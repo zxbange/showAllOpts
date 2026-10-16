@@ -2,6 +2,8 @@
 
 开发时使用 `start.sh` 同时启动前后端；长期运行使用 systemd 管理 Python API、Nginx 提供前端静态页面。数据库继续使用现有 MySQL，应用只读取行业动量数据。
 
+本文默认沿用现有 `/home/ubuntu/showAllOpts` 项目目录和 `ubuntu` 账号，与 [README systemctl 管理指引](../README.md#linux-后台服务systemctl-管理) 一致。RHEL 或其他账号部署时，请统一替换目录、用户和组，并核对目标系统权限与 SELinux 设置。
+
 ## 1. 系统环境
 
 建议使用 Ubuntu 24.04 LTS 或 RHEL 9.2+。需要 Bash、Python 3.11+、Node.js 22.12+ 和 npm。以下软件包命令按这两个系统编写；其他版本需要选择对应的软件包。
@@ -43,9 +45,10 @@ Ubuntu 24.04 的 `python3-venv` 对应 Python 3.12；RHEL 9.2 起提供 Python 3
 
 复制项目时排除 `backend/.venv`、`frontend/node_modules`、`frontend/dist`、`.runtime`。Windows 虚拟环境和原生 Node 依赖不能在 Linux 上直接复用。虚拟环境应在最终目录创建，安装后不要再移动。
 
-在项目根目录中，以普通部署用户执行以下一条命令：
+以 `ubuntu` 用户进入 `/home/ubuntu/showAllOpts`，按实际系统选择一条安装命令：
 
 ```bash
+cd /home/ubuntu/showAllOpts
 # Ubuntu 24.04
 bash scripts/setup.sh --python python3
 
@@ -81,66 +84,76 @@ bash start.sh --host 127.0.0.1
 
 ## 4. systemd + Nginx 后台服务
 
-模板约定：代码 `/opt/showallopts`，后台账号 `showallopts`，网页 `/var/www/showallopts`。改变路径时，同步修改 service 的 `WorkingDirectory`、`ExecStart`、`ReadWritePaths`；若改变前端发布目录，也需修改 Nginx 的 `root`。服务启用 `ProtectHome=true`，代码和虚拟环境不要放在 `/home`。
+部署约定：代码 `/home/ubuntu/showAllOpts`，运行账号和组 `ubuntu`，网页发布到 `/var/www/showallopts`。保留 `showAllOpts` 的大小写。使用现有用户与项目，无需迁移代码或重建未移动的虚拟环境。
+
+仓库基础 service 保留独立账号及 `/opt` 部署参数；本节必须同时安装 `99-ubuntu-home.conf` 覆盖配置，使最终服务按上述目录和账号运行。变更部署目录时，同步修改覆盖配置中的 `WorkingDirectory`、`ExecStart`、`ReadWritePaths`；更换用户时同步修改 `User`、`Group` 和目录权限。
 
 ### 部署目录和权限
 
-以下以有 sudo 权限的普通账号部署，`$USER` 是该账号。若 `showallopts` 用户已存在，跳过 useradd。
+先以 `ubuntu` 在现有项目目录按第 2 节安装依赖。生产配置为 `/home/ubuntu/showAllOpts/config/app.config`，按 [生产配置初始化或迁移](configuration.md#linux-生产配置和现有配置迁移) 保留或创建配置，设置 `ubuntu` 所有权、配置目录 `700` 和真实文件 `600` 权限，并以该账号检查数据库连通性。
 
-```bash
-sudo useradd --system --user-group --no-create-home --shell /usr/sbin/nologin showallopts
-sudo install -d -o "$USER" -g showallopts -m 0750 /opt/showallopts
-```
-
-上传代码至该目录，排除第 2 节的生成目录。然后在 `/opt/showallopts` 按第 2 节安装依赖、配置数据库。确认上传工具没有改变项目根目录的所属组。
-
-```bash
-cd /opt/showallopts
-sudo chgrp showallopts /opt/showallopts backend
-chmod 750 /opt/showallopts backend
-# 下一步按配置管理说明创建 /opt/showallopts/config/app.config，再以服务账号检查连接。
-```
-
-生产服务已改为读取 **`/opt/showallopts/config/app.config`**。请先完成 [生产配置初始化或迁移](configuration.md#linux-生产配置和现有配置迁移)，其中的检查命令会验证服务用户的文件读取权限和数据库连接；完成后再安装或重启下方服务。部署账号维护文件；服务账号只需读取。若安装时 umask 为 `077`，还需给 `backend/app`、`backend/.venv` 授予 `showallopts` 组的读取和目录遍历权限，并保留虚拟环境程序的执行权限。
+部署前在原终端按 `Ctrl+C` 停止 `bash start.sh`；已有后台服务时执行 `sudo systemctl stop showallopts-api`。避免开发启动器与后台服务同时占用 8000 端口。
 
 ### 日志目录与服务升级
 
-应用自动创建项目根目录 `log/`，按天归档 `app.log` 和 `error.log`；默认各保留 30 份历史日文件。详细格式及配置见 [README 运行日志](../README.md#运行日志按天轮转)。开发启动使用当前用户权限，无需提前创建目录。
-
-systemd 服务启用了只读文件系统保护，因此安装或升级服务前，需要先创建日志目录，并只授予服务账号写入权限：
+应用按天轮转 `log/app.log` 和 `log/error.log`，默认各保留 30 份历史日文件。格式和参数见 [README 运行日志](../README.md#运行日志按天轮转)。systemd 使用文件系统保护，需要在启动前准备可写目录。以下命令必须在相关进程停止后执行，旧日志和锁文件也统一归 `ubuntu`：
 
 ```bash
-sudo install -d -o showallopts -g showallopts -m 0750 /opt/showallopts/log
+sudo install -d -o ubuntu -g ubuntu -m 0750 /home/ubuntu/showAllOpts/log
+sudo chown -R ubuntu:ubuntu /home/ubuntu/showAllOpts/log
 ```
 
-如果此前用部署用户运行过开发模式，目录内已有日志和锁文件，需要停止相关服务后将这个专用目录的文件所属用户改为 `showallopts`，再启动后台服务。不要同时以不同账号写入同一日志目录。修改 `LOG_DIR` 时，也需同步调整 service 的 `ReadWritePaths` 并准备对应目录。
-
-旧版本升级时，先按上面的配置管理说明准备 `/opt/showallopts/config/app.config`，再在 `/opt/showallopts` 安装新增依赖，并按下一节重新安装 service、执行 daemon-reload 后重启：
-
-```bash
-backend/.venv/bin/python -m pip install -r backend/requirements.lock.txt
-sudo install -m 0644 deploy/systemd/showallopts-api.service /etc/systemd/system/showallopts-api.service
-sudo systemctl daemon-reload
-sudo systemctl restart showallopts-api
-```
+修改 `LOG_DIR` 时，同步修改覆盖配置中的 `ReadWritePaths` 并准备新目录权限。升级已有服务时，先安装所需依赖，再按下一节重新安装基础模板与覆盖配置、执行 `daemon-reload` 和重启。不要删除现有 `config/app.config` 或日志文件。
 
 ### API 服务
 
-先在原终端按 `Ctrl+C` 停止 `bash start.sh`，避免开发后端与 systemd 服务同时占用 8000 端口。完成服务账号、配置权限、日志目录和数据库连通性检查后再执行下列命令。日常管理命令汇总见 [README systemctl 管理指引](../README.md#linux-后台服务systemctl-管理)。
+数据库检查成功后，安装基础模板并写入本机覆盖配置：
 
 ```bash
-sudo install -m 0644 deploy/systemd/showallopts-api.service /etc/systemd/system/showallopts-api.service
+cd /home/ubuntu/showAllOpts
+sudo install -m 0644 deploy/systemd/showallopts-api.service \
+    /etc/systemd/system/showallopts-api.service
+sudo install -d -m 0755 /etc/systemd/system/showallopts-api.service.d
+
+sudo tee /etc/systemd/system/showallopts-api.service.d/99-ubuntu-home.conf > /dev/null <<'EOF'
+[Service]
+User=ubuntu
+Group=ubuntu
+WorkingDirectory=/home/ubuntu/showAllOpts/backend
+Environment=APP_ENV_FILE=config/app.config
+ExecStart=
+ExecStart=/home/ubuntu/showAllOpts/backend/.venv/bin/python /home/ubuntu/showAllOpts/backend/run.py --host 127.0.0.1 --port 8000 --workers 2
+ProtectHome=read-only
+ReadWritePaths=
+ReadWritePaths=/home/ubuntu/showAllOpts/log
+EOF
+
 sudo systemctl daemon-reload
-sudo systemctl enable --now showallopts-api
+# enable 设置开机启动；restart 同时适用于首次启动和已有服务更新
+sudo systemctl enable showallopts-api
+sudo systemctl restart showallopts-api
 sudo systemctl status showallopts-api --no-pager
 curl --fail http://127.0.0.1:8000/api/v1/health
 ```
 
-服务提供开机启动、失败后重启、日志归集和停止时清理子进程。两个 worker 各自持有连接池。`/opt/showallopts/config/app.config` 由应用通过 `APP_ENV_FILE` 读取，不使用 systemd `EnvironmentFile`，避免引号及 JSON 配置的解析差异。
+`ExecStart=` 和 `ReadWritePaths=` 空行用于清除基础模板中的旧启动命令和旧日志路径，不能省略。覆盖文件将 `ProtectHome=true` 改成 `read-only`，允许服务读取 `/home` 中的代码，并通过 `ReadWritePaths` 单独允许写入项目日志目录；保留基础模板的 `ProtectSystem=strict`。这些设置遵循 [systemd 文件系统保护规则](https://github.com/systemd/systemd/blob/main/man/systemd.exec.xml)。
+
+`APP_ENV_FILE=config/app.config` 由应用按项目根目录解析。终端中的临时 `export` 不会改变 systemd 服务配置。覆盖文件只包含路径和运行参数，不要把数据库密码写入 service。
+
+查看最终合并的配置，确认账号和启动路径已经生效：
+
+```bash
+sudo systemctl cat showallopts-api
+sudo systemctl show showallopts-api \
+    -p User -p Group -p WorkingDirectory -p ExecStart -p ProtectHome -p ReadWritePaths
+```
+
+`systemctl cat` 会同时显示基础模板中的旧值和覆盖文件中的新值，以 `systemctl show` 的最终结果为准。如果机器已有其他覆盖文件，也需检查是否冲突。`/health` 仅验证 API 存活，数据库连通性以上面的检查脚本为准。
 
 ### Nginx 网页和反向代理
 
 ```bash
+cd /home/ubuntu/showAllOpts
 sudo install -d -m 0755 /var/www/showallopts
 sudo rsync -rlt --chmod=D755,F644 frontend/dist/ /var/www/showallopts/
 sudo install -m 0644 deploy/nginx/showallopts.conf /etc/nginx/conf.d/showallopts.conf
@@ -179,6 +192,8 @@ sudo firewall-cmd --reload
 ### 日志、启停和更新
 
 ```bash
+sudo systemctl start showallopts-api
+sudo systemctl status showallopts-api --no-pager
 sudo journalctl -u showallopts-api -n 100 --no-pager
 sudo journalctl -u showallopts-api -f
 sudo systemctl restart showallopts-api
@@ -189,7 +204,7 @@ sudo systemctl disable --now showallopts-api
 
 停止 API 不影响同机其他 Nginx 网站；本网站数据请求会返回代理错误。如需停止网页访问，移除该站点配置，再执行 `nginx -t` 和 `systemctl reload nginx`。
 
-更新代码时保留 `config/app.config`，不要用模板覆盖真实配置，也不要随发布清理 `config/`。更新代码后，在 `/opt/showallopts` 重新运行 setup（Python 参数按系统选择），发布新的 `frontend/dist/`，重启 API。只有前端修改时，可运行 `bash scripts/build.sh` 再发布。rsync 命令保留旧哈希资源，供已打开的页面继续读取；可在维护窗口按发布版本清理旧资源。
+更新代码时保留 `config/app.config`，不要用模板覆盖真实配置，也不要随发布清理 `config/`。更新代码后，以 `ubuntu` 在 `/home/ubuntu/showAllOpts` 重新运行 setup（Python 参数按系统选择），发布新的 `frontend/dist/`，重启 API。保留本机 `99-ubuntu-home.conf`；更新基础 service 或覆盖配置后需要 `daemon-reload`，仅修改数据库配置时重启即可。只有前端修改时，可运行 `bash scripts/build.sh` 再发布。rsync 命令保留旧哈希资源，供已打开的页面继续读取；可在维护窗口按发布版本清理旧资源。
 
 ## 5. Docker Compose
 
@@ -222,6 +237,8 @@ npm test
 npm run build
 ```
 
+- 服务仍显示旧 `/opt` 路径或 `showallopts` 账号：确认安装了 `99-ubuntu-home.conf` 并执行 `daemon-reload`、重启，使用 `systemctl show` 检查最终配置。
+- 服务无法读取 `/home`：检查最终 `ProtectHome` 为 `read-only`，并核对覆盖配置已生效。
 - `Permission denied`：检查目录遍历、虚拟环境执行、配置读取权限；RHEL 同时检查 SELinux 审计日志。
 - 虚拟环境失败：可能复制了 Windows 环境或移动了 Linux 环境；将旧环境移出项目后，在最终目录重新安装。
 - `$'\r': command not found`：脚本被改成 CRLF，恢复 UTF-8 / LF。

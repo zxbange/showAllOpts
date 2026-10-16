@@ -205,7 +205,7 @@ bash scripts/setup.sh --python python3
 
 Python 需要 3.11+，Node.js 需要 22.12+。首次克隆只包含配置模板，setup 会初始化缺失的 `config/app.config`；请用编辑器填入真实数据库连接信息，保留已有配置。
 
-仓库中的基础 service 模板仍适用于独立账号和 `/opt` 目录部署；本节通过 systemd 的覆盖配置适配现有 `/home/ubuntu/showAllOpts`，无需迁移代码或创建 `showallopts` 账号。不要只安装基础模板后就启动，必须同时完成下一节的覆盖配置。[Linux 部署指南](docs/linux-deployment.md#4-systemd--nginx-后台服务) 中的 `/opt` 部署是另一套方案，不要混用其路径和账号权限命令。
+仓库中的基础 service 模板仍适用于独立账号和 `/opt` 目录部署；本节通过 systemd 的覆盖配置适配现有 `/home/ubuntu/showAllOpts`，无需迁移代码或创建 `showallopts` 账号。不要只安装基础模板后就启动，必须同时完成下一节的覆盖配置。[Linux 部署指南](docs/linux-deployment.md#4-systemd--nginx-后台服务) 与本节使用相同的路径、账号和覆盖配置。
 
 先在原终端按 `Ctrl+C` 停止 `bash start.sh`。若之前已启动 systemd 服务，先执行 `sudo systemctl stop showallopts-api`。在进程停止后准备配置和日志权限：
 

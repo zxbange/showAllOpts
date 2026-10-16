@@ -12,7 +12,13 @@
   → 现有 MySQL industry_momentum 表
 ```
 
-前后端独立进程、独立依赖、独立构建。后端不返回网页，前端不直接访问数据库。数据库凭据只由后端从环境变量或选中的配置文件读取：开发默认 `backend/.env`，生产通过 `APP_ENV_FILE` 指向项目根目录下的 `config/app.config`。配置优先级与迁移方式见 [配置管理](configuration.md)。所有查询通过 SQLAlchemy 表达式绑定参数，不拼接用户输入的 SQL。
+前后端独立进程、独立依赖、独立构建。后端不返回网页，前端不直接访问数据库。数据库凭据只由后端从环境变量或选中的配置文件读取：Windows 启动器及直接运行 Python 未指定配置时使用 `backend/.env`；Linux `start.sh`、systemd 和 Compose 默认选择项目根目录下的 `config/app.config`。配置优先级与迁移方式见 [配置管理](configuration.md)。所有查询通过 SQLAlchemy 表达式绑定参数，不拼接用户输入的 SQL。
+
+## Linux 部署约定
+
+当前部署目录为 `/home/ubuntu/showAllOpts`，systemd 服务名为 `showallopts-api`，运行账号和组为 `ubuntu`。基础 service 配合本机 `99-ubuntu-home.conf` 覆盖配置运行，最终读取 `config/app.config`，写入项目 `log/`。`ProtectHome=read-only` 允许读取家目录中的代码，`ReadWritePaths` 允许写入日志目录。
+
+Nginx 从 `/var/www/showallopts` 提供前端静态资源，将 `/api` 代理到 `127.0.0.1:8000`。前端资源发布与后端进程启停分别管理。安装、权限、服务配置和升级步骤见 [Linux 部署指南](linux-deployment.md#4-systemd--nginx-后台服务)。
 
 ## 数据一致性
 
