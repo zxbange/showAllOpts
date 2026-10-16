@@ -155,3 +155,51 @@ def test_setup_explicit_missing_source_fails(initializer, tmp_path):
     with pytest.raises(ConfigurationError, match='source file'):
         initializer(tmp_path, tmp_path / 'missing.py')
     assert not (tmp_path / 'backend' / '.env').exists()
+
+
+@pytest.mark.parametrize('existing', [True, False])
+def test_production_initializer_preserves_or_migrates_local(initializer, tmp_path, existing):
+    (tmp_path / 'backend').mkdir()
+    local = tmp_path / 'backend' / '.env'
+    local.write_text('DB_HOST=development.example\n', encoding='utf-8')
+    target = tmp_path / 'config' / 'app.config'
+    if existing:
+        target.parent.mkdir()
+        target.write_text('DB_HOST=production.example\n', encoding='utf-8')
+    initializer(tmp_path, production=True)
+    expected = 'production.example' if existing else 'development.example'
+    assert Settings(_env_file=target).db_host == expected
+    assert local.read_text(encoding='utf-8') == 'DB_HOST=development.example\n'
+
+
+def test_production_initializer_uses_production_template(initializer, tmp_path):
+    root = tmp_path / 'fresh'
+    (root / 'config').mkdir(parents=True)
+    (root / 'config' / 'app.config.example').write_text('DB_HOST=template.example\n', encoding='utf-8')
+    initializer(root, production=True)
+    assert Settings(_env_file=root / 'config' / 'app.config').db_host == 'template.example'
+    assert not (root / 'backend' / '.env').exists()
+
+
+@pytest.mark.parametrize('override', [None, 'custom/settings.config', ''])
+def test_linux_launcher_selects_production_and_preserves_override(tmp_path, override):
+    import shutil
+    import subprocess
+    bash = Path('D:/Program Files/Git/bin/bash.exe') if os.name == 'nt' else Path(shutil.which('bash') or '/missing-bash')
+    if not bash.is_file():
+        pytest.skip('Bash not available')
+    root = tmp_path / 'project with spaces'
+    python_stub = root / 'backend' / '.venv' / 'bin' / 'python'
+    python_stub.parent.mkdir(parents=True)
+    python_stub.write_text('#!/usr/bin/env bash\nprintf "%s" "$APP_ENV_FILE"\n', encoding='utf-8')
+    python_stub.chmod(0o755)
+    source = Path(__file__).resolve().parents[2] / 'start.sh'
+    launcher = root / 'start.sh'
+    launcher.write_bytes(source.read_bytes())
+    environment = dict(os.environ)
+    environment.pop('APP_ENV_FILE', None)
+    if override is not None:
+        environment['APP_ENV_FILE'] = override
+    result = subprocess.run([str(bash), str(launcher)], cwd=tmp_path, env=environment,
+                            capture_output=True, text=True, check=True)
+    assert result.stdout == ('config/app.config' if override is None else override)

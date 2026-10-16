@@ -53,12 +53,12 @@ bash scripts/setup.sh --python python3
 bash scripts/setup.sh --python python3.11
 ```
 
-脚本检查版本，创建 `backend/.venv`、安装锁定依赖，执行 `npm ci` 并构建前端。设置 `APP_ENV_FILE` 时只校验外部文件，执行 setup 的账号需要可读该文件；未设置时，已有 `backend/.env` 保留，缺少配置时，如存在同级 `../original/mysqltrade.py` 则从中提取连接常量，否则生成 `.env.example` 的副本。新建 `.env` 的权限为 `600`。
+脚本检查版本，创建 `backend/.venv`、安装锁定依赖，执行 `npm ci` 并构建前端。指定 `APP_ENV_FILE` 时只校验该文件；否则保留已有 `config/app.config`。若生产配置缺失，优先从已有 `backend/.env` 迁移，其次提取同级旧采集程序的连接常量，否则复制 `config/app.config.example` 模板。新建配置权限为 `600`，已有配置不会被覆盖。
 
-开发模式编辑 `backend/.env`；若设置了 `APP_ENV_FILE`，则编辑其指定文件。填写 Linux 服务器可访问的 MySQL 地址、库名和账号。如果从 Windows 复制配置，请执行 `chmod 600 backend/.env`。数据库在另一台机器时，`DB_HOST` 不能使用本机的 `127.0.0.1`。完成后只读检查连通性：
+编辑 `config/app.config`，填写 Linux 服务器可访问的 MySQL 地址、库名和账号。若设置了 `APP_ENV_FILE`，编辑其指定文件。数据库在另一台机器时，`DB_HOST` 应为实际数据库地址。完成后只读检查连通性：
 
 ```bash
-backend/.venv/bin/python scripts/check_database.py
+APP_ENV_FILE=config/app.config backend/.venv/bin/python scripts/check_database.py
 ```
 
 脚本使用 `bash 文件名` 执行，无需依赖压缩包是否保留可执行权限。`.gitattributes` 已固定 shell 脚本为 LF 换行。
@@ -69,7 +69,7 @@ backend/.venv/bin/python scripts/check_database.py
 bash start.sh
 ```
 
-默认监听 `0.0.0.0:5173`，其他机器直接访问 `http://服务器IP:5173`，本机仍可使用 `http://127.0.0.1:5173`。如果需要限制为仅本机访问：
+`start.sh` 默认选择 `config/app.config`，也支持显式 `APP_ENV_FILE` 覆盖；启动日志会显示所选配置路径。默认监听 `0.0.0.0:5173`，其他机器直接访问 `http://服务器IP:5173`，本机仍可使用 `http://127.0.0.1:5173`。如果需要限制为仅本机访问：
 
 ```bash
 bash start.sh --host 127.0.0.1

@@ -15,21 +15,27 @@ sys.path.insert(0, str(ROOT / 'backend'))
 from app.core.config import ConfigurationError, Settings
 
 
-def initialize_configuration(root: Path, source: Path | None = None):
+def initialize_configuration(root: Path, source: Path | None = None, production: bool = False):
     if 'APP_ENV_FILE' in os.environ:
         Settings()
         print('External configuration selected by APP_ENV_FILE; validated and preserved. No local .env created.')
         return
-    target = root / 'backend' / '.env'
+    target = root / 'config' / 'app.config' if production else root / 'backend' / '.env'
+    label = target.relative_to(root).as_posix()
     if target.exists():
-        print('backend/.env already exists; preserved without changes.')
+        print(f'{label} already exists; preserved without changes.')
         return
     source_path = source if source is not None else root.parent / 'original' / 'mysqltrade.py'
-    if not source_path.is_file():
+    local_config = root / 'backend' / '.env'
+    if production and source is None and local_config.is_file():
+        content = local_config.read_text(encoding='utf-8')
+        message = 'Created config/app.config from the existing local configuration. Credentials were not printed.'
+    elif not source_path.is_file():
         if source is not None:
             raise ConfigurationError('The explicitly selected collector source file does not exist.')
-        content = (root / 'backend' / '.env.example').read_text(encoding='utf-8')
-        message = 'Created backend/.env from the template. Fill in its database settings before starting.'
+        template = root / 'config' / 'app.config.example' if production else root / 'backend' / '.env.example'
+        content = template.read_text(encoding='utf-8')
+        message = f'Created {label} from the template. Fill in its database settings before starting.'
     else:
         tree = ast.parse(source_path.read_text(encoding='utf-8-sig'))
         config_class = next((node for node in tree.body if isinstance(node, ast.ClassDef)
@@ -49,7 +55,8 @@ def initialize_configuration(root: Path, source: Path | None = None):
         content = '# Local configuration. Never commit this file.\n'
         content += ''.join(f'{key}={json.dumps(str(value), ensure_ascii=False)}\n' for key, value in values.items())
         content += 'CORS_ORIGINS=["http://127.0.0.1:5173","http://localhost:5173"]\n'
-        message = 'Created backend/.env from the existing configuration. Credentials were not printed.'
+        message = f'Created {label} from the existing configuration. Credentials were not printed.'
+    target.parent.mkdir(parents=True, exist_ok=True)
     descriptor = os.open(target, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
     with os.fdopen(descriptor, 'w', encoding='utf-8') as stream:
         stream.write(content)
@@ -59,8 +66,9 @@ def initialize_configuration(root: Path, source: Path | None = None):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--source', type=Path, help='Optional legacy collector file; used only for local initialization.')
+    parser.add_argument('--production', action='store_true', help='Initialize config/app.config for Linux startup.')
     args = parser.parse_args()
-    initialize_configuration(ROOT, args.source)
+    initialize_configuration(ROOT, args.source, production=args.production)
 
 
 if __name__ == '__main__':

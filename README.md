@@ -50,7 +50,7 @@ showAllOpts/
 | 环境 | 配置位置 | 读取方式 |
 | --- | --- | --- |
 | 本地开发 | `backend/.env` | 默认自动读取 |
-| Linux 生产部署 | `config/app.config` | systemd 模板通过 `APP_ENV_FILE` 指定 |
+| Linux 生产部署 | `config/app.config` | `start.sh` 和 systemd 默认选择此文件 |
 | 自定义部署 | 自行指定的配置文件 | 启动前设置 `APP_ENV_FILE` |
 
 仓库只提交 **`backend/.env.example`** 和 **`config/app.config.example`** 配置模板。真实 `config/app.config` 及 `.env` 文件已被 Git 忽略；生产配置位于项目根目录的 `config/` 下，发布时须保留该目录中的真实配置。文件采用 UTF-8 的 `KEY=VALUE` 格式。
@@ -79,7 +79,7 @@ $env:APP_ENV_FILE = 'config/app.config'
 .\start.cmd
 ```
 
-配置优先级为 **进程环境变量 > 选中的配置文件 > 程序默认值**。设置 `APP_ENV_FILE` 后只读取指定文件，不与 `backend/.env` 合并；未设置时才读取本地文件。相对路径以项目根目录为基准，systemd 模板使用相对项目根目录的 `config/app.config`。显式指定的文件不存在、不可读或路径为空时，启动会报错停止。配置修改后需要重启应用。
+配置优先级为 **进程环境变量 > 选中的配置文件 > 程序默认值**。设置 `APP_ENV_FILE` 后只读取指定文件，不与 `backend/.env` 合并；直接运行 Python 或 Windows 启动器且未设置时读取 `backend/.env`；Linux `start.sh` 会自动选择 `config/app.config`。相对路径以项目根目录为基准，systemd 模板使用相对项目根目录的 `config/app.config`。显式指定的文件不存在、不可读或路径为空时，启动会报错停止。配置修改后需要重启应用。
 
 `APP_ENV_FILE` 必须设置在启动进程的环境中，不能写在它所选择的配置文件里。Windows 双击启动不会继承另一个 PowerShell 窗口临时设置的变量，应在设置变量的同一窗口启动。
 
@@ -114,7 +114,7 @@ Docker Compose 默认读取 `config/app.config`，也支持 `APP_ENV_FILE` 覆�
 # Ubuntu 24.04
 bash scripts/setup.sh --python python3
 # RHEL 9.2+ 则将上一条命令改为：bash scripts/setup.sh --python python3.11
-# 配置 backend/.env 的数据库连接，然后启动
+# 配置 config/app.config 的数据库连接，然后启动
 bash start.sh
 ```
 

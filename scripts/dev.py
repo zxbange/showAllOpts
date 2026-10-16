@@ -14,7 +14,7 @@ import time
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'backend'))
-from app.core.config import Settings
+from app.core.config import Settings, resolve_env_file
 from app.core.logging import ANSI_ESCAPE, configure_logging
 
 logger = logging.getLogger('launcher')
@@ -98,6 +98,7 @@ def main(argv=None):
     settings = Settings()
     configure_logging(settings)
     logger.info('Starting ShowAllOpts; log_dir=%s', settings.log_path)
+    logger.info('Configuration file: %s; environment variables take precedence', resolve_env_file())
     processes = []
     readers = []
     previous_sigterm = signal.signal(signal.SIGTERM, request_stop)

@@ -14,7 +14,7 @@ showAllOpts/
     └── .env                 # 本地开发配置，不提交 Git
 ```
 
-systemd 模板通过 `APP_ENV_FILE=config/app.config` 选择生产配置；Docker Compose 默认读取宿主机的 `config/app.config`。手动启动时需设置同一个变量；未设置变量的 Python 启动仍使用开发配置 `backend/.env`。
+systemd 模板通过 `APP_ENV_FILE=config/app.config` 选择生产配置；Docker Compose 默认读取宿主机的 `config/app.config`。Linux `bash start.sh` 也会自动选择该文件；直接运行 Python 或 Windows 启动器且未设置变量时仍使用开发配置 `backend/.env`。
 
 进程环境变量优先于选中的配置文件，未提供的字段使用程序默认值。选中生产配置时不与开发配置合并。相对路径以项目根目录为基准，不受终端工作目录或 systemd 工作目录影响。显式指定的文件不存在、不可读或路径为空时启动失败。
 
@@ -61,7 +61,7 @@ Environment=APP_ENV_FILE=config/app.config
 
 ## 手动启动与安装
 
-本地开发继续使用 `backend/.env`。在项目根目录，使用生产配置手动启动：
+Windows 本地开发继续使用 `backend/.env`。Linux 在项目根目录直接执行 `bash start.sh` 就会读取 `config/app.config`；也可显式指定：
 
 ```bash
 export APP_ENV_FILE=config/app.config
@@ -75,9 +75,9 @@ $env:APP_ENV_FILE = 'config/app.config'
 .\start.cmd
 ```
 
-设置 `APP_ENV_FILE` 后运行 setup，只校验选中的配置，不覆盖或生成配置副本；指定文件必须已准备好且执行账号可读。未设置时，setup 保留或初始化 `backend/.env`，不改动生产配置。正式 systemd 服务始终按 service 内的变量选择 `config/app.config`。
+设置 `APP_ENV_FILE` 后运行 setup，只校验选中的配置，不覆盖或生成配置副本；指定文件必须已准备好且执行账号可读。未设置时，Linux setup 保留已有 `config/app.config`；缺失时优先从已有 `backend/.env` 迁移，其次提取旧采集配置，否则复制生产模板。Windows setup 继续保留或初始化 `backend/.env`。正式 systemd 服务始终按 service 内的变量选择 `config/app.config`。
 
-恢复默认开发配置：PowerShell 执行 `Remove-Item Env:APP_ENV_FILE`；Bash 执行 `unset APP_ENV_FILE`，然后重新启动。
+Windows 恢复开发配置可执行 `Remove-Item Env:APP_ENV_FILE`；Linux 若需使用开发配置，执行 `APP_ENV_FILE=backend/.env bash start.sh`。
 
 ## Docker Compose
 

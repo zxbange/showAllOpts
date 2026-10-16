@@ -12,7 +12,7 @@ while [[ $# -gt 0 ]]; do
             ;;
         -h|--help)
             echo 'Usage: bash scripts/setup.sh [--python python3.11]'
-            echo 'Installs dependencies, initializes local .env or validates APP_ENV_FILE, and builds the frontend.'
+            echo 'Installs dependencies, initializes config/app.config or validates APP_ENV_FILE, and builds the frontend.'
             exit 0
             ;;
         *) echo "Unknown argument: $1" >&2; exit 2 ;;
@@ -34,9 +34,9 @@ if [[ ! -x "$VENV/bin/python" ]]; then
 fi
 "$VENV/bin/python" -c 'import sys; sys.exit(0 if sys.version_info >= (3, 11) else "Existing venv requires Python 3.11+; recreate it with the requested interpreter.")'
 "$VENV/bin/python" -m pip install -r "$PROJECT_ROOT/backend/requirements.lock.txt"
-"$VENV/bin/python" "$PROJECT_ROOT/scripts/configure_database.py"
+"$VENV/bin/python" "$PROJECT_ROOT/scripts/configure_database.py" --production
 cd "$PROJECT_ROOT/frontend"
 npm ci --no-fund --no-audit
 npm run build
-echo 'Setup complete. Check the selected configuration (APP_ENV_FILE or backend/.env), then run: bash start.sh'
+echo 'Setup complete. Check the selected configuration (APP_ENV_FILE or config/app.config), then run: bash start.sh'
 echo 'For a persistent production service, see docs/linux-deployment.md.'
