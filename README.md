@@ -7,7 +7,7 @@
 - 后端：Python 3.11+、FastAPI、SQLAlchemy 2、PyMySQL、Pydantic Settings。
 - 前端：Node.js 22.12+、React、TypeScript、Vite、Apache ECharts。
 - 测试：pytest + SQLite 隔离数据库、Vitest、Playwright。
-- 部署：可独立启动，也提供 Docker Compose + Nginx 反向代理。
+- 部署：开发启动器、Linux systemd + Nginx、Docker Compose + Nginx。
 
 ## 目录约定
 
@@ -49,8 +49,8 @@ showAllOpts/
 
 | 环境 | 配置位置 | 读取方式 |
 | --- | --- | --- |
-| 本地开发 | `backend/.env` | 默认自动读取 |
-| Linux 生产部署 | `config/app.config` | `start.sh` 和 systemd 默认选择此文件 |
+| Windows 开发 / 直接运行 Python | `backend/.env` | 未指定 `APP_ENV_FILE` 时读取 |
+| Linux 启动 / 生产部署 | `config/app.config` | `start.sh`、systemd 和 Compose 默认选择此文件 |
 | 自定义部署 | 自行指定的配置文件 | 启动前设置 `APP_ENV_FILE` |
 
 仓库只提交 **`backend/.env.example`** 和 **`config/app.config.example`** 配置模板。真实 `config/app.config` 及 `.env` 文件已被 Git 忽略；生产配置位于项目根目录的 `config/` 下，发布时须保留该目录中的真实配置。文件采用 UTF-8 的 `KEY=VALUE` 格式。
@@ -63,8 +63,10 @@ if (-not (Test-Path backend/.env)) { Copy-Item backend/.env.example backend/.env
 ```
 
 ```bash
-# Linux；已有配置时保留原文件
-if [ ! -e backend/.env ]; then (umask 077; cp backend/.env.example backend/.env); fi
+# Linux；在项目根目录执行，已有生产配置时保留原文件
+if [ ! -e config/app.config ]; then
+    (umask 077; cp config/app.config.example config/app.config)
+fi
 ```
 
 生产部署先将 `config/app.config.example` 复制为 `config/app.config`（已有文件不要覆盖），填写数据库连接信息。使用生产配置手动启动：
@@ -107,6 +109,8 @@ Docker Compose 默认读取 `config/app.config`，也支持 `APP_ENV_FILE` 覆�
 初始化脚本发现 `APP_ENV_FILE` 时，只校验指定配置，不创建本地副本。否则保留已有 `backend/.env`；缺失时从同级 `../original/mysqltrade.py` 解析连接常量，若没有该文件则复制 `.env.example` 模板，等待填写。整个过程不执行原策略，也不输出密码。
 
 ## Linux 快速启动（Ubuntu / Red Hat）
+
+本节是依赖终端的开发启动方式。服务器后台运行和开机启动请使用 [systemctl 管理指引](#linux-后台服务systemctl-管理)。
 
 安装 Python 3.11+、Node.js 22.12+ 和 npm 后，在项目根目录执行：
 
@@ -174,6 +178,102 @@ bash scripts/setup.sh --python python3.11
 ```
 
 安装成功后执行 `bash start.sh`，其他机器访问 `http://服务器IP:5173`。若仍失败，提供新的错误信息和 `cat /etc/os-release` 输出，以便按具体发行版排查。
+
+## Linux 后台服务：systemctl 管理
+
+systemd 管理后端 `showallopts-api`，Nginx 提供构建后的前端网页并代理 `/api`。安装完成后使用 `systemctl` 启停后端，关闭终端不会结束服务；不再同时运行 `bash start.sh`，避免占用同一个 8000 端口。
+
+### 首次部署准备
+
+模板约定如下：
+
+| 项目 | 默认值 |
+| --- | --- |
+| 代码目录 | `/opt/showallopts`（注意大小写） |
+| 服务账号 / 组 | `showallopts` |
+| 数据库配置 | `/opt/showallopts/config/app.config` |
+| 日志目录 | `/opt/showallopts/log` |
+| 后端监听 | `127.0.0.1:8000` |
+| Nginx 前端目录 / 访问端口 | `/var/www/showallopts` / `80` |
+
+先按 [Linux 部署指南](docs/linux-deployment.md#4-systemd--nginx-后台服务) 创建服务账号、准备代码目录、安装依赖，并按 [配置管理说明](docs/configuration.md#linux-生产配置和现有配置迁移) 填写配置及设置权限。首次克隆只包含配置模板，需要自行准备真实 `config/app.config`。
+
+如果原项目位于 `/home/ubuntu/showAllOpts`，先复制代码到 `/opt/showallopts`，保留真实配置，排除 `.venv`、`node_modules`、`dist` 和旧日志，再在新目录重新运行 setup。模板启用了 `ProtectHome=true`，服务不能读取 `/home` 下的代码和虚拟环境。自定义部署目录时，同步修改 service 中的 `WorkingDirectory`、`ExecStart` 和 `ReadWritePaths`。
+
+启动前在原终端按 `Ctrl+C` 停止开发启动器，确保服务账号可读取配置、执行 Python，并能写入日志目录。以下命令在服务账号及代码目录准备好后执行：
+
+```bash
+cd /opt/showallopts
+
+# 首次部署创建日志目录
+sudo install -d -o showallopts -g showallopts -m 0750 /opt/showallopts/log
+
+# 验证实际服务账号可以读取配置并访问数据库
+sudo -u showallopts env APP_ENV_FILE=config/app.config \
+    backend/.venv/bin/python scripts/check_database.py
+```
+
+如果日志目录已有其他账号创建的日志或锁文件，需要先停止写入它们的进程，再按 [日志目录与服务升级](docs/linux-deployment.md#日志目录与服务升级) 调整所有权；仅创建目录不会修复里面旧文件的权限。
+
+### 安装并启动后端服务
+
+数据库检查成功后执行：
+
+```bash
+cd /opt/showallopts
+sudo install -m 0644 deploy/systemd/showallopts-api.service \
+    /etc/systemd/system/showallopts-api.service
+sudo systemctl daemon-reload
+sudo systemctl enable --now showallopts-api
+sudo systemctl status showallopts-api --no-pager
+curl --fail http://127.0.0.1:8000/api/v1/health
+```
+
+`enable --now` 设置开机启动并立即启动服务；服务已运行时不会因此重启。`/health` 只验证 API 存活，数据库连通性以上面的检查脚本为准。
+
+服务文件已经包含 `Environment=APP_ENV_FILE=config/app.config`，由应用按项目根目录解析。终端中临时 `export APP_ENV_FILE=...` 不会改变 systemd 服务的配置；更改服务的配置路径应修改 service 或其 override，并执行 `daemon-reload` 和 `restart`。
+
+### 发布前端网页
+
+首次部署还需按 [Nginx 网页和反向代理](docs/linux-deployment.md#nginx-网页和反向代理) 发布 `frontend/dist`、配置实际 IP 或域名，并完成 RHEL 的 SELinux 设置。Nginx 配置准备好后执行：
+
+```bash
+sudo nginx -t
+# 仅在配置检查通过后执行
+sudo systemctl enable --now nginx
+sudo systemctl reload nginx
+```
+
+访问 `http://服务器IP` 或配置的域名，默认端口 **80**，放行对应防火墙和云安全组规则。此部署方式不使用开发服务器的 5173 端口；8000 只供本机 Nginx 访问。
+
+### 日常启动、停止和查看日志
+
+| 操作 | 命令 |
+| --- | --- |
+| 启动后端 | `sudo systemctl start showallopts-api` |
+| 停止后端 | `sudo systemctl stop showallopts-api` |
+| 重启后端 | `sudo systemctl restart showallopts-api` |
+| 查看状态 | `sudo systemctl status showallopts-api --no-pager` |
+| 查看最近 100 条日志 | `sudo journalctl -u showallopts-api -n 100 --no-pager` |
+| 实时查看日志 | `sudo journalctl -u showallopts-api -f` |
+| 开机启动并立即启动 | `sudo systemctl enable --now showallopts-api` |
+| 停止并取消开机启动 | `sudo systemctl disable --now showallopts-api` |
+
+应用同时保留按天轮转的日志文件：
+
+```bash
+sudo tail -n 100 -f /opt/showallopts/log/app.log
+sudo tail -n 100 -f /opt/showallopts/log/error.log
+```
+
+`systemctl stop` 会正常停止服务，不会因为模板的 `Restart=on-failure` 自动重启；若保留开机启动设置，下次开机仍会启动。停止后端后，Nginx 静态页面仍可打开，数据接口不可用。只有 Nginx 专门服务本项目时，才使用 `sudo systemctl stop nginx` 一并关闭网页；承载其他网站时应单独停用本项目站点。
+
+### 修改配置或更新代码
+
+- 修改 `config/app.config` 内容：执行 `sudo systemctl restart showallopts-api`，无需 `daemon-reload`。
+- 修改仓库内 service 模板：重新执行上面的 `sudo install` 和 `daemon-reload`，再执行 `sudo systemctl restart showallopts-api`。仅修改仓库文件不会更新已经安装的服务。
+- 修改前端：重新构建并发布 `frontend/dist`；仅重启后端不会更新网页。修改 Nginx 配置后先执行 `sudo nginx -t`，通过后执行 `sudo systemctl reload nginx`。
+- 更新代码：保留 `config/app.config`，按 [Linux 更新步骤](docs/linux-deployment.md#日志启停和更新) 安装依赖、发布前端并重启后端。
 
 ## 分别运行前后端
 

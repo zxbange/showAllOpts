@@ -81,7 +81,7 @@ bash start.sh --host 127.0.0.1
 
 ## 4. systemd + Nginx 后台服务
 
-模板约定：代码 `/opt/showallopts`，后台账号 `showallopts`，网页 `/var/www/showallopts`。改变路径时，同步修改 service 的 `WorkingDirectory`、`ExecStart` 和 Nginx 的 `root`。服务启用 `ProtectHome=true`，代码和虚拟环境不要放在 `/home`。
+模板约定：代码 `/opt/showallopts`，后台账号 `showallopts`，网页 `/var/www/showallopts`。改变路径时，同步修改 service 的 `WorkingDirectory`、`ExecStart`、`ReadWritePaths`；若改变前端发布目录，也需修改 Nginx 的 `root`。服务启用 `ProtectHome=true`，代码和虚拟环境不要放在 `/home`。
 
 ### 部署目录和权限
 
@@ -125,6 +125,8 @@ sudo systemctl restart showallopts-api
 ```
 
 ### API 服务
+
+先在原终端按 `Ctrl+C` 停止 `bash start.sh`，避免开发后端与 systemd 服务同时占用 8000 端口。完成服务账号、配置权限、日志目录和数据库连通性检查后再执行下列命令。日常管理命令汇总见 [README systemctl 管理指引](../README.md#linux-后台服务systemctl-管理)。
 
 ```bash
 sudo install -m 0644 deploy/systemd/showallopts-api.service /etc/systemd/system/showallopts-api.service
