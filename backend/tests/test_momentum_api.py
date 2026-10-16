@@ -88,7 +88,7 @@ def test_unknown_industry_and_invalid_query(client):
     assert client.get(f'/api/v1/industry-momentum/industries/A/history?end_date={tomorrow}').status_code == 422
 
 
-def test_database_failure_does_not_expose_connection_secrets(client, monkeypatch):
+def test_database_failure_does_not_expose_connection_secrets(client, monkeypatch, tmp_path):
     def fail(*args):
         raise OperationalError('SELECT secret', {}, Exception('password=secret-password'))
     monkeypatch.setattr(MomentumRepository, 'latest_date', fail)
@@ -96,6 +96,9 @@ def test_database_failure_does_not_expose_connection_secrets(client, monkeypatch
     assert response.status_code == 503
     assert response.json()['code'] == 'DATABASE_UNAVAILABLE'
     assert 'secret-password' not in response.text
+    error_log = (tmp_path / 'log' / 'error.log').read_text(encoding='utf-8')
+    assert 'OperationalError' in error_log and 'Traceback' in error_log
+    assert 'secret-password' not in error_log
 
 
 def test_api_only_executes_selects(client, engine, session):

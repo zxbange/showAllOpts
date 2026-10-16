@@ -1,4 +1,5 @@
 from pathlib import Path
+from typing import Literal
 
 from pydantic import Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -19,6 +20,15 @@ class Settings(BaseSettings):
     db_user: str = 'readonly'
     db_password: SecretStr = SecretStr('')
     cors_origins: list[str] = ['http://127.0.0.1:5173', 'http://localhost:5173']
+
+    log_dir: Path = Path('log')
+    log_level: Literal['DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL'] = 'INFO'
+    log_retention_days: int = Field(default=30, ge=1, le=3650)
+
+    @property
+    def log_path(self) -> Path:
+        project_root = Path(__file__).resolve().parents[3]
+        return (project_root / self.log_dir).resolve()
 
     @property
     def database_url(self) -> URL:

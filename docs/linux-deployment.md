@@ -104,6 +104,27 @@ sudo -u showallopts backend/.venv/bin/python scripts/check_database.py
 
 最后一条命令同时验证服务用户的读取权限和数据库连接。部署账号维护文件；服务账号只需读取。若安装时 umask 为 `077`，还需给 `backend/app`、`backend/.venv` 授予 `showallopts` 组的读取和目录遍历权限，并保留虚拟环境程序的执行权限。
 
+### 日志目录与服务升级
+
+应用自动创建项目根目录 `log/`，按天归档 `app.log` 和 `error.log`；默认各保留 30 份历史日文件。详细格式及配置见 [README 运行日志](../README.md#运行日志按天轮转)。开发启动使用当前用户权限，无需提前创建目录。
+
+systemd 服务启用了只读文件系统保护，因此安装或升级服务前，需要先创建日志目录，并只授予服务账号写入权限：
+
+```bash
+sudo install -d -o showallopts -g showallopts -m 0750 /opt/showallopts/log
+```
+
+如果此前用部署用户运行过开发模式，目录内已有日志和锁文件，需要停止相关服务后将这个专用目录的文件所属用户改为 `showallopts`，再启动后台服务。不要同时以不同账号写入同一日志目录。修改 `LOG_DIR` 时，也需同步调整 service 的 `ReadWritePaths` 并准备对应目录。
+
+旧版本升级时，在 `/opt/showallopts` 安装新增依赖，并按下一节重新安装 service、执行 daemon-reload 后重启：
+
+```bash
+backend/.venv/bin/python -m pip install -r backend/requirements.lock.txt
+sudo install -m 0644 deploy/systemd/showallopts-api.service /etc/systemd/system/showallopts-api.service
+sudo systemctl daemon-reload
+sudo systemctl restart showallopts-api
+```
+
 ### API 服务
 
 ```bash
@@ -178,6 +199,8 @@ docker compose up --build -d
 docker compose logs -f
 docker compose down
 ```
+
+后端应用日志通过 `./log:/app/log` 映射到宿主机项目目录。首次启动会创建目录；容器入口准备目录权限后切换到 UID 10001 的 appuser 运行 API，容器重建会保留日志。Linux 宿主机查看日志可能需要 `sudo tail -f log/app.log`。原生部署和 Docker 应使用各自的部署目录，以免不同账号的日志文件权限冲突。Nginx 的日志通过 `docker compose logs frontend` 查看。
 
 默认监听所有 IPv4 网卡，其他机器访问 `http://服务器IP:8080`；本机也可使用 `http://127.0.0.1:8080`。如需修改地址或端口，在项目根目录新建 `.env`（与 `backend/.env` 分开；仅本机访问时将 `WEB_BIND_ADDRESS` 改为 `127.0.0.1`）：
 

@@ -37,6 +37,7 @@ showAllOpts/
 ├── scripts/                 # 环境初始化、启动、数据库只读检查
 ├── deploy/                  # Linux systemd 与 Nginx 配置
 ├── docs/                    # 架构、数据口径与 Linux 部署指南
+├── log/                     # 启动时生成，运行日志与每日归档，不提交 Git
 ├── start.cmd / start.ps1 / start.sh
 └── compose.yaml
 ```
@@ -154,7 +155,7 @@ bash scripts/setup.sh --python python3.11
 后端（在 `backend` 中）：
 
 ```powershell
-.\.venv\Scripts\python.exe -m uvicorn app.main:app --host 127.0.0.1 --port 8000 --reload
+.\.venv\Scripts\python.exe run.py --host 127.0.0.1 --port 8000
 ```
 
 前端（另一个终端，在 `frontend` 中）：
@@ -186,6 +187,64 @@ npm run dev
 | `GET /api/v1/industry-momentum/industries/{code}/history?days=365&end_date=2026-10-16` | 单行业历史及区间统计 |
 
 数据接口支持 `industry_type=sw_l1/sw_l2/sw_l3`，网页当前固定使用 `sw_l2`。数据库连接失败返回 503，未知行业返回 404，非法参数返回 422；响应不泄露连接信息。
+
+## 运行日志（按天轮转）
+
+通过 `start.cmd`、`start.ps1`、`bash start.sh` 或后端 `python run.py` 启动后，自动在**项目根目录**创建 `log/`，不随终端当前所在目录改变。日志同时输出到终端和 UTF-8 文件：
+
+| 文件 | 内容 |
+| --- | --- |
+| `log/app.log` | 启动、关闭、API 访问、应用告警和错误；一键开发启动还收集 Vite 的标准输出与错误输出 |
+| `log/error.log` | ERROR / CRITICAL 级别日志及异常堆栈，错误也会出现在 app.log 中 |
+| `log/app.log.2026-10-16`、`log/error.log.2026-10-16` | 按日期归档的历史日志，日期为示例 |
+
+采用**运行环境本地时区的每日零点**作为轮转边界，跨日后的第一条日志触发归档；没有日志时不会空转创建归档。默认分别保留 30 份历史日文件，超出数量后在轮转时删除最旧文件。重启服务继续追加当天日志；多进程使用文件锁协调写入和轮转。不要手动删除运行中的锁文件（`.__*.lock`），也不要让外部 logrotate 同时轮转这两份文件。
+
+标准格式为：`ISO 8601 时间（毫秒与时区） | 级别 | 进程号 | 日志来源 | 内容`。例如：
+
+```text
+2026-10-16T15:30:00.123+08:00 | INFO     | pid=12345 | app.main | Application ready
+2026-10-16T15:30:01.456+08:00 | INFO     | pid=12345 | uvicorn.access | 192.168.1.20:50123 - "GET /api/v1/health HTTP/1.1" 200
+```
+
+异常堆栈每行也有相同前缀。日志会屏蔽已配置的数据库密码、连接 URL 中的凭据以及常见 password/token 字段；不主动记录请求体、Cookie 或 Authorization 请求头。`log/`（包含归档和锁文件）已被 Git 忽略。
+
+可在本地 `backend/.env` 中添加以下选项；不添加时使用这些默认值：
+
+```dotenv
+LOG_DIR=log
+LOG_LEVEL=INFO
+LOG_RETENTION_DAYS=30
+```
+
+`LOG_LEVEL` 支持 DEBUG / INFO / WARNING / ERROR / CRITICAL；INFO 包含常规访问日志。相对 `LOG_DIR` 以项目根目录为基准，所有写入同一目录的进程应使用相同轮转设置；修改后需重启。Docker 容器的本地时区通常是 UTC，日志时间会明确显示时区偏移。
+
+升级旧环境时，先安装新增依赖（项目根目录，按系统选择一条），再重启：
+
+```bash
+# Linux
+backend/.venv/bin/python -m pip install -r backend/requirements.lock.txt
+```
+
+```powershell
+# Windows
+.\backend\.venv\Scripts\python.exe -m pip install -r backend/requirements.lock.txt
+```
+
+查看日志：
+
+```bash
+# Linux
+tail -n 100 -f log/app.log
+tail -n 100 -f log/error.log
+```
+
+```powershell
+# Windows
+Get-Content .\log\app.log -Tail 100 -Wait
+```
+
+systemd 继续同步写入 journal，但需要先给服务账号准备可写的项目日志目录；Docker 会把后端应用日志映射到宿主机项目的 `./log/`。具体权限和升级步骤见 [Linux 部署指南](docs/linux-deployment.md#日志目录与服务升级)。Nginx 自身的访问/错误日志仍由 Nginx 或 Docker 管理；浏览器 JavaScript 错误尚未集中上报。
 
 ## 验证
 

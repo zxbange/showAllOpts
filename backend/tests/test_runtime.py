@@ -38,6 +38,8 @@ def test_stop_reaps_exited_children_and_kills_only_after_timeout():
 
 @pytest.fixture
 def runtime(monkeypatch):
+    monkeypatch.setattr(dev, 'configure_logging', Mock())
+    monkeypatch.setattr(dev, 'start_output_readers', Mock(return_value=[]))
     monkeypatch.setattr(dev.shutil, 'which', lambda name: '/usr/bin/node')
     monkeypatch.setattr(dev.Path, 'exists', lambda self: True)
     probe = Mock()
@@ -85,3 +87,44 @@ def test_busy_port_prevents_starting_any_process(monkeypatch, runtime):
     with pytest.raises(SystemExit, match='already in use'):
         dev.main([])
     spawn.assert_not_called()
+
+
+def test_frontend_output_is_logged_with_child_pid_and_error_level(tmp_path):
+    import io
+    import logging
+    from app.core.config import Settings
+    from app.core.logging import configure_logging
+
+    configure_logging(Settings(_env_file=None, log_dir=tmp_path))
+    try:
+        dev.collect_output(io.StringIO('ready on port 5173\n'), 12345, logging.INFO)
+        dev.collect_output(io.StringIO('Error: failed to load token=private-token\n'), 12345, logging.ERROR)
+        app_log = (tmp_path / 'app.log').read_text(encoding='utf-8')
+        error_log = (tmp_path / 'error.log').read_text(encoding='utf-8')
+        assert 'ready on port 5173' in app_log and 'ready on port 5173' not in error_log
+        assert 'pid=12345 | frontend |' in error_log
+        assert 'failed to load' in error_log and 'private-token' not in error_log
+    finally:
+        logging.shutdown()
+
+
+def test_backend_relay_does_not_duplicate_already_saved_records(tmp_path, monkeypatch):
+    import io
+    import logging
+    from app.core.config import Settings
+    from app.core.logging import configure_logging
+
+    configure_logging(Settings(_env_file=None, log_dir=tmp_path))
+    try:
+        logging.getLogger('app.backend').info('backend-saved-once')
+        before = (tmp_path / 'app.log').read_text(encoding='utf-8')
+        console = io.StringIO()
+        monkeypatch.setattr(dev.sys, 'stderr', console)
+        dev.relay_backend_output(io.StringIO(before), 12345, logging.INFO)
+        assert 'backend-saved-once' in console.getvalue()
+        assert (tmp_path / 'app.log').read_text(encoding='utf-8') == before
+        dev.relay_backend_output(io.StringIO('startup failed password=hidden-value\n'), 12345, logging.ERROR)
+        error_log = (tmp_path / 'error.log').read_text(encoding='utf-8')
+        assert 'startup failed' in error_log and 'hidden-value' not in error_log
+    finally:
+        logging.shutdown()

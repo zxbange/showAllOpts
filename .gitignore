@@ -28,3 +28,6 @@ test-results/
 *.log
 .DS_Store
 .idea/
+
+# Application logs, daily archives and inter-process lock files
+log/

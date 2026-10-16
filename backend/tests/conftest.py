@@ -1,3 +1,5 @@
+import logging
+
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
@@ -24,7 +26,8 @@ def session(engine):
 
 
 @pytest.fixture
-def client(engine):
-    app = create_app(Settings(_env_file=None), engine=engine)
+def client(engine, tmp_path):
+    app = create_app(Settings(_env_file=None, log_dir=tmp_path / 'log'), engine=engine)
     with TestClient(app) as client:
         yield client
+    logging.shutdown()
