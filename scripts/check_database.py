@@ -24,7 +24,7 @@ def main():
             if not result:
                 print('Connection successful; industry_momentum has no records.')
     except SQLAlchemyError as exc:
-        print(f'Database check failed ({type(exc).__name__}). Check .env and the database network whitelist.')
+        print(f'Database check failed ({type(exc).__name__}). Check the selected configuration (APP_ENV_FILE or backend/.env) and database network access.')
         raise SystemExit(1) from None
     finally:
         engine.dispose()

@@ -35,6 +35,7 @@ showAllOpts/
 │   │   └── types/           # API 类型
 │   └── tests/               # 浏览器交互测试
 ├── scripts/                 # 环境初始化、启动、数据库只读检查
+├── config/                  # 生产配置 app.config（不提交）与配置模板
 ├── deploy/                  # Linux systemd 与 Nginx 配置
 ├── docs/                    # 架构、数据口径与 Linux 部署指南
 ├── log/                     # 启动时生成，运行日志与每日归档，不提交 Git
@@ -44,23 +45,47 @@ showAllOpts/
 
 ## 数据库配置与 GitHub 提交
 
-真实数据库连接信息仅保存在 **`backend/.env`**，由 Python 后端读取；该文件已被 `.gitignore` 排除，不上传 GitHub。仓库中的 **`backend/.env.example`** 只有配置项和占位值，用于在新机器上生成配置。
+数据库配置与代码分开管理，前端只通过 `/api` 访问后端，不接触数据库凭据。
 
-首次克隆仓库后，先复制模板并填写 `DB_HOST`、`DB_PORT`、`DB_NAME`、`DB_USER`、`DB_PASSWORD`，再安装依赖并启动：
+| 环境 | 配置位置 | 读取方式 |
+| --- | --- | --- |
+| 本地开发 | `backend/.env` | 默认自动读取 |
+| Linux 生产部署 | `config/app.config` | systemd 模板通过 `APP_ENV_FILE` 指定 |
+| 自定义部署 | 自行指定的配置文件 | 启动前设置 `APP_ENV_FILE` |
+
+仓库只提交 **`backend/.env.example`** 和 **`config/app.config.example`** 配置模板。真实 `config/app.config` 及 `.env` 文件已被 Git 忽略；生产配置位于项目根目录的 `config/` 下，发布时须保留该目录中的真实配置。文件采用 UTF-8 的 `KEY=VALUE` 格式。
+
+本地首次使用，复制模板并用编辑器填写 `DB_HOST`、`DB_PORT`、`DB_NAME`、`DB_USER`、`DB_PASSWORD`：
 
 ```powershell
-# Windows，在项目根目录执行；已有 .env 时保留原文件
+# Windows；已有配置时保留原文件
 if (-not (Test-Path backend/.env)) { Copy-Item backend/.env.example backend/.env }
 ```
 
 ```bash
-# Linux，在项目根目录执行；已有 .env 时保留原文件
+# Linux；已有配置时保留原文件
 if [ ! -e backend/.env ]; then (umask 077; cp backend/.env.example backend/.env); fi
 ```
 
-填写配置请使用本地编辑器，不把实际密码放入命令行、代码或 README。已有配置无需重新生成。前端通过 `/api` 访问后端，前端代码和构建文件不包含数据库账号密码。Docker 的 `env_file` 在容器运行时加载配置，不将真实 `.env` 打包进镜像。
+生产部署先将 `config/app.config.example` 复制为 `config/app.config`（已有文件不要覆盖），填写数据库连接信息。使用生产配置手动启动：
 
-项目根目录可选的 `.env` 仅用于 Docker 的 `WEB_BIND_ADDRESS`、`WEB_PORT` 参数，同样不上传。数据库配置固定放在 `backend/.env`；发布新版本时需保留服务器上的该文件。
+```bash
+export APP_ENV_FILE=config/app.config
+bash start.sh
+```
+
+```powershell
+$env:APP_ENV_FILE = 'config/app.config'
+.\start.cmd
+```
+
+配置优先级为 **进程环境变量 > 选中的配置文件 > 程序默认值**。设置 `APP_ENV_FILE` 后只读取指定文件，不与 `backend/.env` 合并；未设置时才读取本地文件。相对路径以项目根目录为基准，systemd 模板使用相对项目根目录的 `config/app.config`。显式指定的文件不存在、不可读或路径为空时，启动会报错停止。配置修改后需要重启应用。
+
+`APP_ENV_FILE` 必须设置在启动进程的环境中，不能写在它所选择的配置文件里。Windows 双击启动不会继承另一个 PowerShell 窗口临时设置的变量，应在设置变量的同一窗口启动。
+
+Docker Compose 默认读取 `config/app.config`，也支持 `APP_ENV_FILE` 覆盖：在宿主机读取文件，将配置值注入容器环境，不把配置文件打包进镜像。项目根目录可选的 `.env` 仅用于 Compose 参数（`APP_ENV_FILE` 路径、`WEB_BIND_ADDRESS`、`WEB_PORT`）；Python 原生启动不读取这个根目录文件。
+
+生产目录权限、已有配置迁移和 Docker 用法见 [配置管理说明](docs/configuration.md)。
 
 ## Windows 快速启动
 
@@ -79,7 +104,7 @@ if [ ! -e backend/.env ]; then (umask 077; cp backend/.env.example backend/.env)
 .\start.ps1
 ```
 
-初始化脚本只在 `.env` 不存在时，从同级 `../original/mysqltrade.py` 提取连接配置。它使用 AST 解析常量，不执行原策略，也不会输出密码。独立复制本项目时，可自行把 `backend/.env.example` 复制为 `backend/.env` 并填写连接参数。
+初始化脚本发现 `APP_ENV_FILE` 时，只校验指定配置，不创建本地副本。否则保留已有 `backend/.env`；缺失时从同级 `../original/mysqltrade.py` 解析连接常量，若没有该文件则复制 `.env.example` 模板，等待填写。整个过程不执行原策略，也不输出密码。
 
 ## Linux 快速启动（Ubuntu / Red Hat）
 
@@ -209,7 +234,7 @@ npm run dev
 
 异常堆栈每行也有相同前缀。日志会屏蔽已配置的数据库密码、连接 URL 中的凭据以及常见 password/token 字段；不主动记录请求体、Cookie 或 Authorization 请求头。`log/`（包含归档和锁文件）已被 Git 忽略。
 
-可在本地 `backend/.env` 中添加以下选项；不添加时使用这些默认值：
+可在当前选中的配置文件（本地 `backend/.env` 或生产 `config/app.config`）中添加以下选项；不添加时使用这些默认值：
 
 ```dotenv
 LOG_DIR=log
@@ -269,7 +294,7 @@ npm run test:e2e
 docker compose up --build -d
 ```
 
-访问 http://服务器IP:8080（本机也可使用 127.0.0.1）。前端由 Nginx 服务，后端在内部网络运行；数据库继续使用 `.env` 指定的现有 MySQL。Docker 配置未在没有 Docker 的环境下实际构建验证。
+访问 http://服务器IP:8080（本机也可使用 127.0.0.1）。前端由 Nginx 服务，后端在内部网络运行；数据库继续使用 `config/app.config` 指定的现有 MySQL。Docker 配置未在没有 Docker 的环境下实际构建验证。
 
 本版本默认允许通过服务器 IP 访问网页，没有用户登录。开发模式放行 5173，Docker 模式放行 8080，原生 Nginx 部署放行 80；同时检查云安全组。API 通过前端代理访问，无需对外开放 8000。若要开放到外网，应在部署层添加认证和 HTTPS。建议数据库使用仅有目标表 SELECT 权限的账号；已有采集账号可用于本地联调。`.env` 已被 Git 和 Docker 构建忽略。
 

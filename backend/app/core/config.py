@@ -1,3 +1,4 @@
+import os
 from pathlib import Path
 from typing import Literal
 
@@ -6,12 +7,53 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 from sqlalchemy import URL
 
 
+PROJECT_ROOT = Path(__file__).resolve().parents[3]
+DEFAULT_ENV_FILE = PROJECT_ROOT / 'backend' / '.env'
+
+
+class ConfigurationError(ValueError):
+    """Invalid external configuration location; never includes file contents."""
+
+
+def resolve_env_file() -> Path:
+    """Resolve per instance so workers and command-line tools share the same rules."""
+    raw_path = os.environ.get('APP_ENV_FILE')
+    if raw_path is None:
+        return DEFAULT_ENV_FILE
+    if not raw_path.strip():
+        raise ConfigurationError('APP_ENV_FILE must not be empty; unset it to use backend/.env.')
+    path = Path(raw_path).expanduser()
+    if not path.is_absolute():
+        path = PROJECT_ROOT / path
+    path = path.resolve()
+    try:
+        if not path.is_file():
+            raise OSError('Not a regular configuration file')
+        with path.open('rb'):
+            pass
+    except OSError:
+        raise ConfigurationError(
+            f'APP_ENV_FILE is missing or unreadable: {path}. Check the path and service account permissions.'
+        ) from None
+    return path
+
+
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
-        env_file=Path(__file__).resolve().parents[2] / '.env',
+        env_file=DEFAULT_ENV_FILE,
         env_file_encoding='utf-8',
         extra='ignore',
+        hide_input_in_errors=True,
     )
+
+    def __init__(self, **values):
+        # An explicit _env_file (including None in tests) overrides automatic selection.
+        if '_env_file' not in values:
+            values['_env_file'] = resolve_env_file()
+        try:
+            super().__init__(**values)
+        except (OSError, UnicodeError):
+            raise ConfigurationError('Cannot read the selected configuration file. Check permissions and UTF-8 encoding.') from None
 
     app_name: str = 'ShowAllOpts API'
     db_host: str = '127.0.0.1'
@@ -27,8 +69,7 @@ class Settings(BaseSettings):
 
     @property
     def log_path(self) -> Path:
-        project_root = Path(__file__).resolve().parents[3]
-        return (project_root / self.log_dir).resolve()
+        return (PROJECT_ROOT / self.log_dir).resolve()
 
     @property
     def database_url(self) -> URL:

@@ -10,7 +10,8 @@ Type=simple
 User=showallopts
 Group=showallopts
 WorkingDirectory=/opt/showallopts/backend
-# The application reads backend/.env itself, not via EnvironmentFile.
+# The application parses this dotenv file itself; systemd does not load its contents.
+Environment=APP_ENV_FILE=config/app.config
 Environment=PYTHONUNBUFFERED=1
 Environment=PYTHONDONTWRITEBYTECODE=1
 ExecStart=/opt/showallopts/backend/.venv/bin/python /opt/showallopts/backend/run.py --host 127.0.0.1 --port 8000 --workers 2

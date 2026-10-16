@@ -53,9 +53,9 @@ bash scripts/setup.sh --python python3
 bash scripts/setup.sh --python python3.11
 ```
 
-脚本检查版本，创建 `backend/.venv`、安装锁定依赖，执行 `npm ci` 并构建前端。已有 `backend/.env` 保留；缺少配置时，如存在同级 `../original/mysqltrade.py` 则从中提取连接常量，否则生成 `.env.example` 的副本。新建 `.env` 的权限为 `600`。
+脚本检查版本，创建 `backend/.venv`、安装锁定依赖，执行 `npm ci` 并构建前端。设置 `APP_ENV_FILE` 时只校验外部文件，执行 setup 的账号需要可读该文件；未设置时，已有 `backend/.env` 保留，缺少配置时，如存在同级 `../original/mysqltrade.py` 则从中提取连接常量，否则生成 `.env.example` 的副本。新建 `.env` 的权限为 `600`。
 
-编辑 `backend/.env`，填写 Linux 服务器可访问的 MySQL 地址、库名和账号。如果从 Windows 复制配置，请执行 `chmod 600 backend/.env`。数据库在另一台机器时，`DB_HOST` 不能使用本机的 `127.0.0.1`。完成后只读检查连通性：
+开发模式编辑 `backend/.env`；若设置了 `APP_ENV_FILE`，则编辑其指定文件。填写 Linux 服务器可访问的 MySQL 地址、库名和账号。如果从 Windows 复制配置，请执行 `chmod 600 backend/.env`。数据库在另一台机器时，`DB_HOST` 不能使用本机的 `127.0.0.1`。完成后只读检查连通性：
 
 ```bash
 backend/.venv/bin/python scripts/check_database.py
@@ -96,13 +96,12 @@ sudo install -d -o "$USER" -g showallopts -m 0750 /opt/showallopts
 
 ```bash
 cd /opt/showallopts
-sudo chgrp showallopts /opt/showallopts backend backend/.env
+sudo chgrp showallopts /opt/showallopts backend
 chmod 750 /opt/showallopts backend
-chmod 640 backend/.env
-sudo -u showallopts backend/.venv/bin/python scripts/check_database.py
+# 下一步按配置管理说明创建 /opt/showallopts/config/app.config，再以服务账号检查连接。
 ```
 
-最后一条命令同时验证服务用户的读取权限和数据库连接。部署账号维护文件；服务账号只需读取。若安装时 umask 为 `077`，还需给 `backend/app`、`backend/.venv` 授予 `showallopts` 组的读取和目录遍历权限，并保留虚拟环境程序的执行权限。
+生产服务已改为读取 **`/opt/showallopts/config/app.config`**。请先完成 [生产配置初始化或迁移](configuration.md#linux-生产配置和现有配置迁移)，其中的检查命令会验证服务用户的文件读取权限和数据库连接；完成后再安装或重启下方服务。部署账号维护文件；服务账号只需读取。若安装时 umask 为 `077`，还需给 `backend/app`、`backend/.venv` 授予 `showallopts` 组的读取和目录遍历权限，并保留虚拟环境程序的执行权限。
 
 ### 日志目录与服务升级
 
@@ -116,7 +115,7 @@ sudo install -d -o showallopts -g showallopts -m 0750 /opt/showallopts/log
 
 如果此前用部署用户运行过开发模式，目录内已有日志和锁文件，需要停止相关服务后将这个专用目录的文件所属用户改为 `showallopts`，再启动后台服务。不要同时以不同账号写入同一日志目录。修改 `LOG_DIR` 时，也需同步调整 service 的 `ReadWritePaths` 并准备对应目录。
 
-旧版本升级时，在 `/opt/showallopts` 安装新增依赖，并按下一节重新安装 service、执行 daemon-reload 后重启：
+旧版本升级时，先按上面的配置管理说明准备 `/opt/showallopts/config/app.config`，再在 `/opt/showallopts` 安装新增依赖，并按下一节重新安装 service、执行 daemon-reload 后重启：
 
 ```bash
 backend/.venv/bin/python -m pip install -r backend/requirements.lock.txt
@@ -135,7 +134,7 @@ sudo systemctl status showallopts-api --no-pager
 curl --fail http://127.0.0.1:8000/api/v1/health
 ```
 
-服务提供开机启动、失败后重启、日志归集和停止时清理子进程。两个 worker 各自持有连接池。`.env` 由应用读取，不使用 systemd `EnvironmentFile`，避免引号及 JSON 配置的解析差异。
+服务提供开机启动、失败后重启、日志归集和停止时清理子进程。两个 worker 各自持有连接池。`/opt/showallopts/config/app.config` 由应用通过 `APP_ENV_FILE` 读取，不使用 systemd `EnvironmentFile`，避免引号及 JSON 配置的解析差异。
 
 ### Nginx 网页和反向代理
 
@@ -188,11 +187,11 @@ sudo systemctl disable --now showallopts-api
 
 停止 API 不影响同机其他 Nginx 网站；本网站数据请求会返回代理错误。如需停止网页访问，移除该站点配置，再执行 `nginx -t` 和 `systemctl reload nginx`。
 
-更新代码后，在 `/opt/showallopts` 重新运行 setup（Python 参数按系统选择），发布新的 `frontend/dist/`，重启 API。只有前端修改时，可运行 `bash scripts/build.sh` 再发布。rsync 命令保留旧哈希资源，供已打开的页面继续读取；可在维护窗口按发布版本清理旧资源。
+更新代码时保留 `config/app.config`，不要用模板覆盖真实配置，也不要随发布清理 `config/`。更新代码后，在 `/opt/showallopts` 重新运行 setup（Python 参数按系统选择），发布新的 `frontend/dist/`，重启 API。只有前端修改时，可运行 `bash scripts/build.sh` 再发布。rsync 命令保留旧哈希资源，供已打开的页面继续读取；可在维护窗口按发布版本清理旧资源。
 
 ## 5. Docker Compose
 
-已安装 Docker Engine 和 Compose 插件时，宿主机无需另装 Python、Node.js 或 Nginx。配置好 `backend/.env` 后：
+已安装 Docker Engine 和 Compose 插件时，宿主机无需另装 Python、Node.js 或 Nginx。默认配置好 `config/app.config` 后执行下列命令；也可通过 `APP_ENV_FILE` 指定其他文件，权限与配置更新方法见 [配置管理的 Docker 说明](configuration.md#docker-compose)：
 
 ```bash
 docker compose up --build -d

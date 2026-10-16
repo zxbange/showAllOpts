@@ -7,3 +7,7 @@ playwright-report
 .env.*
 !.env.example
 log/
+
+# Production credentials (the project config directory is outside this build context).
+app.config
+app.config.*

@@ -1,8 +1,13 @@
 .venv
 .env
+*.env
 .env.*
 !.env.example
 __pycache__
 .pytest_cache
 tests
 log/
+
+# Production credentials (the project config directory is outside this build context).
+app.config
+app.config.*

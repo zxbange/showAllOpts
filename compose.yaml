@@ -1,7 +1,8 @@
 services:
   backend:
     build: ./backend
-    env_file: ./backend/.env
+    # APP_ENV_FILE is resolved on the host by Compose; only its values enter the container.
+    env_file: "${APP_ENV_FILE-./config/app.config}"
     environment:
       LOG_DIR: /app/log
     volumes:

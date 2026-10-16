@@ -13,13 +13,11 @@ if (-not (Test-Path -LiteralPath $requirements)) {
 }
 & $venvPython -m pip install -r $requirements
 if ($LASTEXITCODE -ne 0) { throw 'Python dependency installation failed.' }
+& $venvPython (Join-Path $PSScriptRoot 'configure_database.py')
+if ($LASTEXITCODE -ne 0) { throw 'Check APP_ENV_FILE or backend/.env configuration.' }
 Push-Location (Join-Path $projectRoot 'frontend')
 try {
     npm.cmd ci --no-fund --no-audit
     if ($LASTEXITCODE -ne 0) { throw 'Frontend dependency installation failed.' }
 } finally { Pop-Location }
-if (-not (Test-Path -LiteralPath (Join-Path $backendRoot '.env'))) {
-    & $venvPython (Join-Path $PSScriptRoot 'configure_database.py')
-    if ($LASTEXITCODE -ne 0) { throw 'Configure backend/.env using .env.example, then start the project.' }
-}
 Write-Host 'Setup complete. Run ./start.ps1, then visit http://127.0.0.1:5173'

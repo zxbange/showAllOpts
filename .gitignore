@@ -1,4 +1,7 @@
 # Local configuration and credentials
+/config/*
+!/config/app.config.example
+*.env
 .env
 .env.*
 !.env.example

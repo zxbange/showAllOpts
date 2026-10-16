@@ -12,7 +12,7 @@ while [[ $# -gt 0 ]]; do
             ;;
         -h|--help)
             echo 'Usage: bash scripts/setup.sh [--python python3.11]'
-            echo 'Installs dependencies, initializes .env if absent, and builds the frontend.'
+            echo 'Installs dependencies, initializes local .env or validates APP_ENV_FILE, and builds the frontend.'
             exit 0
             ;;
         *) echo "Unknown argument: $1" >&2; exit 2 ;;
@@ -34,26 +34,9 @@ if [[ ! -x "$VENV/bin/python" ]]; then
 fi
 "$VENV/bin/python" -c 'import sys; sys.exit(0 if sys.version_info >= (3, 11) else "Existing venv requires Python 3.11+; recreate it with the requested interpreter.")'
 "$VENV/bin/python" -m pip install -r "$PROJECT_ROOT/backend/requirements.lock.txt"
-if [[ ! -f "$PROJECT_ROOT/backend/.env" ]]; then
-    if [[ -f "$PROJECT_ROOT/../original/mysqltrade.py" ]]; then
-        "$VENV/bin/python" "$PROJECT_ROOT/scripts/configure_database.py"
-    else
-        "$VENV/bin/python" - "$PROJECT_ROOT/backend" <<'PY'
-import os
-import sys
-from pathlib import Path
-backend = Path(sys.argv[1])
-fd = os.open(backend / '.env', os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-with os.fdopen(fd, 'w', encoding='utf-8') as stream:
-    stream.write((backend / '.env.example').read_text(encoding='utf-8'))
-print('Created backend/.env template. Edit its database settings before starting.')
-PY
-    fi
-else
-    echo 'Preserving existing backend/.env.'
-fi
+"$VENV/bin/python" "$PROJECT_ROOT/scripts/configure_database.py"
 cd "$PROJECT_ROOT/frontend"
 npm ci --no-fund --no-audit
 npm run build
-echo 'Setup complete. Check backend/.env, then run: bash start.sh'
+echo 'Setup complete. Check the selected configuration (APP_ENV_FILE or backend/.env), then run: bash start.sh'
 echo 'For a persistent production service, see docs/linux-deployment.md.'
