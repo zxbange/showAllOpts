@@ -87,7 +87,7 @@ $env:APP_ENV_FILE = 'config/app.config'
 
 Docker Compose 默认读取 `config/app.config`，也支持 `APP_ENV_FILE` 覆盖：在宿主机读取文件，将配置值注入容器环境，不把配置文件打包进镜像。项目根目录可选的 `.env` 仅用于 Compose 参数（`APP_ENV_FILE` 路径、`WEB_BIND_ADDRESS`、`WEB_PORT`）；Python 原生启动不读取这个根目录文件。
 
-生产目录权限、已有配置迁移和 Docker 用法见 [配置管理说明](docs/configuration.md)。
+使用 `/home/ubuntu/showAllOpts` 部署时，目录权限和服务配置按下方 [systemctl 管理指引](#linux-后台服务systemctl-管理) 操作；其他部署目录的配置迁移和 Docker 用法见 [配置管理说明](docs/configuration.md)。
 
 ## Windows 快速启动
 
@@ -185,53 +185,91 @@ systemd 管理后端 `showallopts-api`，Nginx 提供构建后的前端网页并
 
 ### 首次部署准备
 
-模板约定如下：
+本节按现有 Ubuntu 部署环境编写：代码位于 `/home/ubuntu/showAllOpts`，使用已有的 `ubuntu` 账号运行服务。项目文件夹保留 `showAllOpts` 的大小写；如果您的实际文件夹名不同，请统一替换以下路径。
 
-| 项目 | 默认值 |
+| 项目 | 本节使用的值 |
 | --- | --- |
-| 代码目录 | `/opt/showallopts`（注意大小写） |
-| 服务账号 / 组 | `showallopts` |
-| 数据库配置 | `/opt/showallopts/config/app.config` |
-| 日志目录 | `/opt/showallopts/log` |
+| 代码目录 | `/home/ubuntu/showAllOpts` |
+| 服务账号 / 组 | `ubuntu` / `ubuntu` |
+| 数据库配置 | `/home/ubuntu/showAllOpts/config/app.config` |
+| 日志目录 | `/home/ubuntu/showAllOpts/log` |
 | 后端监听 | `127.0.0.1:8000` |
 | Nginx 前端目录 / 访问端口 | `/var/www/showallopts` / `80` |
 
-先按 [Linux 部署指南](docs/linux-deployment.md#4-systemd--nginx-后台服务) 创建服务账号、准备代码目录、安装依赖，并按 [配置管理说明](docs/configuration.md#linux-生产配置和现有配置迁移) 填写配置及设置权限。首次克隆只包含配置模板，需要自行准备真实 `config/app.config`。
-
-如果原项目位于 `/home/ubuntu/showAllOpts`，先复制代码到 `/opt/showallopts`，保留真实配置，排除 `.venv`、`node_modules`、`dist` 和旧日志，再在新目录重新运行 setup。模板启用了 `ProtectHome=true`，服务不能读取 `/home` 下的代码和虚拟环境。自定义部署目录时，同步修改 service 中的 `WorkingDirectory`、`ExecStart` 和 `ReadWritePaths`。
-
-启动前在原终端按 `Ctrl+C` 停止开发启动器，确保服务账号可读取配置、执行 Python，并能写入日志目录。以下命令在服务账号及代码目录准备好后执行：
+以 `ubuntu` 用户在现有项目目录安装依赖。若已经安装且没有依赖更新，可跳过 setup：
 
 ```bash
-cd /opt/showallopts
+cd /home/ubuntu/showAllOpts
+bash scripts/setup.sh --python python3
+```
 
-# 首次部署创建日志目录
-sudo install -d -o showallopts -g showallopts -m 0750 /opt/showallopts/log
+Python 需要 3.11+，Node.js 需要 22.12+。首次克隆只包含配置模板，setup 会初始化缺失的 `config/app.config`；请用编辑器填入真实数据库连接信息，保留已有配置。
 
-# 验证实际服务账号可以读取配置并访问数据库
-sudo -u showallopts env APP_ENV_FILE=config/app.config \
+仓库中的基础 service 模板仍适用于独立账号和 `/opt` 目录部署；本节通过 systemd 的覆盖配置适配现有 `/home/ubuntu/showAllOpts`，无需迁移代码或创建 `showallopts` 账号。不要只安装基础模板后就启动，必须同时完成下一节的覆盖配置。[Linux 部署指南](docs/linux-deployment.md#4-systemd--nginx-后台服务) 中的 `/opt` 部署是另一套方案，不要混用其路径和账号权限命令。
+
+先在原终端按 `Ctrl+C` 停止 `bash start.sh`。若之前已启动 systemd 服务，先执行 `sudo systemctl stop showallopts-api`。在进程停止后准备配置和日志权限：
+
+```bash
+cd /home/ubuntu/showAllOpts
+
+# 适配服务运行账号；真实配置仅 ubuntu 可读写
+sudo chown ubuntu:ubuntu config config/app.config
+sudo chmod 0700 config
+sudo chmod 0600 config/app.config
+
+# 新日志目录及旧日志、锁文件统一交给 ubuntu
+sudo install -d -o ubuntu -g ubuntu -m 0750 /home/ubuntu/showAllOpts/log
+sudo chown -R ubuntu:ubuntu /home/ubuntu/showAllOpts/log
+
+# 验证实际服务账号可以读取配置、执行 Python 并访问数据库
+sudo -u ubuntu env APP_ENV_FILE=config/app.config \
     backend/.venv/bin/python scripts/check_database.py
 ```
 
-如果日志目录已有其他账号创建的日志或锁文件，需要先停止写入它们的进程，再按 [日志目录与服务升级](docs/linux-deployment.md#日志目录与服务升级) 调整所有权；仅创建目录不会修复里面旧文件的权限。
-
 ### 安装并启动后端服务
 
-数据库检查成功后执行：
+数据库检查成功后，安装基础模板并写入本机覆盖配置：
 
 ```bash
-cd /opt/showallopts
+cd /home/ubuntu/showAllOpts
 sudo install -m 0644 deploy/systemd/showallopts-api.service \
     /etc/systemd/system/showallopts-api.service
+sudo install -d -m 0755 /etc/systemd/system/showallopts-api.service.d
+
+sudo tee /etc/systemd/system/showallopts-api.service.d/99-ubuntu-home.conf > /dev/null <<'EOF'
+[Service]
+User=ubuntu
+Group=ubuntu
+WorkingDirectory=/home/ubuntu/showAllOpts/backend
+Environment=APP_ENV_FILE=config/app.config
+ExecStart=
+ExecStart=/home/ubuntu/showAllOpts/backend/.venv/bin/python /home/ubuntu/showAllOpts/backend/run.py --host 127.0.0.1 --port 8000 --workers 2
+ProtectHome=read-only
+ReadWritePaths=
+ReadWritePaths=/home/ubuntu/showAllOpts/log
+EOF
+
 sudo systemctl daemon-reload
-sudo systemctl enable --now showallopts-api
+# enable 设置开机启动；restart 同时适用于首次启动和已有服务更新
+sudo systemctl enable showallopts-api
+sudo systemctl restart showallopts-api
 sudo systemctl status showallopts-api --no-pager
 curl --fail http://127.0.0.1:8000/api/v1/health
 ```
 
-`enable --now` 设置开机启动并立即启动服务；服务已运行时不会因此重启。`/health` 只验证 API 存活，数据库连通性以上面的检查脚本为准。
+`ExecStart=` 和 `ReadWritePaths=` 空行用于清除基础模板中的旧启动命令和旧日志路径，不能省略。覆盖文件将 `ProtectHome=true` 改成 `read-only`，允许服务读取 `/home` 中的代码，并通过 `ReadWritePaths` 单独允许写入项目日志目录；保留基础模板的 `ProtectSystem=strict`。这些设置遵循 [systemd 文件系统保护规则](https://github.com/systemd/systemd/blob/main/man/systemd.exec.xml)。
 
-服务文件已经包含 `Environment=APP_ENV_FILE=config/app.config`，由应用按项目根目录解析。终端中临时 `export APP_ENV_FILE=...` 不会改变 systemd 服务的配置；更改服务的配置路径应修改 service 或其 override，并执行 `daemon-reload` 和 `restart`。
+`APP_ENV_FILE=config/app.config` 由应用按项目根目录解析。终端中的临时 `export` 不会改变 systemd 服务配置。覆盖文件只包含路径和运行参数，不要把数据库密码写入 service。
+
+查看最终合并的配置，确认账号和启动路径已经生效：
+
+```bash
+sudo systemctl cat showallopts-api
+sudo systemctl show showallopts-api \
+    -p User -p Group -p WorkingDirectory -p ExecStart -p ProtectHome -p ReadWritePaths
+```
+
+`systemctl cat` 会同时显示基础模板中的旧值和覆盖文件中的新值，以 `systemctl show` 的最终结果为准。如果机器已有其他覆盖文件，也需检查是否冲突。`/health` 仅验证 API 存活，数据库连通性以上面的检查脚本为准。
 
 ### 发布前端网页
 
@@ -262,8 +300,8 @@ sudo systemctl reload nginx
 应用同时保留按天轮转的日志文件：
 
 ```bash
-sudo tail -n 100 -f /opt/showallopts/log/app.log
-sudo tail -n 100 -f /opt/showallopts/log/error.log
+sudo tail -n 100 -f /home/ubuntu/showAllOpts/log/app.log
+sudo tail -n 100 -f /home/ubuntu/showAllOpts/log/error.log
 ```
 
 `systemctl stop` 会正常停止服务，不会因为模板的 `Restart=on-failure` 自动重启；若保留开机启动设置，下次开机仍会启动。停止后端后，Nginx 静态页面仍可打开，数据接口不可用。只有 Nginx 专门服务本项目时，才使用 `sudo systemctl stop nginx` 一并关闭网页；承载其他网站时应单独停用本项目站点。
@@ -271,9 +309,9 @@ sudo tail -n 100 -f /opt/showallopts/log/error.log
 ### 修改配置或更新代码
 
 - 修改 `config/app.config` 内容：执行 `sudo systemctl restart showallopts-api`，无需 `daemon-reload`。
-- 修改仓库内 service 模板：重新执行上面的 `sudo install` 和 `daemon-reload`，再执行 `sudo systemctl restart showallopts-api`。仅修改仓库文件不会更新已经安装的服务。
+- 修改仓库内 service 模板：重新安装基础模板，保留本机 `99-ubuntu-home.conf`，执行 `daemon-reload` 后重启。修改覆盖配置也需 `daemon-reload` 后重启；仅修改仓库文件不会更新已安装的服务。
 - 修改前端：重新构建并发布 `frontend/dist`；仅重启后端不会更新网页。修改 Nginx 配置后先执行 `sudo nginx -t`，通过后执行 `sudo systemctl reload nginx`。
-- 更新代码：保留 `config/app.config`，按 [Linux 更新步骤](docs/linux-deployment.md#日志启停和更新) 安装依赖、发布前端并重启后端。
+- 更新代码：在 `/home/ubuntu/showAllOpts` 执行更新，保留 `config/app.config` 和本机 systemd 覆盖配置；以 `ubuntu` 安装依赖、发布前端，再重启后端。保持现有目录不变时，无需迁移或重建虚拟环境。
 
 ## 分别运行前后端
 
