@@ -1,0 +1,30 @@
+# Local configuration and credentials
+.env
+.env.*
+!.env.example
+**/.env
+**/.env.*
+!**/.env.example
+
+# Python
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+*.egg-info/
+.coverage
+htmlcov/
+
+# Frontend
+node_modules/
+dist/
+*.tsbuildinfo
+playwright-report/
+test-results/
+
+# Local runtime
+.runtime/
+*.log
+.DS_Store
+.idea/
