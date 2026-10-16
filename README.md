@@ -96,6 +96,59 @@ bash start.sh
 
 服务器长期运行提供 **systemd + Nginx** 模板，支持开机启动、失败重启和日志查看；也可以用 Docker Compose。完整安装、权限、SELinux、端口和升级步骤见 [Linux 部署指南](docs/linux-deployment.md)。从 Windows 复制代码时，不要复制 `.venv` 和 `node_modules`。
 
+### setup.sh 提示缺少 Node.js / npm
+
+如果出现 `Install Node.js 22.12+ and npm first.`，表示当前用户的 PATH 中没有找到 `node` 命令。项目需要 Node.js 构建前端；`setup.sh` 只检查环境，不会自动安装系统软件。
+
+以下步骤在 Bash 中执行。安装 nvm、Node.js 和运行项目时使用同一个部署用户，不要对这些命令加 `sudo`，否则可能切换用户并丢失 nvm 的环境。使用 [nvm 官方安装方式](https://github.com/nvm-sh/nvm#installing-and-updating) 安装 Node.js 22：
+
+```bash
+export NVM_DIR="$HOME/.nvm"
+curl -fsSL https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.8/install.sh | bash
+
+source "$NVM_DIR/nvm.sh"
+nvm install 22
+nvm use 22
+nvm alias default 22
+
+node -v
+npm -v
+```
+
+确认 `node -v` 为 22.12 或更高版本，且 `npm -v` 正常输出版本号。上面的下载步骤需要能够访问 GitHub 和 Node.js 下载站点。
+
+如果提示 `curl: command not found`，先按系统选择安装 curl，再回到上面的步骤：
+
+```bash
+# Ubuntu
+sudo apt update
+sudo apt install -y curl ca-certificates
+
+# Red Hat：使用这条替代上面的 Ubuntu 命令
+sudo dnf install -y curl ca-certificates
+```
+
+如果已经通过 nvm 安装过 Node.js，但新终端仍找不到命令，通常只需加载原来的 nvm 环境并选择版本：
+
+```bash
+source "${NVM_DIR:-$HOME/.nvm}/nvm.sh"
+nvm use 22
+node -v
+npm -v
+```
+
+回到项目根目录，重新执行安装命令（按系统选择一条）：
+
+```bash
+# Ubuntu 24.04
+bash scripts/setup.sh --python python3
+
+# RHEL 9.2+
+bash scripts/setup.sh --python python3.11
+```
+
+安装成功后执行 `bash start.sh`，其他机器访问 `http://服务器IP:5173`。若仍失败，提供新的错误信息和 `cat /etc/os-release` 输出，以便按具体发行版排查。
+
 ## 分别运行前后端
 
 后端（在 `backend` 中）：

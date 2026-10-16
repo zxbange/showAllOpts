@@ -19,7 +19,18 @@ RHEL 9.2+（需要已启用系统软件源）：
 sudo dnf install -y python3.11 python3.11-pip nginx rsync curl
 ```
 
-Node.js 按 [官方安装说明](https://nodejs.org/en/download) 安装 22.12 以上的受支持版本，确保当前部署用户能调用 `node` 和 `npm`。如果已安装 nvm，可执行 `nvm install 22` 和 `nvm use 22`。不要假设系统默认 nodejs 软件包满足版本要求。
+Node.js 需要 22.12 或更高版本。可以使用 [nvm 官方安装方式](https://github.com/nvm-sh/nvm#installing-and-updating)；在 Bash 中以运行项目的同一个部署用户执行以下命令，不要加 `sudo`：
+
+```bash
+export NVM_DIR="$HOME/.nvm"
+curl -fsSL https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.8/install.sh | bash
+source "$NVM_DIR/nvm.sh"
+nvm install 22
+nvm use 22
+nvm alias default 22
+```
+
+已有 nvm 环境时，只需加载其 `nvm.sh` 并执行 `nvm use 22`。不要假设系统默认 nodejs 软件包满足要求；确认当前用户可以调用 `node` 和 `npm`。`setup.sh` 提示 `Install Node.js 22.12+ and npm first.` 时，请按 [README 的 Node.js 排查步骤](../README.md#setupsh-提示缺少-nodejs--npm) 处理。
 
 ```bash
 node --version
