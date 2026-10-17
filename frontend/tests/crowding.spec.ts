@@ -48,7 +48,7 @@ test('home to crowding, chart, ranges and smoothing on desktop/mobile', async ({
     })
   })
   await page.goto('/')
-  await page.locator('.crowding-module').click()
+  await page.locator('.crowding-module:not(.microcap-module)').click()
   await expect(page.getByRole('heading', { name: /抱团拥挤度.*成交额集中度/ })).toBeVisible()
   await expect(page.locator('.trend-chart canvas')).toBeVisible()
   await expect(page.locator('.stats-grid')).toContainText('40.00%')

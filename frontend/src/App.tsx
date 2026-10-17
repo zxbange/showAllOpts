@@ -13,6 +13,10 @@ const CrowdingPage = lazy(() =>
   import('./pages/CrowdingPage').then((module) => ({ default: module.CrowdingPage })),
 )
 
+const MicrocapPage = lazy(() =>
+  import('./pages/MicrocapPage').then((module) => ({ default: module.MicrocapPage })),
+)
+
 export default function App() {
   return (
     <BrowserRouter>
@@ -20,6 +24,14 @@ export default function App() {
         <Route element={<Layout />}>
           <Route index element={<HomePage />} />
           <Route path="industry-momentum" element={<MomentumPage />} />
+          <Route
+            path="microcap-temperature"
+            element={
+              <Suspense fallback={<LoadingState />}>
+                <MicrocapPage />
+              </Suspense>
+            }
+          />
           <Route
             path="market-crowding"
             element={

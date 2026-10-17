@@ -8,6 +8,7 @@ import {
   MoveUpRight,
   Radar,
   Sparkles,
+  Thermometer,
 } from 'lucide-react'
 import { Link } from 'react-router-dom'
 import { getModules, getSnapshot } from '../api/client'
@@ -77,7 +78,7 @@ export function HomePage() {
           <span>
             研究模块
             <strong>
-              {modules.data?.modules.length ?? 2}
+              {modules.data?.modules.length ?? 3}
               <small>个模块已就绪</small>
             </strong>
           </span>
@@ -118,7 +119,7 @@ export function HomePage() {
             <ArrowDownRight size={15} />
           </span>
         </div>
-        <div className="module-layout">
+        <div className="module-layout module-layout-expanded">
           <Link to="/industry-momentum" className="module-card">
             <div className="module-copy">
               <div className="module-top">
@@ -185,6 +186,23 @@ export function HomePage() {
               前 5% 股票，占据多少成交？
               <br />
               沿着历史曲线，观察市场的集中与分散。
+            </p>
+            <span className="module-link">
+              进入模块 <ArrowRight size={18} />
+            </span>
+          </Link>
+          <Link to="/microcap-temperature" className="next-module crowding-module microcap-module">
+            <div className="next-module-art">
+              <Thermometer size={40} strokeWidth={1} />
+              <span />
+              <span />
+            </div>
+            <span className="section-eyebrow">MICROCAP THERMOMETER</span>
+            <h3>微盘温度计</h3>
+            <p>
+              从估值到交易，读懂微盘温度。
+              <br />
+              追踪微盘 1000 指数与财务指标。
             </p>
             <span className="module-link">
               进入模块 <ArrowRight size={18} />

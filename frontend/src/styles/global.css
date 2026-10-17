@@ -2175,3 +2175,183 @@ svg {
     padding: 8px 5px;
   }
 }
+
+/* Microcap thermometer */
+.module-layout-expanded {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+.module-layout-expanded > .module-card {
+  grid-column: 1 / -1;
+}
+.module-layout-expanded > .next-module {
+  min-height: 260px;
+}
+.microcap-module .next-module-art {
+  color: #efc482;
+}
+.microcap-thermometer {
+  padding: 26px;
+}
+.temperature-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.temperature-heading h2 {
+  font-size: 19px;
+  font-weight: 500;
+  margin: 10px 0 0;
+}
+.temperature-heading > span {
+  font-size: 11px;
+  color: #a2af9c;
+}
+.temperature-track {
+  position: relative;
+  height: 15px;
+  margin-top: 32px;
+  background: linear-gradient(90deg, #518c9b, #91c799 25%, #e3cf81 55%, #e59662 80%, #d65d55);
+  border-radius: 8px;
+}
+.temperature-track > span {
+  position: absolute;
+  top: -5px;
+  width: 4px;
+  height: 25px;
+  transform: translateX(-50%);
+  background: #f2f1da;
+  border: 1px solid #203024;
+  border-radius: 4px;
+  box-shadow: 0 0 12px #f9db8388;
+  transition: left 0.6s ease;
+}
+.temperature-scale {
+  position: relative;
+  height: 25px;
+  font-size: 10px;
+  color: #a5b19e;
+}
+.temperature-scale span {
+  position: absolute;
+  top: 10px;
+  transform: translateX(-50%);
+}
+.temperature-scale span:first-child {
+  left: 0;
+  transform: none;
+}
+.temperature-scale span:nth-child(2) {
+  left: 20%;
+}
+.temperature-scale span:nth-child(3) {
+  left: 50%;
+}
+.temperature-scale span:nth-child(4) {
+  left: 80%;
+}
+.temperature-scale span:last-child {
+  right: 0;
+  transform: none;
+}
+.temperature-factors {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 16px;
+  margin-top: 25px;
+}
+.temperature-factors > div {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  border-left: 1px solid #3c4835;
+  padding-left: 14px;
+}
+.temperature-factors span {
+  font-size: 12px;
+  color: #c1cbb7;
+}
+.temperature-factors strong {
+  color: #efc482;
+  font-size: 24px;
+  font-weight: 500;
+}
+.temperature-factors small {
+  font-size: 10px;
+  color: #94a68c;
+  line-height: 1.5;
+}
+.microcap-view-switch {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+  padding: 6px 0 15px;
+  border-bottom: 1px solid #34402e;
+  margin-bottom: 8px;
+}
+.microcap-view-switch button {
+  background: transparent;
+  border: 1px solid #3b4935;
+  color: #a6b49c;
+  font-size: 11px;
+  border-radius: 6px;
+  padding: 9px 14px;
+}
+.microcap-view-switch button.active {
+  background: #3b392b;
+  color: #f0ce91;
+  border-color: #8e7c51;
+}
+.microcap-secondary {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 20px;
+}
+.microcap-secondary > section {
+  min-width: 0;
+}
+.microcap-secondary .trend-chart {
+  height: 320px;
+}
+@media (max-width: 980px) {
+  .microcap-secondary {
+    grid-template-columns: 1fr;
+    gap: 0;
+  }
+}
+@media (max-width: 700px) {
+  .module-layout-expanded {
+    grid-template-columns: 1fr;
+  }
+  .main-nav a {
+    flex-direction: column;
+    gap: 3px;
+    padding: 5px 4px;
+    font-size: 10px;
+  }
+  .main-nav a > span:not(.nav-key) {
+    font-size: 10px;
+  }
+  .microcap-page .range-switch button {
+    padding: 8px 5px;
+  }
+  .microcap-thermometer {
+    padding: 20px 16px;
+  }
+  .temperature-factors {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .temperature-heading {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+  .microcap-view-switch button {
+    padding: 8px 10px;
+    font-size: 10px;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .temperature-track > span {
+    transition: none;
+  }
+}

@@ -9,7 +9,7 @@
   → FastAPI 路由：校验查询参数
   → Service：确定快照日期、计算区间指标、标记行业缺失
   → Repository：参数化 SELECT
-  → MySQL industry_momentum / market_crowding 表
+  → MySQL industry_momentum / market_crowding / microcap_temperature 表
 ```
 
 前后端独立进程、独立依赖、独立构建。后端不返回网页，前端不直接访问数据库。数据库凭据只由后端从环境变量或选中的配置文件读取：Windows 启动器及直接运行 Python 未指定配置时使用 `backend/.env`；Linux `start.sh`、systemd 和 Compose 默认选择项目根目录下的 `config/app.config`。配置优先级与迁移方式见 [配置管理](configuration.md)。所有查询通过 SQLAlchemy 表达式绑定参数，不拼接用户输入的 SQL。
@@ -35,9 +35,11 @@ Nginx 从 `/var/www/showallopts` 提供前端静态资源，将 `/api` 代理到
 3. 在前端增加页面与 API 类型，注册路由和导航，首页增加模块入口。
 4. 增加必要的查询边界测试及浏览器用户流程测试。
 
-当前模块包括申万二级行业动量和抱团拥挤度。后者对应 `market_crowding` 表，复合主键为 `(top_pct, trade_date)`，每次请求一次 SELECT 获取数据，在服务层计算统计和 EMA 10；前端只将比例转换为百分比显示。模型共用 `models/base.py` 中的 Base，网页不创建表。
+当前模块包括申万二级行业动量、抱团拥挤度和微盘温度计。抱团拥挤度对应 `market_crowding` 表，复合主键为 `(top_pct, trade_date)`，每次请求一次 SELECT 获取数据，在服务层计算统计和 EMA 10；前端只将比例转换为百分比显示。模型共用 `models/base.py` 中的 Base，网页不创建表。
 
-两类采集的保留规则独立：行业动量仅保留 180 个交易日；拥挤度默认保留 2020 年以来的完整历史。细节见 [抱团拥挤度说明](market-crowding.md)。
+各类采集的保留规则独立：行业动量仅保留 180 个交易日；拥挤度默认保留 2020 年以来的完整历史；微盘温度计保留 2021 年以来的五交易日采样历史。细节见 [抱团拥挤度说明](market-crowding.md) 与 [微盘温度计说明](microcap-temperature.md)。
+
+微盘温度计使用独立的 `microcap_temperature` 表。采集器保存原始指标、当期历史分位、综合温度、累计指数和成分股；刷新最后一期时从该期之前的基准续算，避免重复计数。网页模型将成分股字段设为延迟加载，页面接口只读指标，不传输名单。网页不会在切换范围时重算分位或重新设置指数基期。
 
 ## 错误、并发与浏览器行为
 

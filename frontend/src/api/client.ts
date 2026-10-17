@@ -1,3 +1,4 @@
+import type { MicrocapHistory } from '../types/microcap'
 import type { CrowdingHistory } from '../types/crowding'
 import type { IndustryHistory, Module, Snapshot } from '../types/momentum'
 
@@ -39,3 +40,6 @@ export function getHistory(
 
 export const getCrowdingHistory = (days: number, signal?: AbortSignal) =>
   request<CrowdingHistory>(`/market-crowding/history?days=${days}`, signal)
+
+export const getMicrocapHistory = (days: number, signal?: AbortSignal) =>
+  request<MicrocapHistory>(`/microcap-temperature/history?days=${days}`, signal)

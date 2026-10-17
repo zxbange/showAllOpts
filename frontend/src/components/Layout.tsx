@@ -7,6 +7,7 @@ import {
   Grid2X2,
   House,
   Layers3,
+  Thermometer,
 } from 'lucide-react'
 import { Link, NavLink, Outlet, useLocation } from 'react-router-dom'
 
@@ -49,6 +50,11 @@ export function Layout() {
             <span>抱团拥挤度</span>
             <span className="nav-key">03</span>
           </NavLink>
+          <NavLink to="/microcap-temperature">
+            <Thermometer size={18} />
+            <span>微盘温度计</span>
+            <span className="nav-key">04</span>
+          </NavLink>
         </nav>
         <div className="sidebar-bottom">
           <div className="sidebar-note">
@@ -72,9 +78,11 @@ export function Layout() {
             <span>
               {isHome
                 ? '总览'
-                : location.pathname.startsWith('/market-crowding')
-                  ? '抱团拥挤度'
-                  : '行业动量'}
+                : location.pathname.startsWith('/microcap-temperature')
+                  ? '微盘温度计'
+                  : location.pathname.startsWith('/market-crowding')
+                    ? '抱团拥挤度'
+                    : '行业动量'}
               {location.pathname.includes('/industries/') ? ' / 趋势详情' : ''}
             </span>
           </div>
