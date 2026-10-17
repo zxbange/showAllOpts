@@ -9,7 +9,6 @@ import builtins
 import datetime as dt
 import json
 import math
-import re
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP, localcontext
 import pandas as pd
 from sqlalchemy import Column, Date, DateTime, Index, Integer, JSON, Numeric, String, Text, create_engine
@@ -57,8 +56,9 @@ class EarningsStock(Base):
     pe_ttm = Column(Numeric(24, 6), nullable=True)
     pb = Column(Numeric(24, 6), nullable=True)
     valuation_date = Column(Date, nullable=False)
-    analysis = Column(Text, nullable=False)
-    analysis_basis = Column(String(32), nullable=False)
+    # 兼容旧表的非空列；不再生成分析内容，新记录写入空字符串。
+    analysis = Column(Text, nullable=False, default='')
+    analysis_basis = Column(String(32), nullable=False, default='')
     events = Column(JSON, nullable=False)
     prices = Column(JSON, nullable=False)
 
@@ -238,37 +238,6 @@ def price_signal(previous_close, open_price, close_price):
                 intraday_pct=float((closing / opening - 1) * 100))
 
 
-def analyse(record, selected):
-    # 200–300 字的规则化证据解读，不编造新闻，也不调用外部模型。
-    growth = '{:.2f}%'.format(record['profit_yoy'])
-    prefix = ('本期筛选依据为{}，{}归母净利润同比{}{}，达到20%的增长门槛。'
-              '{}对应行情日高开{:.2f}%，收盘较开盘变动{:.2f}%，符合高开后未收阴的价格条件。').format(
-                  SOURCE_NAMES[selected['kind']], selected['profit_basis'],
-                  '下限为' if selected['kind'] == 'forecast' else '增长', growth,
-                  selected['publication_date'], record['open_gap_pct'], record['intraday_pct'])
-    reason = selected.get('reason')
-    if reason:
-        excerpt = re.sub(r'\s+', ' ', reason)
-        excerpt = excerpt if len(excerpt) <= 45 else excerpt[:45] + '…'
-        evidence = '该条公告原因字段记载：“{}”。这一说明来自公司披露，尚未独立验证。'.format(excerpt)
-        basis = '公告原因与量价数据'
-    else:
-        evidence = '现有数据未取得该条公告的经营原因说明，因此不能确认增长来自销量、价格、成本改善或非经常性收益。'
-        basis = '量价与财务数据'
-    tail = ('综合看，该信号体现业绩增长与价格走强同时出现，可能与盈利预期调整有关，'
-            '但日期级数据无法证明公告先于上涨，也不能判断是否超出市场预期。'
-            '后续应核对公告全文、扣非利润和现金流，区分经营改善与一次性因素。')
-    text = prefix + evidence + tail
-    if len(text) > 300:
-        text = prefix + evidence + '该信号反映业绩与价格共振，不证明因果或超预期。公告时点、扣非利润及现金流仍需结合原文核查。'
-    if len(text) < 200:
-        text += '不同公告口径分别保留，不将预告增幅下限与实际单季度增长直接等同。'
-    if not 200 <= len(text) <= 300:
-        raise ValueError('分析文字长度超出 200–300 字，请检查异常数值。')
-    return text, basis
-
-
-
 def screen(codes, names, events, period, as_of):
     grouped = {}
     for e in events:
@@ -339,7 +308,6 @@ def screen(codes, names, events, period, as_of):
                       net_profit=selected['net_profit'], open_gap_pct=selected['signal']['open_gap_pct'],
                       intraday_pct=selected['signal']['intraday_pct'], valuation_date=as_of,
                       events=disclosures, prices=prices)
-        record['analysis'], record['analysis_basis'] = analyse(record, selected)
         results.append(record)
         if index % 25 == 0:
             print('已检查 {} 只披露股票，命中 {} 只。'.format(index, len(results)))
@@ -394,8 +362,7 @@ def save_results(Session, period, as_of, universe_count, records):
     for r in records:
         if (r['report_period'] != period or r['valuation_date'] != as_of
                 or r['signal_date'] > as_of or r['announcement_date'] > r['signal_date']
-                or r['open_gap_pct'] <= 3 or r['intraday_pct'] < 0 or r['profit_yoy'] < 20
-                or not 200 <= len(r['analysis']) <= 300):
+                or r['open_gap_pct'] <= 3 or r['intraday_pct'] < 0 or r['profit_yoy'] < 20):
             raise ValueError('筛选结果校验失败，拒绝覆盖数据库。')
     # 先验证原始筛选阈值，再量化写入值；任何转换失败均发生在删除旧快照之前。
     # 不修改原始 records 和公告 JSON，也不把 Decimal 转回 float。
@@ -446,7 +413,7 @@ def run(end_date=END_DATE):
         save_results(sessionmaker(bind=engine), period, as_of, len(codes), records)
     finally:
         engine.dispose()
-    print('完成：{} 只股票已入库（含原因分析）；其他季度数据保留。'.format(len(records)))
+    print('完成：{} 只股票已入库；其他季度数据保留。'.format(len(records)))
     return pd.DataFrame(records)
 
 

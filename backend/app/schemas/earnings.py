@@ -34,8 +34,6 @@ class StockSummary(BaseModel):
     pe_ttm: float | None
     pb: float | None
     valuation_date: date
-    analysis: str
-    analysis_basis: str
 
 
 class StockDetail(StockSummary):

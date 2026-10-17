@@ -375,7 +375,7 @@ npm run dev
 
 `collectors/净利润断层_数据库版.py` 在聚宽研究环境扫描统一最新已结束季度的全部 A 股披露数据，筛选归母净利润同比达到 20%、公告对应交易日高开超过 3% 且收盘不低于开盘的股票。不下单，不限制入选数量。每次完整重查目标季度，一次事务替换该季度结果，保留其他季度。
 
-页面提供代码/名称搜索、细分行业/季度/公告类型筛选、排序和分页，展示市值、PE、PB、利润增幅与 200–300 字的断层原因分析。点击股票可核查快报、预告、正式财报原始数据及信号附近 K 线。分析基于已取得的公告和量价证据，没有经营原因原文时明确说明，不编造原因。详细口径、数据单位、首次运行和 Linux 更新步骤见 [净利润断层说明](docs/earnings-gap.md)。
+页面提供代码/名称搜索、细分行业/季度/公告类型筛选、排序和分页，展示市值、PE、PB、利润增幅与信号日期。点击股票可核查快报、预告、正式财报原始数据及信号附近 K 线。详细口径、数据单位、首次运行和 Linux 更新步骤见 [净利润断层说明](docs/earnings-gap.md)。
 
 ## 页面与数据口径
 
@@ -398,7 +398,7 @@ npm run dev
 | `GET /api/v1/health` | 服务存活状态，不代表数据库连通 |
 | `GET /api/v1/modules` | 模块目录 |
 | `GET /api/v1/earnings-gap/stocks` | 净利润断层名单，支持季度/行业/公告类型/搜索/排序/分页 |
-| `GET /api/v1/earnings-gap/stocks/{code}?period=2026-09-30` | 股票财务、公告、价格和原因分析详情 |
+| `GET /api/v1/earnings-gap/stocks/{code}?period=2026-09-30` | 股票财务、公告及价格详情 |
 | `GET /api/v1/etf-shares/history?group=hs300&days=365` | ETF 最新份额与区间曲线；支持 hs300 / zz500，days=0 查看全部 |
 | `GET /api/v1/microcap-temperature/history?days=365` | 微盘温度计最新指标、历史曲线及区间统计；days=0 查看全部 |
 | `GET /api/v1/market-crowding/history?days=365` | 抱团拥挤度最新值、历史及区间统计；days=0 查看全部 |

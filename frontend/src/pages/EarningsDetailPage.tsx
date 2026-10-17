@@ -1,6 +1,6 @@
 import { useCallback } from 'react'
 import { Link, useParams, useSearchParams } from 'react-router-dom'
-import { ArrowLeft, FileText, Sparkles } from 'lucide-react'
+import { ArrowLeft, FileText } from 'lucide-react'
 import { getEarningsDetail } from '../api/client'
 import { useResource } from '../hooks/useResource'
 import { EmptyState, ErrorState, LoadingState } from '../components/States'
@@ -63,17 +63,6 @@ export function EarningsDetailPage() {
               {data.signal_source === 'forecast' ? ' · 预告下限' : ''}。估值日期：
               {data.valuation_date}。
             </p>
-            <section className="earnings-analysis panel">
-              <h2>
-                <Sparkles size={20} />
-                断层原因分析
-              </h2>
-              <p>{data.analysis}</p>
-              <small>
-                依据：{data.analysis_basis} · 自动规则解读 · {data.analysis.length}{' '}
-                字。具体原因需结合原文核查。
-              </small>
-            </section>
             <section className="panel">
               <div className="panel-heading">
                 <div>
@@ -164,7 +153,7 @@ export function EarningsDetailPage() {
               })}
             </div>
             <p className="earnings-note">
-              本页按公告日期关联行情，不能确认盘前或盘后发布时间。同比增长不等于超出市场预期；没有原因原文时，不推断订单、产品价格或资金身份。
+              本页按公告日期关联行情，不能确认盘前或盘后发布时间。同比增长不等于超出市场预期。
             </p>
           </>
         )

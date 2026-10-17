@@ -2,7 +2,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import load_only
 from app.models.earnings import EarningsRun, EarningsStock
 
-SUMMARY_COLUMNS = [c for c in EarningsStock.__table__.columns.keys() if c not in ('events', 'prices')]
+SUMMARY_COLUMNS = [c for c in EarningsStock.__table__.columns.keys() if c not in ('events', 'prices', 'analysis', 'analysis_basis')]
 
 
 class EarningsRepository:

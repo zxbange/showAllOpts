@@ -1,7 +1,5 @@
 import { expect, test } from '@playwright/test'
 
-const analysis =
-  '本期筛选依据为正式财报，单季度归母净利润同比增长35.00%，达到20%的增长门槛。2026-10-15对应行情日高开4.00%，收盘较开盘变动1.00%，符合高开后未收阴的价格条件。现有数据未取得该条公告的经营原因说明，因此不能确认增长来自销量、价格、成本改善或非经常性收益。综合看，该信号体现业绩增长与价格走强同时出现，可能与盈利预期调整有关，但日期级数据无法证明公告先于上涨，也不能判断是否超出市场预期。后续应核对公告全文、扣非利润和现金流，区分经营改善与一次性因素。'
 const stock = {
   report_period: '2026-09-30',
   code: '600001.XSHG',
@@ -22,8 +20,6 @@ const stock = {
   pe_ttm: 18,
   pb: 2.5,
   valuation_date: '2026-10-16',
-  analysis,
-  analysis_basis: '量价与财务数据',
 }
 const detail = {
   ...stock,
@@ -70,7 +66,7 @@ const overview = {
   items: [stock],
 }
 
-test('earnings entry, filters, analysis, pagination, detail and mobile layout', async ({
+test('earnings entry, filters, pagination, detail and mobile layout', async ({
   page,
 }, testInfo) => {
   const errors: string[] = []
@@ -86,8 +82,8 @@ test('earnings entry, filters, analysis, pagination, detail and mobile layout', 
   await page.getByRole('link', { name: '进入净利润断层', exact: true }).click()
   await expect(page.getByRole('heading', { level: 1 })).toContainText('净利润断层')
   await expect(page.getByRole('link', { name: stock.name })).toBeVisible()
-  await page.locator('.earnings-analysis-cell summary').click()
-  await expect(page.locator('.earnings-analysis-cell p')).toHaveText(analysis)
+  await expect(page.getByRole('columnheader', { name: '断层原因分析' })).toHaveCount(0)
+  await expect(page.getByRole('columnheader')).toHaveCount(6)
   await page.getByLabel('细分行业', { exact: true }).selectOption('801001')
   await expect.poll(() => requests.at(-1)?.searchParams.get('industry')).toBe('801001')
   await page.getByLabel('排序', { exact: true }).selectOption('profit_yoy')
@@ -103,7 +99,7 @@ test('earnings entry, filters, analysis, pagination, detail and mobile layout', 
   await page.screenshot({ path: testInfo.outputPath('earnings-list.png'), fullPage: true })
   await page.getByRole('link', { name: stock.name }).click()
   await expect(page.getByRole('heading', { level: 1 })).toContainText(stock.name)
-  await expect(page.locator('.earnings-analysis p')).toHaveText(analysis)
+  await expect(page.getByRole('heading', { name: '断层原因分析' })).toHaveCount(0)
   await expect(page.getByRole('img', { name: '信号附近日线走势' }).locator('canvas')).toBeVisible()
   await expect(page.getByText('未取得该期披露数据')).toHaveCount(2)
   await page.getByText('查看数据源原始字段').click()

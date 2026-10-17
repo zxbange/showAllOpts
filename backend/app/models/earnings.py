@@ -1,5 +1,6 @@
 """Collector-owned quarterly snapshots. The web application only reads."""
 from sqlalchemy import Column, Date, DateTime, Index, Integer, JSON, Numeric, String, Text
+from sqlalchemy.orm import deferred
 from app.models.base import Base
 
 
@@ -38,7 +39,8 @@ class EarningsStock(Base):
     pe_ttm = Column(Numeric(24, 6), nullable=True)
     pb = Column(Numeric(24, 6), nullable=True)
     valuation_date = Column(Date, nullable=False)
-    analysis = Column(Text, nullable=False)
-    analysis_basis = Column(String(32), nullable=False)
+    # Legacy columns remain for compatibility, but are never loaded by the API.
+    analysis = deferred(Column(Text, nullable=False, default=''))
+    analysis_basis = deferred(Column(String(32), nullable=False, default=''))
     events = Column(JSON, nullable=False)
     prices = Column(JSON, nullable=False)

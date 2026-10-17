@@ -192,7 +192,7 @@ export function EarningsPage() {
                   label="当前筛选"
                   value={data.total}
                   suffix="只"
-                  note="点击股票查看公告与分析"
+                  note="点击股票查看公告与行情"
                   icon={<ArrowUpRight size={17} />}
                 />
               </div>
@@ -232,7 +232,6 @@ export function EarningsPage() {
                         <th>高开幅度</th>
                         <th>总市值 / 流通市值（亿）</th>
                         <th>PE（TTM） / PB</th>
-                        <th>断层原因分析</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -271,16 +270,6 @@ export function EarningsPage() {
                             {decimal(s.pe_ttm)}
                             <small>{decimal(s.pb)}</small>
                           </td>
-                          <td className="earnings-analysis-cell">
-                            <details>
-                              <summary>
-                                <span>{s.analysis.slice(0, 68)}…</span>
-                                <em>展开分析 · {s.analysis.length} 字</em>
-                              </summary>
-                              <p>{s.analysis}</p>
-                              <small>依据：{s.analysis_basis} · 自动规则解读</small>
-                            </details>
-                          </td>
                         </tr>
                       ))}
                     </tbody>
@@ -308,7 +297,7 @@ export function EarningsPage() {
               </section>
             )}
             <p className="earnings-note">
-              口径：快报、预告为报告期累计；正式财报沿用原策略的单季度指标。公告日为交易日时使用当日行情，非交易日顺延；不据此断言公告引发上涨。原因分析基于已取得的证据，具体经营原因以公告原文为准。
+              口径：快报、预告为报告期累计；正式财报沿用原策略的单季度指标。公告日为交易日时使用当日行情，非交易日顺延；不据此断言公告引发上涨。
             </p>
           </>
         )

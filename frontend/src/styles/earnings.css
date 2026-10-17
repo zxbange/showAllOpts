@@ -79,7 +79,7 @@
 }
 .earnings-table {
   width: 100%;
-  min-width: 1220px;
+  min-width: 900px;
   border-collapse: collapse;
   text-align: left;
 }
@@ -136,30 +136,6 @@
   color: var(--accent);
   font-variant-numeric: tabular-nums;
 }
-.earnings-analysis-cell {
-  width: 320px;
-  min-width: 270px;
-}
-.earnings-analysis-cell summary {
-  cursor: pointer;
-  color: var(--muted);
-  font-size: 12px;
-}
-.earnings-analysis-cell em {
-  display: block;
-  font-size: 10px;
-  font-style: normal;
-  color: var(--accent);
-  margin-top: 5px;
-}
-.earnings-analysis-cell details[open] summary span {
-  display: none;
-}
-.earnings-analysis-cell p {
-  line-height: 1.9;
-  padding-top: 8px;
-  font-size: 12px;
-}
 .earnings-pagination {
   display: flex;
   align-items: center;
@@ -205,32 +181,6 @@
 .earnings-detail-metrics strong {
   font-size: 23px;
   font-weight: 500;
-}
-.earnings-analysis {
-  padding: 26px 30px;
-  border-left: 3px solid var(--accent);
-  background: linear-gradient(100deg, #fff9f2, white);
-}
-.earnings-analysis h2 {
-  display: flex;
-  gap: 10px;
-  align-items: center;
-  font-size: 16px;
-  margin-bottom: 16px;
-}
-.earnings-analysis h2 svg {
-  color: var(--accent);
-}
-.earnings-analysis p {
-  font-size: 14px;
-  line-height: 2.1;
-  letter-spacing: 0.3px;
-}
-.earnings-analysis small {
-  color: var(--muted);
-  display: block;
-  margin-top: 14px;
-  font-size: 11px;
 }
 .earnings-chart {
   height: 360px;
@@ -350,9 +300,6 @@
   }
   .earnings-detail-metrics strong {
     font-size: 21px;
-  }
-  .earnings-analysis {
-    padding: 22px;
   }
   .earnings-chart {
     height: 300px;

@@ -38,12 +38,14 @@ def test_list_filter_sort_page_detail_and_nulls(client,session):
     assert data['total']==2 and data['items'][0]['code']=='000001.XSHE'
     assert data['items'][0]['market_cap'] is None
     assert 'events' not in data['items'][0] and 'prices' not in data['items'][0]
+    assert 'analysis' not in data['items'][0] and 'analysis_basis' not in data['items'][0]
     assert len(data['industries'])==2
     result=client.get('/api/v1/earnings-gap/stocks?period=2026-09-30&industry=test&search=测试&source=formal').json()
     assert result['total']==1 and result['items'][0]['pb']==0 and result['items'][0]['pe_ttm']==-5
     assert client.get('/api/v1/earnings-gap/stocks?period=2026-09-30&search=%25').json()['total']==0
     detail=client.get('/api/v1/earnings-gap/stocks/600001.XSHG?period=2026-09-30').json()
     assert detail['events'][0]['raw']['original']==123 and len(detail['prices'])==1
+    assert 'analysis' not in detail and 'analysis_basis' not in detail
     assert client.get('/api/v1/earnings-gap/stocks/none?period=2026-09-30').status_code==404
 
 
@@ -67,3 +69,4 @@ def test_read_only_queries_and_no_large_payload_in_listing(client,session,engine
     assert 'earnings_gap_stock.events' not in statements[-1]
     assert 'earnings_gap_stock.prices' not in statements[-1]
     assert 'LIMIT' in statements[-1]
+    assert 'earnings_gap_stock.analysis' not in statements[-1]

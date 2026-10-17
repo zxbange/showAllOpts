@@ -18,8 +18,6 @@ export interface EarningsStock {
   pe_ttm: number | null
   pb: number | null
   valuation_date: string
-  analysis: string
-  analysis_basis: string
 }
 export interface EarningsEvent {
   code: string

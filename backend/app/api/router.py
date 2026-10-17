@@ -30,7 +30,7 @@ def modules():
         'path': '/microcap-temperature', 'status': 'available',
     }, {
         'id': 'earnings-gap', 'name': '净利润断层',
-        'description': '筛选最新财报季度的业绩与价格共振，查看公告证据和原因分析。',
+        'description': '筛选最新财报季度的业绩与价格共振，查看公告证据与估值数据。',
         'path': '/earnings-gap', 'status': 'available',
     }, {
         'id': 'etf-shares', 'name': 'ETF份额仪表盘',

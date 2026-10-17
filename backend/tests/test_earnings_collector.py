@@ -45,7 +45,6 @@ def record(c, period=dt.date(2026, 9, 30), code='600001.XSHG'):
         profit_yoy=25, net_profit=1e8, open_gap_pct=4, intraday_pct=0,
         market_cap=50, circulating_market_cap=40, pe_ttm=-10, pb=0,
         valuation_date=dt.date(2026, 10, 16), events=[e], prices=[])
-    result['analysis'], result['analysis_basis'] = c.env['analyse'](result, e)
     return result
 
 
@@ -76,18 +75,6 @@ def test_financial_eligibility(c,kind,profit,growth,eligible):
     assert e['eligible'] is eligible
 
 
-@pytest.mark.parametrize('kind', ['express','forecast','formal'])
-@pytest.mark.parametrize('reason', [None, '销量增加，成本下降。', '公告原因内容。'*100])
-def test_analysis_length_evidence_and_no_invented_cause(c,kind,reason):
-    raw={} if reason is None else {'change_reason':reason}
-    e=c.env['event']('600001.XSHG',kind,'2026-10-15',dt.date(2026,9,30),1e8,25,raw)
-    text,basis=c.env['analyse'](record(c),e)
-    assert 200 <= len(text) <= 300
-    assert '无法证明' in text or '不证明因果' in text
-    if reason is None:
-        assert '未取得' in text and '不能确认' in text and basis == '量价与财务数据'
-    else:
-        assert '公司披露' in text and e['reason'] == reason
 
 
 def test_atomic_replace_idempotence_zero_and_other_quarters(c):
@@ -98,6 +85,7 @@ def test_atomic_replace_idempotence_zero_and_other_quarters(c):
     save(c.Session,p,day,6000,[row])
     with c.Session() as s:
         assert s.query(c.env['EarningsStock']).count()==2
+        assert all(row.analysis == '' and row.analysis_basis == '' for row in s.query(c.env['EarningsStock']).all())
     save(c.Session,p,day,6000,[])
     with c.Session() as s:
         assert s.query(c.env['EarningsStock']).count()==1
@@ -164,7 +152,7 @@ def test_signal_weekend_matches_next_day_not_previous_and_paused_excluded(c):
     result=c.env['screen'](['600001.XSHG'],{'600001.XSHG':'测试公司'},[e],period,end)
     assert len(result)==1 and result[0]['signal_date']==days[2]
     assert result[0]['open_gap_pct']==4  # The low price need not form a strict gap.
-    assert result[0]['analysis'] and result[0]['events'][0]['signal']
+    assert 'analysis' not in result[0] and result[0]['events'][0]['signal']
     bars[-1]['paused']=1
     assert c.env['screen'](['600001.XSHG'],{'600001.XSHG':'测试公司'},[e],period,end)==[]
 
