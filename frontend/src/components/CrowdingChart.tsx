@@ -1,3 +1,4 @@
+import { chartColors } from '../lib/chartTheme'
 import { useEffect, useRef } from 'react'
 import { init, use } from 'echarts/core'
 import type { EChartsType } from 'echarts/core'
@@ -56,15 +57,15 @@ export function CrowdingChart({
           enabled: true,
           description: '前百分之五股票成交额占全市场成交额的比例，按交易日显示。',
         },
-        color: ['#8edbd6', '#edc988'],
+        color: [chartColors.jade, chartColors.gold],
         grid: { left: 16, right: 26, top: 60, bottom: 80, containLabel: true },
-        legend: { top: 6, textStyle: { color: '#a8bcb3' } },
+        legend: { top: 6, textStyle: { color: chartColors.muted } },
         tooltip: {
           trigger: 'axis',
           renderMode: 'richText',
-          backgroundColor: '#24342c',
-          borderColor: '#46584b',
-          textStyle: { color: '#f0f5ec' },
+          backgroundColor: chartColors.background,
+          borderColor: chartColors.border,
+          textStyle: { color: chartColors.text },
           valueFormatter: (value: unknown) =>
             value == null ? '暂无记录' : Number(value).toFixed(2) + '%',
         },
@@ -72,27 +73,36 @@ export function CrowdingChart({
           type: 'category',
           boundaryGap: false,
           data: points.map((p) => p.date),
-          axisLabel: { color: '#88978e', hideOverlap: true },
-          axisLine: { lineStyle: { color: '#344038' } },
+          axisLabel: { color: chartColors.muted, hideOverlap: true },
+          axisLine: { lineStyle: { color: chartColors.border } },
           axisTick: { show: false },
         },
         yAxis: {
           type: 'value',
           min: (value: { min: number }) => Math.max(0, Math.floor(value.min - 2)),
           max: (value: { max: number }) => Math.min(100, Math.ceil(value.max + 2)),
-          axisLabel: { color: '#88978e', formatter: '{value}%' },
-          splitLine: { lineStyle: { color: '#2b3730', type: 'dashed' } },
+          axisLabel: { color: chartColors.muted, formatter: '{value}%' },
+          splitLine: { lineStyle: { color: chartColors.grid, type: 'dashed' } },
         },
         dataZoom: [
           { type: 'inside', zoomOnMouseWheel: false },
           {
             type: 'slider',
+            backgroundColor: chartColors.surface,
+            dataBackground: {
+              lineStyle: { color: chartColors.border },
+              areaStyle: { color: chartColors.surface },
+            },
+            selectedDataBackground: {
+              lineStyle: { color: chartColors.jade },
+              areaStyle: { color: chartColors.jadeFill },
+            },
             bottom: 12,
             height: 24,
             borderColor: 'transparent',
-            fillerColor: 'rgba(142,219,214,0.12)',
-            textStyle: { color: '#88978e' },
-            handleStyle: { color: '#8edbd6' },
+            fillerColor: chartColors.jadeFill,
+            textStyle: { color: chartColors.muted },
+            handleStyle: { color: chartColors.jade },
           },
         ],
         series: [
@@ -104,7 +114,7 @@ export function CrowdingChart({
             connectNulls: false,
             showSymbol: points.length < 3,
             lineStyle: { width: 2 },
-            itemStyle: { color: '#8edbd6' },
+            itemStyle: { color: chartColors.jade },
             areaStyle: { opacity: 0.1 },
             markPoint: {
               symbolSize: 48,
@@ -127,8 +137,8 @@ export function CrowdingChart({
             markLine: {
               silent: true,
               symbol: 'none',
-              label: { position: 'insideEndTop', color: '#a8bcb3', formatter: '区间均值' },
-              lineStyle: { color: '#90a49a', type: 'dashed' },
+              label: { position: 'insideEndTop', color: chartColors.muted, formatter: '区间均值' },
+              lineStyle: { color: chartColors.muted, type: 'dashed' },
               data:
                 data.summary.average_ratio == null
                   ? []
@@ -144,8 +154,8 @@ export function CrowdingChart({
                   smooth: false,
                   connectNulls: false,
                   showSymbol: false,
-                  lineStyle: { width: 2.5, color: '#edc988' },
-                  itemStyle: { color: '#edc988' },
+                  lineStyle: { width: 2.5, color: chartColors.gold },
+                  itemStyle: { color: chartColors.gold },
                 },
               ]
             : []),

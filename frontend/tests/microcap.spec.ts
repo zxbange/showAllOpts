@@ -64,7 +64,7 @@ test('microcap module, metric selection, index overlay, range and financial char
     })
   })
   await page.goto('/')
-  await page.locator('.microcap-module').click()
+  await page.getByRole('link', { name: '进入微盘温度计', exact: true }).click()
   await expect(page.getByRole('heading', { level: 1 })).toContainText('微盘温度计')
   await expect(page.locator('.stats-grid')).toContainText('60.0')
   await expect(page.locator('.trend-chart canvas')).toHaveCount(3)

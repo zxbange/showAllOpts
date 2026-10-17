@@ -15,11 +15,11 @@ export function sortIndustries<T extends { momentum: number; code: string }>(ite
 }
 
 const stops = [
-  [24, 55, 48],
-  [42, 91, 67],
-  [112, 151, 91],
-  [215, 184, 99],
-  [250, 126, 83],
+  [250, 241, 223],
+  [244, 211, 159],
+  [237, 156, 108],
+  [219, 98, 75],
+  [170, 48, 47],
 ]
 export function heatColor(value: number, maximum: number) {
   const ratio = maximum > 0 ? Math.min(1, Math.max(0, Math.log1p(value) / Math.log1p(maximum))) : 0
@@ -28,5 +28,11 @@ export function heatColor(value: number, maximum: number) {
   const rgb = stops[index].map((color, channel) =>
     Math.round(color + (stops[index + 1][channel] - color) * weight),
   )
-  return { background: `rgb(${rgb.join(', ')})`, color: ratio > 0.48 ? '#162219' : '#e4f1e7' }
+  // Choose readable text from actual luminance, independent of the score distribution.
+  const linear = rgb.map((channel) => {
+    const c = channel / 255
+    return c <= 0.04045 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4
+  })
+  const luminance = linear[0] * 0.2126 + linear[1] * 0.7152 + linear[2] * 0.0722
+  return { background: `rgb(${rgb.join(', ')})`, color: luminance > 0.179 ? '#000000' : '#ffffff' }
 }

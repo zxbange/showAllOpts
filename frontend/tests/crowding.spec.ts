@@ -27,7 +27,9 @@ const history = {
   })),
 }
 
-test('home to crowding, chart, ranges and smoothing on desktop/mobile', async ({ page }) => {
+test('home to crowding, chart, ranges and smoothing on desktop/mobile', async ({
+  page,
+}, testInfo) => {
   const errors: string[] = []
   page.on('pageerror', (error) => errors.push(error.message))
   await page.route('**/api/v1/modules', (route) =>
@@ -48,7 +50,7 @@ test('home to crowding, chart, ranges and smoothing on desktop/mobile', async ({
     })
   })
   await page.goto('/')
-  await page.locator('.crowding-module:not(.microcap-module)').click()
+  await page.getByRole('link', { name: '进入抱团拥挤度', exact: true }).click()
   await expect(page.getByRole('heading', { name: /抱团拥挤度.*成交额集中度/ })).toBeVisible()
   await expect(page.locator('.trend-chart canvas')).toBeVisible()
   await expect(page.locator('.stats-grid')).toContainText('40.00%')
@@ -68,6 +70,11 @@ test('home to crowding, chart, ranges and smoothing on desktop/mobile', async ({
     true,
   )
   expect(errors).toEqual([])
+  await page.screenshot({
+    path: testInfo.outputPath('crowding.png'),
+    fullPage: true,
+    animations: 'disabled',
+  })
 })
 
 test('crowding failure, retry, and empty state', async ({ page }) => {

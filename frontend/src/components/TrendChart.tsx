@@ -1,3 +1,4 @@
+import { chartColors } from '../lib/chartTheme'
 import { useEffect, useRef } from 'react'
 import { init, use } from 'echarts/core'
 import { LineChart } from 'echarts/charts'
@@ -49,21 +50,21 @@ export function TrendChart({ points, name }: { points: HistoryPoint[]; name: str
         tooltip: {
           trigger: 'axis',
           renderMode: 'richText',
-          backgroundColor: '#24342c',
-          borderColor: '#46584b',
-          textStyle: { color: '#f0f5ec', fontSize: 12 },
+          backgroundColor: chartColors.background,
+          borderColor: chartColors.border,
+          textStyle: { color: chartColors.text, fontSize: 12 },
           valueFormatter: (value: unknown) =>
             value == null || value === '-' ? '暂无记录' : Number(value).toFixed(2),
-          axisPointer: { type: 'line', lineStyle: { color: '#a9cd94', type: 'dashed' } },
+          axisPointer: { type: 'line', lineStyle: { color: chartColors.coral, type: 'dashed' } },
         },
         xAxis: {
           type: 'category',
           boundaryGap: false,
           data: points.map((p) => p.date),
-          axisLine: { lineStyle: { color: '#344038' } },
+          axisLine: { lineStyle: { color: chartColors.border } },
           axisTick: { show: false },
           axisLabel: {
-            color: '#88978e',
+            color: chartColors.muted,
             fontSize: 11,
             hideOverlap: true,
             formatter: (value: string) => value.slice(5).replace('-', '/'),
@@ -73,8 +74,8 @@ export function TrendChart({ points, name }: { points: HistoryPoint[]; name: str
           type: 'value',
           min: 0,
           splitNumber: 4,
-          axisLabel: { color: '#88978e', fontSize: 11 },
-          splitLine: { lineStyle: { color: '#2b3730', type: 'dashed' } },
+          axisLabel: { color: chartColors.muted, fontSize: 11 },
+          splitLine: { lineStyle: { color: chartColors.grid, type: 'dashed' } },
         },
         dataZoom: [
           { type: 'inside', zoomOnMouseWheel: false, moveOnMouseWheel: false },
@@ -83,15 +84,18 @@ export function TrendChart({ points, name }: { points: HistoryPoint[]; name: str
             height: 22,
             bottom: 12,
             borderColor: 'transparent',
-            backgroundColor: '#16211b',
-            fillerColor: 'rgba(166,209,139,0.10)',
-            dataBackground: { lineStyle: { color: '#5d785e' }, areaStyle: { color: '#314736' } },
-            selectedDataBackground: {
-              lineStyle: { color: '#add78e' },
-              areaStyle: { color: '#5c7a4e' },
+            backgroundColor: chartColors.surface,
+            fillerColor: chartColors.coralFill,
+            dataBackground: {
+              lineStyle: { color: chartColors.coral },
+              areaStyle: { color: chartColors.surface },
             },
-            handleStyle: { color: '#afd391', borderColor: '#afd391' },
-            textStyle: { color: '#9ca99e' },
+            selectedDataBackground: {
+              lineStyle: { color: chartColors.coral },
+              areaStyle: { color: chartColors.coralFill },
+            },
+            handleStyle: { color: chartColors.coral, borderColor: chartColors.coral },
+            textStyle: { color: chartColors.muted },
           },
         ],
         series: [
@@ -104,8 +108,12 @@ export function TrendChart({ points, name }: { points: HistoryPoint[]; name: str
             showSymbol: points.length < 3,
             symbol: 'circle',
             symbolSize: 7,
-            lineStyle: { width: 2.5, color: '#b7e895' },
-            itemStyle: { color: '#b7e895', borderWidth: 2, borderColor: '#18251c' },
+            lineStyle: { width: 2.5, color: chartColors.coral },
+            itemStyle: {
+              color: chartColors.coral,
+              borderWidth: 2,
+              borderColor: chartColors.background,
+            },
             areaStyle: {
               color: {
                 type: 'linear',
@@ -114,8 +122,8 @@ export function TrendChart({ points, name }: { points: HistoryPoint[]; name: str
                 x2: 0,
                 y2: 1,
                 colorStops: [
-                  { offset: 0, color: 'rgba(177,225,139,0.24)' },
-                  { offset: 1, color: 'rgba(177,225,139,0.005)' },
+                  { offset: 0, color: 'rgba(196,72,55,0.18)' },
+                  { offset: 1, color: 'rgba(196,72,55,0.005)' },
                 ],
               },
             },

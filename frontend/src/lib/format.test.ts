@@ -16,8 +16,8 @@ describe('heatmap data', () => {
     expect(formatScore(null)).toBe('—')
   })
   it('has finite deterministic colors for all-zero and equal-value datasets', () => {
-    expect(heatColor(0, 0).background).toBe('rgb(24, 55, 48)')
-    expect(heatColor(5, 5).background).toBe('rgb(250, 126, 83)')
+    expect(heatColor(0, 0).background).toBe('rgb(250, 241, 223)')
+    expect(heatColor(5, 5).background).toBe('rgb(170, 48, 47)')
     expect(heatColor(0, 10).background).not.toContain('NaN')
   })
 })

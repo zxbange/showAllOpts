@@ -68,13 +68,13 @@ async function fixtures(page: Page) {
   })
 }
 
-test('home → heatmap → industry curve, search, range and return', async ({ page }) => {
+test('home → heatmap → industry curve, search, range and return', async ({ page }, testInfo) => {
   await fixtures(page)
   const errors: string[] = []
   page.on('pageerror', (error) => errors.push(error.message))
   await page.goto('/')
-  await expect(page.getByRole('heading', { name: /看见市场的/ })).toBeVisible()
-  await page.getByRole('link', { name: '探索行业动量' }).click()
+  await expect(page.getByRole('heading', { name: /把市场的万千变化/ })).toBeVisible()
+  await page.getByRole('link', { name: '进入行业动量' }).click()
   await expect(page.locator('.heat-cell')).toHaveCount(127)
   await expect(page.locator('.heat-cell').first()).toContainText('32.00')
   await expect(page.locator('.heat-cell').last()).toContainText('0.00')
@@ -83,6 +83,12 @@ test('home → heatmap → industry curve, search, range and return', async ({ p
   const last = await page.locator('.heat-cell').last().boundingBox()
   const grid = await page.locator('.heatmap-grid').boundingBox()
   expect(Math.abs(last!.x + last!.width - (grid!.x + grid!.width))).toBeLessThan(10)
+  if (testInfo.project.name === 'desktop')
+    await page.screenshot({
+      path: testInfo.outputPath('heatmap.png'),
+      fullPage: true,
+      animations: 'disabled',
+    })
   await page.getByRole('textbox', { name: '搜索行业名称或代码' }).fill('半导体')
   await expect(page.locator('.heat-cell')).toHaveCount(1)
   await page.getByRole('button', { name: '清空搜索' }).click()
@@ -90,6 +96,11 @@ test('home → heatmap → industry curve, search, range and return', async ({ p
   await expect(page.getByRole('heading', { name: /电力设备.*动量趋势/ })).toBeVisible()
   expect(await page.evaluate(() => window.scrollY)).toBe(0)
   await expect(page.locator('.trend-chart canvas')).toBeVisible()
+  await page.screenshot({
+    path: testInfo.outputPath('industry.png'),
+    fullPage: true,
+    animations: 'disabled',
+  })
   await expect(page.getByRole('button', { name: '近 1 年' })).toHaveAttribute(
     'aria-pressed',
     'true',

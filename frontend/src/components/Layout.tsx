@@ -4,12 +4,11 @@ import {
   ArrowUpRight,
   ChartNoAxesCombined,
   ChevronRight,
-  Grid2X2,
   House,
   Layers3,
-  Thermometer,
 } from 'lucide-react'
 import { Link, NavLink, Outlet, useLocation } from 'react-router-dom'
+import { researchModules } from '../lib/modules'
 
 export function Layout() {
   const location = useLocation()
@@ -35,26 +34,26 @@ export function Layout() {
           工作空间 <span>WORKSPACE</span>
         </div>
         <nav className="main-nav" aria-label="主导航">
-          <NavLink to="/" end>
+          <NavLink to="/" end aria-label="总览" title="总览">
             <House size={18} />
             <span>总览</span>
             <span className="nav-key">01</span>
           </NavLink>
-          <NavLink to="/industry-momentum">
-            <Grid2X2 size={18} />
-            <span>行业动量</span>
-            <span className="nav-key">02</span>
-          </NavLink>
-          <NavLink to="/market-crowding">
-            <Activity size={18} />
-            <span>抱团拥挤度</span>
-            <span className="nav-key">03</span>
-          </NavLink>
-          <NavLink to="/microcap-temperature">
-            <Thermometer size={18} />
-            <span>微盘温度计</span>
-            <span className="nav-key">04</span>
-          </NavLink>
+          {researchModules.map((module, index) => {
+            const Icon = module.icon
+            return (
+              <NavLink
+                key={module.id}
+                to={module.path}
+                aria-label={module.name}
+                title={module.name}
+              >
+                <Icon size={18} />
+                <span>{module.name}</span>
+                <span className="nav-key">{String(index + 2).padStart(2, '0')}</span>
+              </NavLink>
+            )
+          })}
         </nav>
         <div className="sidebar-bottom">
           <div className="sidebar-note">
@@ -78,11 +77,8 @@ export function Layout() {
             <span>
               {isHome
                 ? '总览'
-                : location.pathname.startsWith('/microcap-temperature')
-                  ? '微盘温度计'
-                  : location.pathname.startsWith('/market-crowding')
-                    ? '抱团拥挤度'
-                    : '行业动量'}
+                : (researchModules.find((module) => location.pathname.startsWith(module.path))
+                    ?.name ?? '研究模块')}
               {location.pathname.includes('/industries/') ? ' / 趋势详情' : ''}
             </span>
           </div>

@@ -9,13 +9,13 @@ test('real database: homepage, all industries, and yearly trend', async ({ page 
   const screenshotDir = '../.runtime/screenshots'
   fs.mkdirSync(screenshotDir, { recursive: true })
   await page.goto('/')
-  await expect(page.locator('.home-data-strip')).not.toContainText('等待数据', { timeout: 20000 })
+  await expect(page.locator('.research-card')).toHaveCount(3)
   await page.screenshot({
     path: `${screenshotDir}/home-${testInfo.project.name}.png`,
     fullPage: true,
     animations: 'disabled',
   })
-  await page.getByRole('link', { name: '探索行业动量' }).click()
+  await page.getByRole('link', { name: '进入行业动量' }).click()
   await expect(page.locator('.heat-cell').first()).toBeVisible({ timeout: 20000 })
   const scores = await page.locator('.cell-value').allTextContents()
   expect(scores.length).toBeGreaterThan(10)

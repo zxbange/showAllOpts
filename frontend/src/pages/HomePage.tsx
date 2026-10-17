@@ -1,215 +1,239 @@
-import {
-  ArrowDownRight,
-  ArrowRight,
-  ArrowUpRight,
-  CircleDot,
-  Grid2X2,
-  Layers3,
-  MoveUpRight,
-  Radar,
-  Sparkles,
-  Thermometer,
-} from 'lucide-react'
+import { useState } from 'react'
+import { ArrowDown, ArrowUpRight, Compass, Layers3, Search, Sparkles, X } from 'lucide-react'
 import { Link } from 'react-router-dom'
-import { getModules, getSnapshot } from '../api/client'
-import { useResource } from '../hooks/useResource'
-import { displayName, formatDate, formatScore, heatColor } from '../lib/format'
+import { researchModules } from '../lib/modules'
+import type { ResearchModule } from '../lib/modules'
+import '../styles/overview.css'
+
+function ModuleIllustration({ kind }: { kind: ResearchModule['illustration'] }) {
+  return (
+    <div className={`module-illustration illustration-${kind}`} aria-hidden="true">
+      {kind === 'heatmap' ? (
+        <div className="illustration-tiles">
+          {Array.from({ length: 24 }, (_, i) => (
+            <span key={i} style={{ opacity: 1 - Math.floor(i / 4) * 0.13 }} />
+          ))}
+        </div>
+      ) : kind === 'concentration' ? (
+        <div className="illustration-rings">
+          <span />
+          <span />
+          <span />
+          <i />
+        </div>
+      ) : (
+        <div className="illustration-gauge">
+          <div />
+          <span />
+          <i />
+        </div>
+      )}
+      <span className="illustration-caption">
+        {kind === 'heatmap' ? '行业强弱' : kind === 'concentration' ? '成交集中' : '估值与交易'} ·
+        视觉示意
+      </span>
+    </div>
+  )
+}
 
 export function HomePage() {
-  const snapshot = useResource(getSnapshot)
-  const modules = useResource(getModules)
-  const count = snapshot.data?.summary.industry_count
-  const top = snapshot.data?.industries[0]
+  const [search, setSearch] = useState('')
+  const [category, setCategory] = useState('全部模块')
+  const categories = ['全部模块', ...new Set(researchModules.map((module) => module.category))]
+  const visible = researchModules.filter(
+    (module) =>
+      (category === '全部模块' || module.category === category) &&
+      [module.name, module.english, module.description, ...module.tags]
+        .join(' ')
+        .toLowerCase()
+        .includes(search.trim().toLowerCase()),
+  )
   return (
-    <div className="home-page page-enter">
-      <div className="section-eyebrow">
-        <span className="tiny-line" /> YOUR MARKET, IN PERSPECTIVE
+    <div className="overview-page page-enter">
+      <div className="overview-intro">
+        <span className="section-eyebrow">
+          <span className="tiny-line" /> THE RESEARCH COLLECTION
+        </span>
+        <span>多一个视角，多一份洞察</span>
       </div>
-      <section className="home-hero">
-        <div className="hero-copy">
-          <span className="pill">
-            <span className="status-dot" />
-            量化视角 · 全局洞察
+      <section className="overview-hero">
+        <div className="overview-hero-copy">
+          <span className="overview-kicker">
+            <Sparkles size={14} /> 欢迎回到你的市场研究工作台
           </span>
           <h1>
-            看见市场的<span>温度与方向。</span>
+            把市场的万千变化，
+            <br />
+            <em>看得更清楚。</em>
           </h1>
           <p>
-            把分散的市场信号，汇聚成清晰的研究视野。
+            从行业强弱、成交集中到微盘温度。
             <br />
-            从行业强弱出发，发现趋势正在发生的地方。
+            让每一个研究视角，都有自己的位置。
           </p>
-          <Link to="/industry-momentum" className="button button-primary hero-button">
-            探索行业动量
-            <ArrowUpRight size={18} />
-          </Link>
-          <div className="hero-footnote">
-            <CircleDot size={13} /> 基于真实入库数据，连接观察与研究。
+          <a className="button button-primary overview-browse" href="#research-modules">
+            浏览全部模块 <ArrowDown size={16} />
+          </a>
+          <div className="overview-hero-meta">
+            <Layers3 size={14} />
+            <strong>{researchModules.length}</strong> 个研究模块
+            <span />
+            独立视角 · 自由探索
           </div>
         </div>
-        <div className="hero-art" aria-hidden="true">
-          <div className="orbital orbit-one" />
-          <div className="orbital orbit-two" />
-          <div className="art-cross cross-a">+</div>
-          <div className="art-cross cross-b">+</div>
-          <div className="art-caption">
-            MARKET PULSE<span>行业信号 · 全景视野</span>
+        <div className="research-orbit" aria-hidden="true">
+          <div className="orbit-disc" />
+          <div className="orbit-path" />
+          <div className="orbit-path orbit-path-inner" />
+          <div className="orbit-center">
+            <Compass size={34} strokeWidth={1.25} />
+            <strong>发现 · 洞察</strong>
+            <small>MARKET PERSPECTIVES</small>
           </div>
-          <div className="signal-bars">
-            {[25, 40, 34, 58, 45, 72, 63, 91, 78, 100, 88, 114].map((height, i) => (
-              <span key={i} style={{ height: `${height}px`, animationDelay: `${i * 80}ms` }} />
+          <div className="orbit-label orbit-label-momentum">
+            <span>
+              <Layers3 size={20} />
+            </span>
+            <div>
+              行业动量<small>看方向</small>
+            </div>
+          </div>
+          <div className="orbit-label orbit-label-crowding">
+            <span>
+              <Sparkles size={20} />
+            </span>
+            <div>
+              抱团拥挤度<small>看集中</small>
+            </div>
+          </div>
+          <div className="orbit-label orbit-label-microcap">
+            <span>
+              <Compass size={20} />
+            </span>
+            <div>
+              微盘温度计<small>看温度</small>
+            </div>
+          </div>
+          <i className="orbit-spark spark-one" />
+          <i className="orbit-spark spark-two" />
+          <i className="orbit-spark spark-three" />
+          <span className="orbit-footnote">CONNECT THE SIGNALS. FIND YOUR PERSPECTIVE.</span>
+        </div>
+      </section>
+      <section
+        className="research-directory"
+        id="research-modules"
+        aria-labelledby="directory-title"
+      >
+        <div className="directory-heading">
+          <div>
+            <span className="section-eyebrow">EXPLORE YOUR WORKSPACE</span>
+            <h2 id="directory-title">
+              选择一个视角，开始研究
+              <span>{researchModules.length.toString().padStart(2, '0')}</span>
+            </h2>
+          </div>
+          <label className="directory-search">
+            <Search size={17} />
+            <input
+              aria-label="搜索研究模块"
+              placeholder="搜索模块、指标或关键词"
+              value={search}
+              onChange={(event) => setSearch(event.target.value)}
+            />
+            {search && (
+              <button aria-label="清空模块搜索" onClick={() => setSearch('')}>
+                <X size={15} />
+              </button>
+            )}
+          </label>
+        </div>
+        <div className="directory-tools">
+          <div className="directory-filters" aria-label="模块分类">
+            {categories.map((item) => (
+              <button
+                key={item}
+                className={category === item ? 'active' : ''}
+                aria-pressed={category === item}
+                onClick={() => setCategory(item)}
+              >
+                {item}
+                <span>
+                  {item === '全部模块'
+                    ? researchModules.length
+                    : researchModules.filter((module) => module.category === item).length}
+                </span>
+              </button>
             ))}
           </div>
-          <div className="art-axis">
-            <span>OBSERVE</span>
-            <span>UNDERSTAND</span>
-            <MoveUpRight size={16} />
+          <span className="directory-count" role="status">
+            找到 {visible.length} 个模块
+          </span>
+        </div>
+        <div className="research-grid">
+          {visible.map((module) => {
+            const Icon = module.icon
+            return (
+              <Link
+                key={module.id}
+                to={module.path}
+                className={`research-card tone-${module.tone}`}
+                aria-label={`进入${module.name}`}
+              >
+                <div className="research-card-top">
+                  <span className="research-icon">
+                    <Icon size={24} strokeWidth={1.7} />
+                  </span>
+                  <span className="research-category">{module.category}</span>
+                  <ArrowUpRight className="research-arrow" size={21} />
+                </div>
+                <ModuleIllustration kind={module.illustration} />
+                <span className="research-english">{module.english}</span>
+                <h3>{module.name}</h3>
+                <strong className="research-question">{module.question}</strong>
+                <p>{module.description}</p>
+                <div className="research-tags">
+                  {module.tags.map((tag) => (
+                    <span key={tag}>{tag}</span>
+                  ))}
+                </div>
+                <div className="research-card-footer">
+                  <span>进入研究</span>
+                  <ArrowUpRight size={17} />
+                </div>
+              </Link>
+            )
+          })}
+        </div>
+        {!visible.length && (
+          <div className="directory-empty">
+            <Search size={28} />
+            <h3>没有找到匹配的模块</h3>
+            <p>试试“行业”“成交”或“微盘”，也可以重置筛选。</p>
+            <button
+              className="button button-quiet"
+              onClick={() => {
+                setSearch('')
+                setCategory('全部模块')
+              }}
+            >
+              查看全部模块
+            </button>
           </div>
-          <span className="floating-label">
-            <Sparkles size={13} /> INSIGHT STARTS HERE
-          </span>
-        </div>
+        )}
       </section>
-      <div className="home-data-strip">
+      <div className="overview-note">
+        <span className="overview-note-icon">
+          <Layers3 size={22} />
+        </span>
         <div>
-          <span className="strip-icon">
-            <Layers3 size={19} />
-          </span>
-          <span>
-            研究模块
-            <strong>
-              {modules.data?.modules.length ?? 3}
-              <small>个模块已就绪</small>
-            </strong>
-          </span>
+          <strong>研究视野，持续生长。</strong>
+          <p>新的研究工具将在这里汇集。先从感兴趣的问题出发，找到属于你的市场观察方式。</p>
         </div>
-        <div>
-          <span className="strip-icon">
-            <Grid2X2 size={19} />
-          </span>
-          <span>
-            覆盖行业
-            <strong>
-              {count ?? '—'}
-              <small>申万二级</small>
-            </strong>
-          </span>
-        </div>
-        <div>
-          <span className="strip-icon">
-            <Radar size={19} />
-          </span>
-          <span>
-            最新数据
-            <strong className="date-value">
-              {formatDate(snapshot.data?.trade_date)}
-              <small>{snapshot.error ? '数据暂不可用' : '按交易日更新'}</small>
-            </strong>
-          </span>
-        </div>
+        <span className="overview-note-mark" aria-hidden="true">
+          MORE PERSPECTIVES, MORE POSSIBILITIES.
+        </span>
       </div>
-      <section className="modules-section">
-        <div className="section-heading">
-          <div>
-            <span className="section-eyebrow">RESEARCH MODULES</span>
-            <h2>你的研究，从这里开始</h2>
-          </div>
-          <span className="subtle-tag">
-            持续拓展的研究空间
-            <ArrowDownRight size={15} />
-          </span>
-        </div>
-        <div className="module-layout module-layout-expanded">
-          <Link to="/industry-momentum" className="module-card">
-            <div className="module-copy">
-              <div className="module-top">
-                <span className="module-icon">
-                  <Grid2X2 size={23} />
-                </span>
-                <span className="pill pill-small">
-                  <span className="status-dot" />
-                  已开放
-                </span>
-              </div>
-              <span className="section-eyebrow">INDUSTRY MOMENTUM</span>
-              <h3>行业动量</h3>
-              <p>
-                一张热力图，看清行业强弱。
-                <br />
-                深入每个行业，追踪近一年的动量变化。
-              </p>
-              <div className="module-tags">
-                <span>全行业热力图</span>
-                <span>历史趋势</span>
-                <span>交互下钻</span>
-              </div>
-              <div className="module-link">
-                进入模块
-                <ArrowRight size={18} />
-              </div>
-            </div>
-            <div className="module-preview">
-              <div className="preview-head">
-                <span>SECTOR HEAT</span>
-                <ArrowUpRight size={15} />
-              </div>
-              <div className="mini-heatmap">
-                {Array.from({ length: 35 }, (_, index) => {
-                  const score = snapshot.data?.industries[index]?.momentum
-                  const max = snapshot.data?.summary.max_momentum ?? 12
-                  const color = heatColor(score ?? (35 - index) / 3, max)
-                  return <span key={index} style={{ background: color.background }} />
-                })}
-              </div>
-              <div className="preview-caption">
-                {top ? (
-                  <>
-                    当前领跑 · {displayName(top.name)} <b>{formatScore(top.momentum)}</b>
-                  </>
-                ) : (
-                  <>
-                    热力分布示意 <b>↗</b>
-                  </>
-                )}
-              </div>
-            </div>
-          </Link>
-          <Link to="/market-crowding" className="next-module crowding-module">
-            <div className="next-module-art">
-              <Radar size={40} strokeWidth={1} />
-              <span />
-              <span />
-            </div>
-            <span className="section-eyebrow">MARKET CROWDING</span>
-            <h3>抱团拥挤度</h3>
-            <p>
-              前 5% 股票，占据多少成交？
-              <br />
-              沿着历史曲线，观察市场的集中与分散。
-            </p>
-            <span className="module-link">
-              进入模块 <ArrowRight size={18} />
-            </span>
-          </Link>
-          <Link to="/microcap-temperature" className="next-module crowding-module microcap-module">
-            <div className="next-module-art">
-              <Thermometer size={40} strokeWidth={1} />
-              <span />
-              <span />
-            </div>
-            <span className="section-eyebrow">MICROCAP THERMOMETER</span>
-            <h3>微盘温度计</h3>
-            <p>
-              从估值到交易，读懂微盘温度。
-              <br />
-              追踪微盘 1000 指数与财务指标。
-            </p>
-            <span className="module-link">
-              进入模块 <ArrowRight size={18} />
-            </span>
-          </Link>
-        </div>
-      </section>
     </div>
   )
 }

@@ -1,3 +1,4 @@
+import { chartColors } from '../lib/chartTheme'
 import { useEffect, useRef } from 'react'
 import { init, use } from 'echarts/core'
 import type { EChartsType } from 'echarts/core'
@@ -91,44 +92,45 @@ export function MicrocapChart({
     })
     const primary = isTemperature
       ? {
-          ...line(view, title, 100, view === 'score' ? ' 分' : '%', 0, '#efc482'),
+          ...line(view, title, 100, view === 'score' ? ' 分' : '%', 0, chartColors.coral),
           areaStyle: { opacity: 0.07 },
           markLine: {
             silent: true,
             symbol: 'none',
-            label: { position: 'insideEndTop', color: '#87978a', formatter: '{c}' },
-            lineStyle: { color: '#71816b', type: 'dashed', opacity: 0.5 },
+            label: { position: 'insideEndTop', color: chartColors.muted, formatter: '{c}' },
+            lineStyle: { color: chartColors.muted, type: 'dashed', opacity: 0.5 },
             data: [{ yAxis: 20 }, { yAxis: 80 }],
           },
         }
       : view === 'valuation'
-        ? line('pe_median', 'PE 中位数', 1, ' 倍', 0, '#efc482')
-        : line('avg_np_growth', '归母净利润同比增速', 1, '%', 0, '#8edbd6')
+        ? line('pe_median', 'PE 中位数', 1, ' 倍', 0, chartColors.coral)
+        : line('avg_np_growth', '归母净利润同比增速', 1, '%', 0, chartColors.jade)
     const series = [primary]
-    if (view === 'valuation') series.push(line('pb_median', 'PB 中位数', 1, ' 倍', 1, '#8edbd6'))
+    if (view === 'valuation')
+      series.push(line('pb_median', 'PB 中位数', 1, ' 倍', 1, chartColors.jade))
     else if (isTemperature && overlayIndex)
-      series.push(line('micro_index', '微盘 1000 等权指数', 1, ' 点', 1, '#8edbd6'))
+      series.push(line('micro_index', '微盘 1000 等权指数', 1, ' 点', 1, chartColors.jade))
     chart.current?.setOption(
       {
         animation: !window.matchMedia('(prefers-reduced-motion: reduce)').matches,
         animationDuration: 650,
         aria: { enabled: true, description: `微盘${title}历史曲线，按五交易日采样展示。` },
-        legend: { top: 4, textStyle: { color: '#b1bcae', fontSize: 11 }, type: 'scroll' },
+        legend: { top: 4, textStyle: { color: chartColors.muted, fontSize: 11 }, type: 'scroll' },
         grid: { left: 8, right: 8, top: 58, bottom: 78, containLabel: true },
         tooltip: {
           trigger: 'axis',
           renderMode: 'richText',
-          backgroundColor: '#24342c',
-          borderColor: '#46584b',
-          textStyle: { color: '#f0f5ec', fontSize: 12 },
+          backgroundColor: chartColors.background,
+          borderColor: chartColors.border,
+          textStyle: { color: chartColors.text, fontSize: 12 },
         },
         xAxis: {
           type: 'category',
           boundaryGap: false,
           data: points.map((point) => point.date),
-          axisLabel: { color: '#88978e', hideOverlap: true, fontSize: 10 },
+          axisLabel: { color: chartColors.muted, hideOverlap: true, fontSize: 10 },
           axisTick: { show: false },
-          axisLine: { lineStyle: { color: '#344038' } },
+          axisLine: { lineStyle: { color: chartColors.border } },
         },
         yAxis: [
           {
@@ -140,18 +142,18 @@ export function MicrocapChart({
               : view === 'valuation'
                 ? 'PE 倍'
                 : '同比 %',
-            nameTextStyle: { color: '#afbaaa', fontSize: 10 },
+            nameTextStyle: { color: chartColors.muted, fontSize: 10 },
             ...(isTemperature ? { min: 0, max: 100 } : { scale: true }),
-            axisLabel: { color: '#a6afa0', fontSize: 10 },
-            splitLine: { lineStyle: { color: '#2b3730', type: 'dashed' } },
+            axisLabel: { color: chartColors.muted, fontSize: 10 },
+            splitLine: { lineStyle: { color: chartColors.grid, type: 'dashed' } },
           },
           {
             type: 'value',
             show: secondAxis,
             name: view === 'valuation' ? 'PB 倍' : '指数点位',
             scale: true,
-            nameTextStyle: { color: '#8edbd6', fontSize: 10 },
-            axisLabel: { color: '#8caeab', fontSize: 10 },
+            nameTextStyle: { color: chartColors.jade, fontSize: 10 },
+            axisLabel: { color: chartColors.jade, fontSize: 10 },
             splitLine: { show: false },
           },
         ],
@@ -159,12 +161,21 @@ export function MicrocapChart({
           { type: 'inside', zoomOnMouseWheel: false },
           {
             type: 'slider',
+            backgroundColor: chartColors.surface,
+            dataBackground: {
+              lineStyle: { color: chartColors.border },
+              areaStyle: { color: chartColors.surface },
+            },
+            selectedDataBackground: {
+              lineStyle: { color: chartColors.jade },
+              areaStyle: { color: chartColors.jadeFill },
+            },
             bottom: 10,
             height: 22,
             borderColor: 'transparent',
-            fillerColor: 'rgba(239,196,130,0.12)',
-            handleStyle: { color: '#efc482' },
-            textStyle: { color: '#88978e', fontSize: 10 },
+            fillerColor: chartColors.coralFill,
+            handleStyle: { color: chartColors.coral },
+            textStyle: { color: chartColors.muted, fontSize: 10 },
           },
         ],
         series,
