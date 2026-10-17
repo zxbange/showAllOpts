@@ -252,3 +252,87 @@ def test_real_query_filters_three_sources_and_preserves_source_records(c):
         assert by_kind['express']['profit_yoy']==25
         assert by_kind['express']['raw']['EndDate']=='2026-09-30'
         assert all(e['report_period']=='2026-09-30' for e in events)
+
+
+@pytest.mark.parametrize('field,value,expected', [
+    ('open_gap_pct', 3.123456789012345, '3.123457'),
+    ('intraday_pct', 0.3333333333333333, '0.333333'),
+    ('pe_ttm', '-1.2345675', '-1.234568'),
+    ('pb', 0, '0.000000'),
+    ('market_cap', '123.1234565', '123.123457'),
+    ('circulating_market_cap', '80.1234564', '80.123456'),
+    ('profit_yoy', '25.1234565', '25.123457'),
+    ('net_profit', '1234567890123456789.12345', '1234567890123456789.1235'),
+    ('net_profit', None, None),
+])
+def test_database_decimal_quantization(c, field, value, expected):
+    from decimal import Decimal
+    row = record(c)
+    row[field] = value
+    normalized = c.env['database_record'](row)
+    assert normalized[field] == (None if expected is None else Decimal(expected))
+    if expected is not None:
+        assert isinstance(normalized[field], Decimal)
+        assert str(normalized[field]) == expected
+    assert row[field] == value  # Do not alter computed/source data.
+    assert normalized['events'] is row['events']
+
+
+@pytest.mark.parametrize('field,value', [
+    ('open_gap_pct', None), ('pb', float('nan')), ('pe_ttm', float('inf')),
+    ('market_cap', '-Infinity'), ('net_profit', 'bad'),
+    ('open_gap_pct', '100000000000000'),
+    ('open_gap_pct', '99999999999999.9999995'),  # Overflow only after rounding.
+    ('net_profit', '1000000000000000000000000'),
+])
+def test_invalid_decimals_rejected_before_opening_write_transaction(c, field, value):
+    row = record(c)
+    row[field] = value
+    with pytest.raises(ValueError):
+        c.env['database_record'](row)
+
+
+def test_mysql_bind_preserves_decimal_without_float_tail(c):
+    from decimal import Decimal
+    from sqlalchemy.dialects.mysql.mysqldb import dialect
+    from pymysql.converters import escape_item, conversions
+    row = record(c)
+    row.update(open_gap_pct=3.123456789012345, intraday_pct=0.3333333333333333)
+    normalized = c.env['database_record'](row)
+    mysql = dialect()
+    for column in c.env['EarningsStock'].__table__.columns:
+        if column.name not in ('open_gap_pct', 'intraday_pct'):
+            continue
+        processor = column.type.dialect_impl(mysql).bind_processor(mysql)
+        value = normalized[column.name]
+        bound = processor(value) if processor else value
+        assert isinstance(bound, Decimal)
+        literal = escape_item(bound, 'utf8mb4', conversions)
+        assert literal in ('3.123457', '0.333333')
+
+
+def test_save_quantizes_after_raw_threshold_and_preserves_old_rows_on_invalid_value(c):
+    from decimal import Decimal
+    from sqlalchemy.orm import Session
+    row = record(c)
+    row.update(open_gap_pct=3.00000001, intraday_pct=1 / 3)
+    seen = []
+    def capture(session, flush_context, instances):
+        for item in session.new:
+            if isinstance(item, c.env['EarningsStock']):
+                seen.append((item.open_gap_pct, item.intraday_pct))
+    sql_event.listen(Session, 'before_flush', capture)
+    try:
+        c.env['save_results'](c.Session, row['report_period'], row['valuation_date'], 6000, [row])
+    finally:
+        sql_event.remove(Session, 'before_flush', capture)
+    assert seen == [(Decimal('3.000000'), Decimal('0.333333'))]
+    assert all(isinstance(v, Decimal) for v in seen[0])
+    assert row['open_gap_pct'] == 3.00000001  # Eligible before storage rounding.
+    bad = dict(row, pe_ttm=float('inf'))
+    with pytest.raises(ValueError):
+        c.env['save_results'](lambda: pytest.fail('must fail before opening session'),
+                              row['report_period'], row['valuation_date'], 6000, [bad])
+    with c.Session() as s:
+        assert s.query(c.env['EarningsStock']).count() == 1
+        assert s.query(c.env['EarningsStock']).one().name == row['name']

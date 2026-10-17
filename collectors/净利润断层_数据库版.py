@@ -10,7 +10,7 @@ import datetime as dt
 import json
 import math
 import re
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation, ROUND_HALF_UP, localcontext
 import pandas as pd
 from sqlalchemy import Column, Date, DateTime, Index, Integer, JSON, Numeric, String, Text, create_engine
 from sqlalchemy.engine.url import URL
@@ -359,6 +359,35 @@ def screen(codes, names, events, period, as_of):
     return results
 
 
+def database_record(record):
+    """按表定义量化全部 DECIMAL 列，保留 Decimal 交给 MySQL 驱动。"""
+    result = dict(record)
+    for column in EarningsStock.__table__.columns:
+        if not isinstance(column.type, Numeric):
+            continue
+        value = record.get(column.name)
+        if value is None:
+            if not column.nullable:
+                raise ValueError('{} 不允许为空。'.format(column.name))
+            result[column.name] = None
+            continue
+        precision, scale = column.type.precision, column.type.scale
+        try:
+            decimal_value = Decimal(str(value))
+            limit = Decimal(10) ** (precision - scale)
+            if not decimal_value.is_finite() or decimal_value.copy_abs() >= limit:
+                raise ValueError('{} 不是有限值或超出字段范围。'.format(column.name))
+            with localcontext() as context:
+                context.prec = precision + 2
+                rounded = decimal_value.quantize(Decimal(1).scaleb(-scale), rounding=ROUND_HALF_UP)
+            if rounded.copy_abs() >= limit:
+                raise ValueError('{} 四舍五入后超出字段范围。'.format(column.name))
+        except (InvalidOperation, TypeError):
+            raise ValueError('{} 无法转换为数据库定点数。'.format(column.name)) from None
+        result[column.name] = rounded
+    return result
+
+
 def save_results(Session, period, as_of, universe_count, records):
     if len({r['code'] for r in records}) != len(records):
         raise ValueError('筛选结果包含重复股票。')
@@ -368,12 +397,15 @@ def save_results(Session, period, as_of, universe_count, records):
                 or r['open_gap_pct'] <= 3 or r['intraday_pct'] < 0 or r['profit_yoy'] < 20
                 or not 200 <= len(r['analysis']) <= 300):
             raise ValueError('筛选结果校验失败，拒绝覆盖数据库。')
+    # 先验证原始筛选阈值，再量化写入值；任何转换失败均发生在删除旧快照之前。
+    # 不修改原始 records 和公告 JSON，也不把 Decimal 转回 float。
+    db_records = [database_record(r) for r in records]
     session = Session()
     try:
         # 清空与重建只针对当前季度，并在同一个事务提交，合法零命中也有元数据。
         session.query(EarningsStock).filter(EarningsStock.report_period == period).delete(synchronize_session=False)
         session.query(EarningsRun).filter(EarningsRun.report_period == period).delete(synchronize_session=False)
-        session.add_all([EarningsStock(**r) for r in records])
+        session.add_all([EarningsStock(**r) for r in db_records])
         session.add(EarningsRun(report_period=period, as_of_date=as_of, updated_at=china_now(),
                                universe_count=universe_count, matched_count=len(records), rule_version=RULE_VERSION))
         session.commit()

@@ -74,6 +74,16 @@ API：
 - `GET /api/v1/earnings-gap/stocks`：`period`、`search`、`industry`、`source`、`sort`、`direction`、`page`、`page_size`。
 - `GET /api/v1/earnings-gap/stocks/{code}?period=YYYY-MM-DD`：股票详情，代码使用聚宽完整代码。
 
+## MySQL 小数精度警告
+
+出现 `1265 Data truncated for column 'open_gap_pct' / 'intraday_pct'` 时，常见原因是涨幅计算结果的小数位超过表中 `DECIMAL(20,6)` 的 6 位精度。MySQL 对超出的小数位进行舍入并产生提示，不表示整个字段被清空；应结合日志确认事务是否已提交。
+
+采集器在写入前按每个 Numeric 字段的声明使用 Decimal 和 ROUND_HALF_UP 量化：比例、市值及估值保留 6 位小数，归母净利润金额保留 4 位。直接将 Decimal 交给驱动，避免转回 float 引入长尾；同时拒绝非有限值和超出字段范围的值。原始价格筛选先于量化，严格大于 3% 的条件不变。极接近阈值的命中值可能显示为 3.000000%，详情中的原始公告信号仍保留计算值。
+
+上传更新后的私有采集脚本到聚宽重新运行，即可刷新当前季度结果；不需要删表、清空历史或修改网页。脚本不会屏蔽数据库警告，也不关闭严格模式。如果更新后仍有相同警告，请核对实际表的 DECIMAL 精度是否与脚本定义一致，`create_all` 不会修改已有列。
+
+参考：[MySQL 定点数舍入说明](https://dev.mysql.com/doc/refman/8.0/en/precision-math-expressions.html)。
+
 ## 数据文档依据与验证范围
 
 - [聚宽财务 API](https://cdn.joinquant.com/help/img/JoinQuantAPI.pdf)：`date` 查询截止日可见数据，`statDate` 与 `date` 不同时使用。
