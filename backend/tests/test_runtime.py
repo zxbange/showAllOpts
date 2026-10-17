@@ -39,6 +39,7 @@ def test_stop_reaps_exited_children_and_kills_only_after_timeout():
 @pytest.fixture
 def runtime(monkeypatch):
     monkeypatch.setattr(dev, 'configure_logging', Mock())
+    monkeypatch.setattr(dev, 'protect_process_tree', Mock(return_value=False))
     monkeypatch.setattr(dev, 'start_output_readers', Mock(return_value=[]))
     monkeypatch.setattr(dev.shutil, 'which', lambda name: '/usr/bin/node')
     monkeypatch.setattr(dev.Path, 'exists', lambda self: True)
@@ -128,3 +129,30 @@ def test_backend_relay_does_not_duplicate_already_saved_records(tmp_path, monkey
         assert 'startup failed' in error_log and 'hidden-value' not in error_log
     finally:
         logging.shutdown()
+
+
+def test_process_tree_protection_precedes_service_spawn(monkeypatch, runtime):
+    protected = False
+    def protect():
+        nonlocal protected
+        protected = True
+        return True
+    monkeypatch.setattr(dev, 'protect_process_tree', protect)
+    processes = [Mock(), Mock()]
+    for process in processes:
+        process.poll.return_value = None
+    def spawn(*args, **kwargs):
+        assert protected
+        return processes.pop(0)
+    monkeypatch.setattr(dev.subprocess, 'Popen', spawn)
+    monkeypatch.setattr(dev.time, 'sleep', lambda _: dev.request_stop(signal.SIGTERM, None))
+    dev.main([])
+
+
+def test_protection_failure_never_starts_unmanaged_servers(monkeypatch, runtime):
+    monkeypatch.setattr(dev, 'protect_process_tree', Mock(side_effect=OSError('job assignment failed')))
+    spawn = Mock()
+    monkeypatch.setattr(dev.subprocess, 'Popen', spawn)
+    with pytest.raises(OSError, match='job assignment failed'):
+        dev.main([])
+    spawn.assert_not_called()

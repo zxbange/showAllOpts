@@ -48,6 +48,18 @@ Nginx 从 `/var/www/showallopts` 提供前端静态资源，将 `/api` 代理到
 - 热力图单元格使用原生链接，可键盘操作和新标签打开；图表尊重减少动态效果偏好。
 - 浏览器只使用 JSON API；所有文字通过 React 渲染，图表 tooltip 使用 canvas richText，避免拼接 HTML。
 
+## Windows 开发启动器的进程管理
+
+`start.cmd` 与 `start.ps1` 共用 `scripts/dev.py`。旧版本只在 Python 的 `finally` 中终止直接子进程，而 Windows 关闭终端可能直接终止启动器，无法保证执行这段清理。前后端以 `CREATE_NO_WINDOW` 启动，也不会依靠终端关闭自动退出。
+
+`scripts/windows_job.py` 在创建任何服务进程之前，将启动器加入一个启用 `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE` 的 Windows Job Object；新建的后代进程自动加入同一个 Job。唯一的 Job 句柄不可继承，始终由启动器持有。启动器正常退出或被强制结束时，操作系统关闭句柄并回收全部后代进程，涵盖虚拟环境 Python 转发进程、Vite 和构建工具子进程。机制依据 [Microsoft Job Objects 文档](https://learn.microsoft.com/en-us/windows/win32/procthread/job-objects)。
+
+启动器自己也是 Job 成员，因此不在 `finally` 或析构函数中主动关闭这个句柄；否则会过早终止自身、打断日志刷新。正常 `Ctrl+C` 仍先执行原有退出清理与日志关闭，再由操作系统兜底。保护初始化失败时停止启动，不创建未受保护的服务；其他进程不属于该 Job，不会被清理。Linux 的原有信号处理与 systemd 部署方式不变。
+
+Windows 集成测试创建随机本地端口的子进程和孙进程，分别验证正常退出、强制结束启动器后的进程退出及立即重新绑定端口，同时确认独立服务仍然存活。测试不操作真实 8000 / 5173 服务或数据库。非 Windows 环境跳过此系统测试，启动器行为仍有独立回归测试。
+
+新机制只保护更新后由启动器创建的进程，旧版残留需要按 [README 排查步骤](../README.md#windows-提示端口已被占用) 一次性清理。
+
 ## 本地开发依赖
 
 `frontend/package-lock.json` 锁定 Node 依赖；后端 `requirements.txt` 定义运行依赖范围，`requirements-dev.txt` 增加测试依赖，`requirements.lock.txt` 记录本次验证环境的精确依赖版本（含开发依赖）。

@@ -13,9 +13,11 @@ import threading
 import time
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / 'backend'))
 from app.core.config import Settings, resolve_env_file
 from app.core.logging import ANSI_ESCAPE, configure_logging
+from scripts.windows_job import protect_process_tree
 
 logger = logging.getLogger('launcher')
 
@@ -114,6 +116,8 @@ def main(argv=None):
                 probe.settimeout(0.3)
                 if probe.connect_ex(('127.0.0.1', port)) == 0:
                     raise SystemExit(f'Port {port} is already in use. Stop the existing server first.')
+        if protect_process_tree():
+            logger.info('Windows process-tree cleanup enabled; closing the terminal stops all services')
         environment = dict(os.environ, PYTHONUNBUFFERED='1', PYTHONIOENCODING='utf-8', NO_COLOR='1')
         backend = subprocess.Popen(
             [sys.executable, '-u', str(ROOT / 'backend' / 'run.py'), '--host', '127.0.0.1', '--port', '8000'],

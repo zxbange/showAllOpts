@@ -100,6 +100,31 @@ Docker Compose 默认读取 `config/app.config`，也支持 `APP_ENV_FILE` 覆�
 
 其他机器访问 **http://服务器IP:5173**，本机也可访问 **http://127.0.0.1:5173**；API 文档在 **http://127.0.0.1:8000/docs**。按 `Ctrl+C` 同时停止前后端。也提供 `start.ps1`；若 PowerShell 执行策略阻止脚本，可使用 `powershell -ExecutionPolicy Bypass -File .\start.ps1`。
 
+Windows 启动器已增加进程树保护：关闭启动终端或启动器被结束时，Windows 会回收本次启动的 API、Vite 及其后代进程。正常停止仍建议先按 `Ctrl+C`，让退出日志写完。更新代码后需重新启动，保护机制不会追溯接管旧版本已经启动的进程。
+
+### Windows 提示端口已被占用
+
+先检查是否仍有本项目的启动窗口；有则在原窗口按 `Ctrl+C`。如果旧版本关闭窗口后留下进程，在 PowerShell 查看监听者：
+
+```powershell
+Get-NetTCPConnection -State Listen -LocalPort 8000,5173 -ErrorAction SilentlyContinue |
+    Select-Object LocalAddress,LocalPort,OwningProcess
+```
+
+只针对确认属于本项目的 PID 清理。下面命令先展示进程路径及命令行，请确认是当前项目的 `backend/run.py` 或 `frontend/node_modules/vite/bin/vite.js`，再手动执行最后一条；不要结束其他服务或批量结束所有 Python / Node 进程。
+
+```powershell
+$serviceProcessId = Read-Host '输入上一步要核对的 OwningProcess'
+Get-CimInstance Win32_Process -Filter "ProcessId = $serviceProcessId" |
+    Select-Object ProcessId,Name,ExecutablePath,CommandLine
+# 确认属于本项目后，按 PID 清理该进程及其后代；另一个端口如仍占用则重复核对
+taskkill /PID $serviceProcessId /T /F
+```
+
+清理旧进程后，使用更新后的 `start.cmd` 或 `start.ps1` 启动。启动器不会自动结束占用端口的未知程序。机制及验证说明见 [Windows 进程管理](docs/architecture.md#windows-开发启动器的进程管理)。
+
+### Windows 首次安装
+
 首次在另一台机器安装：
 
 ```powershell
