@@ -2075,3 +2075,103 @@ svg {
     scroll-behavior: auto !important;
   }
 }
+
+/* Market crowding */
+.crowding-module {
+  display: flex;
+  border-style: solid;
+  border-color: #3e5137;
+  text-decoration: none;
+  color: inherit;
+  transition:
+    border-color 0.2s,
+    transform 0.2s;
+}
+.crowding-module:hover {
+  border-color: #8edbd6;
+  transform: translateY(-3px);
+}
+.crowding-module .next-module-art {
+  color: #8edbd6;
+}
+.crowding-share {
+  padding: 24px;
+  margin: 0 0 24px;
+}
+.crowding-share h2 {
+  font-size: clamp(16px, 2vw, 22px);
+  font-weight: 500;
+  margin: 12px 0 22px;
+}
+.concentration-track {
+  height: 18px;
+  border-radius: 8px;
+  overflow: hidden;
+  background: #2b3730;
+}
+.concentration-track > span {
+  display: block;
+  height: 100%;
+  background: linear-gradient(90deg, #459f98, #a1e7cf);
+  border-radius: inherit;
+  animation: crowding-grow 0.7s ease-out;
+  transform-origin: left;
+}
+.concentration-labels {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-top: 12px;
+  font-size: 12px;
+  color: #a8bcb3;
+}
+.crowding-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 24px;
+  font-size: 12px;
+  color: #c4d1c6;
+}
+.crowding-toggle input {
+  accent-color: #edc988;
+}
+.crowding-method {
+  margin-top: 24px;
+}
+@keyframes crowding-grow {
+  from {
+    transform: scaleX(0);
+  }
+  to {
+    transform: scaleX(1);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .concentration-track > span {
+    animation: none;
+  }
+  .crowding-module {
+    display: flex;
+    border-style: solid;
+    border-color: #3e5137;
+    transition: none;
+  }
+}
+
+@media (max-width: 680px) {
+  .main-nav {
+    gap: 4px;
+  }
+  .main-nav a {
+    flex: 1;
+    min-width: 0;
+    padding: 8px 8px;
+    gap: 6px;
+    white-space: nowrap;
+  }
+  .crowding-page .range-switch button {
+    padding: 8px 5px;
+  }
+}

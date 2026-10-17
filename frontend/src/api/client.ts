@@ -1,3 +1,4 @@
+import type { CrowdingHistory } from '../types/crowding'
 import type { IndustryHistory, Module, Snapshot } from '../types/momentum'
 
 const API_BASE = '/api/v1'
@@ -35,3 +36,6 @@ export function getHistory(
     signal,
   )
 }
+
+export const getCrowdingHistory = (days: number, signal?: AbortSignal) =>
+  request<CrowdingHistory>(`/market-crowding/history?days=${days}`, signal)

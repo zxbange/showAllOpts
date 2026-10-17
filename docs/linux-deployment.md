@@ -1,6 +1,6 @@
 # Linux 运行与部署
 
-开发时使用 `start.sh` 同时启动前后端；长期运行使用 systemd 管理 Python API、Nginx 提供前端静态页面。数据库继续使用现有 MySQL，应用只读取行业动量数据。
+开发时使用 `start.sh` 同时启动前后端；长期运行使用 systemd 管理 Python API、Nginx 提供前端静态页面。数据库继续使用现有 MySQL，应用只读取行业动量及抱团拥挤度数据。
 
 本文默认沿用现有 `/home/ubuntu/showAllOpts` 项目目录和 `ubuntu` 账号，与 [README systemctl 管理指引](../README.md#linux-后台服务systemctl-管理) 一致。RHEL 或其他账号部署时，请统一替换目录、用户和组，并核对目标系统权限与 SELinux 设置。
 
@@ -248,3 +248,7 @@ npm run build
 - 刷新行业详情 404：确认保留 SPA 的 `try_files` 配置。
 
 本次开发环境为 Windows；Ubuntu/RHEL 上的 systemd、Nginx、SELinux 和容器运行仍需在目标服务器验证。
+
+## 抱团拥挤度模块升级
+
+新模块需先在聚宽运行独立采集程序，创建并写入 `market_crowding` 表；网页账号需有该表 SELECT 权限。已有 systemd + Nginx 部署只需更新代码、构建并发布前端、重启 API，保留当前配置及访问端口。操作命令见 [抱团拥挤度部署说明](market-crowding.md#linux-已部署项目升级)。

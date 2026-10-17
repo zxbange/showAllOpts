@@ -77,7 +77,7 @@ export function HomePage() {
           <span>
             研究模块
             <strong>
-              {modules.data?.modules.length ?? 1}
+              {modules.data?.modules.length ?? 2}
               <small>个模块已就绪</small>
             </strong>
           </span>
@@ -173,21 +173,23 @@ export function HomePage() {
               </div>
             </div>
           </Link>
-          <div className="next-module">
+          <Link to="/market-crowding" className="next-module crowding-module">
             <div className="next-module-art">
-              <Layers3 size={36} strokeWidth={1} />
+              <Radar size={40} strokeWidth={1} />
               <span />
               <span />
             </div>
-            <span className="section-eyebrow">WHAT'S NEXT</span>
-            <h3>更多视角，即将汇聚</h3>
+            <span className="section-eyebrow">MARKET CROWDING</span>
+            <h3>抱团拥挤度</h3>
             <p>
-              为新的研究模块预留空间，
+              前 5% 股票，占据多少成交？
               <br />
-              让每一种观察都有自己的位置。
+              沿着历史曲线，观察市场的集中与分散。
             </p>
-            <span className="coming-badge">持续构建中</span>
-          </div>
+            <span className="module-link">
+              进入模块 <ArrowRight size={18} />
+            </span>
+          </Link>
         </div>
       </section>
     </div>

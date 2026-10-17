@@ -9,6 +9,10 @@ const IndustryPage = lazy(() =>
   import('./pages/IndustryPage').then((module) => ({ default: module.IndustryPage })),
 )
 
+const CrowdingPage = lazy(() =>
+  import('./pages/CrowdingPage').then((module) => ({ default: module.CrowdingPage })),
+)
+
 export default function App() {
   return (
     <BrowserRouter>
@@ -16,6 +20,14 @@ export default function App() {
         <Route element={<Layout />}>
           <Route index element={<HomePage />} />
           <Route path="industry-momentum" element={<MomentumPage />} />
+          <Route
+            path="market-crowding"
+            element={
+              <Suspense fallback={<LoadingState />}>
+                <CrowdingPage />
+              </Suspense>
+            }
+          />
           <Route
             path="industry-momentum/industries/:code"
             element={

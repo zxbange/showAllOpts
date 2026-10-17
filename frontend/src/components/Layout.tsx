@@ -44,6 +44,11 @@ export function Layout() {
             <span>行业动量</span>
             <span className="nav-key">02</span>
           </NavLink>
+          <NavLink to="/market-crowding">
+            <Activity size={18} />
+            <span>抱团拥挤度</span>
+            <span className="nav-key">03</span>
+          </NavLink>
         </nav>
         <div className="sidebar-bottom">
           <div className="sidebar-note">
@@ -65,7 +70,11 @@ export function Layout() {
             <Link to="/">研究工作台</Link>
             <ChevronRight size={13} />
             <span>
-              {isHome ? '总览' : '行业动量'}
+              {isHome
+                ? '总览'
+                : location.pathname.startsWith('/market-crowding')
+                  ? '抱团拥挤度'
+                  : '行业动量'}
               {location.pathname.includes('/industries/') ? ' / 趋势详情' : ''}
             </span>
           </div>
