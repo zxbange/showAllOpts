@@ -14,7 +14,8 @@ from sqlalchemy.engine.url import URL
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
 
-START_DATE = None  # 首次采集：以运行当天为终点，向前 365 个自然日（含当天）。
+START_DATE = None  # 首次采集：截至运行当天，最近 300 个交易日。
+INITIAL_TRADE_DAYS = 300
 END_DATE = None  # 每次运行取北京时间当天；不保证当天源数据已经发布。
 LOOKBACK_DAYS = 5  # 含最后入库日，回查最近 5 个交易日。
 WINDOW_SIZE = 120  # 每只基金每次最多请求 120 个交易日，避免接口行数上限截断。
@@ -203,8 +204,8 @@ def probe(code='510300.XSHG', end_date=None):
 def run(start_date=START_DATE, end_date=END_DATE, incremental=True, lookback_days=LOOKBACK_DAYS, groups=None):
     today = china_now().date()
     end = today if end_date is None else as_date(end_date)
-    start = end - datetime.timedelta(days=364) if start_date is None else as_date(start_date)
-    if start > end or end > today:
+    start = None if start_date is None else as_date(start_date)
+    if end > today or (start is not None and start > end):
         raise ValueError('开始日期不能晚于结束日期，结束日期不能晚于今天。')
     if not isinstance(incremental, builtins.bool) or isinstance(lookback_days, builtins.bool) or not isinstance(lookback_days, builtins.int) or lookback_days < 1:
         raise ValueError('incremental 必须为布尔值，回查交易日数必须为正整数。')
@@ -213,6 +214,11 @@ def run(start_date=START_DATE, end_date=END_DATE, incremental=True, lookback_day
         raise ValueError('分组仅支持 hs300、zz500。')
     funds = dict(pair for group in selected for pair in ETF_GROUPS[group])
     share_table()  # 在连接数据库前检查环境。
+    if start is None:
+        initial_days = previous_days(end, INITIAL_TRADE_DAYS)
+        if not initial_days:
+            raise ValueError('无法取得首次采集范围的交易日历。')
+        start = initial_days[0]
     engine = MysqlETF.connect_to_mysql()
     output, failures = [], []
     try:

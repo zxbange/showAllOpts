@@ -69,21 +69,36 @@ def record(c,day,value=100,code='510300.XSHG'):
                 updated_at=dt.datetime(2026,10,17))
 
 
-def test_catalog_schema_and_default_year(collector):
+def test_catalog_schema_and_default_300_trading_days(collector):
     c=collector
     assert c.env['ETF_GROUPS']==ETF_GROUPS
     assert c.env['START_DATE'] is None and c.env['END_DATE'] is None
+    assert c.env['INITIAL_TRADE_DAYS']==300
     columns=c.env['ETFShare'].__table__.columns
     assert [(x.name,str(x.type),x.primary_key,x.nullable) for x in columns]==[
         (x.name,str(x.type),x.primary_key,x.nullable) for x in WebETFShare.__table__.columns]
-    # Capture the requested calendar start rather than sparse test calendar's first day.
-    starts=[]; calendar=c.env['get_trade_days']
-    def capture(**kwargs):
-        if 'start_date' in kwargs: starts.append(kwargs['start_date'])
-        return calendar(**kwargs)
-    c.env['get_trade_days']=capture
-    c.env['run'](groups=['hs300'])
-    assert starts and set(starts)=={dt.date(2025,10,18)}
+    c.env['ETF_GROUPS']={'hs300':ETF_GROUPS['hs300'][:1]}
+    # Synthetic exchange calendar excludes weekends and a holiday gap.
+    end=dt.date(2026,10,17)  # Saturday: last included day must be Friday.
+    holidays={dt.date(2026,10,day) for day in range(1,9)}
+    calendar_days=sorted(end-dt.timedelta(days=i) for i in range(600)
+                         if (end-dt.timedelta(days=i)).weekday()<5
+                         and end-dt.timedelta(days=i) not in holidays)
+    requests=[]
+    def calendar(start_date=None,end_date=None,count=None):
+        requests.append((start_date,end_date,count))
+        result=[d for d in calendar_days if (start_date is None or d>=start_date) and d<=end_date]
+        return result[-count:] if count else result
+    c.env['get_trade_days']=calendar
+    for day in calendar_days:c.source['510300.XSHG',day]=100
+    result=c.env['run']()
+    expected=calendar_days[-300:]
+    assert len(result)==300 and [r.trade_date for r in rows(c)]==expected
+    assert requests[0]==(None,end,300)
+    assert expected[-1]==dt.date(2026,10,16) and expected[0]<end-dt.timedelta(days=365)
+    # Explicit rescan upgrades an existing shorter initial history without duplicates.
+    c.env['run'](incremental=False)
+    assert len(rows(c))==300
 
 
 def test_incremental_per_fund_refresh_and_idempotence(collector):
@@ -205,3 +220,11 @@ def test_notebook_numpy_any_does_not_shadow_python_validation(collector):
     c.env['ETF_GROUPS']={'hs300':ETF_GROUPS['hs300'][:1]}
     for day in c.days[1:]:c.source['510300.XSHG',day]=100
     assert len(c.env['run'](start_date=c.days[1]))==5
+
+
+def test_empty_initial_calendar_does_not_connect(collector):
+    c=collector
+    c.env['get_trade_days']=lambda **kwargs:[]
+    def forbidden():raise AssertionError('database touched')
+    c.env['MysqlETF'].connect_to_mysql=forbidden
+    with pytest.raises(ValueError,match='交易日历'):c.env['run']()
