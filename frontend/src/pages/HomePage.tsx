@@ -15,7 +15,7 @@ function ModuleIllustration({ kind }: { kind: ResearchModule['illustration'] }) 
           ))}
         </div>
       ) : kind === 'shares' || kind === 'earnings' ? (
-        <div className="illustration-shares">
+        <div className="illustration-bars">
           {[38, 55, 45, 72, 61, 88, 100].map((height, i) => (
             <span key={i} style={{ height: `${height}%` }} />
           ))}
