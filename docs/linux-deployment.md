@@ -256,3 +256,7 @@ npm run build
 ## 微盘温度计模块升级
 
 先在聚宽运行独立采集脚本，创建并写入 `microcap_temperature` 表，并给网页账号增加 SELECT 权限。然后更新代码、构建发布前端并重启 API；原配置、代理与端口不变。详见 [微盘温度计部署说明](microcap-temperature.md#已有-linux-部署升级)。
+
+## ETF 份额模块升级
+
+已有部署接入 ETF 仪表盘时，先在聚宽创建并填充 `etf_share_daily`，给网页账号授予该表 SELECT 权限，再更新代码、构建并发布 `frontend/dist/`、重启 `showallopts-api`。无需更换 Nginx 端口、systemd 服务或真实数据库配置。完整命令与字段口径见 [ETF 份额仪表盘](etf-shares.md#已有部署升级)。

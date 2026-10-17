@@ -1,4 +1,4 @@
-import { Activity, Grid2X2, Thermometer } from 'lucide-react'
+import { Activity, ChartNoAxesCombined, Grid2X2, Thermometer } from 'lucide-react'
 import type { LucideIcon } from 'lucide-react'
 
 // Register a new page here to add its overview card, search, category and navigation.
@@ -13,7 +13,7 @@ export interface ResearchModule {
   tags: string[]
   icon: LucideIcon
   tone: 'coral' | 'jade' | 'gold'
-  illustration: 'heatmap' | 'concentration' | 'temperature'
+  illustration: 'heatmap' | 'concentration' | 'temperature' | 'shares'
 }
 
 export const researchModules: ResearchModule[] = [
@@ -55,5 +55,18 @@ export const researchModules: ResearchModule[] = [
     icon: Thermometer,
     tone: 'gold',
     illustration: 'temperature',
+  },
+  {
+    id: 'etf-shares',
+    name: 'ETF份额仪表盘',
+    path: '/etf-shares',
+    category: '资金观察',
+    english: 'ETF SHARE OBSERVATORY',
+    question: '指数基金的份额，如何变化？',
+    description: '跟踪沪深300与中证500 ETF 的总份额与份额变化率，沿着时间观察基金规模变化。',
+    tags: ['ETF总份额', '沪深300', '中证500'],
+    icon: ChartNoAxesCombined,
+    tone: 'coral',
+    illustration: 'shares',
   },
 ]

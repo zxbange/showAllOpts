@@ -9,7 +9,7 @@
   → FastAPI 路由：校验查询参数
   → Service：确定快照日期、计算区间指标、标记行业缺失
   → Repository：参数化 SELECT
-  → MySQL industry_momentum / market_crowding / microcap_temperature 表
+  → MySQL industry_momentum / market_crowding / microcap_temperature / etf_share_daily 表
 ```
 
 前后端独立进程、独立依赖、独立构建。后端不返回网页，前端不直接访问数据库。数据库凭据只由后端从环境变量或选中的配置文件读取：Windows 启动器及直接运行 Python 未指定配置时使用 `backend/.env`；Linux `start.sh`、systemd 和 Compose 默认选择项目根目录下的 `config/app.config`。配置优先级与迁移方式见 [配置管理](configuration.md)。所有查询通过 SQLAlchemy 表达式绑定参数，不拼接用户输入的 SQL。
@@ -35,11 +35,13 @@ Nginx 从 `/var/www/showallopts` 提供前端静态资源，将 `/api` 代理到
 3. 在前端增加页面与 API 类型，在 `App.tsx` 注册路由，并在 `src/lib/modules.ts` 登记名称、路径、分类、说明、标签、图标与视觉类型。首页卡片、搜索、分类计数、导航和面包屑共用此注册表，不必逐个修改入口。后端 `/modules` 元信息仍需同步维护。
 4. 增加必要的查询边界测试及浏览器用户流程测试。
 
-当前模块包括申万二级行业动量、抱团拥挤度和微盘温度计。抱团拥挤度对应 `market_crowding` 表，复合主键为 `(top_pct, trade_date)`，每次请求一次 SELECT 获取数据，在服务层计算统计和 EMA 10；前端只将比例转换为百分比显示。模型共用 `models/base.py` 中的 Base，网页不创建表。
+当前模块包括申万二级行业动量、抱团拥挤度、微盘温度计和 ETF 份额仪表盘。抱团拥挤度对应 `market_crowding` 表，复合主键为 `(top_pct, trade_date)`，每次请求一次 SELECT 获取数据，在服务层计算统计和 EMA 10；前端只将比例转换为百分比显示。模型共用 `models/base.py` 中的 Base，网页不创建表。
 
-各类采集的保留规则独立：行业动量仅保留 180 个交易日；拥挤度默认保留 2020 年以来的完整历史；微盘温度计保留 2021 年以来的五交易日采样历史。细节见 [抱团拥挤度说明](market-crowding.md) 与 [微盘温度计说明](microcap-temperature.md)。
+各类采集的保留规则独立：行业动量仅保留 180 个交易日；拥挤度默认保留 2020 年以来的完整历史；微盘温度计保留 2021 年以来的五交易日采样历史；ETF 份额首次采集近一年，后续增量积累历史，不自动清理。细节见 [抱团拥挤度说明](market-crowding.md) 与 [微盘温度计说明](microcap-temperature.md)。
 
 微盘温度计使用独立的 `microcap_temperature` 表。采集器保存原始指标、当期历史分位、综合温度、累计指数和成分股；刷新最后一期时从该期之前的基准续算，避免重复计数。网页模型将成分股字段设为延迟加载，页面接口只读指标，不传输名单。网页不会在切换范围时重算分位或重新设置指数基期。
+
+ETF 份额按基金独立续传，源数据缺口不会补零。复合主键 `(fund_code, trade_date)` 支持最新日期和区间查询；非空页面请求执行两条 SELECT，历史查询只传输绘图字段。各卡片明确标记自己的数据日期，日增减严格关联 `previous_trade_date`；相对变化曲线使用共同基准日。完整口径、首次采集和部署说明见 [ETF 份额仪表盘](etf-shares.md)。
 
 ## 错误、并发与浏览器行为
 
@@ -72,4 +74,4 @@ Windows 集成测试创建随机本地端口的子进程和孙进程，分别验
 
 主背景、正文、边框和强调色集中在 `frontend/src/styles/global.css` 的 CSS 变量中；总览专属布局在 `styles/overview.css`；ECharts 的亮色画布配色统一在 `lib/chartTheme.ts`。行业热力图保留原有对数映射及排序，色阶由浅米金到朱红，文字按实际背景亮度选用黑色或白色。总览插画标注为视觉示意，不用于表达市场涨跌。
 
-本次调整只涉及网页展示，不更改采集、数据库结构和指标口径。桌面与手机浏览器测试覆盖搜索与分类组合、空结果重置、键盘跳转、三个模块导航、数据库故障状态和原有图表交互。
+本节的总览与主题调整只涉及网页展示，不更改采集、数据库结构和指标口径。桌面与手机浏览器测试覆盖搜索与分类组合、空结果重置、键盘跳转、所有已注册模块导航、数据库故障状态和原有图表交互。

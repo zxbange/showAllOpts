@@ -12,7 +12,7 @@ test('overview directory is independent of database, searchable and categorized'
   })
   await page.goto('/')
   await expect(page.getByRole('heading', { level: 1 })).toContainText('把市场的万千变化')
-  await expect(page.locator('.research-card')).toHaveCount(3)
+  await expect(page.locator('.research-card')).toHaveCount(4)
   await expect(page.getByRole('link', { name: '进入行业动量', exact: true })).toHaveAttribute(
     'href',
     '/industry-momentum',
@@ -36,7 +36,7 @@ test('overview directory is independent of database, searchable and categorized'
   await expect(page.locator('.research-card')).toHaveCount(1)
   await expect(page.locator('.research-card')).toContainText('抱团拥挤度')
   await page.getByRole('button', { name: '清空模块搜索' }).click()
-  await expect(page.locator('.research-card')).toHaveCount(3)
+  await expect(page.locator('.research-card')).toHaveCount(4)
   await page.getByRole('link', { name: '浏览全部模块' }).click()
   await expect(page).toHaveURL(/#research-modules$/)
   await expect(page.getByRole('heading', { name: /选择一个视角/ })).toBeInViewport()
@@ -71,6 +71,7 @@ test('all module routes remain reachable from navigation', async ({ page }) => {
     ['行业动量', 'industry-momentum'],
     ['抱团拥挤度', 'market-crowding'],
     ['微盘温度计', 'microcap-temperature'],
+    ['ETF份额仪表盘', 'etf-shares'],
   ]) {
     await navigation.getByRole('link', { name, exact: true }).click()
     await expect(page).toHaveURL(new RegExp(path + '$'))
@@ -81,5 +82,5 @@ test('all module routes remain reachable from navigation', async ({ page }) => {
     )
   }
   await navigation.getByRole('link', { name: '总览', exact: true }).click()
-  await expect(page.locator('.research-card')).toHaveCount(3)
+  await expect(page.locator('.research-card')).toHaveCount(4)
 })

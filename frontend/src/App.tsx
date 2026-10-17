@@ -17,12 +17,24 @@ const MicrocapPage = lazy(() =>
   import('./pages/MicrocapPage').then((module) => ({ default: module.MicrocapPage })),
 )
 
+const ETFPage = lazy(() =>
+  import('./pages/ETFPage').then((module) => ({ default: module.ETFPage })),
+)
+
 export default function App() {
   return (
     <BrowserRouter>
       <Routes>
         <Route element={<Layout />}>
           <Route index element={<HomePage />} />
+          <Route
+            path="etf-shares"
+            element={
+              <Suspense fallback={<LoadingState />}>
+                <ETFPage />
+              </Suspense>
+            }
+          />
           <Route path="industry-momentum" element={<MomentumPage />} />
           <Route
             path="microcap-temperature"

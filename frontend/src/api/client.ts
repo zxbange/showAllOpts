@@ -1,3 +1,4 @@
+import type { ETFHistory } from '../types/etf'
 import type { MicrocapHistory } from '../types/microcap'
 import type { CrowdingHistory } from '../types/crowding'
 import type { IndustryHistory, Module, Snapshot } from '../types/momentum'
@@ -43,3 +44,9 @@ export const getCrowdingHistory = (days: number, signal?: AbortSignal) =>
 
 export const getMicrocapHistory = (days: number, signal?: AbortSignal) =>
   request<MicrocapHistory>(`/microcap-temperature/history?days=${days}`, signal)
+
+export const getETFHistory = (group: string, days: number, signal?: AbortSignal) =>
+  request<ETFHistory>(
+    `/etf-shares/history?${new URLSearchParams({ group, days: String(days) })}`,
+    signal,
+  )

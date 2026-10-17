@@ -26,7 +26,7 @@ def test_empty_and_catalog(client):
     response = client.get('/api/v1/microcap-temperature/history')
     assert response.status_code == 200
     assert response.json()['latest'] is None and response.json()['points'] == []
-    assert client.get('/api/v1/modules').json()['modules'][-1]['id'] == 'microcap-temperature'
+    assert 'microcap-temperature' in [item['id'] for item in client.get('/api/v1/modules').json()['modules']]
 
 
 def test_history_units_scope_nulls_and_fixed_percentiles(client, session):

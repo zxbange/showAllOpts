@@ -1,4 +1,4 @@
-import { useLayoutEffect } from 'react'
+import { useLayoutEffect, useRef } from 'react'
 import {
   Activity,
   ArrowUpRight,
@@ -12,8 +12,17 @@ import { researchModules } from '../lib/modules'
 
 export function Layout() {
   const location = useLocation()
+  const navigation = useRef<HTMLElement>(null)
   useLayoutEffect(() => {
     window.scrollTo(0, 0)
+    const nav = navigation.current
+    const active = nav?.querySelector<HTMLElement>('[aria-current="page"]')
+    if (nav && active && nav.scrollWidth > nav.clientWidth) {
+      nav.scrollLeft +=
+        active.getBoundingClientRect().left -
+        nav.getBoundingClientRect().left -
+        (nav.clientWidth - active.clientWidth) / 2
+    }
   }, [location.pathname])
   const isHome = location.pathname === '/'
   return (
@@ -33,7 +42,7 @@ export function Layout() {
         <div className="nav-label">
           工作空间 <span>WORKSPACE</span>
         </div>
-        <nav className="main-nav" aria-label="主导航">
+        <nav ref={navigation} className="main-nav" aria-label="主导航">
           <NavLink to="/" end aria-label="总览" title="总览">
             <House size={18} />
             <span>总览</span>

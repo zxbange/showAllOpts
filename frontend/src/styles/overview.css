@@ -755,3 +755,18 @@
     transition: none;
   }
 }
+
+.illustration-shares {
+  display: flex;
+  align-items: flex-end;
+  gap: 9px;
+  width: 78%;
+  height: 88px;
+  margin: auto;
+}
+.illustration-shares span {
+  flex: 1;
+  border-radius: 5px 5px 1px 1px;
+  background: linear-gradient(180deg, #d16b48, #eabb8b);
+  opacity: 0.85;
+}
