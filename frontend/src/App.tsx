@@ -21,12 +21,35 @@ const ETFPage = lazy(() =>
   import('./pages/ETFPage').then((module) => ({ default: module.ETFPage })),
 )
 
+const EarningsPage = lazy(() =>
+  import('./pages/EarningsPage').then((m) => ({ default: m.EarningsPage })),
+)
+const EarningsDetailPage = lazy(() =>
+  import('./pages/EarningsDetailPage').then((m) => ({ default: m.EarningsDetailPage })),
+)
+
 export default function App() {
   return (
     <BrowserRouter>
       <Routes>
         <Route element={<Layout />}>
           <Route index element={<HomePage />} />
+          <Route
+            path="earnings-gap"
+            element={
+              <Suspense fallback={<LoadingState />}>
+                <EarningsPage />
+              </Suspense>
+            }
+          />
+          <Route
+            path="earnings-gap/stocks/:code"
+            element={
+              <Suspense fallback={<LoadingState />}>
+                <EarningsDetailPage />
+              </Suspense>
+            }
+          />
           <Route
             path="etf-shares"
             element={

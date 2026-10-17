@@ -1,0 +1,381 @@
+.earnings-page {
+  display: grid;
+  gap: 22px;
+  min-width: 0;
+}
+.earnings-intro {
+  padding: 28px 32px;
+  border: 1px solid #edd9c9;
+  border-radius: 18px;
+  background: linear-gradient(115deg, #fff1e7, #fffaf2 65%, #f7ebdc);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  overflow: hidden;
+}
+.earnings-intro h2 {
+  margin: 10px 0;
+  font-size: 30px;
+  letter-spacing: -0.7px;
+}
+.earnings-intro p,
+.earnings-note {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.9;
+}
+.earnings-intro > svg {
+  color: #c07a51;
+  transform: rotate(-8deg);
+  margin-right: 20px;
+}
+.earnings-filters {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: end;
+  gap: 14px;
+}
+.earnings-filters label,
+.earnings-search label {
+  display: grid;
+  gap: 7px;
+  color: var(--muted);
+  font-size: 11px;
+}
+.earnings-filters select,
+.earnings-search input {
+  font: inherit;
+  font-size: 13px;
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: white;
+  height: 40px;
+  padding: 0 12px;
+  max-width: 200px;
+}
+.earnings-search {
+  flex: 1;
+  min-width: 175px;
+}
+.earnings-search > div {
+  display: flex;
+  gap: 6px;
+  margin-top: 7px;
+}
+.earnings-search input {
+  flex: 1;
+  min-width: 0;
+  max-width: 100%;
+}
+.earnings-results {
+  overflow: hidden;
+  min-width: 0;
+}
+.earnings-table-scroll {
+  overflow: auto;
+  max-width: 100%;
+}
+.earnings-table {
+  width: 100%;
+  min-width: 1220px;
+  border-collapse: collapse;
+  text-align: left;
+}
+.earnings-table th {
+  padding: 16px 18px;
+  background: #fcf8f3;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 500;
+  white-space: nowrap;
+}
+.earnings-table td {
+  border-top: 1px solid #f0e9e2;
+  padding: 20px 18px;
+  font-size: 13px;
+  vertical-align: top;
+  line-height: 1.7;
+}
+.earnings-table tr:hover td {
+  background: #fffcf8;
+}
+.earnings-table small {
+  display: block;
+  color: var(--muted);
+  font-size: 10px;
+  margin-top: 6px;
+  white-space: nowrap;
+}
+.earnings-stock-link {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+.earnings-stock-link:hover {
+  color: var(--accent);
+}
+.earnings-chip,
+.earnings-hit {
+  display: inline-block;
+  font-size: 10px;
+  border-radius: 5px;
+  background: var(--surface);
+  padding: 3px 6px;
+  margin-top: 5px;
+  color: var(--muted);
+}
+.earnings-hit {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+.earnings-positive {
+  color: var(--accent);
+  font-variant-numeric: tabular-nums;
+}
+.earnings-analysis-cell {
+  width: 320px;
+  min-width: 270px;
+}
+.earnings-analysis-cell summary {
+  cursor: pointer;
+  color: var(--muted);
+  font-size: 12px;
+}
+.earnings-analysis-cell em {
+  display: block;
+  font-size: 10px;
+  font-style: normal;
+  color: var(--accent);
+  margin-top: 5px;
+}
+.earnings-analysis-cell details[open] summary span {
+  display: none;
+}
+.earnings-analysis-cell p {
+  line-height: 1.9;
+  padding-top: 8px;
+  font-size: 12px;
+}
+.earnings-pagination {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  padding: 18px 22px;
+  border-top: 1px solid var(--border);
+  font-size: 12px;
+  color: var(--muted);
+}
+.earnings-pagination > span {
+  margin-right: auto;
+}
+.earnings-back {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--muted);
+  font-size: 12px;
+  width: fit-content;
+}
+.earnings-detail-metrics {
+  display: grid;
+  grid-template-columns: repeat(6, 1fr);
+  background: white;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 22px 10px;
+}
+.earnings-detail-metrics > div {
+  padding: 0 18px;
+  border-right: 1px solid var(--border);
+}
+.earnings-detail-metrics > div:last-child {
+  border: 0;
+}
+.earnings-detail-metrics small {
+  display: block;
+  font-size: 11px;
+  color: var(--muted);
+  margin-bottom: 12px;
+}
+.earnings-detail-metrics strong {
+  font-size: 23px;
+  font-weight: 500;
+}
+.earnings-analysis {
+  padding: 26px 30px;
+  border-left: 3px solid var(--accent);
+  background: linear-gradient(100deg, #fff9f2, white);
+}
+.earnings-analysis h2 {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  font-size: 16px;
+  margin-bottom: 16px;
+}
+.earnings-analysis h2 svg {
+  color: var(--accent);
+}
+.earnings-analysis p {
+  font-size: 14px;
+  line-height: 2.1;
+  letter-spacing: 0.3px;
+}
+.earnings-analysis small {
+  color: var(--muted);
+  display: block;
+  margin-top: 14px;
+  font-size: 11px;
+}
+.earnings-chart {
+  height: 360px;
+  width: 100%;
+}
+.earnings-evidence-heading h2 {
+  font-size: 20px;
+  margin-top: 10px;
+}
+.earnings-disclosures {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 18px;
+}
+.earnings-disclosure {
+  padding: 22px;
+  min-width: 0;
+}
+.earnings-disclosure h2 {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  font-size: 16px;
+  margin-bottom: 18px;
+}
+.earnings-disclosure h2 span {
+  margin-left: auto;
+  font-size: 10px;
+  font-weight: 400;
+  color: var(--muted);
+}
+.earnings-disclosure article {
+  border-top: 1px solid var(--border);
+  padding: 20px 0 8px;
+}
+.earnings-event-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 13px;
+  gap: 10px;
+}
+.earnings-disclosure dl {
+  display: grid;
+  gap: 13px;
+  font-size: 12px;
+  margin: 20px 0;
+}
+.earnings-disclosure dt {
+  color: var(--muted);
+  margin-bottom: 5px;
+  font-size: 10px;
+}
+.earnings-disclosure dd {
+  margin: 0;
+}
+.earnings-source-reason {
+  background: var(--surface);
+  padding: 12px;
+  font-size: 11px;
+  line-height: 1.9;
+  overflow-wrap: anywhere;
+}
+.earnings-raw {
+  margin-top: 15px;
+  font-size: 11px;
+  color: var(--muted);
+}
+.earnings-raw summary {
+  cursor: pointer;
+}
+.earnings-raw p {
+  line-height: 1.8;
+  margin: 10px 0;
+}
+.earnings-raw pre {
+  background: var(--surface);
+  padding: 12px;
+  max-height: 300px;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+@media (max-width: 1100px) {
+  .earnings-detail-metrics {
+    grid-template-columns: repeat(3, 1fr);
+    gap: 22px 0;
+  }
+  .earnings-disclosures {
+    grid-template-columns: 1fr;
+  }
+}
+@media (max-width: 640px) {
+  .earnings-intro {
+    padding: 22px;
+  }
+  .earnings-intro h2 {
+    font-size: 25px;
+  }
+  .earnings-intro > svg {
+    width: 36px;
+    margin-right: 0;
+  }
+  .earnings-filters {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .earnings-filters select {
+    width: 100%;
+    max-width: none;
+  }
+  .earnings-search {
+    min-width: 0;
+  }
+  .earnings-detail-metrics {
+    grid-template-columns: repeat(2, 1fr);
+  }
+  .earnings-detail-metrics strong {
+    font-size: 21px;
+  }
+  .earnings-analysis {
+    padding: 22px;
+  }
+  .earnings-chart {
+    height: 300px;
+  }
+}
+
+/* Keep list and chart headers aligned with the existing workspace panels. */
+.earnings-page .panel > .panel-heading {
+  padding: 22px 24px 0;
+  margin-bottom: 18px;
+}
+.earnings-page .panel-heading h2 {
+  font-size: 17px;
+  font-weight: 600;
+}
+.earnings-page .panel-heading p {
+  font-size: 11px;
+}
+@media (max-width: 640px) {
+  .earnings-page .panel > .panel-heading {
+    padding: 18px 16px 0;
+  }
+  .earnings-page .panel-heading h2 {
+    font-size: 16px;
+  }
+}

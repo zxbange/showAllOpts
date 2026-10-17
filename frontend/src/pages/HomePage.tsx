@@ -14,7 +14,7 @@ function ModuleIllustration({ kind }: { kind: ResearchModule['illustration'] }) 
             <span key={i} style={{ opacity: 1 - Math.floor(i / 4) * 0.13 }} />
           ))}
         </div>
-      ) : kind === 'shares' ? (
+      ) : kind === 'shares' || kind === 'earnings' ? (
         <div className="illustration-shares">
           {[38, 55, 45, 72, 61, 88, 100].map((height, i) => (
             <span key={i} style={{ height: `${height}%` }} />
@@ -39,9 +39,11 @@ function ModuleIllustration({ kind }: { kind: ResearchModule['illustration'] }) 
           ? '行业强弱'
           : kind === 'concentration'
             ? '成交集中'
-            : kind === 'shares'
-              ? '份额变化'
-              : '估值与交易'}{' '}
+            : kind === 'earnings'
+              ? '业绩与价格'
+              : kind === 'shares'
+                ? '份额变化'
+                : '估值与交易'}{' '}
         · 视觉示意
       </span>
     </div>

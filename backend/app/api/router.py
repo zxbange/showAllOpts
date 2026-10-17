@@ -1,5 +1,6 @@
 from fastapi import APIRouter
 
+from app.api.routes.earnings import router as earnings_router
 from app.api.routes.etf import router as etf_router
 from app.api.routes.crowding import router as crowding_router
 from app.api.routes.microcap import router as microcap_router
@@ -10,6 +11,7 @@ router.include_router(momentum_router)
 router.include_router(crowding_router)
 router.include_router(microcap_router)
 router.include_router(etf_router)
+router.include_router(earnings_router)
 
 
 @router.get('/modules', tags=['模块'])
@@ -26,6 +28,10 @@ def modules():
         'id': 'microcap-temperature', 'name': '微盘温度计',
         'description': '从估值与交易拥挤度，观察微盘 1000 的温度与等权指数。',
         'path': '/microcap-temperature', 'status': 'available',
+    }, {
+        'id': 'earnings-gap', 'name': '净利润断层',
+        'description': '筛选最新财报季度的业绩与价格共振，查看公告证据和原因分析。',
+        'path': '/earnings-gap', 'status': 'available',
     }, {
         'id': 'etf-shares', 'name': 'ETF份额仪表盘',
         'description': '跟踪沪深300与中证500 ETF 总份额及份额变化率。',

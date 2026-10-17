@@ -1,4 +1,4 @@
-import { Activity, ChartNoAxesCombined, Grid2X2, Thermometer } from 'lucide-react'
+import { FileSearch, Activity, ChartNoAxesCombined, Grid2X2, Thermometer } from 'lucide-react'
 import type { LucideIcon } from 'lucide-react'
 
 // Register a new page here to add its overview card, search, category and navigation.
@@ -13,10 +13,23 @@ export interface ResearchModule {
   tags: string[]
   icon: LucideIcon
   tone: 'coral' | 'jade' | 'gold'
-  illustration: 'heatmap' | 'concentration' | 'temperature' | 'shares'
+  illustration: 'heatmap' | 'concentration' | 'temperature' | 'shares' | 'earnings'
 }
 
 export const researchModules: ResearchModule[] = [
+  {
+    id: 'earnings-gap',
+    name: '净利润断层',
+    path: '/earnings-gap',
+    category: '业绩观察',
+    english: 'EARNINGS GAP OBSERVATORY',
+    question: '业绩的变化，如何映射到价格？',
+    description: '扫描最新财报季度，追踪全部高开收阳信号，核查公告、估值与断层原因。',
+    tags: ['季度选股', '公告证据', '原因分析'],
+    icon: FileSearch,
+    tone: 'gold',
+    illustration: 'earnings',
+  },
   {
     id: 'industry-momentum',
     name: '行业动量',

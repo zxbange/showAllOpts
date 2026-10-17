@@ -1,3 +1,4 @@
+import type { EarningsOverview, EarningsDetail } from '../types/earnings'
 import type { ETFHistory } from '../types/etf'
 import type { MicrocapHistory } from '../types/microcap'
 import type { CrowdingHistory } from '../types/crowding'
@@ -48,5 +49,13 @@ export const getMicrocapHistory = (days: number, signal?: AbortSignal) =>
 export const getETFHistory = (group: string, days: number, signal?: AbortSignal) =>
   request<ETFHistory>(
     `/etf-shares/history?${new URLSearchParams({ group, days: String(days) })}`,
+    signal,
+  )
+
+export const getEarningsOverview = (query: string, signal?: AbortSignal) =>
+  request<EarningsOverview>('/earnings-gap/stocks?' + query, signal)
+export const getEarningsDetail = (code: string, period: string, signal?: AbortSignal) =>
+  request<EarningsDetail>(
+    '/earnings-gap/stocks/' + encodeURIComponent(code) + '?' + new URLSearchParams({ period }),
     signal,
   )
