@@ -97,7 +97,11 @@ def as_date(value):
 
 
 def share_table():
-    if builtins.any(name not in globals() for name in ('finance', 'query', 'get_trade_days')):
+    try:
+        apis = (finance, query, get_trade_days)
+    except NameError:
+        apis = (None,)
+    if builtins.any(api is None for api in apis):
         raise ValueError('缺少聚宽研究 API，请在聚宽 Notebook 直接粘贴运行，或使用 %run -i。')
     table = getattr(finance, 'FUND_SHARE_DAILY', None)
     if table is None or builtins.any(not hasattr(table, field) for field in ('code', 'date', 'shares')):

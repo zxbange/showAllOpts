@@ -34,6 +34,3 @@ test-results/
 
 # Application logs, daily archives and inter-process lock files
 log/
-
-# Collector execution lock (not a log)
-.collector-batch.lock

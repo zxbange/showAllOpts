@@ -1,4 +1,4 @@
-"""Offline batch module orchestration/console tests; never contact JoinQuant or MySQL."""
+"""Offline standalone batch orchestration/console tests; never contact JoinQuant or MySQL."""
 import ast
 import importlib.util
 import sys
@@ -28,53 +28,101 @@ def load(path, name):
 @pytest.fixture
 def batch(monkeypatch, tmp_path):
     module = load(TARGET, 'offline_collector_batch')
-    monkeypatch.setattr(module, '_MODULE_DIR', tmp_path)
     return module
 
 
-def test_real_loader_isolates_globals_and_injects_config_and_notebook_apis(batch, monkeypatch):
-    monkeypatch.setattr(batch, '_MODULE_DIR', TARGET.parent)
+def fake_platform(monkeypatch):
     jq = ModuleType('jqdata')
     jq.jy = SimpleNamespace()
     jq.finance = SimpleNamespace()
-    pd = ModuleType('pandas')
     monkeypatch.setitem(sys.modules, 'jqdata', jq)
-    monkeypatch.setitem(sys.modules, 'pandas', pd)
+    monkeypatch.setitem(sys.modules, 'pandas', ModuleType('pandas'))
+    return jq
+
+
+def test_factories_isolate_state_and_use_shared_config(batch, monkeypatch):
+    fake_platform(monkeypatch)
     marker = object()
-    apis = dict(get_price=marker, __name__='__main__', Base='old Base', run='old run')
-    runs = [batch._load_strategy(name, CONFIG, apis) for name in batch.STRATEGY_ORDER]
-    bases = []
-    for name, run in zip(batch.STRATEGY_ORDER, runs):
-        env = run.__globals__
-        assert env['get_price'] is marker
-        assert env['__name__'] != '__main__'
-        connector = env[batch.STRATEGIES[name][1]]
+    namespaces = [factory({'get_price': marker}, CONFIG) for factory in batch.STRATEGIES.values()]
+    assert len({id(n.Base) for n in namespaces}) == 5
+    for ns in namespaces:
+        if hasattr(ns, 'get_price'):
+            assert ns.get_price is marker
+        connector = next(v for k, v in vars(ns).items() if k.startswith('Mysql'))
         assert {key: getattr(connector, key) for key in CONFIG} == CONFIG
-        bases.append(env['Base'])
-    assert len(set(bases)) == 5
-    assert len({id(run.__globals__) for run in runs}) == 5
-    assert apis['run'] == 'old run' and apis['Base'] == 'old Base'
+    fresh = batch.STRATEGIES['净利润断层']({}, CONFIG)
+    namespaces[-1].MysqlEarnings.host = 'modified'
+    assert fresh.MysqlEarnings.host == CONFIG['host']
+    assert namespaces[-1].run is not fresh.run
 
 
-def test_entry_uses_external_modules_and_python36_syntax(batch):
-    source = TARGET.read_text(encoding='utf-8')
-    ast.parse(source, feature_version=(3, 6))
-    assert '_SOURCES' not in source and 'exec(compile(' not in source
-    assert not (ROOT/'scripts/build_collector_batch.py').exists()
+def test_loader_supplies_notebook_platform_and_builtin_apis(batch, monkeypatch):
+    jq = fake_platform(monkeypatch)
+    marker = object()
+    jq.get_price = 'platform default'
+    import builtins
+    monkeypatch.setattr(builtins, 'get_trade_days', 'builtin default', raising=False)
+    received = []
+    def factory(apis, config):
+        received.append((apis, config))
+        return SimpleNamespace(run=lambda: None)
+    monkeypatch.setitem(batch.STRATEGIES, '行业动量', factory)
+    batch._load_strategy('行业动量', CONFIG, {'get_price': marker})
+    assert received[0][0]['get_price'] is marker
+    assert received[0][0]['get_trade_days'] == 'builtin default'
+    assert received[0][0]['finance'] is jq.finance
+    assert received[0][1] == CONFIG
+
+
+def test_standalone_business_definitions_match_individual_collectors(batch):
+    # Moving functions into an isolated scope must not change screening or database rules.
+    import copy
+    tree = ast.parse(TARGET.read_text(encoding='utf-8'), feature_version=(3, 6))
+    factories = {n.name: n for n in tree.body if isinstance(n, ast.FunctionDef)}
+    def normalized(node):
+        node = copy.deepcopy(node)
+        if isinstance(node, ast.ClassDef) and node.name.startswith('Mysql'):
+            node.body = [n for n in node.body if not isinstance(n, ast.Assign)]
+        return ast.dump(node, include_attributes=False)
     for name, filename in FILES.items():
-        assert batch.STRATEGIES[name][0] == filename
-        ast.parse((TARGET.parent/filename).read_text(encoding='utf-8'), feature_version=(3, 6))
+        original = ast.parse((TARGET.parent/filename).read_text(encoding='utf-8'))
+        body = factories[batch.STRATEGIES[name].__name__].body
+        for node in original.body:
+            if isinstance(node, (ast.FunctionDef, ast.ClassDef)):
+                actual = next(n for n in body if isinstance(n, type(node)) and n.name == node.name)
+                assert normalized(actual) == normalized(node), (name, node.name)
+            elif isinstance(node, ast.Assign):
+                assert any(normalized(n) == normalized(node) for n in body)
     assert batch.DB_CONFIG['dbpassword'] == 'your_password'
 
 
-def test_loader_rereads_modules_on_repeat(batch, tmp_path):
-    filename, connector = batch.STRATEGIES['ETF份额']
-    path = tmp_path/filename
-    for value in (1, 12345):
-        path.write_text('class {}: pass\ndef run(): return {}, get_price\n'.format(connector, value), encoding='utf-8')
-        run = batch._load_strategy('ETF份额', CONFIG, {'get_price': 'notebook api', 'unexpected': 'do not inject'})
-        assert run() == (value, 'notebook api')
-        assert 'unexpected' not in run.__globals__
+def test_pasted_notebook_without_file_or_sibling_files(batch, monkeypatch, tmp_path):
+    fake_platform(monkeypatch)
+    monkeypatch.chdir(tmp_path)
+    source = TARGET.read_text(encoding='utf-8')
+    assert '__file__' not in source and '_SOURCES' not in source
+    assert 'importlib' not in source
+    tree = ast.parse(source)
+    assert not any(isinstance(n, ast.Call) and isinstance(n.func, ast.Name)
+                   and n.func.id in ('exec', 'eval', 'compile', 'open') for n in ast.walk(tree))
+    namespace = {'__name__': 'notebook_cell'}
+    exec(compile(source, '<ipython-input-test>', 'exec'), namespace)
+    assert len(namespace['STRATEGIES']) == 5
+    # Construct all five real strategies without accessing any project files.
+    for name in namespace['STRATEGY_ORDER']:
+        assert callable(namespace['_load_strategy'](name, CONFIG, {}))
+    events = []
+    def factory(name):
+        def run(skip_existing=False):
+            assert skip_existing is True
+            events.append(name)
+            return []
+        return lambda apis, config: SimpleNamespace(run=run)
+    namespace['STRATEGIES'] = {n: factory(n) for n in namespace['STRATEGY_ORDER']}
+    rows = namespace['run_all'](db_config=CONFIG)
+    assert events == namespace['STRATEGY_ORDER']
+    assert all(r['status'] == 'SUCCESS' for r in rows)
+    assert not list(tmp_path.iterdir())
 
 
 def test_serial_order_quiet_console_and_no_logs(batch, monkeypatch, tmp_path, capsys):
@@ -104,7 +152,7 @@ def test_serial_order_quiet_console_and_no_logs(batch, monkeypatch, tmp_path, ca
     output = capsys.readouterr()
     assert 'SUCCESS | 2' in output.out and '新增 2 条' in output.out
     assert 'must be hidden' not in output.out and output.err == ''
-    assert {p.name for p in tmp_path.iterdir()} == {'.collector-batch.lock'}
+    assert not list(tmp_path.iterdir())
 
 
 def test_preview_only_displays_selected_fields_and_tail(batch, monkeypatch, capsys):
@@ -151,17 +199,16 @@ def test_failure_continues_and_marks_partial_completion(batch, monkeypatch, caps
     assert '成功 4，失败 1' in output and '未完成' in output and 'synthetic failure' in output
 
 
-def test_missing_module_does_not_stop_later_strategy(batch, monkeypatch, capsys):
-    real = batch._load_strategy
+def test_strategy_initialization_failure_does_not_stop_later_strategy(batch, monkeypatch, capsys):
     def loader(name, *args):
         if name == '行业动量':
-            return real(name, *args)
+            raise ImportError('platform dependency unavailable')
         return lambda **kw: []
     monkeypatch.setattr(batch, '_load_strategy', loader)
     rows = batch.run_all(['行业动量', 'ETF份额'], db_config=CONFIG, raise_on_failure=False)
     assert [r['status'] for r in rows] == ['FAILED', 'SUCCESS']
-    assert rows[0]['error_type'] == 'FileNotFoundError'
-    assert 'FileNotFoundError' in capsys.readouterr().out
+    assert rows[0]['error_type'] == 'ImportError'
+    assert 'ImportError' in capsys.readouterr().out
 
 
 def test_credentials_hidden_in_results_and_console(batch, monkeypatch, capsys):
@@ -192,14 +239,14 @@ def test_interrupt_restores_streams_and_releases_lock(batch, monkeypatch):
     with pytest.raises(KeyboardInterrupt): batch.run_all(db_config=CONFIG)
     assert called == ['行业动量']
     assert (sys.stdout, sys.stderr) == streams
-    with batch._BatchLock(batch._MODULE_DIR): pass
+    with batch._batch_guard(): pass
 
 
 def test_lock_prevents_overlapping_runs(batch, tmp_path):
-    with batch._BatchLock(tmp_path):
-        with pytest.raises(RuntimeError, match='采集锁'):
-            with batch._BatchLock(tmp_path): pytest.fail('overlapping execution')
-    with batch._BatchLock(tmp_path): pass
+    with batch._batch_guard():
+        with pytest.raises(RuntimeError, match='已有采集任务'):
+            with batch._batch_guard(): pytest.fail('overlapping execution')
+    with batch._batch_guard(): pass
 
 
 @pytest.mark.parametrize('kwargs', [
@@ -211,3 +258,53 @@ def test_invalid_options_fail_before_any_execution(batch, monkeypatch, tmp_path,
     monkeypatch.setattr(batch, '_load_strategy', lambda *_: pytest.fail('must not execute'))
     with pytest.raises(ValueError): batch.run_all(**kwargs)
     assert not list(tmp_path.iterdir())
+
+
+def test_isolated_etf_api_validation_uses_strategy_scope(batch, monkeypatch):
+    fake_platform(monkeypatch)
+    table = SimpleNamespace(code='code', date='date', shares='shares')
+    ns = batch.STRATEGIES['ETF份额']({
+        'finance': SimpleNamespace(FUND_SHARE_DAILY=table),
+        'query': lambda *args: None, 'get_trade_days': lambda **kw: [],
+    }, CONFIG)
+    assert 'finance' not in ns.share_table.__globals__
+    assert ns.share_table() is table
+    missing = batch.STRATEGIES['ETF份额']({}, CONFIG)
+    with pytest.raises(ValueError, match='缺少聚宽'):
+        missing.share_table()
+
+
+def test_standalone_earnings_insert_only_preserves_first_snapshot(batch, monkeypatch):
+    import datetime as dt
+    from sqlalchemy import create_engine, event
+    from sqlalchemy.orm import sessionmaker
+    fake_platform(monkeypatch)
+    ns = batch.STRATEGIES['净利润断层']({}, CONFIG)
+    engine = create_engine('sqlite://')
+    ns.Base.metadata.create_all(engine)
+    Session = sessionmaker(bind=engine)
+    period, day = dt.date(2026, 9, 30), dt.date(2026, 10, 16)
+    first = dict(report_period=period, code='600001.XSHG', name='first snapshot',
+                 signal_date=day, announcement_date=day, signal_source='formal',
+                 profit_basis='single quarter', profit_yoy=25, net_profit=1e8,
+                 open_gap_pct=4, intraday_pct=0, market_cap=50, pe_ttm=10,
+                 valuation_date=day, events=[], prices=[])
+    try:
+        assert len(ns.save_results(Session, period, day, 6000, [first], skip_existing=True)) == 1
+        second = dict(first, code='600002.XSHG')
+        fresh = ns.save_results(Session, period, day, 6000,
+                                [dict(first, name='changed', pe_ttm=99), second], skip_existing=True)
+        assert [r['code'] for r in fresh] == [second['code']]
+        writes = []
+        def capture(conn, cursor, statement, *args):
+            if statement.lstrip().split()[0].upper() in ('INSERT', 'UPDATE', 'DELETE'):
+                writes.append(statement)
+        event.listen(engine, 'before_cursor_execute', capture)
+        assert ns.save_results(Session, period, day, 6000, [first, second], skip_existing=True) == []
+        assert not writes
+        with Session() as session:
+            stored = session.get(ns.EarningsStock, (period, first['code']))
+            assert stored.name == 'first snapshot' and stored.pe_ttm == 10
+            assert session.get(ns.EarningsRun, period).matched_count == 2
+    finally:
+        engine.dispose()
