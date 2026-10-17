@@ -309,3 +309,59 @@ def test_latest_query_is_index_bounded_and_baseline_has_only_four_metrics(collec
     assert 'LIMIT' in statements[0] and 'DESC' in statements[0]
     assert 'member_codes' not in statements[1] and 'micro_index' not in statements[1]
     assert all(len(values) == 3 for values in histories.values())
+
+
+def test_insert_only_microcap_preserves_sampling_index_and_noop_writes(collector):
+    from sqlalchemy import event
+    c=collector
+    c.env['run'](micro_num=2,end_date=c.days[5],skip_existing=True)
+    original=saved(c)
+    c.calculated.clear()
+    result=c.env['run'](micro_num=2,skip_existing=True)
+    assert len(result)==2 and c.calculated==c.days[10::5]
+    assert saved(c)[:2]==original
+    assert [r['sample_count'] for r in saved(c)]==[1,2,3,4]
+    assert [r['micro_index'] for r in saved(c)]==[1000,1100,1210,1331]
+    before=saved(c)
+    c.calculated.clear()
+    statements=[]
+    def capture(conn,cursor,statement,*args):
+        if statement.lstrip().split()[0].upper() in ('INSERT','UPDATE','DELETE'):
+            statements.append(statement)
+    event.listen(c.engine,'before_cursor_execute',capture)
+    try:
+        assert c.env['run'](micro_num=2,skip_existing=True)==[]
+        assert not c.env['save_period'](c.Session,dict(before[-1],micro_index=9999),skip_existing=True)
+    finally:
+        event.remove(c.engine,'before_cursor_execute',capture)
+    assert not statements and not c.calculated and saved(c)==before
+
+
+def test_insert_only_microcap_failure_resumes_after_committed_sample(collector):
+    c=collector
+    c.env['run'](micro_num=2,end_date=c.days[5],skip_existing=True)
+    calculate=c.env['calculate_period']
+    def fail(day,previous,micro_num):
+        if day==c.days[15]:
+            raise ValueError('synthetic source failure')
+        return calculate(day,previous,micro_num)
+    c.env['calculate_period']=fail
+    with pytest.raises(ValueError):
+        c.env['run'](micro_num=2,skip_existing=True)
+    assert len(saved(c))==3
+    c.env['calculate_period']=calculate
+    c.calculated.clear()
+    result=c.env['run'](micro_num=2,skip_existing=True)
+    assert len(result)==1 and c.calculated==[c.days[15]]
+    assert saved(c)[-1]['micro_index']==1331
+
+
+def test_insert_only_microcap_defers_intraday_sample(collector):
+    c=collector
+    c.env['china_now']=lambda: datetime.datetime.combine(c.days[5],datetime.time(15,30))
+    c.env['run'](micro_num=2,skip_existing=True)
+    assert c.calculated==[c.days[0]]
+    c.calculated.clear()
+    c.env['china_now']=lambda: datetime.datetime.combine(c.days[5],datetime.time(16))
+    c.env['run'](micro_num=2,skip_existing=True)
+    assert c.calculated==[c.days[5]]

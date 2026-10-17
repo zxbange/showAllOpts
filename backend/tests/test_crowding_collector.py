@@ -238,3 +238,35 @@ def test_future_database_date_stops_instead_of_silently_skipping(collector):
     with pytest.raises(ValueError, match='数据库最新日期'):
         c.env['run']()
     assert len(rows(c)) == 1 and not c.calculated
+
+
+def test_insert_only_crowding_skips_recalculation_and_database_dml(collector):
+    from sqlalchemy import event
+    c=collector
+    seed(c,c.days[0])
+    result=c.env['run'](skip_existing=True)
+    assert len(result)==2 and c.calculated==c.days[1:]
+    c.calculated.clear()
+    statements=[]
+    def capture(conn,cursor,statement,*args):
+        if statement.lstrip().split()[0].upper() in ('INSERT','UPDATE','DELETE'):
+            statements.append(statement)
+    event.listen(c.engine,'before_cursor_execute',capture)
+    try:
+        assert c.env['run'](skip_existing=True)==[]
+        assert not c.env['save_day'](c.Session,c.days[0],.05,record(c.days[0],ratio=.99),skip_existing=True)
+    finally:
+        event.remove(c.engine,'before_cursor_execute',capture)
+    assert not statements and not c.calculated
+    assert rows(c)[0].ratio==Decimal('.4')
+
+
+def test_insert_only_crowding_defers_intraday_date(collector):
+    c=collector
+    c.env['china_now']=lambda: datetime.datetime(2026,10,16,15,30)
+    c.env['run'](skip_existing=True)
+    assert c.days[-1] not in c.calculated
+    c.calculated.clear()
+    c.env['china_now']=lambda: datetime.datetime(2026,10,16,16)
+    result=c.env['run'](skip_existing=True)
+    assert len(result)==1 and c.calculated==[c.days[-1]]

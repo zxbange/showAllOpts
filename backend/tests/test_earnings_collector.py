@@ -324,3 +324,64 @@ def test_save_quantizes_after_raw_threshold_and_preserves_old_rows_on_invalid_va
     with c.Session() as s:
         assert s.query(c.env['EarningsStock']).count() == 1
         assert s.query(c.env['EarningsStock']).one().name == row['name']
+
+
+def test_insert_only_earnings_retains_first_snapshot_and_accumulates_new_stocks(c):
+    save=c.env['save_results']; a=record(c); p=a['report_period']; day=a['valuation_date']
+    older=record(c,dt.date(2026,6,30))
+    save(c.Session,older['report_period'],day,6000,[older])
+    save(c.Session,p,day,6000,[a],skip_existing=True)
+    b=record(c,code='600002.XSHG')
+    fresh=save(c.Session,p,day,6000,[dict(a,name='should not replace',pe_ttm=99),b],skip_existing=True)
+    assert [r['code'] for r in fresh]==[b['code']]
+    statements=[]
+    def capture(conn,cursor,statement,*args):
+        if statement.lstrip().split()[0].upper() in ('INSERT','UPDATE','DELETE'):
+            statements.append(statement)
+    sql_event.listen(c.engine,'before_cursor_execute',capture)
+    try:
+        assert save(c.Session,p,day,6000,[b],skip_existing=True)==[]
+        assert save(c.Session,p,day,6000,[],skip_existing=True)==[]
+    finally:
+        sql_event.remove(c.engine,'before_cursor_execute',capture)
+    assert not statements
+    with c.Session() as s:
+        row=s.get(c.env['EarningsStock'],(p,a['code']))
+        assert row.name==a['name'] and row.pe_ttm==a['pe_ttm']
+        assert s.query(c.env['EarningsStock']).count()==3
+        assert s.get(c.env['EarningsRun'],p).matched_count==2
+
+
+def test_insert_only_earnings_rolls_back_new_rows_and_metadata(c):
+    row=record(c); p=row['report_period']; day=row['valuation_date']; save=c.env['save_results']
+    save(c.Session,p,day,6000,[row],skip_existing=True)
+    class FailCommit(c.Session.class_):
+        def commit(self):
+            self.flush()
+            raise RuntimeError('synthetic commit failure')
+    with pytest.raises(RuntimeError):
+        save(sessionmaker(bind=c.engine,class_=FailCommit),p,day,6000,[record(c,code='600002.XSHG')],skip_existing=True)
+    with c.Session() as s:
+        assert s.query(c.env['EarningsStock']).count()==1
+        assert s.get(c.env['EarningsRun'],p).matched_count==1
+
+
+def test_insert_only_earnings_skips_fetching_already_saved_stocks(c):
+    a=record(c); b=record(c,code='600002.XSHG'); day=a['valuation_date']
+    c.env['save_results'](c.Session,a['report_period'],day,2,[a],skip_existing=True)
+    c.env['china_now']=lambda:dt.datetime(2026,10,17,17)
+    c.env['get_trade_days']=lambda **kwargs:[day]
+    c.env['get_all_securities']=lambda **kwargs:SimpleNamespace(
+        empty=False,columns=['display_name'],iterrows=lambda:iter([(a['code'],{'display_name':'A'}),(b['code'],{'display_name':'B'})]))
+    c.env['MysqlEarnings']=SimpleNamespace(connect_to_mysql=lambda:c.engine)
+    seen=[]
+    def fetch(codes,*args):
+        seen.append(list(codes))
+        return []
+    c.env['fetch_events']=fetch
+    c.env['screen']=lambda codes,*args:[b]
+    result=c.env['run'](skip_existing=True)
+    assert seen==[[b['code']]] and [r['code'] for r in result]==[b['code']]
+    c.env['fetch_events']=lambda *args:pytest.fail('already saved')
+    c.env['screen']=lambda *args:pytest.fail('already saved')
+    assert c.env['run'](skip_existing=True)==[]

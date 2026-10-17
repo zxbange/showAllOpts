@@ -26,7 +26,7 @@ DB_CONFIG = {
 # 按此顺序运行；临时只跑部分策略时，可删除不需要的名称。
 STRATEGY_ORDER = ['行业动量', '抱团拥挤度', '微盘温度计', 'ETF份额', '净利润断层']
 LOG_DIR = 'log'  # 相对于聚宽研究环境当前工作目录；按北京时间日期生成日志文件。
-# 可选：传给各策略 run() 的参数；空字典表示保持各策略原有默认值。
+# 可选：传给各策略 run() 的参数；批量入口固定 skip_existing=True，已有记录不覆盖。
 STRATEGY_OPTIONS = {}
 
 _STRATEGY_CLASSES = {
@@ -180,7 +180,7 @@ def _load_strategy(name, config, api_namespace):
 
 def run_all(strategy_names=None, options=None, db_config=None, log_dir=None,
             raise_on_failure=True, api_namespace=None):
-    """串行执行，单策略失败后继续；结束时汇总，并默认抛出批次失败异常。"""
+    """串行只新增，单策略失败后继续；结束时汇总，并默认抛出批次失败异常。"""
     names = list(STRATEGY_ORDER if strategy_names is None else strategy_names)
     if not names or len(names) != len(set(names)) or _batch_builtins.any(name not in _STRATEGY_CLASSES for name in names):
         raise ValueError('策略列表不能为空、重复或包含未知名称。')
@@ -190,6 +190,8 @@ def run_all(strategy_names=None, options=None, db_config=None, log_dir=None,
     selected_options = dict(STRATEGY_OPTIONS if options is None else options)
     if _batch_builtins.any(name not in _STRATEGY_CLASSES or not isinstance(value, dict) for name, value in selected_options.items()):
         raise ValueError('策略参数必须为按策略名称组织的字典。')
+    if _batch_builtins.any(value.get('skip_existing', True) is not True for value in selected_options.values()):
+        raise ValueError('批量入口固定为只新增模式，不允许关闭 skip_existing。')
     api_namespace = dict(globals() if api_namespace is None else api_namespace)
     directory = LOG_DIR if log_dir is None else log_dir
     summary = []
@@ -207,7 +209,9 @@ def run_all(strategy_names=None, options=None, db_config=None, log_dir=None,
                 try:
                     with _batch_stdout(stdout), _batch_stderr(stderr):
                         run = _load_strategy(name, config, api_namespace)
-                        result = run(**selected_options.get(name, {}))
+                        strategy_options = dict(selected_options.get(name, {}))
+                        strategy_options['skip_existing'] = True
+                        result = run(**strategy_options)
                         count = len(result)
                         del result  # 不累积所有策略的行情/历史结果，减少 Notebook 内存占用。
                     row.update(status='SUCCESS', rows=count)
@@ -231,11 +235,13 @@ def run_all(strategy_names=None, options=None, db_config=None, log_dir=None,
                 row['elapsed_seconds'] = _batch_builtins.round(_batch_time.monotonic() - started, 3)
                 summary.append(row)
                 if row['status'] == 'SUCCESS':
-                    log.write('INFO', name, '========== 成功 | 本次处理/写入 {} 条（含覆盖） | 耗时 {:.2f} 秒 =========='.format(row['rows'], row['elapsed_seconds']))
+                    if row['rows'] == 0:
+                        log.write('INFO', name, '无新增数据（已有记录跳过，或本次尚无可入库数据）。')
+                    log.write('INFO', name, '========== 成功 | 本次新增 {} 条 | 耗时 {:.2f} 秒 =========='.format(row['rows'], row['elapsed_seconds']))
                 else:
                     log.write('ERROR', name, '========== 失败 | 耗时 {:.2f} 秒 | 已提交部分保留，继续后续策略 =========='.format(row['elapsed_seconds']))
             successes = _batch_builtins.sum(row['status'] == 'SUCCESS' for row in summary)
-            log.write('INFO', '汇总', '策略 | 状态 | 本次处理/写入条数（含覆盖） | 耗时秒')
+            log.write('INFO', '汇总', '策略 | 状态 | 本次新增条数 | 耗时秒')
             for row in summary:
                 log.write('INFO' if row['status'] == 'SUCCESS' else 'ERROR', '汇总', '{} | {} | {} | {:.2f}'.format(
                     row['strategy'], row['status'], row['rows'] if row['rows'] is not None else '未完成，详见过程日志', row['elapsed_seconds']))
@@ -429,8 +435,8 @@ def calculate_momentum(trade_date, industry_type=INDUSTRY_TYPE):
     return records
 
 
-def save_day(Session, trade_date, industry_type, records):
-    \"\"\"一个事务替换一天的完整快照，避免重跑重复及旧行业残留。\"\"\"
+def save_day(Session, trade_date, industry_type, records, skip_existing=False):
+    \"\"\"默认事务替换日快照；只新增模式按主键过滤已存在记录。\"\"\"
     day = as_date(trade_date)
     if not records:
         raise ValueError('拒绝写入空结果。')
@@ -445,11 +451,17 @@ def save_day(Session, trade_date, industry_type, records):
                     record['trade_date'], record['industry_type']))
     session = Session()
     try:
-        session.query(IndustryMomentum).filter_by(
-            trade_date=day, industry_type=industry_type,
-        ).delete(synchronize_session=False)
+        query = session.query(IndustryMomentum).filter_by(trade_date=day, industry_type=industry_type)
+        if skip_existing:
+            existing = {row[0] for row in query.with_entities(IndustryMomentum.industry_code).all()}
+            records = [record for record in records if record['industry_code'] not in existing]
+            if not records:
+                return []
+        else:
+            query.delete(synchronize_session=False)
         session.add_all([IndustryMomentum(**record) for record in records])
         session.commit()
+        return records
     except Exception:
         session.rollback()
         raise
@@ -504,14 +516,18 @@ def cleanup_old_data(Session, retention_start):
         session.close()
 
 
-def run(start_date=START_DATE, end_date=END_DATE, industry_type=INDUSTRY_TYPE):
-    \"\"\"先清理超过 180 个交易日的数据，再在保留范围内增量更新。\"\"\"
-    today_china = (datetime.datetime.utcnow() + datetime.timedelta(hours=8)).date()
+def run(start_date=START_DATE, end_date=END_DATE, industry_type=INDUSTRY_TYPE, skip_existing=False):
+    \"\"\"先清理过期数据；skip_existing=True 时从最新日期之后只新增。\"\"\"
+    now_china = datetime.datetime.utcnow() + datetime.timedelta(hours=8)
+    today_china = now_china.date()
     if end_date is None:
         end_date = today_china
     initial_start, end = as_date(start_date), as_date(end_date)
     if end > today_china:
         raise ValueError('结束日期不能晚于运行当天。')
+    if skip_existing and end == today_china and now_china.hour < 16:
+        end = today_china - datetime.timedelta(days=1)
+        print('只新增模式：16:00 前不写入当天未完成快照。')
     # 即使手动指定历史 end_date，保留范围仍以实际运行当天为基准。
     # 日历验证在任何数据库修改之前完成，节假日自动使用最近交易日。
     retention_start = get_retention_start(today_china, RETENTION_TRADE_DAYS)
@@ -540,12 +556,14 @@ def run(start_date=START_DATE, end_date=END_DATE, industry_type=INDUSTRY_TYPE):
             print('{} 尚无保留范围内的记录，从 {} 开始入库。'.format(industry_type, start))
         else:
             start = as_date(last_date)
+            if skip_existing:
+                start += datetime.timedelta(days=1)
             if start < retention_start:
                 start = retention_start
             if start > end:
                 print('最后已入库日期 {} 晚于结束日期 {}，无需更新。'.format(start, end))
                 return pd.DataFrame(columns=RESULT_COLUMNS)
-            print('{} 最后已入库日期为 {}，从 {}（含）更新至 {}。'.format(
+            print('{} 最后已入库日期为 {}，从 {}（含）采集至 {}。'.format(
                 industry_type, last_date, start, end))
         trade_days = [as_date(day) for day in get_trade_days(start_date=start, end_date=end)]
         # 先检查整个补录日历，避免异常接口将过期或越界日期写回。
@@ -560,7 +578,7 @@ def run(start_date=START_DATE, end_date=END_DATE, industry_type=INDUSTRY_TYPE):
         for day in trade_days:
             records = calculate_momentum(day, industry_type)
             try:
-                save_day(Session, day, industry_type, records)
+                records = save_day(Session, day, industry_type, records, skip_existing=skip_existing)
             except Exception:
                 print('{} 校验或写入失败；修复后重跑会从最后已入库日期继续。'.format(day))
                 raise
@@ -725,16 +743,21 @@ def calculate_crowding(trade_date, top_pct=TOP_PCT):
     return record
 
 
-def save_day(Session, day, top_pct, record):
+def save_day(Session, day, top_pct, record, skip_existing=False):
     if record['trade_date'] != as_date(day) or record['top_pct'] != Decimal(str(top_pct)):
         raise ValueError('结果日期或 TOP_PCT 不一致，拒绝入库。')
     session = Session()
     try:
-        session.query(MarketCrowding).filter_by(
-            trade_date=as_date(day), top_pct=Decimal(str(top_pct)),
-        ).delete(synchronize_session=False)
+        query = session.query(MarketCrowding).filter_by(
+            trade_date=as_date(day), top_pct=Decimal(str(top_pct)))
+        if skip_existing:
+            if query.first() is not None:
+                return False
+        else:
+            query.delete(synchronize_session=False)
         session.add(MarketCrowding(**record))
         session.commit()
+        return True
     except Exception:
         session.rollback()
         raise
@@ -754,13 +777,17 @@ def get_last_saved_date(Session, top_pct):
         session.close()
 
 
-def run(start_date=START_DATE, end_date=END_DATE, top_pct=TOP_PCT, incremental=True):
+def run(start_date=START_DATE, end_date=END_DATE, top_pct=TOP_PCT, incremental=True, skip_existing=False):
     \"\"\"默认从最后已入库日（含）增量更新；手动补历史时传 incremental=False。\"\"\"
-    today = china_now().date()
+    now = china_now()
+    today = now.date()
     start = as_date(start_date)
     end = today if end_date is None else as_date(end_date)
     if start > end or end > today:
         raise ValueError('开始日期不能晚于结束日期，结束日期不能晚于运行当天。')
+    if skip_existing and end == today and now.hour < 16:
+        end = today - datetime.timedelta(days=1)
+        print('只新增模式：16:00 前不写入当天未完成快照。')
     pct = Decimal(str(top_pct))
     if not pct.is_finite() or not Decimal('0') < pct <= Decimal('1'):
         raise ValueError('TOP_PCT 必须在 (0, 1] 内。')
@@ -778,7 +805,7 @@ def run(start_date=START_DATE, end_date=END_DATE, top_pct=TOP_PCT, incremental=T
             if last is not None:
                 if last > today:
                     raise ValueError('数据库最新日期晚于运行当天，请检查已有数据。')
-                start = builtins.max(start, last)
+                start = builtins.max(start, last + datetime.timedelta(days=1) if skip_existing else last)
             print('最后已入库日期：{}；按最新日期增量更新。'.format(last))
         else:
             print('手动补录模式：重算指定区间，不查询历史日期列表。')
@@ -800,11 +827,14 @@ def run(start_date=START_DATE, end_date=END_DATE, top_pct=TOP_PCT, incremental=T
         if not days:
             print('日期范围没有交易日。')
             return pd.DataFrame(columns=RESULT_COLUMNS)
-        # 包含最后已入库日，刷新盘中快照；更早的历史缺口不自动扫描。
+        # 默认模式刷新末日；skip_existing=True 仅新增，更早缺口不自动扫描。
         for index, day in enumerate(days, 1):
             try:
                 record = calculate_crowding(day, top_pct)
-                save_day(Session, day, top_pct, record)
+                written = save_day(Session, day, top_pct, record, skip_existing=skip_existing)
+                if not written:
+                    print('{} 已有数据，跳过写入。'.format(day))
+                    continue
             except Exception as exc:
                 # 不输出数据库异常全文，避免日志泄露账号、地址或 SQL。
                 print('{} 计算或写入失败（{}），本次停止；已完成日期已提交，修复后重跑可继续。'.format(day, type(exc).__name__))
@@ -1141,7 +1171,7 @@ def append_percentiles(record, histories):
     record['sample_count'] = len(histories[RAW_FIELDS[0]])
 
 
-def load_resume(Session, series_id):
+def load_resume(Session, series_id, include_latest=False):
     session = Session()
     try:
         last = session.query(MicrocapTemperature.trade_date).filter_by(series_id=series_id).order_by(
@@ -1150,16 +1180,18 @@ def load_resume(Session, series_id):
         if last is None:
             return None, None, histories
         day = as_date(last[0])
-        # 分位依赖全部此前样本；仅取四列一次，不重新采集历史行情。
+        boundary = (MicrocapTemperature.trade_date <= day if include_latest
+                    else MicrocapTemperature.trade_date < day)
+        # 只新增时纳入最新一期；从已保存的分位基准和指数继续。
         baseline = session.query(*[getattr(MicrocapTemperature, field) for field in RAW_FIELDS]).filter(
-            MicrocapTemperature.series_id == series_id, MicrocapTemperature.trade_date < day).all()
+            MicrocapTemperature.series_id == series_id, boundary).all()
         for row in baseline:
             for field, value in zip(RAW_FIELDS, row):
                 histories[field].append(Decimal(value))
         for history in histories.values():
             history.sort()
         prev = session.query(MicrocapTemperature).filter(
-            MicrocapTemperature.series_id == series_id, MicrocapTemperature.trade_date < day,
+            MicrocapTemperature.series_id == series_id, boundary,
         ).order_by(MicrocapTemperature.trade_date.desc()).first()
         previous = None if prev is None else {
             column.name: getattr(prev, column.name) for column in MicrocapTemperature.__table__.columns}
@@ -1170,7 +1202,7 @@ def load_resume(Session, series_id):
         session.close()
 
 
-def save_period(Session, record):
+def save_period(Session, record, skip_existing=False):
     required = RESULT_COLUMNS + ['member_codes']
     for field in required:
         if field not in record or (record[field] is None and field != 'avg_np_growth'):
@@ -1181,11 +1213,16 @@ def save_period(Session, record):
             raise ValueError('分位或温度不在 0～1 范围内。')
     session = Session()
     try:
-        session.query(MicrocapTemperature).filter_by(
-            series_id=record['series_id'], trade_date=record['trade_date'],
-        ).delete(synchronize_session=False)
+        query = session.query(MicrocapTemperature).filter_by(
+            series_id=record['series_id'], trade_date=record['trade_date'])
+        if skip_existing:
+            if query.first() is not None:
+                return False
+        else:
+            query.delete(synchronize_session=False)
         session.add(MicrocapTemperature(**record))
         session.commit()
+        return True
     except Exception:
         session.rollback()
         raise
@@ -1193,12 +1230,16 @@ def save_period(Session, record):
         session.close()
 
 
-def run(start_date=START_DATE, end_date=END_DATE, micro_num=MICRO_NUM, sample_step=SAMPLE_STEP):
+def run(start_date=START_DATE, end_date=END_DATE, micro_num=MICRO_NUM, sample_step=SAMPLE_STEP, skip_existing=False):
     start = as_date(start_date)
-    today = china_now().date()
+    now = china_now()
+    today = now.date()
     end = today if end_date is None else as_date(end_date)
     if start > end or end > today:
         raise ValueError('开始日期不能晚于结束日期，结束日期不能晚于今天。')
+    if skip_existing and end == today and now.hour < 16:
+        end = today - datetime.timedelta(days=1)
+        print('只新增模式：16:00 前不写入当天未完成快照。')
     for value in (micro_num, sample_step):
         if isinstance(value, builtins.bool) or not isinstance(value, builtins.int) or value <= 0:
             raise ValueError('微盘数量和采样步长必须是正整数。')
@@ -1208,7 +1249,7 @@ def run(start_date=START_DATE, end_date=END_DATE, micro_num=MICRO_NUM, sample_st
     try:
         Base.metadata.create_all(engine)
         Session = sessionmaker(bind=engine)
-        last, previous, histories = load_resume(Session, series_id)
+        last, previous, histories = load_resume(Session, series_id, include_latest=skip_existing)
         if last is not None and last > today:
             raise ValueError('最新入库日期晚于今天，请检查已有数据。')
         begin = last or start
@@ -1218,7 +1259,7 @@ def run(start_date=START_DATE, end_date=END_DATE, micro_num=MICRO_NUM, sample_st
         days = calendar(begin, end)
         if last is not None and (not days or days[0] != last):
             raise ValueError('最新入库日不在交易日历中，停止写入。')
-        pending = days[::sample_step]
+        pending = days[sample_step::sample_step] if skip_existing and last is not None else days[::sample_step]
         print('微盘 {}；每 {} 个交易日采样；本次 {} 至 {}，待更新 {} 期。'.format(
             micro_num, sample_step, begin, end, len(pending)))
         for day in pending:
@@ -1228,7 +1269,8 @@ def run(start_date=START_DATE, end_date=END_DATE, micro_num=MICRO_NUM, sample_st
                     raise ValueError('计算结果日期或微盘数量不一致。')
                 record.update(series_id=series_id, sample_step=sample_step)
                 append_percentiles(record, histories)
-                save_period(Session, record)
+                if not save_period(Session, record, skip_existing=skip_existing):
+                    raise ValueError('该采样期已被其他任务写入，未覆盖；请重跑以加载已保存的指数和分位基准。')
             except Exception as exc:
                 print('{} 计算或写入失败（{}）；已完成期数已提交，修复后重跑从最新一期继续。'.format(
                     day, type(exc).__name__))
@@ -1423,18 +1465,26 @@ def last_dates(Session, codes):
         session.close()
 
 
-def save_window(Session, code, records):
+def save_window(Session, code, records, skip_existing=False):
     if not records:
-        return
+        return []
     dates = [record['trade_date'] for record in records]
     if len(set(dates)) != len(dates) or builtins.any(r['fund_code'] != code or r['previous_trade_date'] >= r['trade_date'] for r in records):
         raise ValueError('待写入份额快照不一致。')
     session = Session()
     try:
-        # 只替换确实返回的日期；未公布日期不删旧值，不写 0。
-        session.query(ETFShare).filter(ETFShare.fund_code == code, ETFShare.trade_date.in_(dates)).delete(synchronize_session=False)
+        query = session.query(ETFShare).filter(ETFShare.fund_code == code, ETFShare.trade_date.in_(dates))
+        if skip_existing:
+            existing = {row[0] for row in query.with_entities(ETFShare.trade_date).all()}
+            records = [record for record in records if record['trade_date'] not in existing]
+            if not records:
+                return []
+        else:
+            # 旧模式只替换源实际返回的日期；不补零。
+            query.delete(synchronize_session=False)
         session.add_all([ETFShare(**record) for record in records])
         session.commit()
+        return records
     except Exception:
         session.rollback()
         raise
@@ -1453,7 +1503,7 @@ def probe(code='510300.XSHG', end_date=None):
     return pd.DataFrame(records, columns=RESULT_COLUMNS)
 
 
-def run(start_date=START_DATE, end_date=END_DATE, incremental=True, lookback_days=LOOKBACK_DAYS, groups=None):
+def run(start_date=START_DATE, end_date=END_DATE, incremental=True, lookback_days=LOOKBACK_DAYS, groups=None, skip_existing=False):
     today = china_now().date()
     end = today if end_date is None else as_date(end_date)
     start = None if start_date is None else as_date(start_date)
@@ -1487,11 +1537,19 @@ def run(start_date=START_DATE, end_date=END_DATE, incremental=True, lookback_day
                     continue
                 begin = start
                 if last:
-                    recent = previous_days(as_date(last), lookback_days)
+                    recent = previous_days(as_date(last), 1 if skip_existing else lookback_days)
                     if not recent or recent[-1] != as_date(last):
                         raise ValueError('最新记录不在交易日历中。')
                     # 已有数据以水位为准；即使一年以上没运行，也不能跳过中间缺口。
-                    begin = builtins.max(as_date(first), recent[0]) if start_date is None else builtins.max(start, recent[0])
+                    if skip_existing:
+                        begin = as_date(last) + datetime.timedelta(days=1)
+                        if start_date is not None:
+                            begin = builtins.max(start, begin)
+                    else:
+                        begin = builtins.max(as_date(first), recent[0]) if start_date is None else builtins.max(start, recent[0])
+                if begin > end:
+                    print('{} 已有数据，无新增日期，跳过写入。'.format(code))
+                    continue
                 days = trading_days(begin, end)
                 if not days:
                     continue
@@ -1509,11 +1567,11 @@ def run(start_date=START_DATE, end_date=END_DATE, incremental=True, lookback_day
                         # 已知最新日期处于此窗口时，接口应仍包含它，防止覆盖不完整快照。
                         if last and window[0] <= as_date(last) <= window[-1] and as_date(last) not in {r['trade_date'] for r in records}:
                             raise ValueError('源数据未包含已入库的最新日期，停止该基金。')
-                        save_window(Session, code, records)
-                        output.extend(records)
+                        written = save_window(Session, code, records, skip_existing=skip_existing)
+                        output.extend(written)
                         seen_data = True
                         print('{} {} 至 {}：写入 {} 条，最新份额 {:.4f} 亿份。'.format(
-                            code, records[0]['trade_date'], records[-1]['trade_date'], len(records), records[-1]['shares'] / 1e8))
+                            code, records[0]['trade_date'], records[-1]['trade_date'], len(written), records[-1]['shares'] / 1e8))
                         if records[-1]['trade_date'] < window[-1]:
                             print('{} 后续日期尚无数据，保留待下次获取，不补零。'.format(code))
                             break
@@ -1898,7 +1956,7 @@ def database_record(record):
     return result
 
 
-def save_results(Session, period, as_of, universe_count, records):
+def save_results(Session, period, as_of, universe_count, records, skip_existing=False):
     if len({r['code'] for r in records}) != len(records):
         raise ValueError('筛选结果包含重复股票。')
     for r in records:
@@ -1911,6 +1969,35 @@ def save_results(Session, period, as_of, universe_count, records):
     db_records = [database_record(r) for r in records]
     session = Session()
     try:
+        if skip_existing:
+            # 股票快照只插入首次命中的结果；不覆盖、不删除已入库股票。
+            existing = {row[0] for row in session.query(EarningsStock.code).filter(
+                EarningsStock.report_period == period).all()}
+            fresh = [record for record in records if record['code'] not in existing]
+            fresh_db = [record for record in db_records if record['code'] not in existing]
+            run = session.query(EarningsRun).filter(EarningsRun.report_period == period).first()
+            total = len(existing) + len(fresh_db)
+            # 元数据用于网页展示累计命中数量和扫描截止日；仅值有变化时更新。
+            metadata_changed = False
+            if run is None:
+                session.add(EarningsRun(report_period=period, as_of_date=as_of, updated_at=china_now(),
+                    universe_count=universe_count, matched_count=total, rule_version=RULE_VERSION))
+                metadata_changed = True
+            else:
+                values = {'matched_count': total}
+                if as_of >= run.as_of_date:
+                    values.update(as_of_date=as_of, universe_count=universe_count, rule_version=RULE_VERSION)
+                for key, value in values.items():
+                    if getattr(run, key) != value:
+                        setattr(run, key, value)
+                        metadata_changed = True
+                if metadata_changed:
+                    run.updated_at = china_now()
+            if not fresh_db and not metadata_changed:
+                return []
+            session.add_all([EarningsStock(**record) for record in fresh_db])
+            session.commit()
+            return fresh
         # 清空与重建只针对当前季度，并在同一个事务提交，合法零命中也有元数据。
         session.query(EarningsStock).filter(EarningsStock.report_period == period).delete(synchronize_session=False)
         session.query(EarningsRun).filter(EarningsRun.report_period == period).delete(synchronize_session=False)
@@ -1918,6 +2005,7 @@ def save_results(Session, period, as_of, universe_count, records):
         session.add(EarningsRun(report_period=period, as_of_date=as_of, updated_at=china_now(),
                                universe_count=universe_count, matched_count=len(records), rule_version=RULE_VERSION))
         session.commit()
+        return records
     except Exception:
         session.rollback()
         raise
@@ -1925,7 +2013,7 @@ def save_results(Session, period, as_of, universe_count, records):
         session.close()
 
 
-def run(end_date=END_DATE):
+def run(end_date=END_DATE, skip_existing=False):
     now = china_now()
     requested = as_date(end_date) if end_date is not None else now.date()
     if requested > now.date():
@@ -1943,8 +2031,9 @@ def run(end_date=END_DATE):
     names = {str(code): str(row['display_name']) for code, row in universe.iterrows()}
     codes = sorted(names)
     print('报告期 {}，行情/披露截止 {}，扫描 {} 只股票。'.format(period, as_of, len(codes)))
-    events = fetch_events(codes, period, as_of)
-    records = screen(codes, names, events, period, as_of)
+    if not skip_existing:
+        events = fetch_events(codes, period, as_of)
+        records = screen(codes, names, events, period, as_of)
     engine = MysqlEarnings.connect_to_mysql()
     try:
         # 显式指定 InnoDB，确保旧数据库默认引擎不会破坏整批事务。
@@ -1952,10 +2041,22 @@ def run(end_date=END_DATE):
             table.dialect_options['mysql']['engine'] = 'InnoDB'
             table.dialect_options['mysql']['charset'] = 'utf8mb4'
         Base.metadata.create_all(engine)
-        save_results(sessionmaker(bind=engine), period, as_of, len(codes), records)
+        Session = sessionmaker(bind=engine)
+        if skip_existing:
+            session = Session()
+            try:
+                existing = {row[0] for row in session.query(EarningsStock.code).filter(
+                    EarningsStock.report_period == period).all()}
+            finally:
+                session.close()
+            pending = [code for code in codes if code not in existing]
+            print('本季度已入库 {} 只股票，保留原始快照；仅筛选其余 {} 只。'.format(len(existing), len(pending)))
+            events = fetch_events(pending, period, as_of) if pending else []
+            records = screen(pending, names, events, period, as_of) if pending else []
+        records = save_results(Session, period, as_of, len(codes), records, skip_existing=skip_existing)
     finally:
         engine.dispose()
-    print('完成：{} 只股票已入库；其他季度数据保留。'.format(len(records)))
+    print('完成：{} 只股票{}入库；其他季度数据保留。'.format(len(records), '新增' if skip_existing else '已'))
     return pd.DataFrame(records)
 
 

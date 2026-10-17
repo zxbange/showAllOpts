@@ -94,12 +94,12 @@ def test_serial_order_labeled_logs_parameters_and_repeated_runs(batch, monkeypat
         assert all(r['status'] == 'SUCCESS' and r['rows'] == 2 for r in result)
     assert [(name, stage) for name, stage, _ in events] == [
         (name, stage) for _ in range(2) for name in batch.STRATEGY_ORDER for stage in ('start', 'end')]
-    assert events[0][2] == options['行业动量']
-    assert events[2][2] == {}
+    assert events[0][2] == dict(options['行业动量'], skip_existing=True)
+    assert events[2][2] == {'skip_existing': True}
     output = capsys.readouterr().out
     saved = content(tmp_path)
     assert output == saved
-    assert 'SUCCESS | 2' in saved and '含覆盖' in saved
+    assert 'SUCCESS | 2' in saved and '本次新增' in saved
     assert '| WARNING |' in saved
     assert '| 行业动量 | 正在计算，入库完成。' in saved
     assert saved.count('| ETF份额 | 最后一行') == 2
@@ -110,7 +110,7 @@ def test_serial_order_labeled_logs_parameters_and_repeated_runs(batch, monkeypat
 def test_failure_continues_and_summary_marks_partial_completion(batch, monkeypatch, tmp_path, raises):
     called = []
     def loader(name, *_):
-        def run():
+        def run(**kwargs):
             called.append(name)
             print('一个窗口已提交')
             if name == '抱团拥挤度':
@@ -136,7 +136,7 @@ def test_loading_failure_is_attributed_and_later_strategy_runs(batch, monkeypatc
     def loader(name, *_):
         if name == '行业动量':
             raise ImportError('mock missing dependency')
-        return lambda: []
+        return lambda **kwargs: []
     monkeypatch.setattr(batch, '_load_strategy', loader)
     result = batch.run_all(['行业动量', 'ETF份额'], db_config=CONFIG, log_dir=tmp_path, raise_on_failure=False)
     assert [r['status'] for r in result] == ['FAILED', 'SUCCESS']
@@ -146,7 +146,7 @@ def test_loading_failure_is_attributed_and_later_strategy_runs(batch, monkeypatc
 def test_secrets_redacted_from_prints_exceptions_and_file(batch, monkeypatch, tmp_path, capsys):
     secret = CONFIG['dbpassword']
     def loader(*_):
-        def run():
+        def run(**kwargs):
             for value in (secret, quote(secret, safe=''), quote_plus(secret)):
                 print(value)
             print("password='unrelated-secret'")
@@ -184,7 +184,7 @@ def test_interrupt_stops_remaining_strategies_and_restores_streams(batch, monkey
     called = []
     def loader(name, *_):
         called.append(name)
-        def run():
+        def run(**kwargs):
             raise KeyboardInterrupt()
         return run
     monkeypatch.setattr(batch, '_load_strategy', loader)
@@ -220,3 +220,10 @@ def test_invalid_log_path_prevents_execution(batch, monkeypatch, tmp_path):
     monkeypatch.setattr(batch, '_load_strategy', lambda *_: pytest.fail('must not execute'))
     with pytest.raises(OSError):
         batch.run_all(db_config=CONFIG, log_dir=invalid)
+
+
+def test_batch_cannot_disable_insert_only(batch, monkeypatch, tmp_path):
+    monkeypatch.setattr(batch, '_load_strategy', lambda *_: pytest.fail('must not execute'))
+    with pytest.raises(ValueError, match='skip_existing'):
+        batch.run_all(options={'ETF份额': {'skip_existing': False}}, db_config=CONFIG, log_dir=tmp_path)
+    assert not list(tmp_path.iterdir())

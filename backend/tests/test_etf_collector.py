@@ -228,3 +228,30 @@ def test_empty_initial_calendar_does_not_connect(collector):
     def forbidden():raise AssertionError('database touched')
     c.env['MysqlETF'].connect_to_mysql=forbidden
     with pytest.raises(ValueError,match='交易日历'):c.env['run']()
+
+
+def test_insert_only_etf_requests_only_new_dates_and_protects_existing(collector):
+    c=collector
+    c.env['ETF_GROUPS']={'hs300':ETF_GROUPS['hs300'][:1]}
+    code='510300.XSHG'
+    for day in c.days[1:3]:
+        c.env['save_window'](c.Session,code,[record(c,day,100)])
+    for day in c.days[1:]:
+        c.source[code,day]=200
+    result=c.env['run'](skip_existing=True)
+    assert len(result)==3 and c.requested[0][1]==c.days[3]
+    assert [r.shares for r in rows(c)]==[100,100,200,200,200]
+    before=[(r.trade_date,r.shares,r.updated_at) for r in rows(c)]
+    c.requested.clear()
+    statements=[]
+    def capture(conn,cursor,statement,*args):
+        if statement.lstrip().split()[0].upper() in ('INSERT','UPDATE','DELETE'):
+            statements.append(statement)
+    event.listen(c.engine,'before_cursor_execute',capture)
+    try:
+        assert c.env['run'](skip_existing=True)==[]
+        assert c.env['save_window'](c.Session,code,[record(c,c.days[1],999)],skip_existing=True)==[]
+    finally:
+        event.remove(c.engine,'before_cursor_execute',capture)
+    assert not statements and not c.requested
+    assert [(r.trade_date,r.shares,r.updated_at) for r in rows(c)]==before

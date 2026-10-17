@@ -26,7 +26,7 @@ DB_CONFIG = {
 # 按此顺序运行；临时只跑部分策略时，可删除不需要的名称。
 STRATEGY_ORDER = ['行业动量', '抱团拥挤度', '微盘温度计', 'ETF份额', '净利润断层']
 LOG_DIR = 'log'  # 相对于聚宽研究环境当前工作目录；按北京时间日期生成日志文件。
-# 可选：传给各策略 run() 的参数；空字典表示保持各策略原有默认值。
+# 可选：传给各策略 run() 的参数；批量入口固定 skip_existing=True，已有记录不覆盖。
 STRATEGY_OPTIONS = {}
 
 _STRATEGY_CLASSES = {
@@ -180,7 +180,7 @@ def _load_strategy(name, config, api_namespace):
 
 def run_all(strategy_names=None, options=None, db_config=None, log_dir=None,
             raise_on_failure=True, api_namespace=None):
-    """串行执行，单策略失败后继续；结束时汇总，并默认抛出批次失败异常。"""
+    """串行只新增，单策略失败后继续；结束时汇总，并默认抛出批次失败异常。"""
     names = list(STRATEGY_ORDER if strategy_names is None else strategy_names)
     if not names or len(names) != len(set(names)) or _batch_builtins.any(name not in _STRATEGY_CLASSES for name in names):
         raise ValueError('策略列表不能为空、重复或包含未知名称。')
@@ -190,6 +190,8 @@ def run_all(strategy_names=None, options=None, db_config=None, log_dir=None,
     selected_options = dict(STRATEGY_OPTIONS if options is None else options)
     if _batch_builtins.any(name not in _STRATEGY_CLASSES or not isinstance(value, dict) for name, value in selected_options.items()):
         raise ValueError('策略参数必须为按策略名称组织的字典。')
+    if _batch_builtins.any(value.get('skip_existing', True) is not True for value in selected_options.values()):
+        raise ValueError('批量入口固定为只新增模式，不允许关闭 skip_existing。')
     api_namespace = dict(globals() if api_namespace is None else api_namespace)
     directory = LOG_DIR if log_dir is None else log_dir
     summary = []
@@ -207,7 +209,9 @@ def run_all(strategy_names=None, options=None, db_config=None, log_dir=None,
                 try:
                     with _batch_stdout(stdout), _batch_stderr(stderr):
                         run = _load_strategy(name, config, api_namespace)
-                        result = run(**selected_options.get(name, {}))
+                        strategy_options = dict(selected_options.get(name, {}))
+                        strategy_options['skip_existing'] = True
+                        result = run(**strategy_options)
                         count = len(result)
                         del result  # 不累积所有策略的行情/历史结果，减少 Notebook 内存占用。
                     row.update(status='SUCCESS', rows=count)
@@ -231,11 +235,13 @@ def run_all(strategy_names=None, options=None, db_config=None, log_dir=None,
                 row['elapsed_seconds'] = _batch_builtins.round(_batch_time.monotonic() - started, 3)
                 summary.append(row)
                 if row['status'] == 'SUCCESS':
-                    log.write('INFO', name, '========== 成功 | 本次处理/写入 {} 条（含覆盖） | 耗时 {:.2f} 秒 =========='.format(row['rows'], row['elapsed_seconds']))
+                    if row['rows'] == 0:
+                        log.write('INFO', name, '无新增数据（已有记录跳过，或本次尚无可入库数据）。')
+                    log.write('INFO', name, '========== 成功 | 本次新增 {} 条 | 耗时 {:.2f} 秒 =========='.format(row['rows'], row['elapsed_seconds']))
                 else:
                     log.write('ERROR', name, '========== 失败 | 耗时 {:.2f} 秒 | 已提交部分保留，继续后续策略 =========='.format(row['elapsed_seconds']))
             successes = _batch_builtins.sum(row['status'] == 'SUCCESS' for row in summary)
-            log.write('INFO', '汇总', '策略 | 状态 | 本次处理/写入条数（含覆盖） | 耗时秒')
+            log.write('INFO', '汇总', '策略 | 状态 | 本次新增条数 | 耗时秒')
             for row in summary:
                 log.write('INFO' if row['status'] == 'SUCCESS' else 'ERROR', '汇总', '{} | {} | {} | {:.2f}'.format(
                     row['strategy'], row['status'], row['rows'] if row['rows'] is not None else '未完成，详见过程日志', row['elapsed_seconds']))

@@ -356,7 +356,7 @@ def database_record(record):
     return result
 
 
-def save_results(Session, period, as_of, universe_count, records):
+def save_results(Session, period, as_of, universe_count, records, skip_existing=False):
     if len({r['code'] for r in records}) != len(records):
         raise ValueError('筛选结果包含重复股票。')
     for r in records:
@@ -369,6 +369,35 @@ def save_results(Session, period, as_of, universe_count, records):
     db_records = [database_record(r) for r in records]
     session = Session()
     try:
+        if skip_existing:
+            # 股票快照只插入首次命中的结果；不覆盖、不删除已入库股票。
+            existing = {row[0] for row in session.query(EarningsStock.code).filter(
+                EarningsStock.report_period == period).all()}
+            fresh = [record for record in records if record['code'] not in existing]
+            fresh_db = [record for record in db_records if record['code'] not in existing]
+            run = session.query(EarningsRun).filter(EarningsRun.report_period == period).first()
+            total = len(existing) + len(fresh_db)
+            # 元数据用于网页展示累计命中数量和扫描截止日；仅值有变化时更新。
+            metadata_changed = False
+            if run is None:
+                session.add(EarningsRun(report_period=period, as_of_date=as_of, updated_at=china_now(),
+                    universe_count=universe_count, matched_count=total, rule_version=RULE_VERSION))
+                metadata_changed = True
+            else:
+                values = {'matched_count': total}
+                if as_of >= run.as_of_date:
+                    values.update(as_of_date=as_of, universe_count=universe_count, rule_version=RULE_VERSION)
+                for key, value in values.items():
+                    if getattr(run, key) != value:
+                        setattr(run, key, value)
+                        metadata_changed = True
+                if metadata_changed:
+                    run.updated_at = china_now()
+            if not fresh_db and not metadata_changed:
+                return []
+            session.add_all([EarningsStock(**record) for record in fresh_db])
+            session.commit()
+            return fresh
         # 清空与重建只针对当前季度，并在同一个事务提交，合法零命中也有元数据。
         session.query(EarningsStock).filter(EarningsStock.report_period == period).delete(synchronize_session=False)
         session.query(EarningsRun).filter(EarningsRun.report_period == period).delete(synchronize_session=False)
@@ -376,6 +405,7 @@ def save_results(Session, period, as_of, universe_count, records):
         session.add(EarningsRun(report_period=period, as_of_date=as_of, updated_at=china_now(),
                                universe_count=universe_count, matched_count=len(records), rule_version=RULE_VERSION))
         session.commit()
+        return records
     except Exception:
         session.rollback()
         raise
@@ -383,7 +413,7 @@ def save_results(Session, period, as_of, universe_count, records):
         session.close()
 
 
-def run(end_date=END_DATE):
+def run(end_date=END_DATE, skip_existing=False):
     now = china_now()
     requested = as_date(end_date) if end_date is not None else now.date()
     if requested > now.date():
@@ -401,8 +431,9 @@ def run(end_date=END_DATE):
     names = {str(code): str(row['display_name']) for code, row in universe.iterrows()}
     codes = sorted(names)
     print('报告期 {}，行情/披露截止 {}，扫描 {} 只股票。'.format(period, as_of, len(codes)))
-    events = fetch_events(codes, period, as_of)
-    records = screen(codes, names, events, period, as_of)
+    if not skip_existing:
+        events = fetch_events(codes, period, as_of)
+        records = screen(codes, names, events, period, as_of)
     engine = MysqlEarnings.connect_to_mysql()
     try:
         # 显式指定 InnoDB，确保旧数据库默认引擎不会破坏整批事务。
@@ -410,10 +441,22 @@ def run(end_date=END_DATE):
             table.dialect_options['mysql']['engine'] = 'InnoDB'
             table.dialect_options['mysql']['charset'] = 'utf8mb4'
         Base.metadata.create_all(engine)
-        save_results(sessionmaker(bind=engine), period, as_of, len(codes), records)
+        Session = sessionmaker(bind=engine)
+        if skip_existing:
+            session = Session()
+            try:
+                existing = {row[0] for row in session.query(EarningsStock.code).filter(
+                    EarningsStock.report_period == period).all()}
+            finally:
+                session.close()
+            pending = [code for code in codes if code not in existing]
+            print('本季度已入库 {} 只股票，保留原始快照；仅筛选其余 {} 只。'.format(len(existing), len(pending)))
+            events = fetch_events(pending, period, as_of) if pending else []
+            records = screen(pending, names, events, period, as_of) if pending else []
+        records = save_results(Session, period, as_of, len(codes), records, skip_existing=skip_existing)
     finally:
         engine.dispose()
-    print('完成：{} 只股票已入库；其他季度数据保留。'.format(len(records)))
+    print('完成：{} 只股票{}入库；其他季度数据保留。'.format(len(records), '新增' if skip_existing else '已'))
     return pd.DataFrame(records)
 
 

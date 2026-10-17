@@ -314,7 +314,7 @@ def append_percentiles(record, histories):
     record['sample_count'] = len(histories[RAW_FIELDS[0]])
 
 
-def load_resume(Session, series_id):
+def load_resume(Session, series_id, include_latest=False):
     session = Session()
     try:
         last = session.query(MicrocapTemperature.trade_date).filter_by(series_id=series_id).order_by(
@@ -323,16 +323,18 @@ def load_resume(Session, series_id):
         if last is None:
             return None, None, histories
         day = as_date(last[0])
-        # 分位依赖全部此前样本；仅取四列一次，不重新采集历史行情。
+        boundary = (MicrocapTemperature.trade_date <= day if include_latest
+                    else MicrocapTemperature.trade_date < day)
+        # 只新增时纳入最新一期；从已保存的分位基准和指数继续。
         baseline = session.query(*[getattr(MicrocapTemperature, field) for field in RAW_FIELDS]).filter(
-            MicrocapTemperature.series_id == series_id, MicrocapTemperature.trade_date < day).all()
+            MicrocapTemperature.series_id == series_id, boundary).all()
         for row in baseline:
             for field, value in zip(RAW_FIELDS, row):
                 histories[field].append(Decimal(value))
         for history in histories.values():
             history.sort()
         prev = session.query(MicrocapTemperature).filter(
-            MicrocapTemperature.series_id == series_id, MicrocapTemperature.trade_date < day,
+            MicrocapTemperature.series_id == series_id, boundary,
         ).order_by(MicrocapTemperature.trade_date.desc()).first()
         previous = None if prev is None else {
             column.name: getattr(prev, column.name) for column in MicrocapTemperature.__table__.columns}
@@ -343,7 +345,7 @@ def load_resume(Session, series_id):
         session.close()
 
 
-def save_period(Session, record):
+def save_period(Session, record, skip_existing=False):
     required = RESULT_COLUMNS + ['member_codes']
     for field in required:
         if field not in record or (record[field] is None and field != 'avg_np_growth'):
@@ -354,11 +356,16 @@ def save_period(Session, record):
             raise ValueError('分位或温度不在 0～1 范围内。')
     session = Session()
     try:
-        session.query(MicrocapTemperature).filter_by(
-            series_id=record['series_id'], trade_date=record['trade_date'],
-        ).delete(synchronize_session=False)
+        query = session.query(MicrocapTemperature).filter_by(
+            series_id=record['series_id'], trade_date=record['trade_date'])
+        if skip_existing:
+            if query.first() is not None:
+                return False
+        else:
+            query.delete(synchronize_session=False)
         session.add(MicrocapTemperature(**record))
         session.commit()
+        return True
     except Exception:
         session.rollback()
         raise
@@ -366,12 +373,16 @@ def save_period(Session, record):
         session.close()
 
 
-def run(start_date=START_DATE, end_date=END_DATE, micro_num=MICRO_NUM, sample_step=SAMPLE_STEP):
+def run(start_date=START_DATE, end_date=END_DATE, micro_num=MICRO_NUM, sample_step=SAMPLE_STEP, skip_existing=False):
     start = as_date(start_date)
-    today = china_now().date()
+    now = china_now()
+    today = now.date()
     end = today if end_date is None else as_date(end_date)
     if start > end or end > today:
         raise ValueError('开始日期不能晚于结束日期，结束日期不能晚于今天。')
+    if skip_existing and end == today and now.hour < 16:
+        end = today - datetime.timedelta(days=1)
+        print('只新增模式：16:00 前不写入当天未完成快照。')
     for value in (micro_num, sample_step):
         if isinstance(value, builtins.bool) or not isinstance(value, builtins.int) or value <= 0:
             raise ValueError('微盘数量和采样步长必须是正整数。')
@@ -381,7 +392,7 @@ def run(start_date=START_DATE, end_date=END_DATE, micro_num=MICRO_NUM, sample_st
     try:
         Base.metadata.create_all(engine)
         Session = sessionmaker(bind=engine)
-        last, previous, histories = load_resume(Session, series_id)
+        last, previous, histories = load_resume(Session, series_id, include_latest=skip_existing)
         if last is not None and last > today:
             raise ValueError('最新入库日期晚于今天，请检查已有数据。')
         begin = last or start
@@ -391,7 +402,7 @@ def run(start_date=START_DATE, end_date=END_DATE, micro_num=MICRO_NUM, sample_st
         days = calendar(begin, end)
         if last is not None and (not days or days[0] != last):
             raise ValueError('最新入库日不在交易日历中，停止写入。')
-        pending = days[::sample_step]
+        pending = days[sample_step::sample_step] if skip_existing and last is not None else days[::sample_step]
         print('微盘 {}；每 {} 个交易日采样；本次 {} 至 {}，待更新 {} 期。'.format(
             micro_num, sample_step, begin, end, len(pending)))
         for day in pending:
@@ -401,7 +412,8 @@ def run(start_date=START_DATE, end_date=END_DATE, micro_num=MICRO_NUM, sample_st
                     raise ValueError('计算结果日期或微盘数量不一致。')
                 record.update(series_id=series_id, sample_step=sample_step)
                 append_percentiles(record, histories)
-                save_period(Session, record)
+                if not save_period(Session, record, skip_existing=skip_existing):
+                    raise ValueError('该采样期已被其他任务写入，未覆盖；请重跑以加载已保存的指数和分位基准。')
             except Exception as exc:
                 print('{} 计算或写入失败（{}）；已完成期数已提交，修复后重跑从最新一期继续。'.format(
                     day, type(exc).__name__))

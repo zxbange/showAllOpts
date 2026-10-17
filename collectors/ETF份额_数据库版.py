@@ -172,18 +172,26 @@ def last_dates(Session, codes):
         session.close()
 
 
-def save_window(Session, code, records):
+def save_window(Session, code, records, skip_existing=False):
     if not records:
-        return
+        return []
     dates = [record['trade_date'] for record in records]
     if len(set(dates)) != len(dates) or builtins.any(r['fund_code'] != code or r['previous_trade_date'] >= r['trade_date'] for r in records):
         raise ValueError('待写入份额快照不一致。')
     session = Session()
     try:
-        # 只替换确实返回的日期；未公布日期不删旧值，不写 0。
-        session.query(ETFShare).filter(ETFShare.fund_code == code, ETFShare.trade_date.in_(dates)).delete(synchronize_session=False)
+        query = session.query(ETFShare).filter(ETFShare.fund_code == code, ETFShare.trade_date.in_(dates))
+        if skip_existing:
+            existing = {row[0] for row in query.with_entities(ETFShare.trade_date).all()}
+            records = [record for record in records if record['trade_date'] not in existing]
+            if not records:
+                return []
+        else:
+            # 旧模式只替换源实际返回的日期；不补零。
+            query.delete(synchronize_session=False)
         session.add_all([ETFShare(**record) for record in records])
         session.commit()
+        return records
     except Exception:
         session.rollback()
         raise
@@ -202,7 +210,7 @@ def probe(code='510300.XSHG', end_date=None):
     return pd.DataFrame(records, columns=RESULT_COLUMNS)
 
 
-def run(start_date=START_DATE, end_date=END_DATE, incremental=True, lookback_days=LOOKBACK_DAYS, groups=None):
+def run(start_date=START_DATE, end_date=END_DATE, incremental=True, lookback_days=LOOKBACK_DAYS, groups=None, skip_existing=False):
     today = china_now().date()
     end = today if end_date is None else as_date(end_date)
     start = None if start_date is None else as_date(start_date)
@@ -236,11 +244,19 @@ def run(start_date=START_DATE, end_date=END_DATE, incremental=True, lookback_day
                     continue
                 begin = start
                 if last:
-                    recent = previous_days(as_date(last), lookback_days)
+                    recent = previous_days(as_date(last), 1 if skip_existing else lookback_days)
                     if not recent or recent[-1] != as_date(last):
                         raise ValueError('最新记录不在交易日历中。')
                     # 已有数据以水位为准；即使一年以上没运行，也不能跳过中间缺口。
-                    begin = builtins.max(as_date(first), recent[0]) if start_date is None else builtins.max(start, recent[0])
+                    if skip_existing:
+                        begin = as_date(last) + datetime.timedelta(days=1)
+                        if start_date is not None:
+                            begin = builtins.max(start, begin)
+                    else:
+                        begin = builtins.max(as_date(first), recent[0]) if start_date is None else builtins.max(start, recent[0])
+                if begin > end:
+                    print('{} 已有数据，无新增日期，跳过写入。'.format(code))
+                    continue
                 days = trading_days(begin, end)
                 if not days:
                     continue
@@ -258,11 +274,11 @@ def run(start_date=START_DATE, end_date=END_DATE, incremental=True, lookback_day
                         # 已知最新日期处于此窗口时，接口应仍包含它，防止覆盖不完整快照。
                         if last and window[0] <= as_date(last) <= window[-1] and as_date(last) not in {r['trade_date'] for r in records}:
                             raise ValueError('源数据未包含已入库的最新日期，停止该基金。')
-                        save_window(Session, code, records)
-                        output.extend(records)
+                        written = save_window(Session, code, records, skip_existing=skip_existing)
+                        output.extend(written)
                         seen_data = True
                         print('{} {} 至 {}：写入 {} 条，最新份额 {:.4f} 亿份。'.format(
-                            code, records[0]['trade_date'], records[-1]['trade_date'], len(records), records[-1]['shares'] / 1e8))
+                            code, records[0]['trade_date'], records[-1]['trade_date'], len(written), records[-1]['shares'] / 1e8))
                         if records[-1]['trade_date'] < window[-1]:
                             print('{} 后续日期尚无数据，保留待下次获取，不补零。'.format(code))
                             break

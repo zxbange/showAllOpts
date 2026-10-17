@@ -174,3 +174,31 @@ def test_bad_backfill_calendar_cannot_reinsert_expired_data(collector):
         c.env['run']()
     assert not c.calculated
     assert saved(c) == []
+
+
+def test_insert_only_skips_latest_date_and_preserves_old_snapshot(collector):
+    c=collector
+    seed(c, [c.days[-2]])
+    result=c.env['run'](skip_existing=True)
+    assert len(result)==1 and c.calculated==[c.days[-1]]
+    c.calculated.clear()
+    assert c.env['run'](skip_existing=True)==[]
+    assert c.calculated==[]
+    assert len(saved(c))==2
+    original=record(c.days[-2])
+    changed=dict(original,momentum=99)
+    assert c.env['save_day'](c.Session,c.days[-2],'sw_l2',[changed],skip_existing=True)==[]
+    with c.Session() as s:
+        assert s.query(c.env['IndustryMomentum']).filter_by(trade_date=c.days[-2]).one().momentum==0
+
+
+def test_insert_only_momentum_defers_intraday_date(collector):
+    c=collector
+    clock=c.env['datetime'].datetime
+    clock.utcnow=classmethod(lambda cls: datetime.datetime(2026,10,16,7))
+    first=c.env['run'](skip_existing=True)
+    assert first and max(r['trade_date'] for r in first)==c.days[-2]
+    c.calculated.clear()
+    clock.utcnow=classmethod(lambda cls: datetime.datetime(2026,10,16,8))
+    result=c.env['run'](skip_existing=True)
+    assert len(result)==1 and c.calculated==[c.days[-1]]

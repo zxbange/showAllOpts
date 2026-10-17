@@ -177,8 +177,8 @@ def calculate_momentum(trade_date, industry_type=INDUSTRY_TYPE):
     return records
 
 
-def save_day(Session, trade_date, industry_type, records):
-    """一个事务替换一天的完整快照，避免重跑重复及旧行业残留。"""
+def save_day(Session, trade_date, industry_type, records, skip_existing=False):
+    """默认事务替换日快照；只新增模式按主键过滤已存在记录。"""
     day = as_date(trade_date)
     if not records:
         raise ValueError('拒绝写入空结果。')
@@ -193,11 +193,17 @@ def save_day(Session, trade_date, industry_type, records):
                     record['trade_date'], record['industry_type']))
     session = Session()
     try:
-        session.query(IndustryMomentum).filter_by(
-            trade_date=day, industry_type=industry_type,
-        ).delete(synchronize_session=False)
+        query = session.query(IndustryMomentum).filter_by(trade_date=day, industry_type=industry_type)
+        if skip_existing:
+            existing = {row[0] for row in query.with_entities(IndustryMomentum.industry_code).all()}
+            records = [record for record in records if record['industry_code'] not in existing]
+            if not records:
+                return []
+        else:
+            query.delete(synchronize_session=False)
         session.add_all([IndustryMomentum(**record) for record in records])
         session.commit()
+        return records
     except Exception:
         session.rollback()
         raise
@@ -252,14 +258,18 @@ def cleanup_old_data(Session, retention_start):
         session.close()
 
 
-def run(start_date=START_DATE, end_date=END_DATE, industry_type=INDUSTRY_TYPE):
-    """先清理超过 180 个交易日的数据，再在保留范围内增量更新。"""
-    today_china = (datetime.datetime.utcnow() + datetime.timedelta(hours=8)).date()
+def run(start_date=START_DATE, end_date=END_DATE, industry_type=INDUSTRY_TYPE, skip_existing=False):
+    """先清理过期数据；skip_existing=True 时从最新日期之后只新增。"""
+    now_china = datetime.datetime.utcnow() + datetime.timedelta(hours=8)
+    today_china = now_china.date()
     if end_date is None:
         end_date = today_china
     initial_start, end = as_date(start_date), as_date(end_date)
     if end > today_china:
         raise ValueError('结束日期不能晚于运行当天。')
+    if skip_existing and end == today_china and now_china.hour < 16:
+        end = today_china - datetime.timedelta(days=1)
+        print('只新增模式：16:00 前不写入当天未完成快照。')
     # 即使手动指定历史 end_date，保留范围仍以实际运行当天为基准。
     # 日历验证在任何数据库修改之前完成，节假日自动使用最近交易日。
     retention_start = get_retention_start(today_china, RETENTION_TRADE_DAYS)
@@ -288,12 +298,14 @@ def run(start_date=START_DATE, end_date=END_DATE, industry_type=INDUSTRY_TYPE):
             print('{} 尚无保留范围内的记录，从 {} 开始入库。'.format(industry_type, start))
         else:
             start = as_date(last_date)
+            if skip_existing:
+                start += datetime.timedelta(days=1)
             if start < retention_start:
                 start = retention_start
             if start > end:
                 print('最后已入库日期 {} 晚于结束日期 {}，无需更新。'.format(start, end))
                 return pd.DataFrame(columns=RESULT_COLUMNS)
-            print('{} 最后已入库日期为 {}，从 {}（含）更新至 {}。'.format(
+            print('{} 最后已入库日期为 {}，从 {}（含）采集至 {}。'.format(
                 industry_type, last_date, start, end))
         trade_days = [as_date(day) for day in get_trade_days(start_date=start, end_date=end)]
         # 先检查整个补录日历，避免异常接口将过期或越界日期写回。
@@ -308,7 +320,7 @@ def run(start_date=START_DATE, end_date=END_DATE, industry_type=INDUSTRY_TYPE):
         for day in trade_days:
             records = calculate_momentum(day, industry_type)
             try:
-                save_day(Session, day, industry_type, records)
+                records = save_day(Session, day, industry_type, records, skip_existing=skip_existing)
             except Exception:
                 print('{} 校验或写入失败；修复后重跑会从最后已入库日期继续。'.format(day))
                 raise
