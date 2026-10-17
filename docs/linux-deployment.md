@@ -204,6 +204,8 @@ sudo systemctl disable --now showallopts-api
 
 停止 API 不影响同机其他 Nginx 网站；本网站数据请求会返回代理错误。如需停止网页访问，移除该站点配置，再执行 `nginx -t` 和 `systemctl reload nginx`。
 
+已部署服务器的完整更新命令、纯前端发布命令和排错方法见 [README：修改配置或更新代码](../README.md#修改配置或更新代码)。
+
 更新代码时保留 `config/app.config`，不要用模板覆盖真实配置，也不要随发布清理 `config/`。更新代码后，以 `ubuntu` 在 `/home/ubuntu/showAllOpts` 重新运行 setup（Python 参数按系统选择），发布新的 `frontend/dist/`，重启 API。保留本机 `99-ubuntu-home.conf`；更新基础 service 或覆盖配置后需要 `daemon-reload`，仅修改数据库配置时重启即可。只有前端修改时，可运行 `bash scripts/build.sh` 再发布。rsync 命令保留旧哈希资源，供已打开的页面继续读取；可在维护窗口按发布版本清理旧资源。
 
 ## 5. Docker Compose

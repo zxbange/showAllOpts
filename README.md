@@ -334,10 +334,89 @@ sudo tail -n 100 -f /home/ubuntu/showAllOpts/log/error.log
 
 ### 修改配置或更新代码
 
-- 修改 `config/app.config` 内容：执行 `sudo systemctl restart showallopts-api`，无需 `daemon-reload`。
-- 修改仓库内 service 模板：重新安装基础模板，保留本机 `99-ubuntu-home.conf`，执行 `daemon-reload` 后重启。修改覆盖配置也需 `daemon-reload` 后重启；仅修改仓库文件不会更新已安装的服务。
-- 修改前端：重新构建并发布 `frontend/dist`；仅重启后端不会更新网页。修改 Nginx 配置后先执行 `sudo nginx -t`，通过后执行 `sudo systemctl reload nginx`。
-- 更新代码：在 `/home/ubuntu/showAllOpts` 执行更新，保留 `config/app.config` 和本机 systemd 覆盖配置；以 `ubuntu` 安装依赖、发布前端，再重启后端。保持现有目录不变时，无需迁移或重建虚拟环境。
+以下步骤适用于已经部署好的 **systemd 后端 + Nginx 前端**，以 `ubuntu` 用户运行。项目目录为 `/home/ubuntu/showAllOpts`，Nginx 的 `root` 为 `/var/www/showallopts`；若实际配置不同，请替换对应路径。Ubuntu、RHEL 等 Linux 服务器均可沿用，前提是现有依赖及服务已配置完成。
+
+#### 日常完整更新发布
+
+```bash
+(
+  # 任一步骤失败，就停止后续操作；子 shell 不会关闭当前终端
+  set -e
+
+  cd /home/ubuntu/showAllOpts
+
+  # 1. 拉取最新代码；存在分支分歧时停止，不自动合并
+  git pull --ff-only
+
+  # 2. 同步后端依赖
+  backend/.venv/bin/python -m pip install \
+    -r backend/requirements.lock.txt
+
+  # 3. 安装前端依赖并构建
+  bash scripts/build.sh
+
+  # 4. 重启后端，加载最新代码
+  sudo systemctl restart showallopts-api
+
+  # 5. 等待后端恢复，再发布前端
+  curl --fail --show-error --silent \
+    --retry 5 --retry-connrefused --retry-delay 2 --max-time 10 \
+    http://127.0.0.1:8000/api/v1/health
+
+  # 6. 发布前端到 Nginx 的静态目录
+  sudo rsync -rlt --chmod=D755,F644 \
+    frontend/dist/ /var/www/showallopts/
+)
+```
+
+执行完成后刷新浏览器；仍显示旧页面时，使用 `Ctrl+Shift+R` 强制刷新。健康接口只验证 API 存活，最后还需打开具体模块，确认数据库数据能够正常展示。此流程不是零停机发布，重启后端期间请求可能短暂失败。
+
+保留 `config/app.config` 和本机 systemd 覆盖配置 `99-ubuntu-home.conf`，不要用模板覆盖真实配置。普通代码发布无需重新安装 Nginx、改变访问端口或重建虚拟环境。以上 rsync 不删除旧哈希资源，便于已打开的网页继续使用；只发布 `frontend/dist/`，不要发布源码或配置文件。
+
+#### 仅更新前端
+
+修改总览卡片、图片、文案、样式等纯前端内容时，可以使用简化命令：
+
+```bash
+(
+  set -e
+  cd /home/ubuntu/showAllOpts
+  git pull --ff-only
+  bash scripts/build.sh
+  sudo rsync -rlt --chmod=D755,F644 frontend/dist/ /var/www/showallopts/
+)
+```
+
+仅当此次拉取的全部变更都属于前端时使用；如果还包含后端修改，执行上面的完整更新流程。**仅重启后端不会更新网页；仅拉取代码或构建前端，也不会让正在运行的后端加载新接口。**
+
+#### 按变更类型选择操作
+
+| 变更内容 | 生效操作 |
+| --- | --- |
+| 网页样式、图片、文案 | 拉取代码 → 构建前端 → 发布前端 → 刷新浏览器 |
+| 后端接口或数据库查询逻辑 | 拉取代码 → 同步后端依赖 → 重启 `showallopts-api` |
+| `config/app.config` 内容 | 重启 `showallopts-api`，无需 `daemon-reload` |
+| 已安装的 systemd 服务或覆盖配置 | `sudo systemctl daemon-reload` → 重启 `showallopts-api` |
+| Nginx 配置 | `sudo nginx -t` 通过后执行 `sudo systemctl reload nginx` |
+| 仅在聚宽增量采集并写入数据库 | 无需重新部署，刷新网页即可 |
+
+仓库内的 service 模板修改后，需重新安装到 systemd 对应位置，并保留本机覆盖配置，再执行 `daemon-reload` 和重启。仅修改仓库文件不会更新已安装的服务。新增模块如果引入新的数据表，还需先运行对应采集程序，并确认网页数据库账号具有新表的读取权限。
+
+#### 发布后排错
+
+```bash
+sudo systemctl status showallopts-api --no-pager
+sudo journalctl -u showallopts-api -n 80 --no-pager
+```
+
+应用日志位于项目下的 `log/app.log` 和 `log/error.log`，按天轮转。页面“数据暂时没有抵达”表示请求失败，不等同于数据库没有数据：
+
+| 返回结果 | 优先排查 |
+| --- | --- |
+| 404 / Not Found | 后端是否已重启并加载新接口、Nginx 转发路径是否正确 |
+| 503 | 数据库连接、新表是否存在、查询账号的表权限 |
+| 502 / 504 | 后端是否正常运行、代理连接或请求是否超时 |
+| 后端直连正常，网页仍报错 | 浏览器实际请求地址、Nginx 代理及已发布前端是否为最新版本 |
 
 ## 分别运行前后端
 
