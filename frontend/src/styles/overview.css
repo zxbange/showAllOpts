@@ -414,3 +414,40 @@
   background: linear-gradient(180deg, #d16b48, #eabb8b);
   opacity: 0.85;
 }
+
+.illustration-share-trends {
+  width: 82%;
+  height: 92px;
+  margin-top: -12px;
+  overflow: visible;
+}
+.share-trend-grid {
+  stroke: #e8cfc0;
+  stroke-width: 1;
+  stroke-dasharray: 3 5;
+  opacity: 0.6;
+}
+.share-trend-area {
+  fill: #d16b48;
+  opacity: 0.08;
+}
+.share-trend-line {
+  stroke: currentColor;
+  stroke-width: 2.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.share-trend-coral {
+  color: #c44b38;
+}
+.share-trend-jade {
+  color: #458f7e;
+}
+.share-trend-gold {
+  color: #b38a41;
+}
+.share-trend-dot {
+  fill: currentColor;
+  stroke: #fff5ed;
+  stroke-width: 2;
+}

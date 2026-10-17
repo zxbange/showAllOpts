@@ -14,7 +14,35 @@ function ModuleIllustration({ kind }: { kind: ResearchModule['illustration'] }) 
             <span key={i} style={{ opacity: 1 - Math.floor(i / 4) * 0.13 }} />
           ))}
         </div>
-      ) : kind === 'shares' || kind === 'earnings' ? (
+      ) : kind === 'shares' ? (
+        <svg
+          className="illustration-share-trends"
+          viewBox="0 0 260 100"
+          fill="none"
+          focusable="false"
+        >
+          <path className="share-trend-grid" d="M12 20H248M12 45H248M12 70H248M12 95H248" />
+          <path
+            className="share-trend-area"
+            d="M12 78C32 78 38 54 59 60S89 72 111 48S143 59 165 34S203 48 224 19L248 12V95H12Z"
+          />
+          <path
+            className="share-trend-line share-trend-coral"
+            d="M12 78C32 78 38 54 59 60S89 72 111 48S143 59 165 34S203 48 224 19L248 12"
+          />
+          <path
+            className="share-trend-line share-trend-jade"
+            d="M12 87C35 87 41 73 64 78S101 62 125 68S159 48 183 55S222 39 248 43"
+          />
+          <path
+            className="share-trend-line share-trend-gold"
+            d="M12 92C39 92 48 85 72 88S111 77 137 81S176 67 201 72S231 61 248 64"
+          />
+          <circle className="share-trend-dot share-trend-coral" cx="248" cy="12" r="4" />
+          <circle className="share-trend-dot share-trend-jade" cx="248" cy="43" r="4" />
+          <circle className="share-trend-dot share-trend-gold" cx="248" cy="64" r="4" />
+        </svg>
+      ) : kind === 'earnings' ? (
         <div className="illustration-bars">
           {[38, 55, 45, 72, 61, 88, 100].map((height, i) => (
             <span key={i} style={{ height: `${height}%` }} />
