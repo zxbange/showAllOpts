@@ -1,11 +1,9 @@
-"""Offline batch orchestration/logging tests; never contact JoinQuant or MySQL."""
+"""Offline batch module orchestration/console tests; never contact JoinQuant or MySQL."""
 import ast
-import datetime
 import importlib.util
 import sys
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
-from urllib.parse import quote, quote_plus
 
 import pytest
 
@@ -28,26 +26,14 @@ def load(path, name):
 
 
 @pytest.fixture
-def batch():
-    return load(TARGET, 'offline_collector_batch')
-
-
-def content(directory):
-    return '\n'.join(p.read_text(encoding='utf-8') for p in sorted(directory.glob('collector-batch-*.log')))
-
-
-def test_generated_bundle_matches_sources_and_python36_syntax(batch):
-    builder = load(ROOT / 'scripts' / 'build_collector_batch.py', 'batch_builder')
-    assert TARGET.read_text(encoding='utf-8') == builder.render()
-    ast.parse(TARGET.read_text(encoding='utf-8'), feature_version=(3, 6))
-    assert list(batch._SOURCES) == batch.STRATEGY_ORDER
-    for name, filename in FILES.items():
-        assert batch._SOURCES[name] == (ROOT / 'collectors' / filename).read_text(encoding='utf-8')
-        ast.parse(batch._SOURCES[name], feature_version=(3, 6))
-    assert batch.DB_CONFIG['dbpassword'] == 'your_password'
+def batch(monkeypatch, tmp_path):
+    module = load(TARGET, 'offline_collector_batch')
+    monkeypatch.setattr(module, '_MODULE_DIR', tmp_path)
+    return module
 
 
 def test_real_loader_isolates_globals_and_injects_config_and_notebook_apis(batch, monkeypatch):
+    monkeypatch.setattr(batch, '_MODULE_DIR', TARGET.parent)
     jq = ModuleType('jqdata')
     jq.jy = SimpleNamespace()
     jq.finance = SimpleNamespace()
@@ -62,7 +48,7 @@ def test_real_loader_isolates_globals_and_injects_config_and_notebook_apis(batch
         env = run.__globals__
         assert env['get_price'] is marker
         assert env['__name__'] != '__main__'
-        connector = env[batch._STRATEGY_CLASSES[name]]
+        connector = env[batch.STRATEGIES[name][1]]
         assert {key: getattr(connector, key) for key in CONFIG} == CONFIG
         bases.append(env['Base'])
     assert len(set(bases)) == 5
@@ -70,160 +56,158 @@ def test_real_loader_isolates_globals_and_injects_config_and_notebook_apis(batch
     assert apis['run'] == 'old run' and apis['Base'] == 'old Base'
 
 
-def test_serial_order_labeled_logs_parameters_and_repeated_runs(batch, monkeypatch, tmp_path, capsys):
+def test_entry_uses_external_modules_and_python36_syntax(batch):
+    source = TARGET.read_text(encoding='utf-8')
+    ast.parse(source, feature_version=(3, 6))
+    assert '_SOURCES' not in source and 'exec(compile(' not in source
+    assert not (ROOT/'scripts/build_collector_batch.py').exists()
+    for name, filename in FILES.items():
+        assert batch.STRATEGIES[name][0] == filename
+        ast.parse((TARGET.parent/filename).read_text(encoding='utf-8'), feature_version=(3, 6))
+    assert batch.DB_CONFIG['dbpassword'] == 'your_password'
+
+
+def test_loader_rereads_modules_on_repeat(batch, tmp_path):
+    filename, connector = batch.STRATEGIES['ETF份额']
+    path = tmp_path/filename
+    for value in (1, 12345):
+        path.write_text('class {}: pass\ndef run(): return {}, get_price\n'.format(connector, value), encoding='utf-8')
+        run = batch._load_strategy('ETF份额', CONFIG, {'get_price': 'notebook api', 'unexpected': 'do not inject'})
+        assert run() == (value, 'notebook api')
+        assert 'unexpected' not in run.__globals__
+
+
+def test_serial_order_quiet_console_and_no_logs(batch, monkeypatch, tmp_path, capsys):
     events = []
     def loader(name, config, apis):
         assert config == CONFIG
         def run(**kwargs):
             events.append((name, 'start', kwargs))
-            print('正在计算', end='')
-            print('，入库完成。')
-            print('源数据警告', file=sys.stderr)
-            print('最后一行', end='')
+            print('progress must be hidden')
+            print('stderr must be hidden', file=sys.stderr)
             events.append((name, 'end', kwargs))
             return [1, 2]
         return run
     monkeypatch.setattr(batch, '_load_strategy', loader)
-    # Simulate a JoinQuant notebook where numpy.any/sum shadow Python builtins.
-    monkeypatch.setattr(batch, 'any', lambda _: pytest.fail('shadowed any called'), raising=False)
-    monkeypatch.setattr(batch, 'sum', lambda _: pytest.fail('shadowed sum called'), raising=False)
+    monkeypatch.setattr(batch, 'any', lambda _: pytest.fail('shadowed any'), raising=False)
+    monkeypatch.setattr(batch, 'sum', lambda _: pytest.fail('shadowed sum'), raising=False)
     options = {'行业动量': {'end_date': '2026-10-16'}}
     for _ in range(2):
-        result = batch.run_all(options=options, db_config=CONFIG, log_dir=tmp_path)
+        result = batch.run_all(options=options, db_config=CONFIG, preview_rows=0)
         assert [r['strategy'] for r in result] == batch.STRATEGY_ORDER
         assert all(r['status'] == 'SUCCESS' and r['rows'] == 2 for r in result)
-    assert [(name, stage) for name, stage, _ in events] == [
-        (name, stage) for _ in range(2) for name in batch.STRATEGY_ORDER for stage in ('start', 'end')]
+    assert [(n, s) for n, s, _ in events] == [
+        (n, s) for _ in range(2) for n in batch.STRATEGY_ORDER for s in ('start', 'end')]
     assert events[0][2] == dict(options['行业动量'], skip_existing=True)
     assert events[2][2] == {'skip_existing': True}
+    assert options == {'行业动量': {'end_date': '2026-10-16'}}
+    output = capsys.readouterr()
+    assert 'SUCCESS | 2' in output.out and '新增 2 条' in output.out
+    assert 'must be hidden' not in output.out and output.err == ''
+    assert {p.name for p in tmp_path.iterdir()} == {'.collector-batch.lock'}
+
+
+def test_preview_only_displays_selected_fields_and_tail(batch, monkeypatch, capsys):
+    class Frame:
+        columns = ['code', 'name', 'events', 'prices']
+        def __len__(self): return 20
+        def __getitem__(self, columns):
+            assert columns == ['code', 'name']
+            return self
+        def tail(self, rows):
+            assert rows == 5
+            return self
+        def to_string(self, index):
+            assert index is False
+            return '600000.XSHG example'
+    monkeypatch.setattr(batch, '_load_strategy', lambda *_: lambda **kw: Frame())
+    summary = batch.run_all(['净利润断层'], db_config=CONFIG)
     output = capsys.readouterr().out
-    saved = content(tmp_path)
-    assert output == saved
-    assert 'SUCCESS | 2' in saved and '本次新增' in saved
-    assert '| WARNING |' in saved
-    assert '| 行业动量 | 正在计算，入库完成。' in saved
-    assert saved.count('| ETF份额 | 最后一行') == 2
-    assert all('+08:00 | ' in line and ' | run=' in line for line in saved.splitlines())
+    assert '最后 5 条' in output and '600000.XSHG example' in output
+    assert summary[0]['rows'] == 20
 
 
 @pytest.mark.parametrize('raises', [True, False])
-def test_failure_continues_and_summary_marks_partial_completion(batch, monkeypatch, tmp_path, raises):
+def test_failure_continues_and_marks_partial_completion(batch, monkeypatch, capsys, raises):
     called = []
     def loader(name, *_):
         def run(**kwargs):
             called.append(name)
-            print('一个窗口已提交')
             if name == '抱团拥挤度':
                 raise RuntimeError('synthetic failure')
             return []
         return run
     monkeypatch.setattr(batch, '_load_strategy', loader)
-    kwargs = dict(db_config=CONFIG, log_dir=tmp_path, raise_on_failure=raises)
     if raises:
         with pytest.raises(batch.BatchRunError) as caught:
-            batch.run_all(**kwargs)
+            batch.run_all(db_config=CONFIG)
         result = caught.value.summary
     else:
-        result = batch.run_all(**kwargs)
+        result = batch.run_all(db_config=CONFIG, raise_on_failure=False)
     assert called == batch.STRATEGY_ORDER
     assert result[1]['status'] == 'FAILED' and result[1]['rows'] is None
     assert result[-1]['status'] == 'SUCCESS'
-    assert '成功 4，失败 1' in content(tmp_path)
-    assert '未完成，详见过程日志' in content(tmp_path)
+    output = capsys.readouterr().out
+    assert '成功 4，失败 1' in output and '未完成' in output and 'synthetic failure' in output
 
 
-def test_loading_failure_is_attributed_and_later_strategy_runs(batch, monkeypatch, tmp_path):
-    def loader(name, *_):
+def test_missing_module_does_not_stop_later_strategy(batch, monkeypatch, capsys):
+    real = batch._load_strategy
+    def loader(name, *args):
         if name == '行业动量':
-            raise ImportError('mock missing dependency')
-        return lambda **kwargs: []
+            return real(name, *args)
+        return lambda **kw: []
     monkeypatch.setattr(batch, '_load_strategy', loader)
-    result = batch.run_all(['行业动量', 'ETF份额'], db_config=CONFIG, log_dir=tmp_path, raise_on_failure=False)
-    assert [r['status'] for r in result] == ['FAILED', 'SUCCESS']
-    assert '| 行业动量 | ImportError:' in content(tmp_path)
+    rows = batch.run_all(['行业动量', 'ETF份额'], db_config=CONFIG, raise_on_failure=False)
+    assert [r['status'] for r in rows] == ['FAILED', 'SUCCESS']
+    assert rows[0]['error_type'] == 'FileNotFoundError'
+    assert 'FileNotFoundError' in capsys.readouterr().out
 
 
-def test_secrets_redacted_from_prints_exceptions_and_file(batch, monkeypatch, tmp_path, capsys):
+def test_credentials_hidden_in_results_and_console(batch, monkeypatch, capsys):
+    from urllib.parse import quote, quote_plus
     secret = CONFIG['dbpassword']
+    variants = [secret, quote(secret, safe=''), quote_plus(secret), CONFIG['host'], CONFIG['dbname'], CONFIG['dbuser']]
     def loader(*_):
-        def run(**kwargs):
-            for value in (secret, quote(secret, safe=''), quote_plus(secret)):
-                print(value)
-            print("password='unrelated-secret'")
-            raise RuntimeError('mysql://other:other-secret@host {} {} {}'.format(CONFIG['host'], CONFIG['dbname'], CONFIG['dbuser']))
+        def run(**kw):
+            print(secret)
+            raise RuntimeError('mysql://other:other-secret@host ' + ' '.join(variants) + " password='unrelated-secret'")
         return run
     monkeypatch.setattr(batch, '_load_strategy', loader)
-    batch.run_all(['ETF份额'], db_config=CONFIG, log_dir=tmp_path, raise_on_failure=False)
-    output = capsys.readouterr().out + content(tmp_path)
-    for value in (secret, quote(secret, safe=''), quote_plus(secret), CONFIG['host'], CONFIG['dbname'], CONFIG['dbuser'], 'unrelated-secret', 'other-secret'):
+    rows = batch.run_all(['ETF份额'], db_config=CONFIG, raise_on_failure=False)
+    output = capsys.readouterr().out + str(rows)
+    for value in variants + ['other-secret', 'unrelated-secret']:
         assert value not in output
-    assert '[REDACTED]' in output
+    assert '已隐藏' in output
 
 
-def test_daily_files_follow_beijing_date_and_append(batch, monkeypatch, tmp_path):
-    current = [datetime.datetime(2026, 10, 17, 23, 59, 59)]
-    monkeypatch.setattr(batch, '_batch_now', lambda: current[0])
-    log = batch._BatchLog(tmp_path, CONFIG)
-    try:
-        log.write('INFO', 'ETF份额', 'before midnight')
-        current[0] = datetime.datetime(2026, 10, 18, 0, 0, 1)
-        log.write('INFO', 'ETF份额', 'after midnight')
-    finally:
-        log.close()
-    next_log = batch._BatchLog(tmp_path, CONFIG)
-    next_log.write('INFO', '批次', 'next run')
-    next_log.close()
-    first = (tmp_path/'collector-batch-2026-10-17.log').read_text(encoding='utf-8')
-    second = (tmp_path/'collector-batch-2026-10-18.log').read_text(encoding='utf-8')
-    assert 'before midnight' in first and 'after midnight' not in first
-    assert 'after midnight' in second and 'next run' in second
-
-
-def test_interrupt_stops_remaining_strategies_and_restores_streams(batch, monkeypatch, tmp_path):
-    old_stdout, old_stderr = sys.stdout, sys.stderr
+def test_interrupt_restores_streams_and_releases_lock(batch, monkeypatch):
+    streams = sys.stdout, sys.stderr
     called = []
     def loader(name, *_):
         called.append(name)
-        def run(**kwargs):
-            raise KeyboardInterrupt()
+        def run(**kw): raise KeyboardInterrupt()
         return run
     monkeypatch.setattr(batch, '_load_strategy', loader)
-    with pytest.raises(KeyboardInterrupt):
-        batch.run_all(db_config=CONFIG, log_dir=tmp_path)
+    with pytest.raises(KeyboardInterrupt): batch.run_all(db_config=CONFIG)
     assert called == ['行业动量']
-    assert sys.stdout is old_stdout and sys.stderr is old_stderr
-    with batch._BatchLock(tmp_path):
-        pass  # Interrupt releases lock.
-    assert '用户中断' in content(tmp_path)
+    assert (sys.stdout, sys.stderr) == streams
+    with batch._BatchLock(batch._MODULE_DIR): pass
 
 
-def test_lock_prevents_overlap_and_is_reusable(batch, tmp_path):
+def test_lock_prevents_overlapping_runs(batch, tmp_path):
     with batch._BatchLock(tmp_path):
         with pytest.raises(RuntimeError, match='采集锁'):
-            with batch._BatchLock(tmp_path):
-                pytest.fail('overlapping execution')
-    with batch._BatchLock(tmp_path):
-        pass
+            with batch._BatchLock(tmp_path): pytest.fail('overlapping execution')
+    with batch._BatchLock(tmp_path): pass
 
 
-@pytest.mark.parametrize('names', [[], ['ETF份额', 'ETF份额'], ['unknown']])
-def test_invalid_selection_rejected_before_execution(batch, monkeypatch, tmp_path, names):
+@pytest.mark.parametrize('kwargs', [
+    {'strategy_names': []}, {'strategy_names': ['ETF份额', 'ETF份额']},
+    {'strategy_names': ['unknown']}, {'options': {'ETF份额': {'skip_existing': False}}},
+    {'options': {'unknown': {}}}, {'preview_rows': -1}, {'db_config': {}},
+])
+def test_invalid_options_fail_before_any_execution(batch, monkeypatch, tmp_path, kwargs):
     monkeypatch.setattr(batch, '_load_strategy', lambda *_: pytest.fail('must not execute'))
-    with pytest.raises(ValueError):
-        batch.run_all(names, db_config=CONFIG, log_dir=tmp_path)
-    assert not list(tmp_path.iterdir())
-
-
-def test_invalid_log_path_prevents_execution(batch, monkeypatch, tmp_path):
-    invalid = tmp_path/'not_a_directory'
-    invalid.write_text('occupied', encoding='utf-8')
-    monkeypatch.setattr(batch, '_load_strategy', lambda *_: pytest.fail('must not execute'))
-    with pytest.raises(OSError):
-        batch.run_all(db_config=CONFIG, log_dir=invalid)
-
-
-def test_batch_cannot_disable_insert_only(batch, monkeypatch, tmp_path):
-    monkeypatch.setattr(batch, '_load_strategy', lambda *_: pytest.fail('must not execute'))
-    with pytest.raises(ValueError, match='skip_existing'):
-        batch.run_all(options={'ETF份额': {'skip_existing': False}}, db_config=CONFIG, log_dir=tmp_path)
+    with pytest.raises(ValueError): batch.run_all(**kwargs)
     assert not list(tmp_path.iterdir())
