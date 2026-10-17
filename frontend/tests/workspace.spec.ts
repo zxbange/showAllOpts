@@ -73,7 +73,7 @@ test('home → heatmap → industry curve, search, range and return', async ({ p
   const errors: string[] = []
   page.on('pageerror', (error) => errors.push(error.message))
   await page.goto('/')
-  await expect(page.getByRole('heading', { name: /把市场的万千变化/ })).toBeVisible()
+  await expect(page.getByRole('heading', { name: /全部研究模块/ })).toBeVisible()
   await page.getByRole('link', { name: '进入行业动量' }).click()
   await expect(page.locator('.heat-cell')).toHaveCount(127)
   await expect(page.locator('.heat-cell').first()).toContainText('32.00')

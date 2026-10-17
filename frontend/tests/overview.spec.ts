@@ -11,7 +11,7 @@ test('overview directory is independent of database, searchable and categorized'
     return route.fulfill({ status: 503, json: { detail: '数据库暂不可用' } })
   })
   await page.goto('/')
-  await expect(page.getByRole('heading', { level: 1 })).toContainText('把市场的万千变化')
+  await expect(page.getByRole('heading', { level: 1 })).toContainText('全部研究模块')
   await expect(page.locator('.research-card')).toHaveCount(5)
   await expect(page.getByRole('link', { name: '进入行业动量', exact: true })).toHaveAttribute(
     'href',
@@ -37,9 +37,7 @@ test('overview directory is independent of database, searchable and categorized'
   await expect(page.locator('.research-card')).toContainText('抱团拥挤度')
   await page.getByRole('button', { name: '清空模块搜索' }).click()
   await expect(page.locator('.research-card')).toHaveCount(5)
-  await page.getByRole('link', { name: '浏览全部模块' }).click()
-  await expect(page).toHaveURL(/#research-modules$/)
-  await expect(page.getByRole('heading', { name: /选择一个视角/ })).toBeInViewport()
+  await expect(page.getByRole('heading', { name: /全部研究模块/ })).toBeInViewport()
   expect(requests).toEqual([])
   expect(errors).toEqual([])
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(

@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { ArrowDown, ArrowUpRight, Compass, Layers3, Search, Sparkles, X } from 'lucide-react'
+import { ArrowUpRight, Search, X } from 'lucide-react'
 import { Link } from 'react-router-dom'
 import { researchModules } from '../lib/modules'
 import type { ResearchModule } from '../lib/modules'
@@ -64,76 +64,6 @@ export function HomePage() {
   )
   return (
     <div className="overview-page page-enter">
-      <div className="overview-intro">
-        <span className="section-eyebrow">
-          <span className="tiny-line" /> THE RESEARCH COLLECTION
-        </span>
-        <span>多一个视角，多一份洞察</span>
-      </div>
-      <section className="overview-hero">
-        <div className="overview-hero-copy">
-          <span className="overview-kicker">
-            <Sparkles size={14} /> 欢迎回到你的市场研究工作台
-          </span>
-          <h1>
-            把市场的万千变化，
-            <br />
-            <em>看得更清楚。</em>
-          </h1>
-          <p>
-            从行业强弱、成交集中到微盘温度。
-            <br />
-            让每一个研究视角，都有自己的位置。
-          </p>
-          <a className="button button-primary overview-browse" href="#research-modules">
-            浏览全部模块 <ArrowDown size={16} />
-          </a>
-          <div className="overview-hero-meta">
-            <Layers3 size={14} />
-            <strong>{researchModules.length}</strong> 个研究模块
-            <span />
-            独立视角 · 自由探索
-          </div>
-        </div>
-        <div className="research-orbit" aria-hidden="true">
-          <div className="orbit-disc" />
-          <div className="orbit-path" />
-          <div className="orbit-path orbit-path-inner" />
-          <div className="orbit-center">
-            <Compass size={34} strokeWidth={1.25} />
-            <strong>发现 · 洞察</strong>
-            <small>MARKET PERSPECTIVES</small>
-          </div>
-          <div className="orbit-label orbit-label-momentum">
-            <span>
-              <Layers3 size={20} />
-            </span>
-            <div>
-              行业动量<small>看方向</small>
-            </div>
-          </div>
-          <div className="orbit-label orbit-label-crowding">
-            <span>
-              <Sparkles size={20} />
-            </span>
-            <div>
-              抱团拥挤度<small>看集中</small>
-            </div>
-          </div>
-          <div className="orbit-label orbit-label-microcap">
-            <span>
-              <Compass size={20} />
-            </span>
-            <div>
-              微盘温度计<small>看温度</small>
-            </div>
-          </div>
-          <i className="orbit-spark spark-one" />
-          <i className="orbit-spark spark-two" />
-          <i className="orbit-spark spark-three" />
-          <span className="orbit-footnote">CONNECT THE SIGNALS. FIND YOUR PERSPECTIVE.</span>
-        </div>
-      </section>
       <section
         className="research-directory"
         id="research-modules"
@@ -142,10 +72,10 @@ export function HomePage() {
         <div className="directory-heading">
           <div>
             <span className="section-eyebrow">EXPLORE YOUR WORKSPACE</span>
-            <h2 id="directory-title">
-              选择一个视角，开始研究
+            <h1 id="directory-title">
+              全部研究模块
               <span>{researchModules.length.toString().padStart(2, '0')}</span>
-            </h2>
+            </h1>
           </div>
           <label className="directory-search">
             <Search size={17} />
@@ -236,18 +166,6 @@ export function HomePage() {
           </div>
         )}
       </section>
-      <div className="overview-note">
-        <span className="overview-note-icon">
-          <Layers3 size={22} />
-        </span>
-        <div>
-          <strong>研究视野，持续生长。</strong>
-          <p>新的研究工具将在这里汇集。先从感兴趣的问题出发，找到属于你的市场观察方式。</p>
-        </div>
-        <span className="overview-note-mark" aria-hidden="true">
-          MORE PERSPECTIVES, MORE POSSIBILITIES.
-        </span>
-      </div>
     </div>
   )
 }
