@@ -6,7 +6,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, event
 from sqlalchemy.orm import sessionmaker
 
 
@@ -93,14 +93,14 @@ def test_first_run_backfills_2020_to_today_and_rerun_refreshes_last(collector):
     assert len(rows(c)) == 3
 
 
-def test_historical_gap_repaired_without_deleting_other_top_pct(collector):
+def test_incremental_keeps_historical_gap_and_other_top_pct(collector):
     c = collector
     seed(c, c.days[0])
     seed(c, c.days[-1], ratio=.1)
     seed(c, c.days[-1], pct=.1)
     c.env['run']()
-    assert c.calculated == c.days[1:]
-    assert len(rows(c)) == 4
+    assert c.calculated == [c.days[-1]]
+    assert len(rows(c)) == 3
     assert rows(c)[0].trade_date.year == 2020
 
 
@@ -136,12 +136,12 @@ def test_replacement_rollback_preserves_old_value(collector):
 
 
 @pytest.mark.parametrize('bad_days', [None, ['2019-12-31'], ['2026-10-18'], ['2020-01-03', '2020-01-02'], ['2020-01-02'] * 2])
-def test_bad_calendar_never_connects_to_database(collector, bad_days):
+def test_bad_calendar_never_writes_records(collector, bad_days):
     c = collector
     c.env['get_trade_days'] = lambda **kwargs: bad_days
-    c.env['MysqlCrowding'].connect_to_mysql = lambda: pytest.fail('Unexpected DB connection')
     with pytest.raises(ValueError):
         c.env['run']()
+    assert not rows(c) and not c.calculated
 
 
 def test_runtime_today_and_no_trade_day(collector):
@@ -151,7 +151,6 @@ def test_runtime_today_and_no_trade_day(collector):
         dates.append(end_date)
         return []
     c.env['get_trade_days'] = calendar
-    c.env['MysqlCrowding'].connect_to_mysql = lambda: pytest.fail('Unexpected DB connection')
     assert c.env['run']() == []
     c.env['china_now'] = lambda: datetime.datetime(2026, 10, 18)
     assert c.env['run']() == []
@@ -184,3 +183,58 @@ def test_price_adapter_validates_universe_dates_and_missing_fields(collector):
     del frame['time']
     with pytest.raises(ValueError):
         calc(c.days[0])
+
+
+def test_incremental_queries_one_latest_date_and_only_recent_calendar(collector):
+    c = collector
+    seed(c, c.days[0])
+    seed(c, c.days[1])
+    # A different TOP_PCT must not advance this run's starting date.
+    seed(c, c.days[-1], pct=.1)
+    statements = []
+    def capture(conn, cursor, statement, parameters, context, executemany):
+        if statement.lstrip().upper().startswith('SELECT'):
+            statements.append(statement)
+    calendar_calls = []
+    calendar = c.env['get_trade_days']
+    def checked_calendar(start_date, end_date):
+        calendar_calls.append((start_date, end_date))
+        return calendar(start_date, end_date)
+    c.env['get_trade_days'] = checked_calendar
+    event.listen(c.engine, 'before_cursor_execute', capture)
+    try:
+        c.env['run']()
+    finally:
+        event.remove(c.engine, 'before_cursor_execute', capture)
+    assert calendar_calls == [(c.days[1], datetime.date(2026, 10, 17))]
+    assert c.calculated == c.days[1:]
+    assert len(statements) == 1
+    assert 'DESC' in statements[0] and 'LIMIT' in statements[0]
+    assert 'ratio' not in statements[0]
+
+
+def test_manual_backfill_repairs_older_gap_and_refreshes_value(collector):
+    c = collector
+    seed(c, c.days[0], ratio=.1)
+    seed(c, c.days[-1])
+    c.env['get_last_saved_date'] = lambda *args: pytest.fail('Manual mode must not query latest')
+    c.env['run'](start_date=c.days[0], end_date=c.days[1], incremental=False)
+    assert c.calculated == c.days[:2]
+    assert [row.trade_date for row in rows(c)] == c.days
+    assert rows(c)[0].ratio == Decimal('.4')
+
+
+def test_latest_after_end_skips_calendar_and_preserves_records(collector):
+    c = collector
+    seed(c, c.days[-1])
+    c.env['get_trade_days'] = lambda **kwargs: pytest.fail('No calendar query needed')
+    assert c.env['run'](end_date=c.days[1]) == []
+    assert len(rows(c)) == 1 and not c.calculated
+
+
+def test_future_database_date_stops_instead_of_silently_skipping(collector):
+    c = collector
+    seed(c, datetime.date(2026, 10, 18))
+    with pytest.raises(ValueError, match='数据库最新日期'):
+        c.env['run']()
+    assert len(rows(c)) == 1 and not c.calculated

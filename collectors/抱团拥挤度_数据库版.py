@@ -164,67 +164,78 @@ def save_day(Session, day, top_pct, record):
         session.close()
 
 
-def get_saved_dates(Session, start, end, top_pct):
+def get_last_saved_date(Session, top_pct):
+    """利用 (top_pct, trade_date) 主键，仅查询当前口径的最新日期。"""
     session = Session()
     try:
-        rows = session.query(MarketCrowding.trade_date).filter(
+        row = session.query(MarketCrowding.trade_date).filter(
             MarketCrowding.top_pct == Decimal(str(top_pct)),
-            MarketCrowding.trade_date >= start,
-            MarketCrowding.trade_date <= end,
-        ).all()
-        return {as_date(row[0]) for row in rows}
+        ).order_by(MarketCrowding.trade_date.desc()).first()
+        return as_date(row[0]) if row is not None else None
     finally:
         session.close()
 
 
-def run(start_date=START_DATE, end_date=END_DATE, top_pct=TOP_PCT):
+def run(start_date=START_DATE, end_date=END_DATE, top_pct=TOP_PCT, incremental=True):
+    """默认从最后已入库日（含）增量更新；手动补历史时传 incremental=False。"""
     today = china_now().date()
     start = as_date(start_date)
     end = today if end_date is None else as_date(end_date)
     if start > end or end > today:
         raise ValueError('开始日期不能晚于结束日期，结束日期不能晚于运行当天。')
-    # 参数及整个日历先验证，再进行数据库连接或写入。
     pct = Decimal(str(top_pct))
     if not pct.is_finite() or not Decimal('0') < pct <= Decimal('1'):
         raise ValueError('TOP_PCT 必须在 (0, 1] 内。')
     if pct != pct.quantize(Decimal('0.000001')):
         raise ValueError('TOP_PCT 最多支持六位小数。')
-    raw_days = get_trade_days(start_date=start, end_date=end)
-    if raw_days is None:
-        raise ValueError('获取交易日历失败，未写入数据库。')
-    days = [as_date(day) for day in raw_days]
-    previous = None
-    for day in days:
-        if day < start or day > end or (previous is not None and day <= previous):
-            raise ValueError('交易日历越界、重复或乱序，未写入数据库。')
-        previous = day
-    print('采集范围：{} 至 {}；TOP_PCT={}；完整保留历史。'.format(start, end, top_pct))
-    if not days:
-        print('日期范围没有交易日。')
-        return pd.DataFrame(columns=RESULT_COLUMNS)
+    if not isinstance(incremental, bool):
+        raise ValueError('incremental 必须是 True 或 False。')
     engine = MysqlCrowding.connect_to_mysql()
     records = []
     try:
         Base.metadata.create_all(engine)
         Session = sessionmaker(bind=engine)
-        saved = get_saved_dates(Session, start, end, top_pct)
-        last = builtins.max(saved) if saved else None
-        # 补齐任意历史缺口，并重算最后一个已入库日，修正盘中快照。
-        pending = [day for day in days if day not in saved or day == last]
-        print('最后已入库日期：{}；待计算 {} 个交易日。'.format(last, len(pending)))
-        for index, day in enumerate(pending, 1):
+        if incremental:
+            last = get_last_saved_date(Session, top_pct)
+            if last is not None:
+                if last > today:
+                    raise ValueError('数据库最新日期晚于运行当天，请检查已有数据。')
+                start = builtins.max(start, last)
+            print('最后已入库日期：{}；按最新日期增量更新。'.format(last))
+        else:
+            print('手动补录模式：重算指定区间，不查询历史日期列表。')
+        if start > end:
+            print('最后已入库日期晚于结束日期，无需增量更新。')
+            return pd.DataFrame(columns=RESULT_COLUMNS)
+        # 仅请求实际增量区间的日历；全部验证通过后才计算、写入日记录。
+        raw_days = get_trade_days(start_date=start, end_date=end)
+        if raw_days is None:
+            raise ValueError('获取交易日历失败，未写入数据。')
+        days = [as_date(day) for day in raw_days]
+        previous = None
+        for day in days:
+            if day < start or day > end or (previous is not None and day <= previous):
+                raise ValueError('交易日历越界、重复或乱序，未写入数据。')
+            previous = day
+        print('实际采集范围：{} 至 {}；TOP_PCT={}；待计算 {} 个交易日。'.format(
+            start, end, top_pct, len(days)))
+        if not days:
+            print('日期范围没有交易日。')
+            return pd.DataFrame(columns=RESULT_COLUMNS)
+        # 包含最后已入库日，刷新盘中快照；更早的历史缺口不自动扫描。
+        for index, day in enumerate(days, 1):
             try:
                 record = calculate_crowding(day, top_pct)
                 save_day(Session, day, top_pct, record)
             except Exception as exc:
                 # 不输出数据库异常全文，避免日志泄露账号、地址或 SQL。
-                print('{} 计算或写入失败（{}），本次停止；已完成日期已提交，修复后重跑可补齐。'.format(day, type(exc).__name__))
+                print('{} 计算或写入失败（{}），本次停止；已完成日期已提交，修复后重跑可继续。'.format(day, type(exc).__name__))
                 if isinstance(exc, ValueError):
                     raise
                 raise RuntimeError('{} 采集失败，请检查聚宽接口、数据权限和数据库连接。'.format(day)) from None
             records.append(record)
             print('[{}/{}] {} 入库完成：占比 {:.2%}，前 {} / {} 只股票。'.format(
-                index, len(pending), day, float(record['ratio']),
+                index, len(days), day, float(record['ratio']),
                 record['top_stock_count'], record['stock_count']))
     finally:
         engine.dispose()
