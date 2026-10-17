@@ -22,12 +22,12 @@ export function Layout() {
         跳到主要内容
       </a>
       <aside className="sidebar">
-        <Link className="brand" to="/" aria-label="ShowAllOpts 首页">
+        <Link className="brand" to="/" aria-label="发奋墙 首页">
           <span className="brand-mark">
             <ChartNoAxesCombined size={22} strokeWidth={2.4} />
           </span>
           <span>
-            ShowAllOpts<span className="brand-caption">MARKET INTELLIGENCE</span>
+            发奋墙<span className="brand-caption">MARKET INTELLIGENCE</span>
           </span>
         </Link>
         <div className="nav-label">
