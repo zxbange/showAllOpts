@@ -3,11 +3,11 @@ import { expect, test } from '@playwright/test'
 const names = [
   '沪深300ETF华泰柏瑞',
   '沪深300ETF易方达',
-  '沪深300ETF中金',
   '沪深300ETF华夏',
-  '沪深300ETF工银',
+  '沪深300ETF嘉实',
+  '沪深300ETF天弘',
 ]
-const codes = ['510300.XSHG', '510310.XSHG', '510320.XSHG', '510330.XSHG', '510350.XSHG']
+const codes = ['510300.XSHG', '510310.XSHG', '510330.XSHG', '159919.XSHE', '515330.XSHG']
 function fixture(group = 'hs300') {
   const dates = Array.from({ length: 70 }, (_, i) =>
     new Date(Date.UTC(2026, 5, 1 + i)).toISOString().slice(0, 10),
