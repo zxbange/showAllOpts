@@ -1,6 +1,6 @@
 # Linux 运行与部署
 
-开发时使用 `start.sh` 同时启动前后端；长期运行使用 systemd 管理 Python API、Nginx 提供前端静态页面。数据库继续使用现有 MySQL，应用只读取行业动量、抱团拥挤度及微盘温度计数据。
+开发时使用 `start.sh` 同时启动前后端；长期运行使用 systemd 管理 Python API、Nginx 提供前端静态页面。数据库继续使用现有 MySQL，应用读取各功能模块已采集入库的数据。
 
 本文默认沿用现有 `/home/ubuntu/showAllOpts` 项目目录和 `ubuntu` 账号，与 [README systemctl 管理指引](../README.md#linux-后台服务systemctl-管理) 一致。RHEL 或其他账号部署时，请统一替换目录、用户和组，并核对目标系统权限与 SELinux 设置。
 
@@ -204,9 +204,64 @@ sudo systemctl disable --now showallopts-api
 
 停止 API 不影响同机其他 Nginx 网站；本网站数据请求会返回代理错误。如需停止网页访问，移除该站点配置，再执行 `nginx -t` 和 `systemctl reload nginx`。
 
-已部署服务器的完整更新命令、纯前端发布命令和排错方法见 [README：修改配置或更新代码](../README.md#修改配置或更新代码)。
+### 自动更新发布
 
-更新代码时保留 `config/app.config`，不要用模板覆盖真实配置，也不要随发布清理 `config/`。更新代码后，以 `ubuntu` 在 `/home/ubuntu/showAllOpts` 重新运行 setup（Python 参数按系统选择），发布新的 `frontend/dist/`，重启 API。保留本机 `99-ubuntu-home.conf`；更新基础 service 或覆盖配置后需要 `daemon-reload`，仅修改数据库配置时重启即可。只有前端修改时，可运行 `bash scripts/build.sh` 再发布。rsync 命令保留旧哈希资源，供已打开的页面继续读取；可在维护窗口按发布版本清理旧资源。
+首次安装仍需完成上面的环境、配置、systemd 与 Nginx 设置。后续更新推荐在当前项目目录执行一键脚本，首次获取脚本需先 `git pull --ff-only`：
+
+```bash
+cd /home/ubuntu/showAllOpts
+bash deploy.sh
+```
+
+以服务的运行账号（默认 `ubuntu`）执行，不要在命令前加 `sudo`。脚本只在管理服务和复制网页时调用 sudo。需要 Python 3.11+ 的现有 Linux 虚拟环境、Node.js 22.12+、npm、Git、rsync、sudo 和已运行的 Nginx。使用 nvm 的终端先 `source "$HOME/.nvm/nvm.sh"`，再 `nvm use 22`。Ubuntu 与 RHEL 使用同一个脚本，项目目录从脚本位置自动确定。
+
+默认读取 `origin/main`，要求当前在 `main`，工作区干净且没有本地独有提交。不会执行 `git reset --hard`、自动 stash 或清理配置文件。数据库检查使用 systemd 最终 `Environment` 中的 `APP_ENV_FILE` 和环境变量，不受当前终端临时 `DB_*` 覆盖影响。现有服务需要使用本文的 `APP_ENV_FILE` 方式；存在 systemd `EnvironmentFile` 时脚本会停止，需先统一配置方式。
+
+| 参数 | 默认值 / 用法 |
+| --- | --- |
+| `--web-root` | `/var/www/showallopts`，必须与 Nginx 已配置的独立静态目录一致且已存在 |
+| `--service` | `showallopts-api`，其账号、工作目录和启动程序必须指向当前项目 |
+| `--api-url` | `http://127.0.0.1:8000`，直接检查本机 API；自定义端口时修改 |
+| `--web-url` | 可选，如 `http://127.0.0.1:8081` 或实际域名；检查网站 `/api/v1/health` 代理 |
+| `--remote` / `--branch` | `origin` / `main`；其他分支需先手动切换 |
+| `--skip-pull` | 不联网拉代码，发布当前干净分支的代码；适用于已手动拉取的场景 |
+
+例如此前使用 8081 端口的 HTTP 站点：
+
+```bash
+bash deploy.sh --web-url http://127.0.0.1:8081
+```
+
+没有 HTTPS 证书的 HTTP 端口不能填写 `https://`。指定域名匹配的站点使用真实域名；指定的 URL 需能够从服务器访问。该选项不改变 Nginx 端口或域名。不指定 `--web-url` 时不验证代理链路；部署后仍应从浏览器确认网页和各模块数据。
+
+脚本按顺序执行以下步骤，并输出 `[1/7]` 到 `[7/7]` 的进度：
+
+1. 检查 Git 工作区、Node.js、服务账号/路径、配置可读性及 Nginx 配置和运行状态。
+2. 拉取指定分支并仅快进更新，记录更新前和目标 Git 提交号。
+3. 使用 `npm ci` 安装锁定依赖并构建前端，此时不停止 API、不切换已发布网页。
+4. 停止 API，再安装后端锁定依赖，避免服务运行期间混用新旧依赖。
+5. 按服务配置执行数据库读取检查，失败时保留当前网页并停止后续步骤。
+6. 重启 API，轮询健康接口，确认返回本项目的服务标识且 systemd 服务仍在运行。
+7. 先复制静态资源（保留旧哈希文件），最后原子替换 `index.html`；可选检查 Nginx 代理链路。启用 SELinux 且存在检测工具时对发布目录执行 `restorecon`，不会更改系统安全策略。
+
+脚本使用项目 `.runtime/deploy.lock` 避免同一目录并发发布。控制台输出追加到 `log/deploy-YYYY-MM-DD.log`，以服务器日期分文件；发布日志不会自动清理，可按运维保留周期归档。服务和应用原有日志仍按既有规则轮转。
+
+这不是独立版本目录或零停机部署，不提供自动回滚：
+
+| 失败阶段 | 可能的状态与处理 |
+| --- | --- |
+| 预检或 Git 更新 | 尚未主动停止 API，处理本地改动、账号/路径、网络或分支问题后重跑 |
+| 前端安装或构建 | Git 代码可能已更新，已发布网页保留；修复依赖/构建问题后重跑 |
+| 后端依赖安装或数据库检查 | API 已停止，依赖可能只安装了一部分；修复后重跑，脚本会重新安装依赖、验证并启动 |
+| API 启动或健康检查 | 新网页尚未切换，检查 `systemctl status`、`journalctl` 和 `log/error.log` 后重跑 |
+| 静态资源发布 | 旧入口在最终替换前保留，部分资源可能已复制；检查目录权限、磁盘空间和 SELinux 后重跑 |
+| 可选网站代理检查 | 新网页已经发布；检查 URL 协议/端口、Nginx 的站点匹配和代理设置，不能据此认为发布未发生 |
+
+Git 拉取会更新原目录文件，仍在运行的旧 API 不保证完全隔离于源码变更。若需要回退，应依据发布日志记录的旧提交，在维护窗口恢复匹配的代码与依赖并重新部署；脚本不会替用户重置代码或回滚数据库。运行中断后也应检查服务状态并完成一次重新发布。
+
+普通发布不覆盖 `config/app.config`、systemd 覆盖文件和 Nginx 配置，不自动修改数据库；新增模块依赖的新表仍由聚宽采集程序生成。仓库基础 service 或 Nginx 模板有变动时，按本文对应章节检查并更新本机配置，再执行必要的 `daemon-reload` 或 `nginx -t` / reload。端口和 SELinux 的首次设置仍需手动完成。
+
+仅前端更新的简化命令、配置变更与排错见 [README：修改配置或更新代码](../README.md#修改配置或更新代码)。本脚本面向原生 systemd + Nginx 部署，Docker 部署继续使用下一节的 Compose 命令。
 
 ## 5. Docker Compose
 

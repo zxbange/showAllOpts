@@ -336,42 +336,39 @@ sudo tail -n 100 -f /home/ubuntu/showAllOpts/log/error.log
 
 以下步骤适用于已经部署好的 **systemd 后端 + Nginx 前端**，以 `ubuntu` 用户运行。项目目录为 `/home/ubuntu/showAllOpts`，Nginx 的 `root` 为 `/var/www/showallopts`；若实际配置不同，请替换对应路径。Ubuntu、RHEL 等 Linux 服务器均可沿用，前提是现有依赖及服务已配置完成。
 
-#### 日常完整更新发布
+#### 一键更新发布（推荐）
+
+首次获取新增的发布脚本，先执行一次 `git pull --ff-only`。之后每次项目新增功能或修复问题，只需以部署账号执行：
 
 ```bash
-(
-  # 任一步骤失败，就停止后续操作；子 shell 不会关闭当前终端
-  set -e
-
-  cd /home/ubuntu/showAllOpts
-
-  # 1. 拉取最新代码；存在分支分歧时停止，不自动合并
-  git pull --ff-only
-
-  # 2. 同步后端依赖
-  backend/.venv/bin/python -m pip install \
-    -r backend/requirements.lock.txt
-
-  # 3. 安装前端依赖并构建
-  bash scripts/build.sh
-
-  # 4. 重启后端，加载最新代码
-  sudo systemctl restart showallopts-api
-
-  # 5. 等待后端恢复，再发布前端
-  curl --fail --show-error --silent \
-    --retry 5 --retry-connrefused --retry-delay 2 --max-time 10 \
-    http://127.0.0.1:8000/api/v1/health
-
-  # 6. 发布前端到 Nginx 的静态目录
-  sudo rsync -rlt --chmod=D755,F644 \
-    frontend/dist/ /var/www/showallopts/
-)
+cd /home/ubuntu/showAllOpts
+bash deploy.sh
 ```
 
-执行完成后刷新浏览器；仍显示旧页面时，使用 `Ctrl+Shift+R` 强制刷新。健康接口只验证 API 存活，最后还需打开具体模块，确认数据库数据能够正常展示。此流程不是零停机发布，重启后端期间请求可能短暂失败。
+脚本会自动检查运行环境和本机服务配置 → 拉取 `origin/main` 最新代码（仅快进）→ 安装并构建前端 → 停止 API、同步后端锁定依赖 → 使用 systemd 配置检查数据库读取 → 重启 API、等待健康检查 → 发布网页。**无需再手动运行 setup、复制前端或重启后端。** 第一次需要输入 sudo 密码时按提示输入；不要用 `sudo bash deploy.sh`，避免以 root 安装项目依赖。
 
-保留 `config/app.config` 和本机 systemd 覆盖配置 `99-ubuntu-home.conf`，不要用模板覆盖真实配置。普通代码发布无需重新安装 Nginx、改变访问端口或重建虚拟环境。以上 rsync 不删除旧哈希资源，便于已打开的网页继续使用；只发布 `frontend/dist/`，不要发布源码或配置文件。
+默认服务为 `showallopts-api`，Nginx 静态目录为 `/var/www/showallopts`，API 检查地址为 `http://127.0.0.1:8000`。网页使用自定义端口时，可同时检查 Nginx 到后端的代理，例如：
+
+```bash
+# 按实际 HTTP/HTTPS 协议和访问端口填写；不会修改 Nginx 监听端口
+bash deploy.sh --web-url http://127.0.0.1:8081
+
+# 自定义部署目录/服务/后端端口的示例
+bash deploy.sh --web-root /var/www/my-market --service my-market-api \
+  --api-url http://127.0.0.1:8001 --web-url https://market.example.com
+
+# 已自行更新到目标提交，跳过联网拉取（仍要求干净的 main 分支）
+bash deploy.sh --skip-pull
+bash deploy.sh --help
+```
+
+使用域名匹配的 Nginx 站点时，`--web-url` 填该站点实际域名；不指定此参数时只检查后端直连接口和 Nginx 运行状态，不验证网站代理链路。`--web-root` 必须对应 Nginx 已配置的 `root`。项目路径自动识别，支持 Ubuntu、RHEL 等已完成原生部署的 Linux；使用 nvm 时先加载当前用户的 Node.js 22.12+ 环境。
+
+进度输出到控制台和项目 `log/deploy-YYYY-MM-DD.log`，同一天追加。并发运行会拒绝第二次发布；存在本地代码改动、未跟踪文件、分支不匹配或本地未推送提交时停止，不自动丢弃修改。被 Git 忽略的真实配置和日志不会阻止发布。
+
+脚本保留 `config/app.config`、本机 systemd 覆盖配置、Nginx 配置及旧哈希资源；先发布资源，最后原子替换 `index.html`。此流程**不是零停机发布，也没有自动回滚**：后端安装依赖期间暂停服务；任一步骤失败会停止后续操作，代码或依赖可能已更新、API 可能仍处于停止状态。修复日志中指出的问题后重新运行；不要仅重启一个依赖安装不完整的服务。详细失败阶段和处理方式见 [Linux 自动发布说明](docs/linux-deployment.md#自动更新发布)。
+
+执行成功后刷新浏览器，必要时 `Ctrl+Shift+R`。数据库预检检查行业动量表的读取，健康接口检查 API 存活；新增模块的数据表和数据仍需先由聚宽采集程序生成，并授予网页账号读取权限。脚本不会自动执行采集、建表或数据库迁移，也不会修改系统服务模板、Nginx 配置、端口、防火墙或 SELinux 策略；这些配置变更按下表单独操作。
 
 #### 仅更新前端
 
