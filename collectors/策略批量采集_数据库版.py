@@ -1975,7 +1975,7 @@ def _dividend_strategy(_apis, _config):
     if BATCH_SIZE > 3000 or PAGE_SIZE > 3000:
         raise ValueError('batch_size 和 page_size 不得超过 3000。')
     END_DATE = settings['end_date']
-    RULE_VERSION = 'dividend_top25_v1'
+    RULE_VERSION = 'dividend_top25_v2'
     METHODS = ('classic', 'value')
     Base = declarative_base()
 
@@ -2067,7 +2067,7 @@ def _dividend_strategy(_apis, _config):
         if len(names) != len(frame):
             raise ValueError('股票列表代码重复。')
         # 无真实持仓，不使用原交易策略的持仓豁免；两个筛选共用可选池。
-        codes = sorted(code for code, name in names.items() if not code.startswith(('4', '8', '68'))
+        codes = sorted(code for code, name in names.items() if not code.startswith(('4', '8'))
                        and not builtins.any(tag in name for tag in ('ST', '*', '退')))
         quotes, caps = {}, {}
         for offset in _progress_items(range(0, len(codes), BATCH_SIZE), '股票池批次'):
@@ -2076,29 +2076,24 @@ def _dividend_strategy(_apis, _config):
             if (st is None or len(st.index) != 1 or as_date(st.index[0]) != day
                     or set(st.columns) != set(batch) or len(st.columns) != len(batch)):
                 raise ValueError('ST 状态不完整。')
-            fields = ('open', 'close', 'high_limit', 'low_limit', 'paused')
+            # 价格仅用于展示；不按停牌、开盘价或涨跌停状态筛选。
+            # skip_paused=False 保留停牌股票，由数据源提供填充后的收盘价。
             prices = by_code(get_price(batch, start_date=day, end_date=day, frequency='daily',
-                                      fields=list(fields), fq=None, skip_paused=False, panel=False),
-                             batch, ('time',)+fields, '行情')
+                                      fields=['close'], fq=None, skip_paused=False, panel=False),
+                             batch, ('time', 'close'), '行情')
             eligible = []
             for code in batch:
                 flag = st.iloc[0][code]
                 bar = prices[code]
-                paused = number(bar['paused'])
-                if pd.isna(flag) or flag not in (True, False) or paused not in (0, 1) or as_date(bar['time']) != day:
-                    raise ValueError('ST/停牌状态或行情日期无效。')
-                if flag or paused:
+                if pd.isna(flag) or flag not in (True, False) or as_date(bar['time']) != day:
+                    raise ValueError('ST 状态或行情日期无效。')
+                if flag:
                     continue
-                values = [number(bar[k]) for k in fields[:-1]]
-                if (builtins.any(v is None for v in values)
-                        or builtins.any(v <= 0 for v in values[:3]) or values[3] < 0):
-                    raise ValueError('交易价格缺失或无效。')
-                opening, closing, high, low = values
-                if low >= high:
-                    raise ValueError('涨跌停价格异常。')
-                if low < opening < high:
-                    eligible.append(code)
-                    quotes[code] = closing
+                closing = number(bar['close'])
+                if closing is None or closing <= 0:
+                    raise ValueError('收盘价缺失或无效。')
+                eligible.append(code)
+                quotes[code] = closing
             if eligible:
                 q = query(valuation.code, valuation.market_cap, valuation.pe_ratio, valuation.pb_ratio).filter(valuation.code.in_(eligible))
                 caps.update(by_code(get_fundamentals(q, date=day), eligible,

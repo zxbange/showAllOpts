@@ -166,7 +166,8 @@ def test_dividend_dates_pagination_and_truncation_protection(module):
     with pytest.raises(ValueError,match='分页'):ns.dividends(['a','b'],DAY)
 
 
-def test_end_to_end_source_dates_filters_recompute_and_failure_keeps_snapshot(module,monkeypatch):
+@pytest.mark.parametrize('preferred', ['000002.XSHE', '000003.XSHE', '000004.XSHE', '688001.XSHG'])
+def test_end_to_end_source_dates_filters_recompute_and_failure_keeps_snapshot(module,monkeypatch,preferred):
     from sqlalchemy import select
     metadata=MetaData()
     val=Table('val',metadata,Column('code',String),Column('market_cap',Numeric),Column('pe_ratio',Numeric),Column('pb_ratio',Numeric))
@@ -182,8 +183,11 @@ def test_end_to_end_source_dates_filters_recompute_and_failure_keeps_snapshot(mo
     def quote(batch,start_date,end_date,**kwargs):
         dates.append(end_date);state['price_calls']+=1
         if state['fail']:raise RuntimeError('source unavailable')
-        return Frame([dict(code=c,time=end_date,open=11 if c==codes[3] else 10,close=10,
-                           high_limit=11,low_limit=9,paused=1 if c==codes[2] else 0) for c in batch])
+        assert kwargs['fields']==['close'] and kwargs['skip_paused'] is False
+        # Paused, upper-limit and lower-limit stocks remain available. Only requested fields are returned.
+        bars=[dict(code=c,time=end_date,open=11 if c==codes[3] else 9 if c==codes[4] else 10,
+                   close=10,high_limit=11,low_limit=9,paused=1 if c==codes[2] else 0) for c in batch]
+        return Frame([{k:bar[k] for k in ['code','time']+kwargs['fields']} for bar in bars])
     def fundamentals(q,date):
         dates.append(date)
         batch=next(v for v in q.compile().params.values() if isinstance(v,list))
@@ -196,7 +200,7 @@ def test_end_to_end_source_dates_filters_recompute_and_failure_keeps_snapshot(mo
         batch=next(v for v in params.values() if isinstance(v,list))
         after=next(v for k,v in params.items() if k.startswith('id_'))
         columns=['id','code','a_registration_date','a_xr_date','bonus_amount_rmb']
-        return Frame([dict(id=i+1,code=c,a_registration_date=DAY-dt.timedelta(days=1),a_xr_date=DAY,bonus_amount_rmb=50000)
+        return Frame([dict(id=i+1,code=c,a_registration_date=DAY-dt.timedelta(days=1),a_xr_date=DAY,bonus_amount_rmb=100000 if c==preferred else 50000)
                       for i,c in enumerate(batch) if i+1>after],columns)
     apis=dict(query=select,valuation=val.c,indicator=ind.c,
               finance=SimpleNamespace(STK_XR_XD=payout.c,run_query=dividends),
@@ -207,12 +211,14 @@ def test_end_to_end_source_dates_filters_recompute_and_failure_keeps_snapshot(mo
               get_industry=lambda selected,date:{c:{'sw_l3':dict(industry_code='test',industry_name='测试行业')} for c in selected})
     ns=module._dividend_strategy(apis,module.DB_CONFIG)
     result=ns.run()
-    assert len(result)==28  # 36 eligible -> top-decile 3 + value top25
+    assert len(result)==28  # 39 eligible -> top-decile 3 + value top25
     assert {r['trade_date'] for r in result.data}=={DAY}
     assert all(d==DAY for d in dates)
-    assert all(not r['code'].startswith(('68','8')) and r['code'] not in codes[:4] for r in result.data)
+    assert all(not r['code'].startswith(('4','8')) and r['code'] not in codes[:2] for r in result.data)
+    assert {r['method'] for r in result.data if r['code']==preferred}=={'classic','value'}
+    assert all(r['rank']==1 for r in result.data if r['code']==preferred)
     assert [r['rank'] for r in result.data if r['method']=='value']==list(range(1,26))
-    assert all(r['dividend_yield_1y']==5 for r in result.data)
+    assert all(r['dividend_yield_1y']==(10 if r['code']==preferred else 5) for r in result.data)
     before=state['price_calls'];again=ns.run()
     assert state['price_calls']>before and again.data==result.data  # same date always recomputes
     state['fail']=True
