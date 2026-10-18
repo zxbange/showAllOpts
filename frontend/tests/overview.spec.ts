@@ -12,7 +12,7 @@ test('overview directory is independent of database, searchable and categorized'
   })
   await page.goto('/')
   await expect(page.getByRole('heading', { level: 1 })).toContainText('全部研究模块')
-  await expect(page.locator('.research-card')).toHaveCount(5)
+  await expect(page.locator('.research-card')).toHaveCount(6)
   await expect(page.getByRole('link', { name: '进入行业动量', exact: true })).toHaveAttribute(
     'href',
     '/industry-momentum',
@@ -25,9 +25,9 @@ test('overview directory is independent of database, searchable and categorized'
     'href',
     '/microcap-temperature',
   )
-  await page.getByRole('button', { name: '风格观察 1', exact: true }).click()
-  await expect(page.locator('.research-card')).toHaveCount(1)
-  await expect(page.locator('.research-card')).toContainText('微盘温度计')
+  await page.getByRole('button', { name: '风格观察 2', exact: true }).click()
+  await expect(page.locator('.research-card')).toHaveCount(2)
+  await expect(page.getByRole('link', { name: '进入微盘温度计', exact: true })).toBeVisible()
   const search = page.getByRole('textbox', { name: '搜索研究模块' })
   await search.fill('行业')
   await expect(page.getByRole('heading', { name: '没有找到匹配的模块' })).toBeVisible()
@@ -36,7 +36,7 @@ test('overview directory is independent of database, searchable and categorized'
   await expect(page.locator('.research-card')).toHaveCount(1)
   await expect(page.locator('.research-card')).toContainText('抱团拥挤度')
   await page.getByRole('button', { name: '清空模块搜索' }).click()
-  await expect(page.locator('.research-card')).toHaveCount(5)
+  await expect(page.locator('.research-card')).toHaveCount(6)
   await expect(page.getByRole('heading', { name: /全部研究模块/ })).toBeInViewport()
   expect(requests).toEqual([])
   expect(errors).toEqual([])
@@ -60,6 +60,7 @@ test('overview directory is independent of database, searchable and categorized'
 })
 
 test('all module routes remain reachable from navigation', async ({ page }) => {
+  test.setTimeout(60000)
   await page.route('**/api/v1/**', (route) =>
     route.fulfill({ status: 503, json: { detail: '数据库暂不可用' } }),
   )
@@ -69,6 +70,7 @@ test('all module routes remain reachable from navigation', async ({ page }) => {
     ['行业动量', 'industry-momentum'],
     ['抱团拥挤度', 'market-crowding'],
     ['微盘温度计', 'microcap-temperature'],
+    ['微盘新高新低', 'microcap-breadth'],
     ['ETF份额仪表盘', 'etf-shares'],
     ['净利润断层', 'earnings-gap'],
   ]) {
@@ -81,5 +83,5 @@ test('all module routes remain reachable from navigation', async ({ page }) => {
     )
   }
   await navigation.getByRole('link', { name: '总览', exact: true }).click()
-  await expect(page.locator('.research-card')).toHaveCount(5)
+  await expect(page.locator('.research-card')).toHaveCount(6)
 })

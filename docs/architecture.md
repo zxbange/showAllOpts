@@ -9,7 +9,7 @@
   → FastAPI 路由：校验查询参数
   → Service：确定快照日期、计算区间指标、标记行业缺失
   → Repository：参数化 SELECT
-  → MySQL industry_momentum / market_crowding / microcap_temperature / etf_share_daily / earnings_gap_* 表
+  → MySQL industry_momentum / market_crowding / microcap_temperature / etf_share_daily / earnings_gap_* / microcap_breadth 表
 ```
 
 前后端独立进程、独立依赖、独立构建。后端不返回网页，前端不直接访问数据库。数据库凭据只由后端从环境变量或选中的配置文件读取：Windows 启动器及直接运行 Python 未指定配置时使用 `backend/.env`；Linux `start.sh`、systemd 和 Compose 默认选择项目根目录下的 `config/app.config`。配置优先级与迁移方式见 [配置管理](configuration.md)。所有查询通过 SQLAlchemy 表达式绑定参数，不拼接用户输入的 SQL。
@@ -77,3 +77,5 @@ Windows 集成测试创建随机本地端口的子进程和孙进程，分别验
 主背景、正文、边框和强调色集中在 `frontend/src/styles/global.css` 的 CSS 变量中；总览专属布局在 `styles/overview.css`；ECharts 的亮色画布配色统一在 `lib/chartTheme.ts`。行业热力图保留原有对数映射及排序，色阶由浅米金到朱红，文字按实际背景亮度选用黑色或白色。总览插画标注为视觉示意，不用于表达市场涨跌。
 
 本节的总览与主题调整只涉及网页展示，不更改采集、数据库结构和指标口径。桌面与手机浏览器测试覆盖搜索与分类组合、空结果重置、键盘跳转、所有已注册模块导航、数据库故障状态和原有图表交互。
+
+微盘新高新低使用 `microcap_breadth`，按 `(series_id, trade_date)` 唯一保存每日四周期数量。只新增续传，历史不清理；后端一次限量 SELECT，跳过成分股文本，按需计算比例和滚动指标。详见 [统计与部署说明](microcap-breadth.md)。

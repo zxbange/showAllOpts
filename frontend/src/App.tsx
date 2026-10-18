@@ -13,6 +13,10 @@ const CrowdingPage = lazy(() =>
   import('./pages/CrowdingPage').then((module) => ({ default: module.CrowdingPage })),
 )
 
+const BreadthPage = lazy(() =>
+  import('./pages/BreadthPage').then((m) => ({ default: m.BreadthPage })),
+)
+
 const MicrocapPage = lazy(() =>
   import('./pages/MicrocapPage').then((module) => ({ default: module.MicrocapPage })),
 )
@@ -55,6 +59,14 @@ export default function App() {
             element={
               <Suspense fallback={<LoadingState />}>
                 <ETFPage />
+              </Suspense>
+            }
+          />
+          <Route
+            path="microcap-breadth"
+            element={
+              <Suspense fallback={<LoadingState />}>
+                <BreadthPage />
               </Suspense>
             }
           />

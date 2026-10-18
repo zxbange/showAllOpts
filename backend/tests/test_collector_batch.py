@@ -45,14 +45,14 @@ def test_factories_isolate_state_and_use_shared_config(batch, monkeypatch):
     fake_platform(monkeypatch)
     marker = object()
     namespaces = [factory({'get_price': marker}, CONFIG) for factory in batch.STRATEGIES.values()]
-    assert len({id(n.Base) for n in namespaces}) == 5
+    assert len({id(n.Base) for n in namespaces}) == len(batch.STRATEGIES)
     for ns in namespaces:
         if hasattr(ns, 'get_price'):
             assert ns.get_price is marker
         assert ns._config == CONFIG
     fresh = batch.STRATEGIES['净利润断层']({}, CONFIG)
     assert fresh._config == CONFIG
-    assert namespaces[-1].run is not fresh.run
+    assert namespaces[batch.STRATEGY_ORDER.index('净利润断层')].run is not fresh.run
 
 
 def test_loader_supplies_notebook_platform_and_builtin_apis(batch, monkeypatch):
@@ -124,8 +124,8 @@ def test_pasted_notebook_without_file_or_sibling_files(batch, monkeypatch, tmp_p
                    and n.func.id in ('exec', 'eval', 'compile', 'open') for n in ast.walk(tree))
     namespace = {'__name__': 'notebook_cell'}
     exec(compile(source, '<ipython-input-test>', 'exec'), namespace)
-    assert len(namespace['STRATEGIES']) == 5
-    # Construct all five real strategies without accessing any project files.
+    assert len(namespace['STRATEGIES']) == 6
+    # Construct all six real strategies without accessing any project files.
     for name in namespace['STRATEGY_ORDER']:
         assert callable(namespace['_load_strategy'](name, CONFIG, {}))
     events = []
@@ -213,7 +213,7 @@ def test_failure_continues_and_marks_partial_completion(batch, monkeypatch, caps
     assert result[1]['status'] == 'FAILED' and result[1]['rows'] is None
     assert result[-1]['status'] == 'SUCCESS'
     output = capsys.readouterr().out
-    assert '成功 4，失败 1' in output and '未完成' in output and 'synthetic failure' in output
+    assert '成功 5，失败 1' in output and '未完成' in output and 'synthetic failure' in output
 
 
 def test_strategy_initialization_failure_does_not_stop_later_strategy(batch, monkeypatch, capsys):

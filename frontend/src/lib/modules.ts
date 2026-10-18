@@ -1,4 +1,11 @@
-import { FileSearch, Activity, ChartNoAxesCombined, Grid2X2, Thermometer } from 'lucide-react'
+import {
+  ArrowUpDown,
+  FileSearch,
+  Activity,
+  ChartNoAxesCombined,
+  Grid2X2,
+  Thermometer,
+} from 'lucide-react'
 import type { LucideIcon } from 'lucide-react'
 
 // Register a new page here to add its overview card, search, category and navigation.
@@ -13,10 +20,23 @@ export interface ResearchModule {
   tags: string[]
   icon: LucideIcon
   tone: 'coral' | 'jade' | 'gold'
-  illustration: 'heatmap' | 'concentration' | 'temperature' | 'shares' | 'earnings'
+  illustration: 'heatmap' | 'concentration' | 'temperature' | 'shares' | 'earnings' | 'breadth'
 }
 
 export const researchModules: ResearchModule[] = [
+  {
+    id: 'microcap-breadth',
+    name: '微盘新高新低',
+    path: '/microcap-breadth',
+    category: '风格观察',
+    english: 'MICROCAP MARKET BREADTH',
+    question: '微盘股的上涨，扩散到多少股票？',
+    description: '跟踪微盘400在四个周期中的新高新低数量，观察市场宽度、强度与行情持续性。',
+    tags: ['新高新低', '微盘400', '每日采样'],
+    icon: ArrowUpDown,
+    tone: 'jade',
+    illustration: 'breadth',
+  },
   {
     id: 'earnings-gap',
     name: '净利润断层',

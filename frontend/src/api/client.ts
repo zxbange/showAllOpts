@@ -1,3 +1,4 @@
+import type { BreadthHistory } from '../types/breadth'
 import type { EarningsOverview, EarningsDetail } from '../types/earnings'
 import type { ETFHistory } from '../types/etf'
 import type { MicrocapHistory } from '../types/microcap'
@@ -59,3 +60,6 @@ export const getEarningsDetail = (code: string, period: string, signal?: AbortSi
     '/earnings-gap/stocks/' + encodeURIComponent(code) + '?' + new URLSearchParams({ period }),
     signal,
   )
+
+export const getBreadthHistory = (days: number, signal?: AbortSignal) =>
+  request<BreadthHistory>(`/microcap-breadth/history?days=${days}`, signal)

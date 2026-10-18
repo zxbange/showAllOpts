@@ -67,9 +67,10 @@ STRATEGY_CONFIG = {
         },
     },
     '净利润断层': {'end_date': None, 'page_size': 1000},
+    '微盘新高新低': {'start_date': None, 'end_date': None, 'micro_num': 400, 'initial_days': 180, 'batch_size': 500, 'price_batch_size': 100},
 }
 
-STRATEGY_ORDER = ['行业动量', '抱团拥挤度', '微盘温度计', 'ETF份额', '净利润断层']
+STRATEGY_ORDER = ['行业动量', '抱团拥挤度', '微盘温度计', 'ETF份额', '净利润断层', '微盘新高新低']
 STRATEGY_OPTIONS = {}  # 按策略名称传入 run() 参数；固定 skip_existing=True。
 PREVIEW_ROWS = 5  # 每个策略展示最后几条新增记录；0 表示仅展示条数。
 # ==================== 公共能力 ====================
@@ -83,6 +84,7 @@ _PREVIEW_COLUMNS = {
     '抱团拥挤度': ('trade_date', 'top_pct', 'ratio', 'top_money', 'total_money'),
     '微盘温度计': ('trade_date', 'score', 'micro_index', 'sample_count'),
     'ETF份额': ('trade_date', 'fund_code', 'fund_name', 'shares'),
+    '微盘新高新低': ('trade_date', 'sample_count', 'high_5', 'low_5', 'high_30', 'low_30'),
     '净利润断层': ('report_period', 'code', 'name', 'industry_name', 'signal_date', 'profit_yoy'),
 }
 
@@ -90,7 +92,7 @@ _PREVIEW_COLUMNS = {
 def strategy_settings(name):
     """每次运行取得配置快照，先检查控制分页/窗口的参数以免出现空循环。"""
     settings = deepcopy(STRATEGY_CONFIG[name])
-    for key in ('retention_trade_days', 'batch_size', 'initial_trade_days', 'window_size', 'page_size'):
+    for key in ('retention_trade_days', 'batch_size', 'initial_trade_days', 'window_size', 'page_size', 'initial_days', 'price_batch_size'):
         value = settings.get(key)
         if key in settings and (isinstance(value, bool) or not isinstance(value, int) or value <= 0):
             raise ValueError('{} 的 {} 必须为正整数。'.format(name, key))
@@ -1592,12 +1594,222 @@ def _earnings_strategy(_apis, _config):
     return SimpleNamespace(**locals())
 
 
+# ---------- 微盘新高新低 ----------
+def _breadth_strategy(_apis, _config):
+    """微盘 400 新高新低：每日动态选股，一次历史行情计算四个周期。"""
+    settings = strategy_settings('微盘新高新低')
+    get_all_securities = _apis.get('get_all_securities')
+    get_trade_days = _apis.get('get_trade_days')
+    get_extras = _apis.get('get_extras')
+    get_fundamentals = _apis.get('get_fundamentals')
+    get_price = _apis.get('get_price')
+    query = _apis.get('query')
+    valuation = _apis.get('valuation')
+    PERIODS = (5, 10, 20, 30)
+    START_DATE = settings['start_date']
+    END_DATE = settings['end_date']
+    MICRO_NUM = settings['micro_num']
+    INITIAL_DAYS = settings['initial_days']
+    BATCH_SIZE = settings['batch_size']
+    PRICE_BATCH_SIZE = settings['price_batch_size']
+    Base = declarative_base()
+
+    class MicrocapBreadth(Base):
+        __tablename__ = 'microcap_breadth'
+        __table_args__ = {'mysql_engine': 'InnoDB', 'mysql_charset': 'utf8mb4'}
+        series_id = Column(String(64), primary_key=True)
+        trade_date = Column(Date, primary_key=True)
+        sample_count = Column(Integer, nullable=False)
+        high_5 = Column(Integer, nullable=False)
+        low_5 = Column(Integer, nullable=False)
+        high_10 = Column(Integer, nullable=False)
+        low_10 = Column(Integer, nullable=False)
+        high_20 = Column(Integer, nullable=False)
+        low_20 = Column(Integer, nullable=False)
+        high_30 = Column(Integer, nullable=False)
+        low_30 = Column(Integer, nullable=False)
+        member_codes = Column(Text, nullable=False)
+        updated_at = Column(DateTime, nullable=False)
+
+    RESULT_COLUMNS = [c.name for c in MicrocapBreadth.__table__.columns if c.name != 'member_codes']
+
+    def series_key(micro_num):
+        return 'micro{}_hl_v1'.format(micro_num)
+
+    def trade_calendar(start=None, end=None, count=None):
+        args = {'end_date': end}
+        if count is None:
+            args['start_date'] = start
+        else:
+            args['count'] = count
+        raw = get_trade_days(**args)
+        if raw is None:
+            raise ValueError('交易日历返回空对象。')
+        days = [as_date(d) for d in raw]
+        if (days != sorted(set(days)) or builtins.any(d > end or (start and d < start) for d in days)
+                or (count is not None and len(days) != count)):
+            raise ValueError('交易日历缺失、重复或越界。')
+        return days
+
+    def choose_stocks(day, micro_num):
+        securities = get_all_securities(types=['stock'], date=day)
+        if securities is None or securities.empty or 'start_date' not in securities.columns:
+            raise ValueError('股票列表为空或缺少上市日期。')
+        cutoff = day - datetime.timedelta(days=240)
+        codes = sorted(str(code) for code, row in securities.iterrows()
+                       if not str(code).startswith(('68', '4', '8')) and as_date(row['start_date']) < cutoff)
+        if len(codes) != len(set(codes)):
+            raise ValueError('股票列表包含重复代码。')
+        eligible = []
+        for offset in range(0, len(codes), BATCH_SIZE):
+            batch = codes[offset:offset+BATCH_SIZE]
+            st = get_extras('is_st', batch, start_date=day, end_date=day, df=True)
+            if (st is None or len(st.index) != 1 or as_date(st.index[0]) != day
+                    or set(st.columns) != set(batch) or len(st.columns) != len(batch)):
+                raise ValueError('ST 状态未完整返回，停止该日采集。')
+            for code in batch:
+                flag = st.iloc[0][code]
+                if pd.isna(flag) or flag not in (True, False):
+                    raise ValueError('ST 状态无效。')
+                if not flag:
+                    eligible.append(code)
+        caps = {}
+        for offset in range(0, len(eligible), BATCH_SIZE):
+            batch = eligible[offset:offset+BATCH_SIZE]
+            frame = get_fundamentals(query(valuation.code, valuation.market_cap).filter(
+                valuation.code.in_(batch)), date=day)
+            if frame is None or not {'code', 'market_cap'}.issubset(frame.columns):
+                raise ValueError('市值数据字段缺失。')
+            rows = frame.to_dict('records')
+            if len(rows) != len(batch) or {str(r['code']) for r in rows} != set(batch):
+                raise ValueError('市值数据不完整或重复，不能确定真实的微盘股名单。')
+            for row in rows:
+                try:
+                    cap = float(row['market_cap'])
+                except (TypeError, ValueError):
+                    raise ValueError('市值无效。') from None
+                if not math.isfinite(cap) or cap <= 0:
+                    raise ValueError('市值缺失或非正数。')
+                caps[str(row['code'])] = cap
+        selected = sorted(caps, key=lambda code: (caps[code], code))[:micro_num]
+        if len(selected) != micro_num:
+            raise ValueError('可选股票不足 {} 只。'.format(micro_num))
+        return selected
+
+    def high_low_counts(closes):
+        if len(closes) != 31 or builtins.any(not math.isfinite(float(p)) or p <= 0 for p in closes):
+            raise ValueError('新高新低需要连续 31 个有效交易日收盘价。')
+        current = closes[-1]
+        return {key: int(hit) for period in PERIODS for key, hit in (
+            ('high_{}'.format(period), current >= builtins.max(closes[-period-1:-1])),
+            ('low_{}'.format(period), current <= builtins.min(closes[-period-1:-1])),
+        )}
+
+    def count_prices(frame, codes, calendar):
+        if frame is None or not {'code', 'time', 'close'}.issubset(frame.columns):
+            raise ValueError('历史行情字段缺失。')
+        rows = frame.to_dict('records')
+        if len(rows) != len(codes)*len(calendar):
+            raise ValueError('历史行情未完整返回，拒绝将缺失记录按零统计。')
+        prices = {code: {} for code in codes}
+        for row in rows:
+            code, day = str(row['code']), as_date(row['time'])
+            if code not in prices or day not in calendar or day in prices[code]:
+                raise ValueError('行情包含重复、越界日期或股票。')
+            try:
+                price = float(row['close'])
+            except (TypeError, ValueError):
+                raise ValueError('收盘价无效。') from None
+            if not math.isfinite(price) or price <= 0:
+                raise ValueError('收盘价缺失或非正数。')
+            prices[code][day] = price
+        counts = {'{}_{}'.format(side, period): 0 for period in PERIODS for side in ('high', 'low')}
+        for code in codes:
+            if set(prices[code]) != set(calendar):
+                raise ValueError('个股历史行情缺失。')
+            for key, value in high_low_counts([prices[code][day] for day in calendar]).items():
+                counts[key] += value
+        return counts
+
+    def calculate_day(day, micro_num=MICRO_NUM):
+        codes = choose_stocks(day, micro_num)
+        calendar = trade_calendar(end=day, count=31)
+        if calendar[-1] != day:
+            raise ValueError('采集日期不是交易日。')
+        counts = {'{}_{}'.format(side, period): 0 for period in PERIODS for side in ('high', 'low')}
+        for offset in range(0, len(codes), PRICE_BATCH_SIZE):
+            batch = codes[offset:offset+PRICE_BATCH_SIZE]
+            frame = get_price(batch, start_date=calendar[0], end_date=day, frequency='daily',
+                              fields=['close'], fq='pre', skip_paused=False, panel=False)
+            for key, value in count_prices(frame, batch, calendar).items():
+                counts[key] += value
+        return dict(counts, series_id=series_key(micro_num), trade_date=day, sample_count=micro_num,
+                    member_codes=json.dumps(codes), updated_at=china_now())
+
+    def last_date(Session, series_id):
+        with session_scope(Session) as session:
+            return session.query(func.max(MicrocapBreadth.trade_date)).filter_by(series_id=series_id).scalar()
+
+    def save_day(Session, record):
+        size = record['sample_count']
+        if isinstance(size, bool) or not isinstance(size, int) or size <= 0:
+            raise ValueError('样本数量须为正整数。')
+        if record['series_id'] != series_key(size):
+            raise ValueError('序列与样本数量不一致。')
+        members = json.loads(record['member_codes'])
+        if not isinstance(members, list) or len(members) != size or len(set(members)) != size:
+            raise ValueError('成分股名单与样本数量不一致。')
+        for period in PERIODS:
+            for side in ('high', 'low'):
+                value = record['{}_{}'.format(side, period)]
+                if isinstance(value, bool) or not isinstance(value, int) or not 0 <= value <= size:
+                    raise ValueError('新高新低数量超出范围。')
+                if period > 5 and value > record['{}_5'.format(side)]:
+                    raise ValueError('长期新高新低数量不能超过 5 日数量。')
+        with session_scope(Session) as session:
+            if session.query(MicrocapBreadth).filter_by(
+                    series_id=record['series_id'], trade_date=record['trade_date']).first() is not None:
+                return False
+            session.add(MicrocapBreadth(**record))
+            session.commit()
+            return True
+
+    def run(start_date=START_DATE, end_date=END_DATE, micro_num=MICRO_NUM, skip_existing=True):
+        if skip_existing is not True:
+            raise ValueError('微盘新高新低仅支持只新增，不覆盖已入库快照。')
+        if isinstance(micro_num, bool) or not isinstance(micro_num, int) or micro_num <= 0:
+            raise ValueError('micro_num 必须为正整数。')
+        now = china_now()
+        end = as_date(end_date) if end_date is not None else now.date()
+        initial = as_date(start_date) if start_date is not None else end-datetime.timedelta(days=INITIAL_DAYS)
+        if end > now.date() or initial > end:
+            raise ValueError('日期范围无效或结束日期晚于今天。')
+        if end == now.date() and now.hour < 16:
+            end -= datetime.timedelta(days=1)
+        output = []
+        with database_scope(Base, _config) as Session:
+            latest = last_date(Session, series_key(micro_num))
+            if latest and latest > now.date():
+                raise ValueError('数据库最新日期晚于今天。')
+            start = latest+datetime.timedelta(days=1) if latest else initial
+            if start > end:
+                return pd.DataFrame(columns=RESULT_COLUMNS)
+            for day in trade_calendar(start=start, end=end):
+                record = calculate_day(day, micro_num)
+                # 每日一个事务；任何缺失或失败立即停止，不越过缺失日续传。
+                if save_day(Session, record):
+                    output.append({key: record[key] for key in RESULT_COLUMNS})
+        return pd.DataFrame(output, columns=RESULT_COLUMNS)
+    return SimpleNamespace(**locals())
+
+
 STRATEGIES = {
     '行业动量': _momentum_strategy,
     '抱团拥挤度': _crowding_strategy,
     '微盘温度计': _microcap_strategy,
     'ETF份额': _etf_strategy,
     '净利润断层': _earnings_strategy,
+    '微盘新高新低': _breadth_strategy,
 }
 
 if __name__ == '__main__':

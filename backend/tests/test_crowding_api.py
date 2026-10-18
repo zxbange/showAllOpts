@@ -23,7 +23,7 @@ def test_empty_and_module_catalog(client):
     assert data['latest'] is None and data['points'] == []
     assert data['summary']['observed_days'] == 0
     assert [module['id'] for module in client.get('/api/v1/modules').json()['modules']] == [
-        'industry-momentum', 'market-crowding', 'microcap-temperature', 'earnings-gap', 'etf-shares']
+        'industry-momentum', 'market-crowding', 'microcap-temperature', 'earnings-gap', 'etf-shares', 'microcap-breadth']
 
 
 def test_scope_order_statistics_and_percentage_points(client, session):

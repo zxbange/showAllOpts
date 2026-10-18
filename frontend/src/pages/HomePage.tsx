@@ -8,7 +8,38 @@ import '../styles/overview.css'
 function ModuleIllustration({ kind }: { kind: ResearchModule['illustration'] }) {
   return (
     <div className={`module-illustration illustration-${kind}`} aria-hidden="true">
-      {kind === 'heatmap' ? (
+      {kind === 'breadth' ? (
+        <svg
+          className="illustration-share-trends"
+          viewBox="0 0 260 100"
+          fill="none"
+          focusable="false"
+        >
+          <path d="M10 50H250" stroke="#d9c9ba" strokeDasharray="4 5" />
+          {[16, 29, 22, 37, 43, 32, 45, 38, 47].map((h, i) => (
+            <g key={i}>
+              <rect
+                x={16 + i * 26}
+                y={50 - h}
+                width="9"
+                height={h}
+                rx="3"
+                fill="#c44837"
+                opacity={0.5 + i * 0.05}
+              />
+              <rect
+                x={26 + i * 26}
+                y="52"
+                width="7"
+                height={45 - h / 1.4}
+                rx="3"
+                fill="#217b70"
+                opacity=".65"
+              />
+            </g>
+          ))}
+        </svg>
+      ) : kind === 'heatmap' ? (
         <div className="illustration-tiles">
           {Array.from({ length: 24 }, (_, i) => (
             <span key={i} style={{ opacity: 1 - Math.floor(i / 4) * 0.13 }} />
@@ -69,9 +100,11 @@ function ModuleIllustration({ kind }: { kind: ResearchModule['illustration'] }) 
             ? '成交集中'
             : kind === 'earnings'
               ? '业绩与价格'
-              : kind === 'shares'
-                ? '份额变化'
-                : '估值与交易'}{' '}
+              : kind === 'breadth'
+                ? '新高与新低'
+                : kind === 'shares'
+                  ? '份额变化'
+                  : '估值与交易'}{' '}
         · 视觉示意
       </span>
     </div>

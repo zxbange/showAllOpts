@@ -1,5 +1,6 @@
 from fastapi import APIRouter
 
+from app.api.routes.breadth import router as breadth_router
 from app.api.routes.earnings import router as earnings_router
 from app.api.routes.etf import router as etf_router
 from app.api.routes.crowding import router as crowding_router
@@ -12,6 +13,7 @@ router.include_router(crowding_router)
 router.include_router(microcap_router)
 router.include_router(etf_router)
 router.include_router(earnings_router)
+router.include_router(breadth_router)
 
 
 @router.get('/modules', tags=['模块'])
@@ -36,6 +38,10 @@ def modules():
         'id': 'etf-shares', 'name': 'ETF份额仪表盘',
         'description': '跟踪沪深300与中证500 ETF 总份额及份额变化率。',
         'path': '/etf-shares', 'status': 'available',
+    }, {
+        'id': 'microcap-breadth', 'name': '微盘新高新低',
+        'description': '观察微盘400的新高新低数量、市场宽度与强度趋势。',
+        'path': '/microcap-breadth', 'status': 'available',
     }]}
 
 

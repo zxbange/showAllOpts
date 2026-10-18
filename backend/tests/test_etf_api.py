@@ -19,7 +19,7 @@ def test_empty_catalog(client):
     result = client.get('/api/v1/etf-shares/history').json()
     assert result['end_date'] is None and result['observed_days'] == 0
     assert len(result['funds']) == 5 and all(f['shares'] is None for f in result['funds'])
-    assert client.get('/api/v1/modules').json()['modules'][-1]['id'] == 'etf-shares'
+    assert 'etf-shares' in {module['id'] for module in client.get('/api/v1/modules').json()['modules']}
 
 
 def test_latest_units_previous_trading_day_stale_and_scope(client, session):
