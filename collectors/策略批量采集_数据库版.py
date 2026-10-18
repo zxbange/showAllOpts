@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """聚宽单文件串行采集：直接粘贴到 Notebook，或 %run -i 本文件。
-五个策略在本文件内独立实现；不读取外部策略、配置或日志文件。
+六个策略在本文件内独立实现；不读取外部策略、配置或日志文件。
 依赖和参数集中在开头；共用连接、会话及日期工具。用法见 docs/collector-batch.md。
 """
 import bisect
@@ -10,6 +10,7 @@ import io
 import json
 import math
 import re
+import sys
 import threading
 import time
 from contextlib import contextmanager, redirect_stderr, redirect_stdout
@@ -73,6 +74,8 @@ STRATEGY_CONFIG = {
 STRATEGY_ORDER = ['行业动量', '抱团拥挤度', '微盘温度计', 'ETF份额', '净利润断层', '微盘新高新低']
 STRATEGY_OPTIONS = {}  # 按策略名称传入 run() 参数；固定 skip_existing=True。
 PREVIEW_ROWS = 5  # 每个策略展示最后几条新增记录；0 表示仅展示条数。
+PROGRESS_ENABLED = True  # 控制台进度条；关闭后仍保留各策略结果和最终汇总。
+PROGRESS_INTERVAL_SECONDS = 5.0  # 最多每隔多少秒刷新；等待接口/数据库时也刷新耗时。
 # ==================== 公共能力 ====================
 # Notebook 重复粘贴时沿用当前内核的锁；不创建锁文件。
 _RUN_LOCK = globals().get('_RUN_LOCK') or threading.Lock()
@@ -87,6 +90,124 @@ _PREVIEW_COLUMNS = {
     '微盘新高新低': ('trade_date', 'sample_count', 'high_5', 'low_5', 'high_30', 'low_30'),
     '净利润断层': ('report_period', 'code', 'name', 'industry_name', 'signal_date', 'profit_yoy'),
 }
+
+
+_PROGRESS_LOCAL = threading.local()
+
+
+class _ConsoleProgress:
+    """仅后台刷新文字；采集与数据库操作始终在主线程串行执行。"""
+    def __init__(self, name, index, total, stream, interval):
+        self.title = '【{}/{} {}】'.format(index, total, name)
+        self.stream, self.interval = stream, interval
+        self.started = time.monotonic()
+        self.last_refresh, self.width = 0.0, 0
+        self.frames = []
+        self.note = '初始化策略'
+        self.lock = threading.RLock()
+        self.stopped = threading.Event()
+        self.thread = None
+        self.writable = True
+
+    def render(self, force=False, ending=None):
+        with self.lock:
+            now = time.monotonic()
+            if not self.writable or (not force and now - self.last_refresh < self.interval):
+                return
+            parts = []
+            for frame in self.frames:
+                total, done = frame['total'], frame['done']
+                filled = int(20 * done / total) if total else 0
+                bar = '[' + '#' * filled + '-' * (20 - filled) + ']'
+                value = '{}/{} {}%'.format(done, total, 100*done//total) if total else '0/0 无待处理项'
+                parts.append('{} {} {} {}'.format(frame['label'], bar, value, frame['item']))
+            line = '{} {} | {} | 已用 {:.0f}s'.format(
+                self.title, ' > '.join(parts) or ('[结束]' if ending else '[处理中]'), self.note, now-self.started)
+            if ending:
+                line += ' | ' + ending
+            try:
+                self.stream.write('\r' + line + ' ' * builtins.max(0, self.width-len(line)) + ('\n' if ending else ''))
+                self.stream.flush()
+            except Exception:
+                # 显示失败不改变采集结果，也不打印可能含连接信息的异常。
+                self.writable = False
+            self.width, self.last_refresh = len(line), now
+
+    def heartbeat(self):
+        while not self.stopped.wait(self.interval):
+            self.render(force=True)
+
+    def start(self):
+        self.render(force=True)
+        self.thread = threading.Thread(target=self.heartbeat, name='collector-progress')
+        self.thread.daemon = True
+        try:
+            self.thread.start()
+        except Exception:
+            # 某些研究容器限制线程：退化为任务推进时刷新，不阻断采集。
+            self.thread = None
+            self.note = '自动定时刷新不可用，按任务推进刷新'
+            self.render(force=True)
+
+    def close(self, ending):
+        self.stopped.set()
+        if self.thread is not None and self.thread.ident is not None:
+            self.thread.join()
+        self.render(force=True, ending=ending)
+
+
+@contextmanager
+def _progress_scope(name, index, total):
+    progress = None
+    ending = '完成'
+    try:
+        if PROGRESS_ENABLED:
+            progress = _ConsoleProgress(name, index, total, sys.stdout, PROGRESS_INTERVAL_SECONDS)
+            _PROGRESS_LOCAL.current = progress
+            progress.start()
+        yield
+    except BaseException as exc:
+        ending = '已中断' if isinstance(exc, KeyboardInterrupt) else '未完成'
+        raise
+    finally:
+        _PROGRESS_LOCAL.current = None
+        if progress is not None:
+            progress.close(ending)
+
+
+def _progress_note(message):
+    progress = getattr(_PROGRESS_LOCAL, 'current', None)
+    if progress is not None:
+        with progress.lock:
+            progress.note = message
+            progress.render()
+
+
+def _progress_items(items, label, describe=str):
+    """仅循环体正常返回后计为已处理；不是新增入库条数。"""
+    progress = getattr(_PROGRESS_LOCAL, 'current', None)
+    if progress is None:
+        yield from items
+        return
+    frame = dict(label=label, total=len(items), done=0, item='')
+    with progress.lock:
+        progress.frames.append(frame)
+        progress.note = '准备处理'
+        progress.render(force=True)
+    try:
+        for item in items:
+            with progress.lock:
+                frame['item'] = describe(item)
+                progress.note = '采集中'
+                progress.render(force=frame['done'] == 0)
+            yield item
+            with progress.lock:
+                frame['done'] += 1
+                progress.note = '本项已处理'
+                progress.render(force=frame['done'] == frame['total'])
+    finally:
+        with progress.lock:
+            progress.frames.remove(frame)
 
 
 def strategy_settings(name):
@@ -128,6 +249,7 @@ def connect_database(config):
                            connect_args={'connect_timeout': opts['connect_timeout']})
     try:
         for attempt in range(opts['retry_count']):
+            _progress_note('连接数据库（第 {} / {} 次）'.format(attempt + 1, opts['retry_count']))
             try:
                 with engine.connect():
                     pass
@@ -135,6 +257,7 @@ def connect_database(config):
             except Exception:
                 if attempt + 1 == opts['retry_count']:
                     raise RuntimeError('MySQL 连接失败，请检查配置、网络和白名单。') from None
+                _progress_note('连接暂未成功，等待重试')
                 time.sleep(opts['retry_interval'])
     except BaseException:
         engine.dispose()
@@ -149,7 +272,9 @@ def database_scope(base, config):
         for table in base.metadata.tables.values():
             table.dialect_options['mysql']['engine'] = 'InnoDB'
             table.dialect_options['mysql']['charset'] = 'utf8mb4'
+        _progress_note('检查数据库表结构')
         base.metadata.create_all(engine)
+        _progress_note('读取已有数据与增量范围')
         yield sessionmaker(bind=engine)
     finally:
         engine.dispose()
@@ -216,7 +341,7 @@ def _safe_error(exc, config):
 
 def run_all(strategy_names=None, options=None, db_config=None, preview_rows=None,
             raise_on_failure=True, api_namespace=None):
-    """依次调用文件内策略，只新增；控制台展示结果，失败后继续，最后统一报告。"""
+    """依次调用文件内策略，只新增；控制台展示进度及结果，失败后继续，最后统一报告。"""
     names = list(STRATEGY_ORDER if strategy_names is None else strategy_names)
     config = dict(DB_CONFIG if db_config is None else db_config)
     options = dict(STRATEGY_OPTIONS if options is None else options)
@@ -231,15 +356,20 @@ def run_all(strategy_names=None, options=None, db_config=None, preview_rows=None
         raise ValueError('不允许关闭 skip_existing；已有股票及其他明细保持原值。')
     if not isinstance(preview_rows, int) or preview_rows < 0:
         raise ValueError('preview_rows 必须是非负整数。')
+    if not isinstance(PROGRESS_ENABLED, bool):
+        raise ValueError('PROGRESS_ENABLED 必须为布尔值。')
+    if (isinstance(PROGRESS_INTERVAL_SECONDS, bool) or not isinstance(PROGRESS_INTERVAL_SECONDS, (int, float))
+            or not math.isfinite(PROGRESS_INTERVAL_SECONDS) or PROGRESS_INTERVAL_SECONDS <= 0):
+        raise ValueError('PROGRESS_INTERVAL_SECONDS 必须是有限正数。')
     apis = globals() if api_namespace is None else api_namespace
     summary = []
     with _batch_guard():
-        for name in names:
+        for strategy_index, name in enumerate(names, 1):
             started = time.monotonic()
             row = dict(strategy=name, status='FAILED', rows=None, error_type=None, error=None)
             result = None
             try:
-                with _QuietStream() as quiet, redirect_stdout(quiet), redirect_stderr(quiet):
+                with _progress_scope(name, strategy_index, len(names)), _QuietStream() as quiet, redirect_stdout(quiet), redirect_stderr(quiet):
                     run = _load_strategy(name, config, apis)
                     kwargs = dict(options.get(name, {}), skip_existing=True)
                     result = run(**kwargs)
@@ -313,6 +443,7 @@ def _momentum_strategy(_apis, _config):
 
     def calculate_momentum(trade_date, industry_type=INDUSTRY_TYPE):
         """计算一个交易日的全部行业；仅获取数据，不连接数据库。"""
+        _progress_note('获取行业成分及行情，计算动量')
         day = as_date(trade_date)
         date_text = day.isoformat()
         industries = get_industries(name=industry_type, date=date_text)
@@ -391,6 +522,7 @@ def _momentum_strategy(_apis, _config):
 
     def save_day(Session, trade_date, industry_type, records, skip_existing=False):
         """默认事务替换日快照；只新增模式按主键过滤已存在记录。"""
+        _progress_note('写入当日行业动量')
         day = as_date(trade_date)
         if not records:
             raise ValueError('拒绝写入空结果。')
@@ -425,6 +557,7 @@ def _momentum_strategy(_apis, _config):
 
     def get_retention_start(reference_date, count=RETENTION_TRADE_DAYS):
         """先验证交易日历，再允许清理；避免接口异常导致误删。"""
+        _progress_note('获取保留区间交易日历')
         if isinstance(count, bool) or not isinstance(count, int) or count <= 0:
             raise ValueError('保留交易日数量必须是正整数。')
         reference = as_date(reference_date)
@@ -443,6 +576,7 @@ def _momentum_strategy(_apis, _config):
 
     def cleanup_old_data(Session, retention_start):
         """一个事务清理整张表的过期数据，保留边界日及之后的快照。"""
+        _progress_note('清理过期行业动量数据')
         cutoff = as_date(retention_start)
         with session_scope(Session) as session:
             deleted = session.query(IndustryMomentum).filter(
@@ -494,7 +628,7 @@ def _momentum_strategy(_apis, _config):
                 previous = day
             if not trade_days:
                 return pd.DataFrame(columns=RESULT_COLUMNS)
-            for day in trade_days:
+            for day in _progress_items(trade_days, '交易日'):
                 records = calculate_momentum(day, industry_type)
                 records = save_day(Session, day, industry_type, records, skip_existing=skip_existing)
                 all_records.extend(records)
@@ -565,6 +699,7 @@ def _crowding_strategy(_apis, _config):
                     stock_count=len(values), top_stock_count=count)
 
     def calculate_crowding(trade_date, top_pct=TOP_PCT):
+        _progress_note('获取全市场成交额，计算拥挤度')
         day = as_date(trade_date)
         securities = get_all_securities(types=['stock'], date=day.isoformat())
         if securities is None or securities.empty:
@@ -589,6 +724,7 @@ def _crowding_strategy(_apis, _config):
         return record
 
     def save_day(Session, day, top_pct, record, skip_existing=False):
+        _progress_note('写入当日拥挤度')
         if record['trade_date'] != as_date(day) or record['top_pct'] != Decimal(str(top_pct)):
             raise ValueError('结果日期或 TOP_PCT 不一致，拒绝入库。')
         with session_scope(Session) as session:
@@ -653,7 +789,7 @@ def _crowding_strategy(_apis, _config):
             if not days:
                 return pd.DataFrame(columns=RESULT_COLUMNS)
             # 默认模式刷新末日；skip_existing=True 仅新增，更早缺口不自动扫描。
-            for index, day in enumerate(days, 1):
+            for index, day in enumerate(_progress_items(days, '交易日'), 1):
                 try:
                     record = calculate_crowding(day, top_pct)
                     written = save_day(Session, day, top_pct, record, skip_existing=skip_existing)
@@ -754,6 +890,7 @@ def _microcap_strategy(_apis, _config):
         return days
 
     def fundamental_rows(codes, table, fields, day):
+        _progress_note('获取估值和财务指标')
         result = {}
         for batch in chunks(codes):
             q = query(*[getattr(table, field) for field in ('code',) + tuple(fields)]).filter(table.code.in_(batch))
@@ -770,6 +907,7 @@ def _microcap_strategy(_apis, _config):
         return result
 
     def price_rows(codes, start, end, field):
+        _progress_note('获取历史行情')
         result = {}
         for batch in chunks(codes):
             frame = get_price(
@@ -787,6 +925,7 @@ def _microcap_strategy(_apis, _config):
         return result
 
     def eligible_codes(day):
+        _progress_note('获取股票池及 ST 状态')
         securities = get_all_securities(types=['stock'], date=day.isoformat())
         if securities is None or securities.empty or 'start_date' not in securities.columns:
             raise ValueError('股票列表或上市日期缺失。')
@@ -942,6 +1081,7 @@ def _microcap_strategy(_apis, _config):
             return day, previous, histories
 
     def save_period(Session, record, skip_existing=False):
+        _progress_note('写入当前采样期温度数据')
         required = RESULT_COLUMNS + ['member_codes']
         for field in required:
             if field not in record or (record[field] is None and field != 'avg_np_growth'):
@@ -987,7 +1127,7 @@ def _microcap_strategy(_apis, _config):
             if last is not None and (not days or days[0] != last):
                 raise ValueError('最新入库日不在交易日历中，停止写入。')
             pending = days[sample_step::sample_step] if skip_existing and last is not None else days[::sample_step]
-            for day in pending:
+            for day in _progress_items(pending, '采样日'):
                 try:
                     record = calculate_period(day, previous, micro_num)
                     if record['trade_date'] != day or record['micro_num'] != micro_num:
@@ -1107,6 +1247,7 @@ def _etf_strategy(_apis, _config):
             ).filter(ETFShare.fund_code.in_(codes)).group_by(ETFShare.fund_code).all()}
 
     def save_window(Session, code, records, skip_existing=False):
+        _progress_note('写入当前份额窗口')
         if not records:
             return []
         dates = [record['trade_date'] for record in records]
@@ -1156,7 +1297,7 @@ def _etf_strategy(_apis, _config):
         output, failures = [], []
         with database_scope(Base, _config) as Session:
             latest = last_dates(Session, list(funds)) if incremental else {}
-            for code, name in funds.items():
+            for code, name in _progress_items(list(funds.items()), '基金', lambda item: '{} {}'.format(*item)):
                 try:
                     first, last = latest.get(code, (None, None))
                     if last and as_date(last) > today:
@@ -1188,6 +1329,7 @@ def _etf_strategy(_apis, _config):
                     seen_data = builtins.bool(last and first and days[0] >= as_date(first))
                     for offset in range(0, len(days), WINDOW_SIZE):
                         window = days[offset:offset + WINDOW_SIZE]
+                        _progress_note('份额窗口 {} / {}：{} 至 {}'.format(offset//WINDOW_SIZE+1, (len(days)+WINDOW_SIZE-1)//WINDOW_SIZE, window[0], window[-1]))
                         records = fetch_window(code, name, window, before, require_start=seen_data)
                         if records:
                             # 已知最新日期处于此窗口时，接口应仍包含它，防止覆盖不完整快照。
@@ -1309,6 +1451,9 @@ def _earnings_strategy(_apis, _config):
             raise ValueError('数据表缺少分页主键，不能保证完整采集。')
         after, rows = -1, []
         while True:
+            _progress_note('{}：已读取 {} 条，正在请求下一页'.format(
+                {'SecuMain': '公司代码映射', 'LC_FSPerformedLetters': '业绩快报', 'STK_FIN_FORCAST': '业绩预告'}.get(
+                    getattr(table, '__tablename__', ''), '公告分页'), len(rows)))
             frame = fetch(query(table).filter(*(filters + [key > after])).order_by(key).limit(PAGE_SIZE))
             page = checked_rows(frame, [key.key], '公告接口')
             if not page:
@@ -1339,9 +1484,11 @@ def _earnings_strategy(_apis, _config):
                     reason_field=reason_field, raw=clean(raw), signal=None)
 
     def fetch_events(codes, period, as_of):
+        _progress_note('获取本季度公告及财报')
         events = []
         code_map = {code[:6]: code for code in codes}
         code_set = set(codes)
+        _progress_note('获取公司代码映射')
         t = jy.SecuMain
         mappings = paged(t, [t.SecuCategory == 1], jy.run_query)
         companies = {}
@@ -1363,7 +1510,7 @@ def _earnings_strategy(_apis, _config):
                 # 不猜测可选预告金额字段的单位；原始字段完整保存在 raw。
                 events.append(event(row['code'], 'forecast', row['pub_date'], period, None,
                                     row['profit_ratio_min'], row, row.get('profit_ratio_max')))
-        for start in range(0, len(codes), 300):
+        for start in _progress_items(range(0, len(codes), 300), '正式财报批次', lambda offset: '股票 {}—{}'.format(offset+1, builtins.min(offset+300, len(codes)))):
             q = query(income.code, income.pubDate.label('publication_date'),
                       income.statDate.label('report_period'),
                       income.np_parent_company_owners.label('net_profit'),
@@ -1403,7 +1550,7 @@ def _earnings_strategy(_apis, _config):
                 raise ValueError('公告报告期、股票代码或截止日期异常。')
             grouped.setdefault(e['code'], []).append(e)
         results = []
-        for index, (code, disclosures) in enumerate(sorted(grouped.items()), 1):
+        for index, (code, disclosures) in enumerate(_progress_items(sorted(grouped.items()), '股票筛选', lambda item: item[0]), 1):
             qualifying = [e for e in disclosures if e['eligible']]
             if not qualifying:
                 continue
@@ -1469,7 +1616,7 @@ def _earnings_strategy(_apis, _config):
             results.append(record)
         selected_codes = [r['code'] for r in results]
         valuations = {}
-        for start in range(0, len(selected_codes), 300):
+        for start in _progress_items(range(0, len(selected_codes), 300), '入选股票估值批次', lambda offset: '股票 {}—{}'.format(offset+1, builtins.min(offset+300, len(selected_codes)))):
             q = query(valuation.code, valuation.market_cap, valuation.circulating_market_cap,
                       valuation.pe_ratio, valuation.pb_ratio).filter(valuation.code.in_(selected_codes[start:start+300]))
             frame = get_fundamentals(q, date=as_of)
@@ -1511,6 +1658,7 @@ def _earnings_strategy(_apis, _config):
         return result
 
     def save_results(Session, period, as_of, universe_count, records, skip_existing=False):
+        _progress_note('写入本季度新入选股票')
         if len({r['code'] for r in records}) != len(records):
             raise ValueError('筛选结果包含重复股票。')
         for r in records:
@@ -1586,6 +1734,7 @@ def _earnings_strategy(_apis, _config):
                 with session_scope(Session) as session:
                     existing = {row[0] for row in session.query(EarningsStock.code).filter(
                         EarningsStock.report_period == period).all()}
+                _progress_note('已有 {} 只股票，本次仅筛选尚未入库股票'.format(len(existing)))
                 pending = [code for code in codes if code not in existing]
                 events = fetch_events(pending, period, as_of) if pending else []
                 records = screen(pending, names, events, period, as_of) if pending else []
@@ -1652,6 +1801,7 @@ def _breadth_strategy(_apis, _config):
         return days
 
     def choose_stocks(day, micro_num):
+        _progress_note('获取股票池、ST 状态和市值')
         securities = get_all_securities(types=['stock'], date=day)
         if securities is None or securities.empty or 'start_date' not in securities.columns:
             raise ValueError('股票列表为空或缺少上市日期。')
@@ -1739,6 +1889,7 @@ def _breadth_strategy(_apis, _config):
         counts = {'{}_{}'.format(side, period): 0 for period in PERIODS for side in ('high', 'low')}
         for offset in range(0, len(codes), PRICE_BATCH_SIZE):
             batch = codes[offset:offset+PRICE_BATCH_SIZE]
+            _progress_note('行情批次 {} / {}'.format(offset//PRICE_BATCH_SIZE+1, (len(codes)+PRICE_BATCH_SIZE-1)//PRICE_BATCH_SIZE))
             frame = get_price(batch, start_date=calendar[0], end_date=day, frequency='daily',
                               fields=['close'], fq='pre', skip_paused=False, panel=False)
             for key, value in count_prices(frame, batch, calendar).items():
@@ -1751,6 +1902,7 @@ def _breadth_strategy(_apis, _config):
             return session.query(func.max(MicrocapBreadth.trade_date)).filter_by(series_id=series_id).scalar()
 
     def save_day(Session, record):
+        _progress_note('写入当日新高新低统计')
         size = record['sample_count']
         if isinstance(size, bool) or not isinstance(size, int) or size <= 0:
             raise ValueError('样本数量须为正整数。')
@@ -1794,7 +1946,7 @@ def _breadth_strategy(_apis, _config):
             start = latest+datetime.timedelta(days=1) if latest else initial
             if start > end:
                 return pd.DataFrame(columns=RESULT_COLUMNS)
-            for day in trade_calendar(start=start, end=end):
+            for day in _progress_items(trade_calendar(start=start, end=end), '交易日'):
                 record = calculate_day(day, micro_num)
                 # 每日一个事务；任何缺失或失败立即停止，不越过缺失日续传。
                 if save_day(Session, record):

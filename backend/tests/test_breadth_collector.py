@@ -71,10 +71,19 @@ def test_schema_and_single_file_factory_parity(module, scenario):
     ns,_,_=scenario
     assert [(c.name,str(c.type),c.primary_key,c.nullable) for c in ns.MicrocapBreadth.__table__.columns] == [
         (c.name,str(c.type),c.primary_key,c.nullable) for c in WebModel.__table__.columns]
+    class WithoutProgress(ast.NodeTransformer):
+        def visit_Expr(self, node):
+            if isinstance(node.value, ast.Call) and isinstance(node.value.func, ast.Name) and node.value.func.id == '_progress_note':
+                return None
+            return self.generic_visit(node)
+        def visit_Call(self, node):
+            if isinstance(node.func, ast.Name) and node.func.id == '_progress_items':
+                return self.visit(node.args[0])
+            return self.generic_visit(node)
     nodes=[]
     for path in (SOURCE, ROOT/'collectors'/'策略批量采集_数据库版.py'):
         tree=ast.parse(path.read_text(encoding='utf-8'),feature_version=(3,6))
-        nodes.append(ast.dump(next(n for n in tree.body if isinstance(n,ast.FunctionDef) and n.name=='_breadth_strategy'),include_attributes=False))
+        nodes.append(ast.dump(WithoutProgress().visit(next(n for n in tree.body if isinstance(n,ast.FunctionDef) and n.name=='_breadth_strategy')),include_attributes=False))
     assert nodes[0]==nodes[1]
     assert '__file__' not in SOURCE.read_text(encoding='utf-8')
 

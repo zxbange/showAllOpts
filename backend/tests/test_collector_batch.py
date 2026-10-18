@@ -94,8 +94,12 @@ def test_calculation_and_model_definitions_keep_original_rules(batch):
             actual = next(n for n in body if isinstance(n, type(node)) and n.name == node.name)
             class WithoutProgressOutput(ast.NodeTransformer):
                 def visit_Expr(self, n):
-                    if isinstance(n.value, ast.Call) and isinstance(n.value.func, ast.Name) and n.value.func.id == 'print':
+                    if isinstance(n.value, ast.Call) and isinstance(n.value.func, ast.Name) and n.value.func.id in ('print', '_progress_note'):
                         return None
+                    return self.generic_visit(n)
+                def visit_Call(self, n):
+                    if isinstance(n.func, ast.Name) and n.func.id == '_progress_items':
+                        return self.visit(n.args[0])
                     return self.generic_visit(n)
                 def visit_If(self, n):
                     n = self.generic_visit(n)
@@ -483,3 +487,157 @@ def test_shared_sessions_keep_insert_only_across_strategies(batch, monkeypatch, 
         assert not writes
         with Session() as session:
             assert session.query(model).count() == 1
+
+
+@pytest.mark.parametrize('name', ['行业动量', '抱团拥挤度', '微盘温度计', 'ETF份额', '净利润断层', '微盘新高新低'])
+def test_progress_visible_through_quiet_stream_for_each_strategy(batch, monkeypatch, capsys, name):
+    processed = []
+    def run(**kwargs):
+        for day in batch._progress_items(['2026-10-15', '2026-10-16'], '交易日'):
+            batch._progress_note('计算并写入')
+            print('internal details must stay hidden')
+            processed.append(day)
+        return [1]
+    monkeypatch.setattr(batch, '_load_strategy', lambda *_: run)
+    result = batch.run_all([name], db_config=CONFIG, preview_rows=0)
+    output = capsys.readouterr().out
+    assert '【1/1 ' + name + '】' in output
+    assert '0/2 0%' in output and '2/2 100%' in output and '2026-10-16' in output
+    assert '新增 1 条' in output and 'internal details' not in output
+    assert len(processed) == 2 and result[0]['rows'] == 1
+    assert batch._PROGRESS_LOCAL.current is None
+
+
+def test_heartbeat_refreshes_during_blocking_call_and_stops(batch, monkeypatch):
+    import io
+    import threading
+    signalled = threading.Event()
+    class Stream(io.StringIO):
+        def write(self, text):
+            value = super().write(text)
+            if '等待模拟行情接口' in text:
+                signalled.set()
+            return value
+    stream = Stream()
+    monkeypatch.setattr(sys, 'stdout', stream)
+    monkeypatch.setattr(batch, 'PROGRESS_INTERVAL_SECONDS', .01)
+    reports = []
+    real = batch._ConsoleProgress
+    def capture(*args):
+        report = real(*args)
+        reports.append(report)
+        return report
+    monkeypatch.setattr(batch, '_ConsoleProgress', capture)
+    caller = threading.get_ident()
+    def run(**kwargs):
+        assert threading.get_ident() == caller
+        batch._progress_note('等待模拟行情接口')
+        assert signalled.wait(2), 'heartbeat did not refresh while collector was blocked'
+        return []
+    monkeypatch.setattr(batch, '_load_strategy', lambda *_: run)
+    batch.run_all(['行业动量'], db_config=CONFIG)
+    assert '已用' in stream.getvalue() and '无新增数据' in stream.getvalue()
+    assert reports[0].stopped.is_set() and not reports[0].thread.is_alive()
+    assert sys.stdout is stream and batch._PROGRESS_LOCAL.current is None
+
+
+@pytest.mark.parametrize('error', [RuntimeError('source unavailable'), KeyboardInterrupt()])
+def test_failed_item_never_counts_as_completed_and_thread_stops(batch, monkeypatch, capsys, error):
+    reports = []
+    def run(**kwargs):
+        report = batch._PROGRESS_LOCAL.current
+        reports.append(report)
+        for index in batch._progress_items(range(3), '交易日'):
+            if index == 1:
+                assert report.frames[-1]['done'] == 1
+                report.render(force=True)
+                raise error
+        return []
+    monkeypatch.setattr(batch, '_load_strategy', lambda *_: run)
+    if isinstance(error, KeyboardInterrupt):
+        with pytest.raises(KeyboardInterrupt):
+            batch.run_all(['行业动量'], db_config=CONFIG)
+    else:
+        result = batch.run_all(['行业动量'], db_config=CONFIG, raise_on_failure=False)
+        assert result[0]['status'] == 'FAILED'
+    output = capsys.readouterr().out
+    assert '1/3 33%' in output and '100%' not in output
+    assert '未完成' in output or '已中断' in output
+    assert not reports[0].thread.is_alive() and batch._PROGRESS_LOCAL.current is None
+    with batch._batch_guard():
+        pass
+
+
+def test_progress_disabled_keeps_results_and_no_progress_thread(batch, monkeypatch, capsys):
+    monkeypatch.setattr(batch, 'PROGRESS_ENABLED', False)
+    monkeypatch.setattr(batch, '_ConsoleProgress', lambda *a: pytest.fail('must not start progress'))
+    def run(**kwargs):
+        batch._progress_note('hidden stage')
+        assert list(batch._progress_items([1, 2], 'hidden loop')) == [1, 2]
+        return []
+    monkeypatch.setattr(batch, '_load_strategy', lambda *_: run)
+    batch.run_all(['行业动量'], db_config=CONFIG)
+    output = capsys.readouterr().out
+    assert 'SUCCESS' in output and 'hidden' not in output and '[处理中]' not in output
+
+
+def test_progress_output_failure_does_not_change_collection(batch, monkeypatch):
+    import io
+    class Stream(io.StringIO):
+        def write(self, text):
+            if text.startswith('\r'):
+                raise OSError('simulated notebook display failure')
+            return super().write(text)
+    stream = Stream()
+    monkeypatch.setattr(sys, 'stdout', stream)
+    monkeypatch.setattr(batch, '_load_strategy', lambda *_: lambda **kw: list(batch._progress_items([1], '日期')))
+    result = batch.run_all(['行业动量'], db_config=CONFIG, preview_rows=0)
+    assert result[0]['rows'] == 1 and result[0]['status'] == 'SUCCESS'
+    assert 'display failure' not in stream.getvalue()
+
+
+def test_progress_throttles_frequent_updates_and_handles_empty_work(batch, monkeypatch, capsys):
+    import io
+    clock = [0.0]
+    monkeypatch.setattr(batch.time, 'monotonic', lambda: clock[0])
+    stream = io.StringIO()
+    report = batch._ConsoleProgress('行业动量', 1, 1, stream, 5)
+    report.render(force=True)
+    for i in range(100):
+        report.note = 'stage ' + str(i)
+        report.render()
+    assert stream.getvalue().count('\r') == 1
+    clock[0] = 5
+    report.render()
+    assert stream.getvalue().count('\r') == 2
+    monkeypatch.setattr(batch, '_load_strategy', lambda *_: lambda **kw: list(batch._progress_items([], '交易日')))
+    batch.run_all(['行业动量'], db_config=CONFIG)
+    output = capsys.readouterr().out
+    assert '0/0 无待处理项' in output and '无新增数据' in output
+
+
+@pytest.mark.parametrize('interval', [0, -1, True, '5', float('inf'), float('nan')])
+def test_invalid_progress_interval_fails_before_collection(batch, monkeypatch, interval):
+    monkeypatch.setattr(batch, 'PROGRESS_INTERVAL_SECONDS', interval)
+    monkeypatch.setattr(batch, '_load_strategy', lambda *_: pytest.fail('must not collect'))
+    with pytest.raises(ValueError, match='PROGRESS_INTERVAL_SECONDS'):
+        batch.run_all(['行业动量'], db_config=CONFIG)
+
+
+def test_progress_does_not_round_incomplete_work_to_100_percent(batch):
+    import io
+    stream = io.StringIO()
+    report = batch._ConsoleProgress('微盘新高新低', 1, 1, stream, 5)
+    report.frames.append(dict(label='交易日', total=400, done=399, item='2026-10-16'))
+    report.render(force=True)
+    assert '399/400 99%' in stream.getvalue() and '100%' not in stream.getvalue()
+
+
+def test_progress_thread_unavailable_falls_back_without_failing_strategy(batch, monkeypatch, capsys):
+    def unavailable(*args):
+        raise RuntimeError('thread creation not available')
+    monkeypatch.setattr(batch.threading.Thread, 'start', unavailable)
+    monkeypatch.setattr(batch, '_load_strategy', lambda *_: lambda **kw: list(batch._progress_items([1], '日期')))
+    result = batch.run_all(['行业动量'], db_config=CONFIG, preview_rows=0)
+    assert result[0]['status'] == 'SUCCESS' and result[0]['rows'] == 1
+    assert '按任务推进刷新' in capsys.readouterr().out
