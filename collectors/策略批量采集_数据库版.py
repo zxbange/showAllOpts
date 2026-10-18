@@ -1,17 +1,35 @@
 # -*- coding: utf-8 -*-
 """聚宽单文件串行采集：直接粘贴到 Notebook，或 %run -i 本文件。
 五个策略在本文件内独立实现；不读取外部策略、配置或日志文件。
-只需填写下面的 DB_CONFIG；用法见 docs/collector-batch.md。
+依赖和参数集中在开头；共用连接、会话及日期工具。用法见 docs/collector-batch.md。
 """
-import builtins as _b
-import io as _io
-import re as _re
-import time as _time
-from contextlib import redirect_stdout, redirect_stderr, contextmanager
-import threading as _threading
-from types import SimpleNamespace as _Namespace
+import bisect
+import builtins
+import datetime
+import io
+import json
+import math
+import re
+import threading
+import time
+from contextlib import contextmanager, redirect_stderr, redirect_stdout
+from copy import deepcopy
+from decimal import Decimal, InvalidOperation, ROUND_HALF_UP, localcontext
+from statistics import median
+from types import SimpleNamespace
 from urllib.parse import quote, quote_plus
 
+import jqdata as jq
+import pandas as pd
+from sqlalchemy import (BigInteger, Column, Date, DateTime, Index, Integer, JSON,
+                        Numeric, String, Text, create_engine, func)
+from sqlalchemy.engine.url import URL
+from sqlalchemy.ext.declarative import declarative_base
+from sqlalchemy.orm import sessionmaker
+
+dt = datetime  # 净利润断层使用的日期别名，共用同一个模块。
+
+# ==================== 集中配置区 ====================
 DB_CONFIG = {
     'host': 'your_mysql_host',
     'port': 3306,
@@ -19,11 +37,44 @@ DB_CONFIG = {
     'dbuser': 'your_database_user',
     'dbpassword': 'your_password',
 }
+# 连接参数只配置一次；重试仅针对连接，不重放写入事务。
+DB_OPTIONS = {'connect_timeout': 10, 'retry_count': 5, 'retry_interval': 10, 'pool_recycle': 3600}
+
+# end_date=None：每次运行取北京时间当天。下列参数按策略分组配置。
+STRATEGY_CONFIG = {
+    '行业动量': {
+        'start_date': '2025-01-01', 'end_date': None,
+        'industry_type': 'sw_l2', 'retention_trade_days': 180,
+    },
+    '抱团拥挤度': {
+        'start_date': '2020-01-01', 'end_date': None, 'top_pct': 0.05,
+    },
+    '微盘温度计': {
+        'start_date': '2021-01-01', 'end_date': None,
+        'micro_num': 1000, 'sample_step': 5, 'batch_size': 1000,
+    },
+    'ETF份额': {
+        'start_date': None, 'end_date': None, 'initial_trade_days': 300,
+        'window_size': 120, 'lookback_days': 5,  # 只新增模式不会回查覆盖。
+        # 固定跟踪名单；金额单位不影响源数据以“份”入库。
+        'funds': {
+            'hs300': [('510300.XSHG', '沪深300ETF华泰柏瑞'), ('510310.XSHG', '沪深300ETF易方达'),
+                      ('510330.XSHG', '沪深300ETF华夏'), ('159919.XSHE', '沪深300ETF嘉实'),
+                      ('515330.XSHG', '沪深300ETF天弘')],
+            'zz500': [('510500.XSHG', '中证500ETF南方'), ('510510.XSHG', '中证500ETF广发'),
+                      ('510580.XSHG', '中证500ETF易方达'), ('512500.XSHG', '中证500ETF华夏'),
+                      ('159922.XSHE', '中证500ETF嘉实')],
+        },
+    },
+    '净利润断层': {'end_date': None, 'page_size': 1000},
+}
+
 STRATEGY_ORDER = ['行业动量', '抱团拥挤度', '微盘温度计', 'ETF份额', '净利润断层']
 STRATEGY_OPTIONS = {}  # 按策略名称传入 run() 参数；固定 skip_existing=True。
 PREVIEW_ROWS = 5  # 每个策略展示最后几条新增记录；0 表示仅展示条数。
+# ==================== 公共能力 ====================
 # Notebook 重复粘贴时沿用当前内核的锁；不创建锁文件。
-_RUN_LOCK = globals().get('_RUN_LOCK') or _threading.Lock()
+_RUN_LOCK = globals().get('_RUN_LOCK') or threading.Lock()
 _API_NAMES = ('get_all_securities', 'get_trade_days', 'get_price', 'get_extras',
               'get_industries', 'get_industry_stocks', 'get_industry', 'get_fundamentals',
               'query', 'valuation', 'indicator', 'income', 'finance', 'jy')
@@ -36,6 +87,85 @@ _PREVIEW_COLUMNS = {
 }
 
 
+def strategy_settings(name):
+    """每次运行取得配置快照，先检查控制分页/窗口的参数以免出现空循环。"""
+    settings = deepcopy(STRATEGY_CONFIG[name])
+    for key in ('retention_trade_days', 'batch_size', 'initial_trade_days', 'window_size', 'page_size'):
+        value = settings.get(key)
+        if key in settings and (isinstance(value, bool) or not isinstance(value, int) or value <= 0):
+            raise ValueError('{} 的 {} 必须为正整数。'.format(name, key))
+    return settings
+
+
+def china_now():
+    """所有策略统一按北京时间确定运行日期。"""
+    return datetime.datetime.utcnow() + datetime.timedelta(hours=8)
+
+
+def as_date(value):
+    if isinstance(value, datetime.datetime):
+        return value.date()
+    if isinstance(value, datetime.date):
+        return value
+    return datetime.datetime.strptime(str(value)[:10], '%Y-%m-%d').date()
+
+
+def connect_database(config):
+    """统一建立连接、有限重试；调用策略负责最终释放 engine。"""
+    opts = DB_OPTIONS
+    if (not isinstance(opts['retry_count'], int) or opts['retry_count'] < 1
+            or opts['retry_interval'] < 0 or opts['connect_timeout'] <= 0
+            or opts['pool_recycle'] <= 0):
+        raise ValueError('DB_OPTIONS 的次数、超时须为正，重试间隔不可为负。')
+    url = getattr(URL, 'create', URL)(
+        drivername='mysql+mysqldb', host=config['host'], port=config['port'],
+        username=config['dbuser'], password=config['dbpassword'], database=config['dbname'],
+        query={'charset': 'utf8mb4'})
+    engine = create_engine(url, echo=False, pool_size=1, max_overflow=0,
+                           pool_pre_ping=True, pool_recycle=opts['pool_recycle'],
+                           connect_args={'connect_timeout': opts['connect_timeout']})
+    try:
+        for attempt in range(opts['retry_count']):
+            try:
+                with engine.connect():
+                    pass
+                return engine
+            except Exception:
+                if attempt + 1 == opts['retry_count']:
+                    raise RuntimeError('MySQL 连接失败，请检查配置、网络和白名单。') from None
+                time.sleep(opts['retry_interval'])
+    except BaseException:
+        engine.dispose()
+        raise
+
+
+@contextmanager
+def database_scope(base, config):
+    """各策略独立建表及持有连接，正常结束、异常、中断时均释放。"""
+    engine = connect_database(config)
+    try:
+        for table in base.metadata.tables.values():
+            table.dialect_options['mysql']['engine'] = 'InnoDB'
+            table.dialect_options['mysql']['charset'] = 'utf8mb4'
+        base.metadata.create_all(engine)
+        yield sessionmaker(bind=engine)
+    finally:
+        engine.dispose()
+
+
+@contextmanager
+def session_scope(Session):
+    """统一回滚和关闭；提交仍由各策略显式决定，查询不触发写入。"""
+    session = Session()
+    try:
+        yield session
+    except BaseException:
+        session.rollback()
+        raise
+    finally:
+        session.close()
+
+
 class BatchRunError(RuntimeError):
     def __init__(self, summary):
         self.summary = summary
@@ -43,7 +173,7 @@ class BatchRunError(RuntimeError):
         super(BatchRunError, self).__init__('采集未全部完成：{}；请查看控制台结果。'.format('、'.join(failed)))
 
 
-class _QuietStream(_io.TextIOBase):
+class _QuietStream(io.TextIOBase):
     """丢弃策略过程输出，不在内存累积历史日志，也不创建日志文件。"""
     def write(self, text):
         return len(text)
@@ -63,15 +193,14 @@ def _batch_guard():
 
 
 def _load_strategy(name, config, api_namespace):
-    import jqdata as _jq
-    apis = {key: api_namespace.get(key, getattr(_jq, key, getattr(_b, key, None)))
+    apis = {key: api_namespace.get(key, getattr(jq, key, getattr(builtins, key, None)))
             for key in _API_NAMES}
     return STRATEGIES[name](apis, config).run
 
 
 def _safe_error(exc, config):
-    message = _re.sub(r'(?i)[a-z][a-z0-9+.-]*://[^\s]+', '[连接地址已隐藏]', str(exc))
-    message = _re.sub(r"(?i)(password|passwd|pwd|token|secret)\s*[:=]\s*('.*?'|\".*?\"|[^\s,;]+)",
+    message = re.sub(r'(?i)[a-z][a-z0-9+.-]*://[^\s]+', '[连接地址已隐藏]', str(exc))
+    message = re.sub(r"(?i)(password|passwd|pwd|token|secret)\s*[:=]\s*('.*?'|\".*?\"|[^\s,;]+)",
                       r'\1=[已隐藏]', message)
     secrets = set()
     for key in ('host', 'dbname', 'dbuser', 'dbpassword'):
@@ -90,13 +219,13 @@ def run_all(strategy_names=None, options=None, db_config=None, preview_rows=None
     config = dict(DB_CONFIG if db_config is None else db_config)
     options = dict(STRATEGY_OPTIONS if options is None else options)
     preview_rows = PREVIEW_ROWS if preview_rows is None else preview_rows
-    if not names or len(names) != len(set(names)) or _b.any(n not in STRATEGIES for n in names):
+    if not names or len(names) != len(set(names)) or builtins.any(n not in STRATEGIES for n in names):
         raise ValueError('策略列表不能为空、重复或包含未知名称。')
     if set(config) != {'host', 'port', 'dbname', 'dbuser', 'dbpassword'}:
         raise ValueError('DB_CONFIG 必须包含 host、port、dbname、dbuser、dbpassword。')
-    if _b.any(n not in STRATEGIES or not isinstance(v, dict) for n, v in options.items()):
+    if builtins.any(n not in STRATEGIES or not isinstance(v, dict) for n, v in options.items()):
         raise ValueError('策略参数必须为按策略名称组织的字典。')
-    if _b.any(v.get('skip_existing', True) is not True for v in options.values()):
+    if builtins.any(v.get('skip_existing', True) is not True for v in options.values()):
         raise ValueError('不允许关闭 skip_existing；已有股票及其他明细保持原值。')
     if not isinstance(preview_rows, int) or preview_rows < 0:
         raise ValueError('preview_rows 必须是非负整数。')
@@ -104,7 +233,7 @@ def run_all(strategy_names=None, options=None, db_config=None, preview_rows=None
     summary = []
     with _batch_guard():
         for name in names:
-            started = _time.monotonic()
+            started = time.monotonic()
             row = dict(strategy=name, status='FAILED', rows=None, error_type=None, error=None)
             result = None
             try:
@@ -118,7 +247,7 @@ def run_all(strategy_names=None, options=None, db_config=None, preview_rows=None
                 raise
             except Exception as exc:
                 row.update(error_type=type(exc).__name__, error=_safe_error(exc, config))
-            row['elapsed_seconds'] = _b.round(_time.monotonic() - started, 3)
+            row['elapsed_seconds'] = builtins.round(time.monotonic() - started, 3)
             summary.append(row)
             if row['status'] == 'SUCCESS':
                 print('\n【{}】成功：新增 {} 条，耗时 {:.2f} 秒。'.format(name, row['rows'], row['elapsed_seconds']))
@@ -127,7 +256,7 @@ def run_all(strategy_names=None, options=None, db_config=None, preview_rows=None
                 elif preview_rows:
                     try:
                         columns = [c for c in _PREVIEW_COLUMNS[name] if c in result.columns]
-                        print('本次新增结果（最后 {} 条，字段单位沿用策略）：'.format(_b.min(preview_rows, row['rows'])))
+                        print('本次新增结果（最后 {} 条，字段单位沿用策略）：'.format(builtins.min(preview_rows, row['rows'])))
                         print(result[columns].tail(preview_rows).to_string(index=False))
                     except Exception:
                         print('结果预览不可用，入库已完成。')
@@ -138,51 +267,29 @@ def run_all(strategy_names=None, options=None, db_config=None, preview_rows=None
         for row in summary:
             print('{} | {} | {} | {:.2f}'.format(row['strategy'], row['status'],
                   row['rows'] if row['rows'] is not None else '未完成', row['elapsed_seconds']))
-        failed = _b.sum(r['status'] == 'FAILED' for r in summary)
+        failed = builtins.sum(r['status'] == 'FAILED' for r in summary)
         print('成功 {}，失败 {}。'.format(len(summary) - failed, failed))
         if failed and raise_on_failure:
             raise BatchRunError(summary)
     return summary
 
 
-
 # ---------- 行业动量 ----------
 def _momentum_strategy(_apis, _config):
     """独立作用域隔离模型、参数和函数，返回本策略的接口。"""
+    settings = strategy_settings('行业动量')
     get_all_securities = _apis.get('get_all_securities')
     get_trade_days = _apis.get('get_trade_days')
     get_price = _apis.get('get_price')
     get_industries = _apis.get('get_industries')
     get_industry_stocks = _apis.get('get_industry_stocks')
     query = _apis.get('query')
-    import datetime
 
-    import math
-
-    import time
-
-    from decimal import Decimal
-
-    import pandas as pd
-
-    from sqlalchemy import Column, Date, DateTime, Integer, Numeric, String, create_engine, func
-
-    from sqlalchemy.engine.url import URL
-
-    from sqlalchemy.ext.declarative import declarative_base
-
-    from sqlalchemy.orm import sessionmaker
-
-    START_DATE = '2025-01-01'  # 该行业分类首次入库时使用的起始日期。
-
-    END_DATE = None  # None 表示每次运行时取北京时间当天，也可指定 'YYYY-MM-DD'。
-
-    INDUSTRY_TYPE = 'sw_l2'
-
-    RETENTION_TRADE_DAYS = 180  # 按运行当天的交易日历保留，不是 180 个自然日。
-
+    START_DATE = settings['start_date']
+    END_DATE = settings['end_date']
+    INDUSTRY_TYPE = settings['industry_type']
+    RETENTION_TRADE_DAYS = settings['retention_trade_days']
     Base = declarative_base()
-
     RESULT_COLUMNS = [
         'trade_date', 'industry_type', 'industry_code', 'industry_name',
         'momentum', 'momentum_rank', 'front_stock_count', 'industry_stock_count',
@@ -201,50 +308,6 @@ def _momentum_strategy(_apis, _config):
         front_stock_count = Column(Integer, nullable=False)
         industry_stock_count = Column(Integer, nullable=False)
         updated_at = Column(DateTime, nullable=False, default=datetime.datetime.now)
-
-    class MysqlMomentum:
-        # GitHub 脱敏模板：在聚宽私有副本中填写连接信息，不要提交真实凭据。
-        host = _config['host']
-        port = _config['port']
-        dbname = _config['dbname']
-        dbuser = _config['dbuser']
-        dbpassword = _config['dbpassword']
-
-        @classmethod
-        def connect_to_mysql(cls):
-            # URL.create 兼容新 SQLAlchemy；旧版聚宽环境使用 URL 构造函数。
-            make_url = getattr(URL, 'create', URL)
-            uri = make_url(
-                drivername='mysql+mysqldb', host=cls.host, port=cls.port,
-                username=cls.dbuser, password=cls.dbpassword, database=cls.dbname,
-                query={'charset': 'utf8mb4'},
-            )
-            engine = create_engine(
-                uri, echo=False, pool_size=1, max_overflow=0,
-                pool_recycle=3600, pool_pre_ping=True,
-                connect_args={'connect_timeout': 10},
-            )
-            for attempt in range(1, 6):
-                try:
-                    with engine.connect():
-                        pass
-                    print('成功连接到 MySQL 数据库。')
-                    return engine
-                except Exception as exc:
-                    # 不打印连接串或异常全文，避免日志包含密码。
-                    print('MySQL 连接失败，第 {}/5 次，异常类型：{}'.format(
-                        attempt, type(exc).__name__))
-                    engine.dispose()
-                    if attempt == 5:
-                        raise RuntimeError('MySQL 连接失败，请检查网络、白名单和连接参数。') from None
-                    time.sleep(10)
-
-    def as_date(value):
-        if isinstance(value, datetime.datetime):
-            return value.date()
-        if isinstance(value, datetime.date):
-            return value
-        return datetime.datetime.strptime(str(value)[:10], '%Y-%m-%d').date()
 
     def calculate_momentum(trade_date, industry_type=INDUSTRY_TYPE):
         """计算一个交易日的全部行业；仅获取数据，不连接数据库。"""
@@ -303,9 +366,6 @@ def _momentum_strategy(_apis, _config):
                 front_stocks.add(code)
         if not valid_count:
             raise ValueError('{} 没有可计算涨幅的股票，停止写入。'.format(date_text))
-        if valid_count < len(eligible):
-            print('{}：{} 只股票价格无效或缺失，未参与涨幅统计。'.format(
-                date_text, len(eligible) - valid_count))
 
         records = []
         for code in industries.index:
@@ -341,8 +401,7 @@ def _momentum_strategy(_apis, _config):
                     '预期日期={!r}、分类={!r}；实际日期={!r}、分类={!r}。'.format(
                         record.get('industry_code'), day, industry_type,
                         record['trade_date'], record['industry_type']))
-        session = Session()
-        try:
+        with session_scope(Session) as session:
             query = session.query(IndustryMomentum).filter_by(trade_date=day, industry_type=industry_type)
             if skip_existing:
                 existing = {row[0] for row in query.with_entities(IndustryMomentum.industry_code).all()}
@@ -354,21 +413,13 @@ def _momentum_strategy(_apis, _config):
             session.add_all([IndustryMomentum(**record) for record in records])
             session.commit()
             return records
-        except Exception:
-            session.rollback()
-            raise
-        finally:
-            session.close()
 
     def get_last_saved_date(Session, industry_type):
         """按行业分类查询最后已提交的交易日期；没有记录时返回 None。"""
-        session = Session()
-        try:
+        with session_scope(Session) as session:
             return session.query(func.max(IndustryMomentum.trade_date)).filter(
                 IndustryMomentum.industry_type == industry_type,
             ).scalar()
-        finally:
-            session.close()
 
     def get_retention_start(reference_date, count=RETENTION_TRADE_DAYS):
         """先验证交易日历，再允许清理；避免接口异常导致误删。"""
@@ -391,22 +442,16 @@ def _momentum_strategy(_apis, _config):
     def cleanup_old_data(Session, retention_start):
         """一个事务清理整张表的过期数据，保留边界日及之后的快照。"""
         cutoff = as_date(retention_start)
-        session = Session()
-        try:
+        with session_scope(Session) as session:
             deleted = session.query(IndustryMomentum).filter(
                 IndustryMomentum.trade_date < cutoff,
             ).delete(synchronize_session=False)
             session.commit()
             return deleted
-        except Exception:
-            session.rollback()
-            raise
-        finally:
-            session.close()
 
     def run(start_date=START_DATE, end_date=END_DATE, industry_type=INDUSTRY_TYPE, skip_existing=False):
         """先清理过期数据；skip_existing=True 时从最新日期之后只新增。"""
-        now_china = datetime.datetime.utcnow() + datetime.timedelta(hours=8)
+        now_china = china_now()
         today_china = now_china.date()
         if end_date is None:
             end_date = today_china
@@ -415,24 +460,13 @@ def _momentum_strategy(_apis, _config):
             raise ValueError('结束日期不能晚于运行当天。')
         if skip_existing and end == today_china and now_china.hour < 16:
             end = today_china - datetime.timedelta(days=1)
-            print('只新增模式：16:00 前不写入当天未完成快照。')
         # 即使手动指定历史 end_date，保留范围仍以实际运行当天为基准。
         # 日历验证在任何数据库修改之前完成，节假日自动使用最近交易日。
         retention_start = get_retention_start(today_china, RETENTION_TRADE_DAYS)
-        engine = MysqlMomentum.connect_to_mysql()
         all_records = []
-        try:
-            Base.metadata.create_all(engine)
-            Session = sessionmaker(bind=engine)
-            try:
-                deleted = cleanup_old_data(Session, retention_start)
-            except Exception:
-                print('过期数据清理失败，事务已回滚，未开始计算或入库。')
-                raise
-            print('已清理 {} 条过期记录（所有行业分类）；按运行当天保留最近 {} 个交易日，'
-                  '保留起始日为 {}（含）。'.format(deleted, RETENTION_TRADE_DAYS, retention_start))
+        with database_scope(Base, _config) as Session:
+            cleanup_old_data(Session, retention_start)
             if end < retention_start:
-                print('结束日期 {} 早于保留起始日 {}，不再补录过期数据。'.format(end, retention_start))
                 return pd.DataFrame(columns=RESULT_COLUMNS)
             last_date = get_last_saved_date(Session, industry_type)
             if last_date is None:
@@ -441,7 +475,6 @@ def _momentum_strategy(_apis, _config):
                     start = retention_start
                 if start > end:
                     raise ValueError('首次入库的开始日期不能晚于结束日期。')
-                print('{} 尚无保留范围内的记录，从 {} 开始入库。'.format(industry_type, start))
             else:
                 start = as_date(last_date)
                 if skip_existing:
@@ -449,10 +482,7 @@ def _momentum_strategy(_apis, _config):
                 if start < retention_start:
                     start = retention_start
                 if start > end:
-                    print('最后已入库日期 {} 晚于结束日期 {}，无需更新。'.format(start, end))
                     return pd.DataFrame(columns=RESULT_COLUMNS)
-                print('{} 最后已入库日期为 {}，从 {}（含）采集至 {}。'.format(
-                    industry_type, last_date, start, end))
             trade_days = [as_date(day) for day in get_trade_days(start_date=start, end_date=end)]
             # 先检查整个补录日历，避免异常接口将过期或越界日期写回。
             previous = None
@@ -461,56 +491,28 @@ def _momentum_strategy(_apis, _config):
                     raise ValueError('补录交易日历越界、重复或乱序，停止入库。')
                 previous = day
             if not trade_days:
-                print('日期范围内没有交易日，无需写入。')
                 return pd.DataFrame(columns=RESULT_COLUMNS)
             for day in trade_days:
                 records = calculate_momentum(day, industry_type)
-                try:
-                    records = save_day(Session, day, industry_type, records, skip_existing=skip_existing)
-                except Exception:
-                    print('{} 校验或写入失败；修复后重跑会从最后已入库日期继续。'.format(day))
-                    raise
+                records = save_day(Session, day, industry_type, records, skip_existing=skip_existing)
                 all_records.extend(records)
-                print('{} 计算并入库完成，共 {} 个行业（含零分行业）。'.format(day, len(records)))
-        finally:
-            engine.dispose()
         return pd.DataFrame(all_records, columns=RESULT_COLUMNS)
-    return _Namespace(**locals())
+    return SimpleNamespace(**locals())
 
 
 # ---------- 抱团拥挤度 ----------
 def _crowding_strategy(_apis, _config):
     """独立作用域隔离模型、参数和函数，返回本策略的接口。"""
+    settings = strategy_settings('抱团拥挤度')
     get_all_securities = _apis.get('get_all_securities')
     get_trade_days = _apis.get('get_trade_days')
     get_price = _apis.get('get_price')
     query = _apis.get('query')
-    import builtins
 
-    import datetime
-
-    import time
-
-    from decimal import Decimal, InvalidOperation
-
-    import pandas as pd
-
-    from sqlalchemy import Column, Date, DateTime, Integer, Numeric, create_engine
-
-    from sqlalchemy.engine.url import URL
-
-    from sqlalchemy.ext.declarative import declarative_base
-
-    from sqlalchemy.orm import sessionmaker
-
-    START_DATE = '2020-01-01'
-
-    END_DATE = None  # 每次调用 run 时取北京时间当天，不在导入文件时固定日期。
-
-    TOP_PCT = 0.05  # 沿用原程序的前 5%。
-
+    START_DATE = settings['start_date']
+    END_DATE = settings['end_date']
+    TOP_PCT = settings['top_pct']
     Base = declarative_base()
-
     RESULT_COLUMNS = ['trade_date', 'top_pct', 'ratio', 'top_money', 'total_money',
                       'stock_count', 'top_stock_count', 'updated_at']
 
@@ -527,53 +529,6 @@ def _crowding_strategy(_apis, _config):
         stock_count = Column(Integer, nullable=False)
         top_stock_count = Column(Integer, nullable=False)
         updated_at = Column(DateTime, nullable=False)
-
-    class MysqlCrowding:
-        # GitHub 脱敏模板：在聚宽私有副本中填写连接信息，不要提交真实凭据。
-        host = _config['host']
-        port = _config['port']
-        dbname = _config['dbname']
-        dbuser = _config['dbuser']
-        dbpassword = _config['dbpassword']
-
-        @classmethod
-        def connect_to_mysql(cls):
-            # URL.create 兼容新 SQLAlchemy；旧版聚宽环境使用 URL 构造函数。
-            make_url = getattr(URL, 'create', URL)
-            uri = make_url(
-                drivername='mysql+mysqldb', host=cls.host, port=cls.port,
-                username=cls.dbuser, password=cls.dbpassword, database=cls.dbname,
-                query={'charset': 'utf8mb4'},
-            )
-            engine = create_engine(
-                uri, echo=False, pool_size=1, max_overflow=0,
-                pool_recycle=3600, pool_pre_ping=True,
-                connect_args={'connect_timeout': 10},
-            )
-            for attempt in range(1, 6):
-                try:
-                    with engine.connect():
-                        pass
-                    print('成功连接到 MySQL 数据库。')
-                    return engine
-                except Exception as exc:
-                    # 不打印连接串或异常全文，避免日志包含密码。
-                    print('MySQL 连接失败，第 {}/5 次，异常类型：{}'.format(
-                        attempt, type(exc).__name__))
-                    engine.dispose()
-                    if attempt == 5:
-                        raise RuntimeError('MySQL 连接失败，请检查网络、白名单和连接参数。') from None
-                    time.sleep(10)
-
-    def china_now():
-        return datetime.datetime.utcnow() + datetime.timedelta(hours=8)
-
-    def as_date(value):
-        if isinstance(value, datetime.datetime):
-            return value.date()
-        if isinstance(value, datetime.date):
-            return value
-        return datetime.datetime.strptime(str(value)[:10], '%Y-%m-%d').date()
 
     def summarize_money(pairs, top_pct=TOP_PCT):
         """纯计算：零成交额股票计入总数量；无效/负数/重复数据拒绝入库。"""
@@ -634,8 +589,7 @@ def _crowding_strategy(_apis, _config):
     def save_day(Session, day, top_pct, record, skip_existing=False):
         if record['trade_date'] != as_date(day) or record['top_pct'] != Decimal(str(top_pct)):
             raise ValueError('结果日期或 TOP_PCT 不一致，拒绝入库。')
-        session = Session()
-        try:
+        with session_scope(Session) as session:
             query = session.query(MarketCrowding).filter_by(
                 trade_date=as_date(day), top_pct=Decimal(str(top_pct)))
             if skip_existing:
@@ -646,22 +600,14 @@ def _crowding_strategy(_apis, _config):
             session.add(MarketCrowding(**record))
             session.commit()
             return True
-        except Exception:
-            session.rollback()
-            raise
-        finally:
-            session.close()
 
     def get_last_saved_date(Session, top_pct):
         """利用 (top_pct, trade_date) 主键，仅查询当前口径的最新日期。"""
-        session = Session()
-        try:
+        with session_scope(Session) as session:
             row = session.query(MarketCrowding.trade_date).filter(
                 MarketCrowding.top_pct == Decimal(str(top_pct)),
             ).order_by(MarketCrowding.trade_date.desc()).first()
             return as_date(row[0]) if row is not None else None
-        finally:
-            session.close()
 
     def run(start_date=START_DATE, end_date=END_DATE, top_pct=TOP_PCT, incremental=True, skip_existing=False):
         """默认从最后已入库日（含）增量更新；手动补历史时传 incremental=False。"""
@@ -673,7 +619,6 @@ def _crowding_strategy(_apis, _config):
             raise ValueError('开始日期不能晚于结束日期，结束日期不能晚于运行当天。')
         if skip_existing and end == today and now.hour < 16:
             end = today - datetime.timedelta(days=1)
-            print('只新增模式：16:00 前不写入当天未完成快照。')
         pct = Decimal(str(top_pct))
         if not pct.is_finite() or not Decimal('0') < pct <= Decimal('1'):
             raise ValueError('TOP_PCT 必须在 (0, 1] 内。')
@@ -681,22 +626,17 @@ def _crowding_strategy(_apis, _config):
             raise ValueError('TOP_PCT 最多支持六位小数。')
         if not isinstance(incremental, bool):
             raise ValueError('incremental 必须是 True 或 False。')
-        engine = MysqlCrowding.connect_to_mysql()
         records = []
-        try:
-            Base.metadata.create_all(engine)
-            Session = sessionmaker(bind=engine)
+        with database_scope(Base, _config) as Session:
             if incremental:
                 last = get_last_saved_date(Session, top_pct)
                 if last is not None:
                     if last > today:
                         raise ValueError('数据库最新日期晚于运行当天，请检查已有数据。')
                     start = builtins.max(start, last + datetime.timedelta(days=1) if skip_existing else last)
-                print('最后已入库日期：{}；按最新日期增量更新。'.format(last))
             else:
-                print('手动补录模式：重算指定区间，不查询历史日期列表。')
+                pass
             if start > end:
-                print('最后已入库日期晚于结束日期，无需增量更新。')
                 return pd.DataFrame(columns=RESULT_COLUMNS)
             # 仅请求实际增量区间的日历；全部验证通过后才计算、写入日记录。
             raw_days = get_trade_days(start_date=start, end_date=end)
@@ -708,10 +648,7 @@ def _crowding_strategy(_apis, _config):
                 if day < start or day > end or (previous is not None and day <= previous):
                     raise ValueError('交易日历越界、重复或乱序，未写入数据。')
                 previous = day
-            print('实际采集范围：{} 至 {}；TOP_PCT={}；待计算 {} 个交易日。'.format(
-                start, end, top_pct, len(days)))
             if not days:
-                print('日期范围没有交易日。')
                 return pd.DataFrame(columns=RESULT_COLUMNS)
             # 默认模式刷新末日；skip_existing=True 仅新增，更早缺口不自动扫描。
             for index, day in enumerate(days, 1):
@@ -719,27 +656,21 @@ def _crowding_strategy(_apis, _config):
                     record = calculate_crowding(day, top_pct)
                     written = save_day(Session, day, top_pct, record, skip_existing=skip_existing)
                     if not written:
-                        print('{} 已有数据，跳过写入。'.format(day))
                         continue
                 except Exception as exc:
                     # 不输出数据库异常全文，避免日志泄露账号、地址或 SQL。
-                    print('{} 计算或写入失败（{}），本次停止；已完成日期已提交，修复后重跑可继续。'.format(day, type(exc).__name__))
                     if isinstance(exc, ValueError):
                         raise
                     raise RuntimeError('{} 采集失败，请检查聚宽接口、数据权限和数据库连接。'.format(day)) from None
                 records.append(record)
-                print('[{}/{}] {} 入库完成：占比 {:.2%}，前 {} / {} 只股票。'.format(
-                    index, len(days), day, float(record['ratio']),
-                    record['top_stock_count'], record['stock_count']))
-        finally:
-            engine.dispose()
         return pd.DataFrame(records, columns=RESULT_COLUMNS)
-    return _Namespace(**locals())
+    return SimpleNamespace(**locals())
 
 
 # ---------- 微盘温度计 ----------
 def _microcap_strategy(_apis, _config):
     """独立作用域隔离模型、参数和函数，返回本策略的接口。"""
+    settings = strategy_settings('微盘温度计')
     get_all_securities = _apis.get('get_all_securities')
     get_trade_days = _apis.get('get_trade_days')
     get_price = _apis.get('get_price')
@@ -748,46 +679,15 @@ def _microcap_strategy(_apis, _config):
     query = _apis.get('query')
     valuation = _apis.get('valuation')
     indicator = _apis.get('indicator')
-    import bisect
 
-    import builtins
-
-    import datetime
-
-    import json
-
-    import time
-
-    from decimal import Decimal, InvalidOperation
-
-    from statistics import median
-
-    import pandas as pd
-
-    from sqlalchemy import Column, Date, DateTime, Integer, Numeric, String, Text, create_engine
-
-    from sqlalchemy.engine.url import URL
-
-    from sqlalchemy.ext.declarative import declarative_base
-
-    from sqlalchemy.orm import sessionmaker
-
-    START_DATE = '2021-01-01'
-
-    END_DATE = None  # 每次运行时取北京时间当天。
-
-    MICRO_NUM = 1000
-
-    SAMPLE_STEP = 5  # 从首个交易日起，每 5 个交易日采样；增量不改变采样网格。
-
-    BATCH_SIZE = 1000
-
+    START_DATE = settings['start_date']
+    END_DATE = settings['end_date']
+    MICRO_NUM = settings['micro_num']
+    SAMPLE_STEP = settings['sample_step']
+    BATCH_SIZE = settings['batch_size']
     RAW_FIELDS = ('micro_median', 'relative_ratio', 'crowding_ratio', 'amount_crowding_ratio')
-
     PCT_FIELDS = ('cap_pct', 'relative_pct', 'crowding_pct', 'amount_crowding_pct')
-
     Q = Decimal('0.0000000001')
-
     Base = declarative_base()
 
     class MicrocapTemperature(Base):
@@ -821,53 +721,6 @@ def _microcap_strategy(_apis, _config):
 
     RESULT_COLUMNS = [column.name for column in MicrocapTemperature.__table__.columns
                       if column.name != 'member_codes']
-
-    class MysqlMicrocap:
-        # GitHub 脱敏模板：在聚宽私有副本中填写连接信息，不要提交真实凭据。
-        host = _config['host']
-        port = _config['port']
-        dbname = _config['dbname']
-        dbuser = _config['dbuser']
-        dbpassword = _config['dbpassword']
-
-        @classmethod
-        def connect_to_mysql(cls):
-            # URL.create 兼容新 SQLAlchemy；旧版聚宽环境使用 URL 构造函数。
-            make_url = getattr(URL, 'create', URL)
-            uri = make_url(
-                drivername='mysql+mysqldb', host=cls.host, port=cls.port,
-                username=cls.dbuser, password=cls.dbpassword, database=cls.dbname,
-                query={'charset': 'utf8mb4'},
-            )
-            engine = create_engine(
-                uri, echo=False, pool_size=1, max_overflow=0,
-                pool_recycle=3600, pool_pre_ping=True,
-                connect_args={'connect_timeout': 10},
-            )
-            for attempt in range(1, 6):
-                try:
-                    with engine.connect():
-                        pass
-                    print('成功连接到 MySQL 数据库。')
-                    return engine
-                except Exception as exc:
-                    # 不打印连接串或异常全文，避免日志包含密码。
-                    print('MySQL 连接失败，第 {}/5 次，异常类型：{}'.format(
-                        attempt, type(exc).__name__))
-                    engine.dispose()
-                    if attempt == 5:
-                        raise RuntimeError('MySQL 连接失败，请检查网络、白名单和连接参数。') from None
-                    time.sleep(10)
-
-    def china_now():
-        return datetime.datetime.utcnow() + datetime.timedelta(hours=8)
-
-    def as_date(value):
-        if isinstance(value, datetime.datetime):
-            return value.date()
-        if isinstance(value, datetime.date):
-            return value
-        return datetime.datetime.strptime(str(value)[:10], '%Y-%m-%d').date()
 
     def number(value):
         try:
@@ -1060,8 +913,7 @@ def _microcap_strategy(_apis, _config):
         record['sample_count'] = len(histories[RAW_FIELDS[0]])
 
     def load_resume(Session, series_id, include_latest=False):
-        session = Session()
-        try:
+        with session_scope(Session) as session:
             last = session.query(MicrocapTemperature.trade_date).filter_by(series_id=series_id).order_by(
                 MicrocapTemperature.trade_date.desc()).first()
             histories = {field: [] for field in RAW_FIELDS}
@@ -1086,8 +938,6 @@ def _microcap_strategy(_apis, _config):
             if previous is not None and previous['sample_count'] != len(baseline):
                 raise ValueError('历史样本不连续，请检查历史删除或外部修改，不能直接续算分位。')
             return day, previous, histories
-        finally:
-            session.close()
 
     def save_period(Session, record, skip_existing=False):
         required = RESULT_COLUMNS + ['member_codes']
@@ -1098,8 +948,7 @@ def _microcap_strategy(_apis, _config):
             value = number(record[field])
             if value is None or not 0 <= value <= 1:
                 raise ValueError('分位或温度不在 0～1 范围内。')
-        session = Session()
-        try:
+        with session_scope(Session) as session:
             query = session.query(MicrocapTemperature).filter_by(
                 series_id=record['series_id'], trade_date=record['trade_date'])
             if skip_existing:
@@ -1110,11 +959,6 @@ def _microcap_strategy(_apis, _config):
             session.add(MicrocapTemperature(**record))
             session.commit()
             return True
-        except Exception:
-            session.rollback()
-            raise
-        finally:
-            session.close()
 
     def run(start_date=START_DATE, end_date=END_DATE, micro_num=MICRO_NUM, sample_step=SAMPLE_STEP, skip_existing=False):
         start = as_date(start_date)
@@ -1125,29 +969,22 @@ def _microcap_strategy(_apis, _config):
             raise ValueError('开始日期不能晚于结束日期，结束日期不能晚于今天。')
         if skip_existing and end == today and now.hour < 16:
             end = today - datetime.timedelta(days=1)
-            print('只新增模式：16:00 前不写入当天未完成快照。')
         for value in (micro_num, sample_step):
             if isinstance(value, builtins.bool) or not isinstance(value, builtins.int) or value <= 0:
                 raise ValueError('微盘数量和采样步长必须是正整数。')
         series_id = series_key(start, micro_num, sample_step)
-        engine = MysqlMicrocap.connect_to_mysql()
         records = []
-        try:
-            Base.metadata.create_all(engine)
-            Session = sessionmaker(bind=engine)
+        with database_scope(Base, _config) as Session:
             last, previous, histories = load_resume(Session, series_id, include_latest=skip_existing)
             if last is not None and last > today:
                 raise ValueError('最新入库日期晚于今天，请检查已有数据。')
             begin = last or start
             if begin > end:
-                print('最新日期晚于结束日期，无需增量更新。')
                 return pd.DataFrame(columns=RESULT_COLUMNS)
             days = calendar(begin, end)
             if last is not None and (not days or days[0] != last):
                 raise ValueError('最新入库日不在交易日历中，停止写入。')
             pending = days[sample_step::sample_step] if skip_existing and last is not None else days[::sample_step]
-            print('微盘 {}；每 {} 个交易日采样；本次 {} 至 {}，待更新 {} 期。'.format(
-                micro_num, sample_step, begin, end, len(pending)))
             for day in pending:
                 try:
                     record = calculate_period(day, previous, micro_num)
@@ -1158,67 +995,30 @@ def _microcap_strategy(_apis, _config):
                     if not save_period(Session, record, skip_existing=skip_existing):
                         raise ValueError('该采样期已被其他任务写入，未覆盖；请重跑以加载已保存的指数和分位基准。')
                 except Exception as exc:
-                    print('{} 计算或写入失败（{}）；已完成期数已提交，修复后重跑从最新一期继续。'.format(
-                        day, type(exc).__name__))
                     if isinstance(exc, ValueError):
                         raise
                     raise RuntimeError('{} 采集失败，请检查聚宽接口、权限及数据库连接。'.format(day)) from None
                 previous = record
                 records.append({field: record[field] for field in RESULT_COLUMNS})
-                print('{} 入库完成：综合温度 {:.1f}，等权指数 {:.2f}，累计 {} 期。'.format(
-                    day, float(record['score']) * 100, float(record['micro_index']), record['sample_count']))
-        finally:
-            engine.dispose()
         return pd.DataFrame(records, columns=RESULT_COLUMNS)
-    return _Namespace(**locals())
+    return SimpleNamespace(**locals())
 
 
 # ---------- ETF份额 ----------
 def _etf_strategy(_apis, _config):
     """独立作用域隔离模型、参数和函数，返回本策略的接口。"""
+    settings = strategy_settings('ETF份额')
     get_trade_days = _apis.get('get_trade_days')
     query = _apis.get('query')
     finance = _apis.get('finance')
-    import builtins
 
-    import datetime
-
-    import time
-
-    from decimal import Decimal, InvalidOperation
-
-    import pandas as pd
-
-    from sqlalchemy import BigInteger, Column, Date, DateTime, String, create_engine, func
-
-    from sqlalchemy.engine.url import URL
-
-    from sqlalchemy.ext.declarative import declarative_base
-
-    from sqlalchemy.orm import sessionmaker
-
-    START_DATE = None  # 首次采集：截至运行当天，最近 300 个交易日。
-
-    INITIAL_TRADE_DAYS = 300
-
-    END_DATE = None  # 每次运行取北京时间当天；不保证当天源数据已经发布。
-
-    LOOKBACK_DAYS = 5  # 含最后入库日，回查最近 5 个交易日。
-
-    WINDOW_SIZE = 120  # 每只基金每次最多请求 120 个交易日，避免接口行数上限截断。
-
-    ETF_GROUPS = {
-        # 按 2026-10-16 规模排名选定的前五只，固定跟踪，不在运行时自动替换名单。
-        'hs300': [('510300.XSHG', '沪深300ETF华泰柏瑞'), ('510310.XSHG', '沪深300ETF易方达'),
-                  ('510330.XSHG', '沪深300ETF华夏'), ('159919.XSHE', '沪深300ETF嘉实'),
-                  ('515330.XSHG', '沪深300ETF天弘')],
-        'zz500': [('510500.XSHG', '中证500ETF南方'), ('510510.XSHG', '中证500ETF广发'),
-                  ('510580.XSHG', '中证500ETF易方达'), ('512500.XSHG', '中证500ETF华夏'),
-                  ('159922.XSHE', '中证500ETF嘉实')],
-    }
-
+    START_DATE = settings['start_date']
+    INITIAL_TRADE_DAYS = settings['initial_trade_days']
+    END_DATE = settings['end_date']
+    LOOKBACK_DAYS = settings['lookback_days']
+    WINDOW_SIZE = settings['window_size']
+    ETF_GROUPS = settings['funds']
     SOURCE = 'jqdata.FUND_SHARE_DAILY'
-
     Base = declarative_base()
 
     class ETFShare(Base):
@@ -1233,53 +1033,6 @@ def _etf_strategy(_apis, _config):
         updated_at = Column(DateTime, nullable=False)
 
     RESULT_COLUMNS = [column.name for column in ETFShare.__table__.columns]
-
-    class MysqlETF:
-        # GitHub 脱敏模板：在聚宽私有副本中填写连接信息，不要提交真实凭据。
-        host = _config['host']
-        port = _config['port']
-        dbname = _config['dbname']
-        dbuser = _config['dbuser']
-        dbpassword = _config['dbpassword']
-
-        @classmethod
-        def connect_to_mysql(cls):
-            # URL.create 兼容新 SQLAlchemy；旧版聚宽环境使用 URL 构造函数。
-            make_url = getattr(URL, 'create', URL)
-            uri = make_url(
-                drivername='mysql+mysqldb', host=cls.host, port=cls.port,
-                username=cls.dbuser, password=cls.dbpassword, database=cls.dbname,
-                query={'charset': 'utf8mb4'},
-            )
-            engine = create_engine(
-                uri, echo=False, pool_size=1, max_overflow=0,
-                pool_recycle=3600, pool_pre_ping=True,
-                connect_args={'connect_timeout': 10},
-            )
-            for attempt in range(1, 6):
-                try:
-                    with engine.connect():
-                        pass
-                    print('成功连接到 MySQL 数据库。')
-                    return engine
-                except Exception as exc:
-                    # 不打印连接串或异常全文，避免日志包含密码。
-                    print('MySQL 连接失败，第 {}/5 次，异常类型：{}'.format(
-                        attempt, type(exc).__name__))
-                    engine.dispose()
-                    if attempt == 5:
-                        raise RuntimeError('MySQL 连接失败，请检查网络、白名单和连接参数。') from None
-                    time.sleep(10)
-
-    def china_now():
-        return datetime.datetime.utcnow() + datetime.timedelta(hours=8)
-
-    def as_date(value):
-        if isinstance(value, datetime.datetime):
-            return value.date()
-        if isinstance(value, datetime.date):
-            return value
-        return datetime.datetime.strptime(str(value)[:10], '%Y-%m-%d').date()
 
     def share_table():
         try:
@@ -1346,13 +1099,10 @@ def _etf_strategy(_apis, _config):
         return records
 
     def last_dates(Session, codes):
-        session = Session()
-        try:
+        with session_scope(Session) as session:
             return {code: (first, last) for code, first, last in session.query(
                 ETFShare.fund_code, func.min(ETFShare.trade_date), func.max(ETFShare.trade_date),
             ).filter(ETFShare.fund_code.in_(codes)).group_by(ETFShare.fund_code).all()}
-        finally:
-            session.close()
 
     def save_window(Session, code, records, skip_existing=False):
         if not records:
@@ -1360,8 +1110,7 @@ def _etf_strategy(_apis, _config):
         dates = [record['trade_date'] for record in records]
         if len(set(dates)) != len(dates) or builtins.any(r['fund_code'] != code or r['previous_trade_date'] >= r['trade_date'] for r in records):
             raise ValueError('待写入份额快照不一致。')
-        session = Session()
-        try:
+        with session_scope(Session) as session:
             query = session.query(ETFShare).filter(ETFShare.fund_code == code, ETFShare.trade_date.in_(dates))
             if skip_existing:
                 existing = {row[0] for row in query.with_entities(ETFShare.trade_date).all()}
@@ -1374,11 +1123,6 @@ def _etf_strategy(_apis, _config):
             session.add_all([ETFShare(**record) for record in records])
             session.commit()
             return records
-        except Exception:
-            session.rollback()
-            raise
-        finally:
-            session.close()
 
     def probe(code='510300.XSHG', end_date=None):
         """只测试聚宽最近份额接口，不连接 MySQL；用于确认权限、日期和份额单位。"""
@@ -1387,7 +1131,6 @@ def _etf_strategy(_apis, _config):
         if len(days) < 2:
             raise ValueError('交易日历不足，无法验证。')
         records = fetch_window(code, code, days[1:], dict(zip(days[1:], days[:-1])))
-        print('源字段 shares 按份读取；返回 {} 条，请核对最新日期及基金官方份额。'.format(len(records)))
         return pd.DataFrame(records, columns=RESULT_COLUMNS)
 
     def run(start_date=START_DATE, end_date=END_DATE, incremental=True, lookback_days=LOOKBACK_DAYS, groups=None, skip_existing=False):
@@ -1408,11 +1151,8 @@ def _etf_strategy(_apis, _config):
             if not initial_days:
                 raise ValueError('无法取得首次采集范围的交易日历。')
             start = initial_days[0]
-        engine = MysqlETF.connect_to_mysql()
         output, failures = [], []
-        try:
-            Base.metadata.create_all(engine)
-            Session = sessionmaker(bind=engine)
+        with database_scope(Base, _config) as Session:
             latest = last_dates(Session, list(funds)) if incremental else {}
             for code, name in funds.items():
                 try:
@@ -1420,7 +1160,6 @@ def _etf_strategy(_apis, _config):
                     if last and as_date(last) > today:
                         raise ValueError('最新入库日期晚于今天。')
                     if last and as_date(last) > end:
-                        print('{} 最新记录晚于请求终点，跳过；历史修订请指定 incremental=False。'.format(code))
                         continue
                     begin = start
                     if last:
@@ -1435,7 +1174,6 @@ def _etf_strategy(_apis, _config):
                         else:
                             begin = builtins.max(as_date(first), recent[0]) if start_date is None else builtins.max(start, recent[0])
                     if begin > end:
-                        print('{} 已有数据，无新增日期，跳过写入。'.format(code))
                         continue
                     days = trading_days(begin, end)
                     if not days:
@@ -1446,7 +1184,6 @@ def _etf_strategy(_apis, _config):
                     before = dict(zip(days, prior + days[:-1]))
                     # 回查可能早于基金首条有效数据；已有记录本身作为连续性锚点。
                     seen_data = builtins.bool(last and first and days[0] >= as_date(first))
-                    print('{} {}：最新入库 {}；查询 {} 至 {}。'.format(code, name, last, begin, end))
                     for offset in range(0, len(days), WINDOW_SIZE):
                         window = days[offset:offset + WINDOW_SIZE]
                         records = fetch_window(code, name, window, before, require_start=seen_data)
@@ -1457,33 +1194,23 @@ def _etf_strategy(_apis, _config):
                             written = save_window(Session, code, records, skip_existing=skip_existing)
                             output.extend(written)
                             seen_data = True
-                            print('{} {} 至 {}：写入 {} 条，最新份额 {:.4f} 亿份。'.format(
-                                code, records[0]['trade_date'], records[-1]['trade_date'], len(written), records[-1]['shares'] / 1e8))
                             if records[-1]['trade_date'] < window[-1]:
-                                print('{} 后续日期尚无数据，保留待下次获取，不补零。'.format(code))
                                 break
                         elif seen_data or last:
-                            print('{} 当前窗口无数据，保留已有记录，下次重试。'.format(code))
                             break
-                    if not seen_data:
-                        print('{} 本次未取得份额；请检查数据覆盖、权限及发布时间。'.format(code))
-                except Exception as exc:
+                except Exception:
                     # 每只基金独立恢复；不打印数据库连接或原始驱动异常。
-                    print('{} 采集失败（{}）；该窗口未写入或已回滚，其他基金继续。'.format(code, type(exc).__name__))
-                    if isinstance(exc, ValueError):
-                        print(str(exc))
                     failures.append(code)
             if failures:
                 raise RuntimeError('以下 ETF 未完成：{}。成功窗口已提交，修复后重跑可续传。'.format(', '.join(failures)))
-        finally:
-            engine.dispose()
         return pd.DataFrame(output, columns=RESULT_COLUMNS)
-    return _Namespace(**locals())
+    return SimpleNamespace(**locals())
 
 
 # ---------- 净利润断层 ----------
 def _earnings_strategy(_apis, _config):
     """独立作用域隔离模型、参数和函数，返回本策略的接口。"""
+    settings = strategy_settings('净利润断层')
     get_all_securities = _apis.get('get_all_securities')
     get_trade_days = _apis.get('get_trade_days')
     get_price = _apis.get('get_price')
@@ -1495,32 +1222,10 @@ def _earnings_strategy(_apis, _config):
     income = _apis.get('income')
     finance = _apis.get('finance')
     jy = _apis.get('jy')
-    import builtins
 
-    import datetime as dt
-
-    import json
-
-    import math
-
-    from decimal import Decimal, InvalidOperation, ROUND_HALF_UP, localcontext
-
-    import pandas as pd
-
-    from sqlalchemy import Column, Date, DateTime, Index, Integer, JSON, Numeric, String, Text, create_engine
-
-    from sqlalchemy.engine.url import URL
-
-    from sqlalchemy.ext.declarative import declarative_base
-
-    from sqlalchemy.orm import sessionmaker
-
-    END_DATE = None  # 北京时间运行当天；16:00 前仅使用上一日及以前的完整行情。
-
+    END_DATE = settings['end_date']
     RULE_VERSION = 'announcement-open-v1'
-
-    PAGE_SIZE = 1000
-
+    PAGE_SIZE = settings['page_size']
     Base = declarative_base()
 
     class EarningsRun(Base):
@@ -1562,41 +1267,6 @@ def _earnings_strategy(_apis, _config):
         analysis_basis = Column(String(32), nullable=False, default='')
         events = Column(JSON, nullable=False)
         prices = Column(JSON, nullable=False)
-
-    class MysqlEarnings:
-        # GitHub 脱敏模板；仅在聚宽私有副本填写真实凭据。
-        host = _config['host']
-        port = _config['port']
-        dbname = _config['dbname']
-        dbuser = _config['dbuser']
-        dbpassword = _config['dbpassword']
-
-        @classmethod
-        def connect_to_mysql(cls):
-            url = getattr(URL, 'create', URL)(
-                drivername='mysql+mysqldb', host=cls.host, port=cls.port,
-                username=cls.dbuser, password=cls.dbpassword, database=cls.dbname,
-                query={'charset': 'utf8mb4'})
-            engine = create_engine(url, echo=False, pool_size=1, max_overflow=0,
-                                  pool_pre_ping=True, pool_recycle=3600,
-                                  connect_args={'connect_timeout': 10})
-            try:
-                with engine.connect():
-                    pass
-            except Exception:
-                engine.dispose()
-                raise RuntimeError('MySQL 连接失败，请检查私有配置、网络和白名单。') from None
-            return engine
-
-    def china_now():
-        return dt.datetime.utcnow() + dt.timedelta(hours=8)
-
-    def as_date(value):
-        if isinstance(value, dt.datetime):
-            return value.date()
-        if isinstance(value, dt.date):
-            return value
-        return dt.datetime.strptime(str(value)[:10], '%Y-%m-%d').date()
 
     def latest_period(day):
         # 当前季度开始前一天；10 月运行统一取 9 月 30 日。
@@ -1685,14 +1355,12 @@ def _earnings_strategy(_apis, _config):
             for code in sorted(companies.get(row['CompanyCode'], [])):
                 events.append(event(code, 'express', row['InfoPublDate'], period,
                                     row['NPParentCompanyOwners'], row['NPCOwnersYOY'], row))
-        print('业绩快报读取完成：{} 条。'.format(len(events)))
         t = finance.STK_FIN_FORCAST
         for row in paged(t, [t.end_date == period, t.pub_date <= as_of], finance.run_query):
             if row['code'] in code_set:
                 # 不猜测可选预告金额字段的单位；原始字段完整保存在 raw。
                 events.append(event(row['code'], 'forecast', row['pub_date'], period, None,
                                     row['profit_ratio_min'], row, row.get('profit_ratio_max')))
-        print('业绩预告读取完成。')
         for start in range(0, len(codes), 300):
             q = query(income.code, income.pubDate.label('publication_date'),
                       income.statDate.label('report_period'),
@@ -1712,7 +1380,6 @@ def _earnings_strategy(_apis, _config):
                 pub = builtins.max(as_date(row['publication_date']), as_date(row['indicator_publication_date']))
                 if pub <= as_of:
                     events.append(event(row['code'], 'formal', pub, period, row['net_profit'], row['profit_yoy'], row))
-        print('三类公告合计 {} 条。'.format(len(events)))
         unique = {json.dumps(e, ensure_ascii=False, sort_keys=True): e for e in events}
         return sorted(unique.values(), key=lambda e: (e['code'], e['publication_date'], e['kind']))
 
@@ -1798,8 +1465,6 @@ def _earnings_strategy(_apis, _config):
                           intraday_pct=selected['signal']['intraday_pct'], valuation_date=as_of,
                           events=disclosures, prices=prices)
             results.append(record)
-            if index % 25 == 0:
-                print('已检查 {} 只披露股票，命中 {} 只。'.format(index, len(results)))
         selected_codes = [r['code'] for r in results]
         valuations = {}
         for start in range(0, len(selected_codes), 300):
@@ -1854,8 +1519,7 @@ def _earnings_strategy(_apis, _config):
         # 先验证原始筛选阈值，再量化写入值；任何转换失败均发生在删除旧快照之前。
         # 不修改原始 records 和公告 JSON，也不把 Decimal 转回 float。
         db_records = [database_record(r) for r in records]
-        session = Session()
-        try:
+        with session_scope(Session) as session:
             if skip_existing:
                 # 股票快照只插入首次命中的结果；不覆盖、不删除已入库股票。
                 existing = {row[0] for row in session.query(EarningsStock.code).filter(
@@ -1893,11 +1557,6 @@ def _earnings_strategy(_apis, _config):
                                    universe_count=universe_count, matched_count=len(records), rule_version=RULE_VERSION))
             session.commit()
             return records
-        except Exception:
-            session.rollback()
-            raise
-        finally:
-            session.close()
 
     def run(end_date=END_DATE, skip_existing=False):
         now = china_now()
@@ -1916,35 +1575,21 @@ def _earnings_strategy(_apis, _config):
         # 平台提供的全部 A 股，不使用原行业白名单、黑名单、ST/持仓或数量限制。
         names = {str(code): str(row['display_name']) for code, row in universe.iterrows()}
         codes = sorted(names)
-        print('报告期 {}，行情/披露截止 {}，扫描 {} 只股票。'.format(period, as_of, len(codes)))
         if not skip_existing:
             events = fetch_events(codes, period, as_of)
             records = screen(codes, names, events, period, as_of)
-        engine = MysqlEarnings.connect_to_mysql()
-        try:
+        with database_scope(Base, _config) as Session:
             # 显式指定 InnoDB，确保旧数据库默认引擎不会破坏整批事务。
-            for table in Base.metadata.tables.values():
-                table.dialect_options['mysql']['engine'] = 'InnoDB'
-                table.dialect_options['mysql']['charset'] = 'utf8mb4'
-            Base.metadata.create_all(engine)
-            Session = sessionmaker(bind=engine)
             if skip_existing:
-                session = Session()
-                try:
+                with session_scope(Session) as session:
                     existing = {row[0] for row in session.query(EarningsStock.code).filter(
                         EarningsStock.report_period == period).all()}
-                finally:
-                    session.close()
                 pending = [code for code in codes if code not in existing]
-                print('本季度已入库 {} 只股票，保留原始快照；仅筛选其余 {} 只。'.format(len(existing), len(pending)))
                 events = fetch_events(pending, period, as_of) if pending else []
                 records = screen(pending, names, events, period, as_of) if pending else []
             records = save_results(Session, period, as_of, len(codes), records, skip_existing=skip_existing)
-        finally:
-            engine.dispose()
-        print('完成：{} 只股票{}入库；其他季度数据保留。'.format(len(records), '新增' if skip_existing else '已'))
         return pd.DataFrame(records)
-    return _Namespace(**locals())
+    return SimpleNamespace(**locals())
 
 
 STRATEGIES = {

@@ -27,6 +27,7 @@ def load(path, name):
 
 @pytest.fixture
 def batch(monkeypatch, tmp_path):
+    fake_platform(monkeypatch)
     module = load(TARGET, 'offline_collector_batch')
     return module
 
@@ -48,11 +49,9 @@ def test_factories_isolate_state_and_use_shared_config(batch, monkeypatch):
     for ns in namespaces:
         if hasattr(ns, 'get_price'):
             assert ns.get_price is marker
-        connector = next(v for k, v in vars(ns).items() if k.startswith('Mysql'))
-        assert {key: getattr(connector, key) for key in CONFIG} == CONFIG
+        assert ns._config == CONFIG
     fresh = batch.STRATEGIES['净利润断层']({}, CONFIG)
-    namespaces[-1].MysqlEarnings.host = 'modified'
-    assert fresh.MysqlEarnings.host == CONFIG['host']
+    assert fresh._config == CONFIG
     assert namespaces[-1].run is not fresh.run
 
 
@@ -60,6 +59,7 @@ def test_loader_supplies_notebook_platform_and_builtin_apis(batch, monkeypatch):
     jq = fake_platform(monkeypatch)
     marker = object()
     jq.get_price = 'platform default'
+    monkeypatch.setattr(batch, 'jq', jq)
     import builtins
     monkeypatch.setattr(builtins, 'get_trade_days', 'builtin default', raising=False)
     received = []
@@ -74,25 +74,42 @@ def test_loader_supplies_notebook_platform_and_builtin_apis(batch, monkeypatch):
     assert received[0][1] == CONFIG
 
 
-def test_standalone_business_definitions_match_individual_collectors(batch):
-    # Moving functions into an isolated scope must not change screening or database rules.
-    import copy
+def test_calculation_and_model_definitions_keep_original_rules(batch):
+    # Formulas/screening/schema remain identical; connection lifecycles are tested separately.
     tree = ast.parse(TARGET.read_text(encoding='utf-8'), feature_version=(3, 6))
     factories = {n.name: n for n in tree.body if isinstance(n, ast.FunctionDef)}
-    def normalized(node):
-        node = copy.deepcopy(node)
-        if isinstance(node, ast.ClassDef) and node.name.startswith('Mysql'):
-            node.body = [n for n in node.body if not isinstance(n, ast.Assign)]
-        return ast.dump(node, include_attributes=False)
+    compared = 0
     for name, filename in FILES.items():
         original = ast.parse((TARGET.parent/filename).read_text(encoding='utf-8'))
         body = factories[batch.STRATEGIES[name].__name__].body
         for node in original.body:
-            if isinstance(node, (ast.FunctionDef, ast.ClassDef)):
-                actual = next(n for n in body if isinstance(n, type(node)) and n.name == node.name)
-                assert normalized(actual) == normalized(node), (name, node.name)
-            elif isinstance(node, ast.Assign):
-                assert any(normalized(n) == normalized(node) for n in body)
+            if not isinstance(node, (ast.FunctionDef, ast.ClassDef)):
+                continue
+            if node.name.startswith('Mysql') or node.name in ('as_date', 'china_now'):
+                continue
+            # Resource-owning functions have intentionally moved to common context managers.
+            used = {n.id for n in ast.walk(node) if isinstance(n, ast.Name)}
+            if 'Session' in used or 'engine' in used:
+                continue
+            actual = next(n for n in body if isinstance(n, type(node)) and n.name == node.name)
+            class WithoutProgressOutput(ast.NodeTransformer):
+                def visit_Expr(self, n):
+                    if isinstance(n.value, ast.Call) and isinstance(n.value.func, ast.Name) and n.value.func.id == 'print':
+                        return None
+                    return self.generic_visit(n)
+                def visit_If(self, n):
+                    n = self.generic_visit(n)
+                    if not n.body and not n.orelse: return None
+                    if not n.body: n.body = [ast.Pass()]
+                    return n
+            import copy
+            def normalized(n):
+                return ast.dump(WithoutProgressOutput().visit(copy.deepcopy(n)), include_attributes=False)
+            assert normalized(actual) == normalized(node), (name, node.name)
+            compared += 1
+    assert compared >= 35
+    imports = [n for n in ast.walk(tree) if isinstance(n, (ast.Import, ast.ImportFrom))]
+    assert all(n in tree.body for n in imports)
     assert batch.DB_CONFIG['dbpassword'] == 'your_password'
 
 
@@ -308,3 +325,161 @@ def test_standalone_earnings_insert_only_preserves_first_snapshot(batch, monkeyp
             assert session.get(ns.EarningsRun, period).matched_count == 2
     finally:
         engine.dispose()
+
+
+@pytest.mark.parametrize('name,changes', [
+    ('行业动量', {'start_date': '2025-02-01', 'end_date': '2026-10-16', 'industry_type': 'sw_l1'}),
+    ('抱团拥挤度', {'start_date': '2024-01-01', 'top_pct': 0.1}),
+    ('微盘温度计', {'start_date': '2022-01-01', 'micro_num': 500, 'sample_step': 10}),
+    ('ETF份额', {'start_date': '2025-01-01', 'lookback_days': 7}),
+    ('净利润断层', {'end_date': '2026-10-16'}),
+])
+def test_grouped_configuration_changes_run_defaults(batch, name, changes):
+    import inspect
+    batch.STRATEGY_CONFIG[name].update(changes)
+    strategy = batch.STRATEGIES[name]({}, CONFIG)
+    defaults = {k: p.default for k, p in inspect.signature(strategy.run).parameters.items()}
+    assert all(defaults[k] == v for k, v in changes.items())
+
+
+def test_internal_limits_and_fund_lists_use_central_config(batch):
+    batch.STRATEGY_CONFIG['行业动量']['retention_trade_days'] = 200
+    batch.STRATEGY_CONFIG['微盘温度计']['batch_size'] = 500
+    batch.STRATEGY_CONFIG['ETF份额'].update(initial_trade_days=250, window_size=60)
+    batch.STRATEGY_CONFIG['净利润断层']['page_size'] = 200
+    namespaces = {name: factory({}, CONFIG) for name, factory in batch.STRATEGIES.items()}
+    assert namespaces['行业动量'].RETENTION_TRADE_DAYS == 200
+    assert namespaces['微盘温度计'].BATCH_SIZE == 500
+    assert namespaces['ETF份额'].INITIAL_TRADE_DAYS == 250
+    assert namespaces['ETF份额'].WINDOW_SIZE == 60
+    assert namespaces['净利润断层'].PAGE_SIZE == 200
+    namespaces['ETF份额'].ETF_GROUPS['hs300'].clear()
+    assert len(batch.STRATEGY_CONFIG['ETF份额']['funds']['hs300']) == 5
+
+
+@pytest.mark.parametrize('failures,interrupt', [(0, False), (2, False), (3, False), (0, True)])
+def test_shared_connection_retry_and_failure_cleanup(batch, monkeypatch, failures, interrupt):
+    from contextlib import nullcontext
+    seen = []
+    class Engine:
+        attempts = 0
+        disposed = 0
+        def connect(self):
+            self.attempts += 1
+            if interrupt: raise KeyboardInterrupt()
+            if self.attempts <= failures: raise RuntimeError('synthetic connection failure')
+            return nullcontext()
+        def dispose(self): self.disposed += 1
+    engine = Engine()
+    def create(url, **kwargs):
+        assert url.password == CONFIG['dbpassword']
+        assert kwargs['connect_args']['connect_timeout'] == 10
+        seen.append(kwargs)
+        return engine
+    monkeypatch.setattr(batch, 'create_engine', create)
+    monkeypatch.setattr(batch.time, 'sleep', lambda seconds: None)
+    batch.DB_OPTIONS['retry_count'] = 3
+    if interrupt:
+        with pytest.raises(KeyboardInterrupt): batch.connect_database(CONFIG)
+    elif failures == 3:
+        with pytest.raises(RuntimeError, match='MySQL'): batch.connect_database(CONFIG)
+    else:
+        assert batch.connect_database(CONFIG) is engine
+    assert len(seen) == 1
+    assert engine.attempts == (1 if interrupt else min(failures+1, 3))
+    assert engine.disposed == (1 if interrupt or failures == 3 else 0)
+
+
+@pytest.mark.parametrize('failure', ['none', 'create', 'body', 'interrupt'])
+def test_database_scope_always_disposes(batch, monkeypatch, failure):
+    disposed = []
+    engine = SimpleNamespace(dispose=lambda: disposed.append(True))
+    monkeypatch.setattr(batch, 'connect_database', lambda config: engine)
+    def create_all(bind):
+        assert bind is engine
+        if failure == 'create': raise ValueError('table creation failed')
+    table = SimpleNamespace(dialect_options={'mysql': {}})
+    base = SimpleNamespace(metadata=SimpleNamespace(tables={'test': table}, create_all=create_all))
+    factory = object()
+    monkeypatch.setattr(batch, 'sessionmaker', lambda bind: factory)
+    def use():
+        with batch.database_scope(base, CONFIG) as Session:
+            assert Session is factory
+            if failure == 'body': raise ValueError('body failure')
+            if failure == 'interrupt': raise KeyboardInterrupt()
+    if failure == 'none': use()
+    else:
+        with pytest.raises(KeyboardInterrupt if failure == 'interrupt' else ValueError): use()
+    assert disposed == [True]
+    assert table.dialect_options['mysql']['engine'] == 'InnoDB'
+
+
+@pytest.mark.parametrize('failure', ['none', 'error', 'interrupt'])
+def test_session_scope_closes_rolls_back_without_implicit_commit(batch, failure):
+    events = []
+    session = SimpleNamespace(close=lambda: events.append('close'), rollback=lambda: events.append('rollback'),
+                              commit=lambda: events.append('commit'))
+    def use():
+        with batch.session_scope(lambda: session) as current:
+            assert current is session
+            if failure == 'error': raise ValueError()
+            if failure == 'interrupt': raise KeyboardInterrupt()
+    if failure == 'none': use()
+    else:
+        with pytest.raises(KeyboardInterrupt if failure == 'interrupt' else ValueError): use()
+    assert events == (['close'] if failure == 'none' else ['rollback', 'close'])
+
+
+@pytest.mark.parametrize('name,key', [
+    ('行业动量', 'retention_trade_days'), ('微盘温度计', 'batch_size'),
+    ('ETF份额', 'initial_trade_days'), ('ETF份额', 'window_size'), ('净利润断层', 'page_size'),
+])
+def test_invalid_loop_limits_fail_before_connecting(batch, monkeypatch, name, key):
+    batch.STRATEGY_CONFIG[name][key] = 0
+    monkeypatch.setattr(batch, 'connect_database', lambda *_: pytest.fail('must not connect'))
+    with pytest.raises(ValueError, match=key):
+        batch.STRATEGIES[name]({}, CONFIG)
+
+
+@pytest.mark.parametrize('name,model_name', [
+    ('行业动量', 'IndustryMomentum'), ('抱团拥挤度', 'MarketCrowding'),
+    ('微盘温度计', 'MicrocapTemperature'), ('ETF份额', 'ETFShare'),
+])
+def test_shared_sessions_keep_insert_only_across_strategies(batch, monkeypatch, name, model_name):
+    import datetime as dt
+    from decimal import Decimal
+    from sqlalchemy import create_engine, event, Date, DateTime, Integer, Numeric
+    strategy = batch.STRATEGIES[name]({}, CONFIG)
+    model = getattr(strategy, model_name)
+    day = dt.date(2026, 10, 16)
+    record = {}
+    for column in model.__table__.columns:
+        if isinstance(column.type, DateTime): record[column.name] = dt.datetime(2026, 10, 16, 17)
+        elif isinstance(column.type, Date): record[column.name] = day
+        elif isinstance(column.type, Integer): record[column.name] = 1
+        elif isinstance(column.type, Numeric): record[column.name] = Decimal('0.5')
+        else: record[column.name] = 'fixture'
+    record.update({
+        '行业动量': {'industry_type': 'sw_l2'},
+        '抱团拥挤度': {'top_pct': Decimal('0.05')},
+        '微盘温度计': {'member_codes': '[]'},
+        'ETF份额': {'previous_trade_date': day-dt.timedelta(days=1)},
+    }[name])
+    def save(Session):
+        if name == '行业动量': return strategy.save_day(Session, day, 'sw_l2', [record], skip_existing=True)
+        if name == '抱团拥挤度': return strategy.save_day(Session, day, 0.05, record, skip_existing=True)
+        if name == '微盘温度计': return strategy.save_period(Session, record, skip_existing=True)
+        return strategy.save_window(Session, record['fund_code'], [record], skip_existing=True)
+    engine = create_engine('sqlite://')
+    monkeypatch.setattr(batch, 'connect_database', lambda _: engine)
+    with batch.database_scope(strategy.Base, CONFIG) as Session:
+        assert save(Session)
+        writes = []
+        def capture(conn, cursor, statement, *args):
+            if statement.lstrip().split()[0].upper() in ('INSERT', 'UPDATE', 'DELETE'):
+                writes.append(statement)
+        event.listen(engine, 'before_cursor_execute', capture)
+        assert not save(Session)
+        assert not writes
+        with Session() as session:
+            assert session.query(model).count() == 1
