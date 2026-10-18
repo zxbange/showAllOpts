@@ -72,7 +72,7 @@ def test_refresh_keeps_old_request_snapshot_and_new_request_sees_update(cached, 
     cache.refresh('industry-momentum', background=False)
     with cache.session('industry-momentum') as before:
         assert before.scalar(select(IndustryMomentum.momentum).order_by(IndustryMomentum.trade_date.desc())) == 5
-        session.query(IndustryMomentum).filter(IndustryMomentum.industry_code=='A').update({'momentum':9})
+        session.query(IndustryMomentum).filter(IndustryMomentum.industry_code=='A').update({'momentum':9, 'updated_at':datetime(2026,1,7,17)})
         session.commit()
         cache.refresh('industry-momentum', background=False)
         assert before.scalar(select(IndustryMomentum.momentum).order_by(IndustryMomentum.trade_date.desc())) == 5

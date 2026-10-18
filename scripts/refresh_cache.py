@@ -18,6 +18,7 @@ from app.core.logging import configure_logging
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--module', choices=MODULES, help='Refresh one module; default: all modules')
+    parser.add_argument('--full', action='store_true', help='Rebuild from all source rows instead of incremental sync')
     parser.add_argument('--status', action='store_true', help='Show local status without querying MySQL')
     parser.add_argument('--env-file', help='Explicit app configuration path, relative to project root')
     options = parser.parse_args(argv)
@@ -34,7 +35,7 @@ def main(argv=None):
         if options.status:
             print(json.dumps(cache.status(), ensure_ascii=False, indent=2))
             return 0
-        if not cache.refresh(options.module, background=False, reason='cli'):
+        if not cache.refresh(options.module, background=False, reason='cli', full=options.full):
             print('已有同步任务正在执行；本次未重复启动。')
             return 2
         result = cache.status()

@@ -5,16 +5,18 @@ import hashlib
 import json
 import logging
 import os
+import shutil
 from pathlib import Path
 import threading
 import time
 import uuid
 
 import portalocker
-from sqlalchemy import create_engine, select, text
+from sqlalchemy import create_engine, text
 from sqlalchemy.orm import Session
 from sqlalchemy.pool import NullPool
 
+from app.core.cache_sync import sync_tables
 from app.models.momentum import IndustryMomentum
 from app.models.crowding import MarketCrowding
 from app.models.microcap import MicrocapTemperature
@@ -34,7 +36,6 @@ MODULES = {
     'microcap-breadth': ('微盘新高新低', (MicrocapBreadth,)),
     'dividend-selection': ('高股息选股', (DividendSnapshot, DividendStock)),
 }
-OMIT = {'member_codes', 'analysis', 'analysis_basis'}
 
 
 def now():
@@ -149,33 +150,27 @@ class SnapshotCache:
         finally:
             engine.dispose()
 
-    def copy_module(self, module):
+    def copy_module(self, module, full=False):
         models = MODULES[module][1]
         filename = module + '-' + uuid.uuid4().hex + '.sqlite'
         path = self.root / filename
         destination = create_engine('sqlite:///' + path.as_posix(), poolclass=NullPool)
-        count = 0
+        previous = self.snapshot_path(module, self.read_state()['modules'].get(module, {}))
+        incremental = previous is not None and not full
         try:
+            if incremental:
+                # Published files are immutable: copy locally before applying changes.
+                shutil.copyfile(previous, path)
             tables = [model.__table__ for model in models]
             tables[0].metadata.create_all(destination, tables=tables)
             with self.source.connect() as source:
                 if self.source.dialect.name == 'mysql':
                     source = source.execution_options(isolation_level='REPEATABLE READ')
                 with source.begin(), destination.begin() as target:
-                    for model in models:
-                        table = model.__table__
-                        columns = [c for c in table.columns if c.name not in OMIT]
-                        result = source.execution_options(stream_results=True).execute(select(*columns))
-                        try:
-                            for batch in result.mappings().partitions(2000):
-                                values = [dict(row, **{c.name: '' for c in table.columns if c.name in OMIT}) for row in batch]
-                                target.execute(table.insert(), values)
-                                count += len(values)
-                        finally:
-                            result.close()
+                    count = sync_tables(source, target, tables, module, incremental)
                     if module == 'industry-momentum':
-                        target.execute(text('CREATE INDEX ix_local_momentum_type_date ON industry_momentum (industry_type, trade_date)'))
-                        target.execute(text('CREATE INDEX ix_local_momentum_history ON industry_momentum (industry_type, industry_code, trade_date)'))
+                        target.execute(text('CREATE INDEX IF NOT EXISTS ix_local_momentum_type_date ON industry_momentum (industry_type, trade_date)'))
+                        target.execute(text('CREATE INDEX IF NOT EXISTS ix_local_momentum_history ON industry_momentum (industry_type, industry_code, trade_date)'))
             with destination.connect() as connection:
                 if connection.exec_driver_sql('PRAGMA quick_check').scalar() != 'ok':
                     raise CacheUnavailable('Local snapshot validation failed')
@@ -187,11 +182,12 @@ class SnapshotCache:
         finally:
             destination.dispose()
 
-    def _refresh_locked(self, lock, modules, reason, slot=None):
+    def _refresh_locked(self, lock, modules, reason, slot=None, full=False):
         try:
             state = self.read_state()
             state['last_attempt_at'] = now().isoformat()
             state['pending'] = list(modules)
+            state['pending_full'] = full
             if slot:
                 state['scheduled_slot'] = slot
             self.write_state(state)
@@ -203,7 +199,7 @@ class SnapshotCache:
                 entry['last_attempt_at'] = now().isoformat()
                 logger.info('Cache refresh started module=%s reason=%s', module, reason)
                 try:
-                    filename, rows = self.copy_module(module)
+                    filename, rows = self.copy_module(module, full=True) if full else self.copy_module(module)
                     entry.update(file=filename, rows=rows, updated_at=now().isoformat(), error=None)
                     logger.info('Cache refresh complete module=%s rows=%s seconds=%.2f', module, rows, time.monotonic()-started)
                 except Exception as exc:
@@ -215,7 +211,7 @@ class SnapshotCache:
         finally:
             lock.release()
 
-    def refresh(self, module=None, background=True, reason='manual'):
+    def refresh(self, module=None, background=True, reason='manual', full=False):
         if not self.settings.cache_enabled:
             raise CacheUnavailable('本地缓存未启用。')
         if module is not None and module not in MODULES:
@@ -225,10 +221,13 @@ class SnapshotCache:
             return False
         selected = [module] if module else list(MODULES)
         # Preserve unfinished work left by an interrupted process.
-        selected += [m for m in self.read_state().get('pending', []) if m in MODULES and m not in selected]
+        state = self.read_state()
+        pending = [m for m in state.get('pending', []) if m in MODULES]
+        selected += [m for m in pending if m not in selected]
+        full = full or bool(pending and state.get('pending_full'))
         slot = latest_slot(now(), self.settings.cache_refresh_time).isoformat() if module is None else None
         if background:
-            self.worker = threading.Thread(target=self._run_background, args=(lock, selected, reason, slot),
+            self.worker = threading.Thread(target=self._run_background, args=(lock, selected, reason, slot, full),
                                            name='cache-refresh', daemon=True)
             try:
                 self.worker.start()
@@ -236,12 +235,12 @@ class SnapshotCache:
                 lock.release()
                 raise
         else:
-            self._refresh_locked(lock, selected, reason, slot)
+            self._refresh_locked(lock, selected, reason, slot, full)
         return True
 
-    def _run_background(self, lock, selected, reason, slot):
+    def _run_background(self, lock, selected, reason, slot, full):
         try:
-            self._refresh_locked(lock, selected, reason, slot)
+            self._refresh_locked(lock, selected, reason, slot, full)
         except Exception as exc:
             logger.error('Cache refresh interrupted error_type=%s', type(exc).__name__)
 
@@ -266,6 +265,7 @@ class SnapshotCache:
             pending = [m for m in state.get('pending', []) if m in MODULES]
             missing = [m for m in MODULES if self.snapshot_path(m, state['modules'].get(m, {})) is None]
             last_attempt = datetime.fromisoformat(state.get('last_attempt_at', '1970-01-01T00:00:00+08:00'))
+            full = bool(pending and state.get('pending_full'))
             if pending:
                 selected, reason = pending, 'resume'
                 slot = state.get('scheduled_slot')
@@ -279,7 +279,7 @@ class SnapshotCache:
         except BaseException:
             lock.release()
             raise
-        self._refresh_locked(lock, selected, reason, slot)
+        self._refresh_locked(lock, selected, reason, slot, full)
 
     def start(self):
         if not self.settings.cache_enabled or not self.settings.cache_auto_refresh:
