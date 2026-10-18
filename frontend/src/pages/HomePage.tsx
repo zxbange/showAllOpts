@@ -8,7 +8,26 @@ import '../styles/overview.css'
 function ModuleIllustration({ kind }: { kind: ResearchModule['illustration'] }) {
   return (
     <div className={`module-illustration illustration-${kind}`} aria-hidden="true">
-      {kind === 'breadth' ? (
+      {kind === 'dividend' ? (
+        <svg
+          className="illustration-share-trends"
+          viewBox="0 0 260 100"
+          fill="none"
+          focusable="false"
+        >
+          {[0, 1, 2].map((i) => (
+            <g key={i} transform={`translate(${40 + i * 80},${60 - i * 15})`}>
+              {[0, 1, 2, 3].slice(0, i + 2).map((j) => (
+                <g key={j} transform={`translate(0,${-j * 10})`}>
+                  <path d="M-26 0v8c0 12 52 12 52 0V0" fill="#e9c58b" stroke="#bb8842" />
+                  <ellipse rx="26" ry="8" fill="#f7e5be" stroke="#bb8842" />
+                </g>
+              ))}
+              <path d="M-8 -6L0 -10 8 -6 0 -2Z" stroke="#ba5840" />
+            </g>
+          ))}
+        </svg>
+      ) : kind === 'breadth' ? (
         <svg
           className="illustration-share-trends"
           viewBox="0 0 260 100"
@@ -94,17 +113,19 @@ function ModuleIllustration({ kind }: { kind: ResearchModule['illustration'] }) 
         </div>
       )}
       <span className="illustration-caption">
-        {kind === 'heatmap'
-          ? '行业强弱'
-          : kind === 'concentration'
-            ? '成交集中'
-            : kind === 'earnings'
-              ? '业绩与价格'
-              : kind === 'breadth'
-                ? '新高与新低'
-                : kind === 'shares'
-                  ? '份额变化'
-                  : '估值与交易'}{' '}
+        {kind === 'dividend'
+          ? '分红与估值'
+          : kind === 'heatmap'
+            ? '行业强弱'
+            : kind === 'concentration'
+              ? '成交集中'
+              : kind === 'earnings'
+                ? '业绩与价格'
+                : kind === 'breadth'
+                  ? '新高与新低'
+                  : kind === 'shares'
+                    ? '份额变化'
+                    : '估值与交易'}{' '}
         · 视觉示意
       </span>
     </div>

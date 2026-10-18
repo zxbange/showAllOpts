@@ -1,4 +1,5 @@
 from fastapi import APIRouter
+from app.api.routes.dividend import router as dividend_router
 
 from app.api.routes.breadth import router as breadth_router
 from app.api.routes.earnings import router as earnings_router
@@ -14,6 +15,7 @@ router.include_router(microcap_router)
 router.include_router(etf_router)
 router.include_router(earnings_router)
 router.include_router(breadth_router)
+router.include_router(dividend_router)
 
 
 @router.get('/modules', tags=['模块'])
@@ -42,6 +44,10 @@ def modules():
         'id': 'microcap-breadth', 'name': '微盘新高新低',
         'description': '观察微盘400的新高新低数量、市场宽度与强度趋势。',
         'path': '/microcap-breadth', 'status': 'available',
+    }, {
+        'id': 'dividend-selection', 'name': '高股息选股',
+        'description': '两种高股息规则，各取前 25，只读展示最新选股结果。',
+        'path': '/dividend-selection', 'status': 'available',
     }]}
 
 

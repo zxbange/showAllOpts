@@ -128,14 +128,14 @@ def test_pasted_notebook_without_file_or_sibling_files(batch, monkeypatch, tmp_p
                    and n.func.id in ('exec', 'eval', 'compile', 'open') for n in ast.walk(tree))
     namespace = {'__name__': 'notebook_cell'}
     exec(compile(source, '<ipython-input-test>', 'exec'), namespace)
-    assert len(namespace['STRATEGIES']) == 6
-    # Construct all six real strategies without accessing any project files.
+    assert len(namespace['STRATEGIES']) == 7
+    # Construct all seven real strategies without accessing any project files.
     for name in namespace['STRATEGY_ORDER']:
         assert callable(namespace['_load_strategy'](name, CONFIG, {}))
     events = []
     def factory(name):
         def run(skip_existing=False):
-            assert skip_existing is True
+            assert skip_existing is (name != '高股息选股')
             events.append(name)
             return []
         return lambda apis, config: SimpleNamespace(run=run)
@@ -217,7 +217,7 @@ def test_failure_continues_and_marks_partial_completion(batch, monkeypatch, caps
     assert result[1]['status'] == 'FAILED' and result[1]['rows'] is None
     assert result[-1]['status'] == 'SUCCESS'
     output = capsys.readouterr().out
-    assert '成功 5，失败 1' in output and '未完成' in output and 'synthetic failure' in output
+    assert '成功 6，失败 1' in output and '未完成' in output and 'synthetic failure' in output
 
 
 def test_strategy_initialization_failure_does_not_stop_later_strategy(batch, monkeypatch, capsys):
@@ -641,3 +641,15 @@ def test_progress_thread_unavailable_falls_back_without_failing_strategy(batch, 
     result = batch.run_all(['行业动量'], db_config=CONFIG, preview_rows=0)
     assert result[0]['status'] == 'SUCCESS' and result[0]['rows'] == 1
     assert '按任务推进刷新' in capsys.readouterr().out
+
+
+def test_latest_dividend_mode_does_not_receive_insert_only_flag(batch, monkeypatch, capsys):
+    received=[]
+    def loader(name,*args):
+        def run(**kwargs):received.append((name,kwargs));return [1,2]
+        return run
+    monkeypatch.setattr(batch,'_load_strategy',loader)
+    batch.run_all(['高股息选股','行业动量'],preview_rows=0)
+    assert received==[('高股息选股',{}),('行业动量',{'skip_existing':True})]
+    output=capsys.readouterr().out
+    assert '当前选股结果 2 条' in output and '新增 2 条' in output

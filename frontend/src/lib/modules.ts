@@ -1,4 +1,5 @@
 import {
+  Coins,
   ArrowUpDown,
   FileSearch,
   Activity,
@@ -20,10 +21,24 @@ export interface ResearchModule {
   tags: string[]
   icon: LucideIcon
   tone: 'coral' | 'jade' | 'gold'
-  illustration: 'heatmap' | 'concentration' | 'temperature' | 'shares' | 'earnings' | 'breadth'
+  illustration:
+    'heatmap' | 'concentration' | 'temperature' | 'shares' | 'earnings' | 'breadth' | 'dividend'
 }
 
 export const researchModules: ResearchModule[] = [
+  {
+    id: 'dividend-selection',
+    name: '高股息选股',
+    path: '/dividend-selection',
+    category: '价值观察',
+    english: 'DIVIDEND SELECTION',
+    question: '分红与估值，能否同时兼顾？',
+    description: '并列观察纯高股息与高股息低估值两组 Top25，查看分红、估值及盈利指标。',
+    tags: ['双策略选股', '股息率', 'PE估值'],
+    icon: Coins,
+    tone: 'gold',
+    illustration: 'dividend',
+  },
   {
     id: 'microcap-breadth',
     name: '微盘新高新低',

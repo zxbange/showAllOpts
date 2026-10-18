@@ -1,3 +1,4 @@
+import type { DividendOverview } from '../types/dividend'
 import type { BreadthHistory } from '../types/breadth'
 import type { EarningsOverview, EarningsDetail } from '../types/earnings'
 import type { ETFHistory } from '../types/etf'
@@ -63,3 +64,6 @@ export const getEarningsDetail = (code: string, period: string, signal?: AbortSi
 
 export const getBreadthHistory = (days: number, signal?: AbortSignal) =>
   request<BreadthHistory>(`/microcap-breadth/history?days=${days}`, signal)
+
+export const getDividendOverview = (signal?: AbortSignal) =>
+  request<DividendOverview>('/dividend-selection/latest', signal)

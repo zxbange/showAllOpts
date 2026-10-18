@@ -79,3 +79,5 @@ Windows 集成测试创建随机本地端口的子进程和孙进程，分别验
 本节的总览与主题调整只涉及网页展示，不更改采集、数据库结构和指标口径。桌面与手机浏览器测试覆盖搜索与分类组合、空结果重置、键盘跳转、所有已注册模块导航、数据库故障状态和原有图表交互。
 
 微盘新高新低使用 `microcap_breadth`，按 `(series_id, trade_date)` 唯一保存每日四周期数量。只新增续传，历史不清理；后端一次限量 SELECT，跳过成分股文本，按需计算比例和滚动指标。详见 [统计与部署说明](microcap-breadth.md)。
+
+高股息选股使用 `dividend_selection_snapshot` 和 `dividend_selection_stock`，由聚宽单文件每次重算并事务替换最新结果，不保留历史；这是其他采集模块增量规则的独立例外。网页通过一次只读 JOIN 查询展示两组 Top25，详情见 [高股息选股](dividend-selection.md)。

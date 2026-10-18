@@ -5,6 +5,10 @@ import { HomePage } from './pages/HomePage'
 import { MomentumPage } from './pages/MomentumPage'
 import { LoadingState } from './components/States'
 
+const DividendPage = lazy(() =>
+  import('./pages/DividendPage').then((m) => ({ default: m.DividendPage })),
+)
+
 const IndustryPage = lazy(() =>
   import('./pages/IndustryPage').then((module) => ({ default: module.IndustryPage })),
 )
@@ -38,6 +42,14 @@ export default function App() {
       <Routes>
         <Route element={<Layout />}>
           <Route index element={<HomePage />} />
+          <Route
+            path="dividend-selection"
+            element={
+              <Suspense fallback={<LoadingState />}>
+                <DividendPage />
+              </Suspense>
+            }
+          />
           <Route
             path="earnings-gap"
             element={
