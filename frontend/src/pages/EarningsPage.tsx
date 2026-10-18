@@ -200,7 +200,7 @@ export function EarningsPage() {
             {!data.run ? (
               <EmptyState
                 title="本季度尚未采集"
-                description="请在聚宽运行 净利润断层_数据库版.py，写入同一数据库后刷新。不以旧季度数据代替本季度。"
+                description="请在聚宽运行 净利润断层_数据库版.py，写入同一数据库后，在「数据同步」中更新本地快照。不以旧季度数据代替本季度。"
               />
             ) : !data.items.length ? (
               <EmptyState

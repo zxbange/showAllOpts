@@ -8,6 +8,7 @@ import {
   Layers3,
 } from 'lucide-react'
 import { Link, NavLink, Outlet, useLocation } from 'react-router-dom'
+import { CacheControl } from './CacheControl'
 import { researchModules } from '../lib/modules'
 
 export function Layout() {
@@ -92,7 +93,7 @@ export function Layout() {
             </span>
           </div>
           <div className="topbar-right">
-            <span className="desktop-only">把握趋势 · 看见全局</span>
+            <CacheControl />
             <span className="avatar">SQ</span>
           </div>
         </header>

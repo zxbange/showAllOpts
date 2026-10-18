@@ -204,6 +204,12 @@ sudo systemctl disable --now showallopts-api
 
 停止 API 不影响同机其他 Nginx 网站；本网站数据请求会返回代理错误。如需停止网页访问，移除该站点配置，再执行 `nginx -t` 和 `systemctl reload nginx`。
 
+### 本地数据缓存
+
+默认缓存覆盖全部业务模块，每天北京时间 18:00 同步；缓存目录为项目 `log/cache/`，沿用现有 `ReadWritePaths` 和运行账号，不需要另开端口或新增 systemd timer。首次启动后台准备数据；通常在下次定时同步前直接使用已有磁盘快照。网页右上角提供同步状态，可配置私有密钥启用手动同步，也可运行 `backend/.venv/bin/python scripts/refresh_cache.py`。命令与服务须使用同一账号、配置文件及 `LOG_DIR`。
+
+数据库不可用时仍可读取已有快照；采集刚入库的数据需先同步才会出现在页面中。关闭自动同步或恢复直连的配置见[本地缓存说明](local-cache.md)。Docker 的现有 `./log:/app/log` 卷已保留缓存，避免用清理日志的命令递归删除整个 `log/`。
+
 ### 自动更新发布
 
 首次安装仍需完成上面的环境、配置、systemd 与 Nginx 设置。后续更新推荐在当前项目目录执行一键脚本，首次获取脚本需先 `git pull --ff-only`：

@@ -62,7 +62,7 @@ def daily_handler(filename, retention_days=30):
 def logging_config(settings: Settings):
     directory = settings.log_path
     # Do not pass a database URL into logs. Also redact known values in driver errors.
-    secrets = [settings.db_password.get_secret_value()]
+    secrets = [settings.db_password.get_secret_value(), settings.cache_refresh_token.get_secret_value()]
     secrets.extend(value for value in (settings.db_host, settings.db_user, settings.db_name)
                    if len(value) >= 4)
     return {

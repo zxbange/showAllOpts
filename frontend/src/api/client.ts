@@ -67,3 +67,18 @@ export const getBreadthHistory = (days: number, signal?: AbortSignal) =>
 
 export const getDividendOverview = (signal?: AbortSignal) =>
   request<DividendOverview>('/dividend-selection/latest', signal)
+
+export const getCacheStatus = (signal?: AbortSignal) =>
+  request<import('../types/cache').CacheStatus>('/cache/status', signal)
+
+export async function refreshCache(token: string, module: string | null) {
+  const response = await fetch(`${API_BASE}/cache/refresh`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+    body: JSON.stringify({ module }),
+  })
+  if (!response.ok) {
+    const body = await response.json().catch(() => null)
+    throw new Error(typeof body?.detail === 'string' ? body.detail : '无法启动同步，请稍后重试。')
+  }
+}

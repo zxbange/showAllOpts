@@ -94,3 +94,10 @@ Compose 在宿主机读取文件，将键值注入后端容器环境。`config/`
 自定义配置路径仍可通过 `APP_ENV_FILE` 指定；旧 Docker 部署若暂时继续使用开发配置，可执行 `APP_ENV_FILE=./backend/.env docker compose up --build -d`。
 
 配置修改后执行 `docker compose up -d --force-recreate backend`，保持同一配置路径与执行账号；仅执行 `restart` 不会重新注入环境变量。不要分享展开后的 Compose 配置或容器环境，其中可能包含凭据。
+
+
+## 本地缓存配置
+
+默认使用磁盘快照，`CACHE_ENABLED=true`、`CACHE_AUTO_REFRESH=true`、`CACHE_REFRESH_TIME=18:00`（北京时间）。快照目录固定为当前 `LOG_DIR` 下的 `cache/`，可复用现有目录权限和持久化挂载。`CACHE_REFRESH_TOKEN` 留空则不开放网页手动同步；需要此功能时在真实配置中设置私有随机密钥，前端不内置密钥。CLI 不需要该密钥，但必须使用与服务相同的配置和运行账号。
+
+修改这些配置后重启后端。缓存开关和命令用法见[本地缓存说明](local-cache.md)，真实配置仍按本文规则排除 GitHub。

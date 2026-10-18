@@ -58,7 +58,7 @@ export function MicrocapPage() {
       ) : !latest ? (
         <EmptyState
           title="暂无微盘温度数据"
-          description="请先在聚宽运行微盘温度计_数据库版.py，写入同一数据库后刷新页面。"
+          description="请先在聚宽运行微盘温度计_数据库版.py，写入同一数据库后，在「数据同步」中更新本地快照。"
         />
       ) : (
         data && (

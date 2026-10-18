@@ -1,0 +1,206 @@
+import { useCallback, useEffect, useRef, useState } from 'react'
+import { Database, RefreshCw, X, ShieldCheck } from 'lucide-react'
+import { getCacheStatus, refreshCache } from '../api/client'
+import type { CacheStatus } from '../types/cache'
+import '../styles/cache.css'
+
+function formatTime(value: string | null) {
+  return value
+    ? new Date(value).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai', hour12: false })
+    : '尚未同步'
+}
+
+export function CacheControl() {
+  const [status, setStatus] = useState<CacheStatus | null>(null)
+  const [error, setError] = useState('')
+  const [message, setMessage] = useState('')
+  const [open, setOpen] = useState(false)
+  const [token, setToken] = useState('')
+  const [module, setModule] = useState('')
+  const [submitting, setSubmitting] = useState(false)
+  const dialog = useRef<HTMLDialogElement>(null)
+  const signature = useRef<string | null>(null)
+  const mounted = useRef(false)
+  const controller = useRef<AbortController | null>(null)
+  const load = useCallback(async () => {
+    controller.current?.abort()
+    const active = new AbortController()
+    controller.current = active
+    try {
+      const result = await getCacheStatus(active.signal)
+      if (!mounted.current || active.signal.aborted) return
+      setStatus(result)
+      setError('')
+      const next = JSON.stringify(result.modules.map((m) => [m.id, m.updated_at, m.ready]))
+      if (signature.current !== null && signature.current !== next) {
+        window.dispatchEvent(new Event('data-cache-updated'))
+      }
+      signature.current = next
+    } catch (reason) {
+      if (!active.signal.aborted && mounted.current) {
+        setError(reason instanceof Error ? reason.message : '暂时无法读取同步状态。')
+      }
+    }
+  }, [])
+  useEffect(() => {
+    mounted.current = true
+    void load()
+    return () => {
+      mounted.current = false
+      controller.current?.abort()
+    }
+  }, [load])
+  useEffect(() => {
+    const timer = window.setInterval(() => void load(), status?.refreshing || open ? 3000 : 30000)
+    return () => window.clearInterval(timer)
+  }, [load, status?.refreshing, open])
+  useEffect(() => {
+    if (open) dialog.current?.showModal()
+    else dialog.current?.close()
+  }, [open])
+  const busy = submitting || status?.refreshing
+  const issues = status?.modules.filter((m) => !m.ready || m.error).length ?? 0
+  async function sync() {
+    setSubmitting(true)
+    setMessage('')
+    try {
+      await refreshCache(token, module || null)
+      setToken('')
+      setMessage('同步任务已启动，完成后页面会自动读取新快照。')
+      await load()
+    } catch (reason) {
+      setMessage(reason instanceof Error ? reason.message : '无法启动同步。')
+    } finally {
+      if (mounted.current) setSubmitting(false)
+    }
+  }
+  return (
+    <>
+      <button
+        className={`cache-trigger ${issues || error ? 'cache-attention' : ''}`}
+        onClick={() => setOpen(true)}
+        aria-label="数据同步状态"
+      >
+        {status?.refreshing ? (
+          <RefreshCw size={16} className="cache-spin" />
+        ) : (
+          <Database size={16} />
+        )}
+        <span>{status?.refreshing ? '同步中' : status?.enabled ? '本地数据' : '数据同步'}</span>
+        {issues > 0 && <b>{issues}</b>}
+      </button>
+      <dialog
+        ref={dialog}
+        className="cache-dialog"
+        aria-labelledby="cache-title"
+        onClose={() => {
+          setOpen(false)
+          setToken('')
+        }}
+      >
+        <div className="cache-heading">
+          <div>
+            <span className="eyebrow">DATA SYNC</span>
+            <h2 id="cache-title">数据同步</h2>
+          </div>
+          <button className="cache-close" onClick={() => setOpen(false)} aria-label="关闭数据同步">
+            <X size={20} />
+          </button>
+        </div>
+        <p className="cache-intro">
+          {status?.enabled
+            ? `页面读取本地快照。${status.auto_refresh ? `每天北京时间 ${status.daily_time} 自动同步` : '自动同步已关闭'}，同步失败时保留上次成功数据。`
+            : status
+              ? '当前使用数据库直连，尚未启用本地缓存。'
+              : '正在读取同步状态…'}
+        </p>
+        {error && (
+          <p className="cache-message" role="alert">
+            {error}
+          </p>
+        )}
+        {status?.enabled && (
+          <>
+            <div className="cache-list">
+              {status.modules.map((item) => (
+                <div key={item.id} className="cache-row">
+                  <div>
+                    <strong>{item.name}</strong>
+                    <small>上次成功同步 · {formatTime(item.updated_at)}</small>
+                    {item.error && <p className="cache-row-error">{item.error}</p>}
+                  </div>
+                  <span
+                    className={`cache-badge ${item.error || !item.ready ? 'cache-badge-warn' : ''}`}
+                  >
+                    {item.ready ? (item.error ? '保留旧快照' : '已就绪') : '待同步'}
+                  </span>
+                </div>
+              ))}
+            </div>
+            <form
+              className="cache-form"
+              onSubmit={(event) => {
+                event.preventDefault()
+                void sync()
+              }}
+            >
+              <div className="cache-form-title">
+                <ShieldCheck size={17} />
+                <strong>从数据库同步</strong>
+              </div>
+              {status.manual_enabled ? (
+                <>
+                  <p>同步密钥仅用于本次请求，不保存在浏览器中。</p>
+                  <div className="cache-fields">
+                    <label>
+                      同步范围
+                      <select
+                        aria-label="同步范围"
+                        value={module}
+                        onChange={(e) => setModule(e.target.value)}
+                        disabled={busy}
+                      >
+                        <option value="">全部模块</option>
+                        {status.modules.map((item) => (
+                          <option key={item.id} value={item.id}>
+                            {item.name}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                    <label>
+                      同步密钥
+                      <input
+                        type="password"
+                        autoComplete="off"
+                        value={token}
+                        onChange={(e) => setToken(e.target.value)}
+                        placeholder="输入同步密钥"
+                        required
+                        disabled={busy}
+                      />
+                    </label>
+                  </div>
+                  <button type="submit" className="cache-submit" disabled={busy || !token.trim()}>
+                    <RefreshCw size={15} className={busy ? 'cache-spin' : ''} />
+                    {busy ? '同步进行中…' : '立即同步'}
+                  </button>
+                </>
+              ) : (
+                <p>网页手动同步尚未启用，请由管理员配置同步密钥。仍可使用服务器命令手动同步。</p>
+              )}
+              {message && (
+                <p role="status" className="cache-message">
+                  {message}
+                </p>
+              )}
+            </form>
+            <p className="cache-footnote">
+              同步时间不等于数据交易日；模块页面会显示实际数据日期。页面上的刷新按钮重新读取当前快照。
+            </p>
+          </>
+        )}
+      </dialog>
+    </>
+  )
+}

@@ -55,7 +55,7 @@ export function CrowdingPage() {
       ) : data && !latest ? (
         <EmptyState
           title="暂无拥挤度数据"
-          description="请先在聚宽运行抱团拥挤度_数据库版.py，将数据写入同一数据库，再刷新页面。"
+          description="请先在聚宽运行抱团拥挤度_数据库版.py，将数据写入同一数据库，再在「数据同步」中更新本地快照。"
         />
       ) : data && latest ? (
         <>

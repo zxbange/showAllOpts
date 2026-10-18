@@ -1,4 +1,5 @@
 from fastapi import APIRouter
+from app.api.routes.cache import router as cache_router
 from app.api.routes.dividend import router as dividend_router
 
 from app.api.routes.breadth import router as breadth_router
@@ -16,6 +17,7 @@ router.include_router(etf_router)
 router.include_router(earnings_router)
 router.include_router(breadth_router)
 router.include_router(dividend_router)
+router.include_router(cache_router)
 
 
 @router.get('/modules', tags=['模块'])

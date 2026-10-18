@@ -1,6 +1,6 @@
 # ShowAllOpts · 市场研究工作台
 
-严格前后端分离的市场研究项目。Python API 只读 MySQL 数据，React 网页提供行业动量热力图、抱团拥挤度（前 5% 股票成交额占比）、微盘温度计、ETF 份额仪表盘和净利润断层观察名单。聚宽独立采集脚本负责入库。
+严格前后端分离的市场研究项目。聚宽独立采集脚本负责写入 MySQL，Python 后端每天同步到本地只读快照，React 网页提供行业动量、抱团拥挤度、微盘温度计、ETF 份额、净利润断层、微盘新高新低和高股息选股七个模块。
 
 ## 技术栈
 
@@ -16,7 +16,7 @@ showAllOpts/
 ├── backend/
 │   ├── app/
 │   │   ├── api/             # HTTP 路由、参数校验
-│   │   ├── core/            # 环境配置、数据库连接
+│   │   ├── core/            # 环境配置、数据库连接、本地快照与调度
 │   │   ├── models/          # 现有数据库表映射
 │   │   ├── repositories/    # 只读 SQL 查询
 │   │   ├── schemas/         # API 响应结构
@@ -34,12 +34,13 @@ showAllOpts/
 │   │   ├── styles/          # 设计变量、响应式布局、动效
 │   │   └── types/           # API 类型
 │   └── tests/               # 浏览器交互测试
-├── scripts/                 # 环境初始化、启动、数据库只读检查
+├── scripts/                 # 环境初始化、启动、发布与缓存同步
 ├── collectors/              # 聚宽独立采集脚本（仅脱敏模板）
 ├── config/                  # 生产配置 app.config（不提交）与配置模板
 ├── deploy/                  # Linux systemd 与 Nginx 配置
 ├── docs/                    # 架构、数据口径与 Linux 部署指南
-├── log/                     # 启动时生成，运行日志与每日归档，不提交 Git
+├── log/                     # 运行日志、每日归档与 cache/ 本地快照，不提交 Git
+├── deploy.sh                # Linux 一键更新发布
 ├── start.cmd / start.ps1 / start.sh
 └── compose.yaml
 ```
@@ -204,6 +205,50 @@ bash scripts/setup.sh --python python3.11
 ```
 
 安装成功后执行 `bash start.sh`，其他机器访问 `http://服务器IP:5173`。若仍失败，提供新的错误信息和 `cat /etc/os-release` 输出，以便按具体发行版排查。
+
+## 本地缓存与定时同步
+
+默认已启用本地 SQLite 快照，覆盖七个模块的列表、历史曲线、筛选与详情。页面请求只查询本机磁盘，不再逐次访问公网 MySQL；操作系统会缓存常用磁盘页。首次启动后台准备快照，之后重启可继续使用已有快照。每天**北京时间 18:00** 自动从 MySQL 同步，停机错过时间后会在下次启动补做一次。
+
+网页右上角的“本地数据 / 数据同步”可查看各模块的上次成功同步时间、失败状态，以及手动同步一个或全部模块。同步失败保留旧数据；无初始快照时显示“本地数据尚未准备好”，不会让大量页面请求回源数据库。缓存记录的是同步时数据库内的数据，不能代替聚宽采集。
+
+已有配置无需修改即可启用默认缓存。可在 Linux `config/app.config` 或 Windows `backend/.env` 中显式设置（修改后重启后端）：
+
+```dotenv
+CACHE_ENABLED=true
+CACHE_AUTO_REFRESH=true
+CACHE_REFRESH_TIME=18:00
+# 网页手动同步的私有随机密钥；留空则禁用网页触发，仍可使用下面的命令
+CACHE_REFRESH_TOKEN=
+```
+
+如需网页手动更新，给 `CACHE_REFRESH_TOKEN` 填入自行生成的随机值，重启后在同步面板输入相同密钥。它不会进入前端构建或浏览器存储；真实配置继续不提交 GitHub。密钥通过请求头发送，公开访问建议使用 HTTPS。
+
+也可直接在服务器命令行同步，无需网页密钥：
+
+```bash
+cd /home/ubuntu/showAllOpts
+# Linux：默认读取 config/app.config，使用与服务相同的部署账号
+backend/.venv/bin/python scripts/refresh_cache.py
+# 仅更新高股息；支持七个模块 ID
+backend/.venv/bin/python scripts/refresh_cache.py --module dividend-selection
+# 仅检查本地状态，不连接 MySQL
+backend/.venv/bin/python scripts/refresh_cache.py --status
+```
+
+Windows PowerShell：
+
+```powershell
+.\backend\.venv\Scripts\python.exe scripts/refresh_cache.py
+# 若启动时指定了生产配置，手动同步也选择同一文件
+.\backend\.venv\Scripts\python.exe scripts/refresh_cache.py --env-file config/app.config
+```
+
+缓存保存在 `log/cache/`（自定义 `LOG_DIR` 时随其变化），已被 Git 忽略；现有 systemd 日志可写权限和 Docker 日志卷可直接复用。多 worker、自动同步与手动同步共用文件锁，同一缓存目录同时只执行一个任务。同步过程写入既有应用日志。
+
+**采集入库后，需等待定时同步或手动同步，页面才会看到新数据。** 各模块原来的刷新按钮只重新读取当前快照，不直接查询 MySQL。若需恢复原来的数据库直连模式，设 `CACHE_ENABLED=false` 并重启。
+
+更新项目仍执行 `bash deploy.sh`。详细的首次准备、失败重试、数据范围和运维说明见 [本地缓存说明](docs/local-cache.md)。
 
 ## Linux 后台服务：systemctl 管理
 
@@ -395,7 +440,7 @@ bash deploy.sh --help
 | `config/app.config` 内容 | 重启 `showallopts-api`，无需 `daemon-reload` |
 | 已安装的 systemd 服务或覆盖配置 | `sudo systemctl daemon-reload` → 重启 `showallopts-api` |
 | Nginx 配置 | `sudo nginx -t` 通过后执行 `sudo systemctl reload nginx` |
-| 仅在聚宽增量采集并写入数据库 | 无需重新部署，刷新网页即可 |
+| 仅在聚宽增量采集并写入数据库 | 无需重新部署；等待定时同步或手动同步本地数据，再查看网页 |
 
 仓库内的 service 模板修改后，需重新安装到 systemd 对应位置，并保留本机覆盖配置，再执行 `daemon-reload` 和重启。仅修改仓库文件不会更新已安装的服务。新增模块如果引入新的数据表，还需先运行对应采集程序，并确认网页数据库账号具有新表的读取权限。
 
@@ -485,7 +530,9 @@ npm run dev
 
 | 请求 | 用途 |
 | --- | --- |
-| `GET /api/v1/health` | 服务存活状态，不代表数据库连通 |
+| `GET /api/v1/health` | 服务存活状态，不代表数据库连通或缓存已就绪 |
+| `GET /api/v1/cache/status` | 本地快照的同步状态、更新时间与每日计划 |
+| `POST /api/v1/cache/refresh` | 手动同步一个或全部模块，要求 Bearer 同步密钥 |
 | `GET /api/v1/modules` | 模块目录 |
 | `GET /api/v1/earnings-gap/stocks` | 净利润断层名单，支持季度/行业/公告类型/搜索/排序/分页 |
 | `GET /api/v1/earnings-gap/stocks/{code}?period=2026-09-30` | 股票财务、公告及价格详情 |

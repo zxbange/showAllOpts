@@ -9,7 +9,9 @@
   → FastAPI 路由：校验查询参数
   → Service：确定快照日期、计算区间指标、标记行业缺失
   → Repository：参数化 SELECT
-  → MySQL industry_momentum / market_crowding / microcap_temperature / etf_share_daily / earnings_gap_* / microcap_breadth 表
+  → 本地 SQLite 模块快照（每日 18:00 / 手动从 MySQL 同步）
+
+聚宽采集 → MySQL 模块数据表 → 后台只读同步 → 本地 SQLite 快照
 ```
 
 前后端独立进程、独立依赖、独立构建。后端不返回网页，前端不直接访问数据库。数据库凭据只由后端从环境变量或选中的配置文件读取：Windows 启动器及直接运行 Python 未指定配置时使用 `backend/.env`；Linux `start.sh`、systemd 和 Compose 默认选择项目根目录下的 `config/app.config`。配置优先级与迁移方式见 [配置管理](configuration.md)。所有查询通过 SQLAlchemy 表达式绑定参数，不拼接用户输入的 SQL。
@@ -81,3 +83,10 @@ Windows 集成测试创建随机本地端口的子进程和孙进程，分别验
 微盘新高新低使用 `microcap_breadth`，按 `(series_id, trade_date)` 唯一保存每日四周期数量。只新增续传，历史不清理；后端一次限量 SELECT，跳过成分股文本，按需计算比例和滚动指标。详见 [统计与部署说明](microcap-breadth.md)。
 
 高股息选股使用 `dividend_selection_snapshot` 和 `dividend_selection_stock`，由聚宽单文件每次重算并事务替换最新结果，不保留历史；这是其他采集模块增量规则的独立例外。网页通过一次只读 JOIN 查询展示两组 Top25，详情见 [高股息选股](dividend-selection.md)。
+
+
+## 本地快照查询层
+
+`get_session` 默认按 API 模块选择 `SnapshotCache` 的只读 SQLite 会话，现有 repository/service 查询和响应格式保持一致。只有同步任务连接源 MySQL，网页查询没有自动回源分支；`CACHE_ENABLED=false` 恢复原会话工厂。七个模块、九张表按模块分事务复制，详情 JSON 保留，不复制网页不用的成分股和已删除分析字段。MySQL 使用 REPEATABLE READ，确保同一模块的快照头和明细来自同一事务。
+
+每次生成一个新的 SQLite 文件，完成写入与完整性检查后原子替换元信息；已有请求继续读取旧版本，新请求读取新版本。源数据库保持只读，建表和索引操作仅发生在本地 SQLite。独立文件锁协调 Uvicorn 多进程、每日调度和 CLI/网页手动同步。未完成模块记录在元信息中，进程中断后可继续；数据库/账号/映射结构变化会切换缓存命名空间，避免复用错误数据。详情见[本地缓存说明](local-cache.md)。

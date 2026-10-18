@@ -7,6 +7,10 @@ export function useResource<T>(loader: (signal: AbortSignal) => Promise<T>) {
   const [revision, setRevision] = useState(0)
   const reload = useCallback(() => setRevision((value) => value + 1), [])
   useEffect(() => {
+    window.addEventListener('data-cache-updated', reload)
+    return () => window.removeEventListener('data-cache-updated', reload)
+  }, [reload])
+  useEffect(() => {
     const controller = new AbortController()
     setLoading(true)
     setError(null)

@@ -1,4 +1,5 @@
 import logging
+import asyncio
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
@@ -9,6 +10,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import sessionmaker
 
 from app.api.router import router
+from app.core.cache import CacheUnavailable, SnapshotCache
 from app.core.config import Settings
 from app.core.database import build_engine
 from app.core.logging import ensure_logging
@@ -20,20 +22,29 @@ def create_app(settings: Settings | None = None, engine: Engine | None = None) -
     settings = settings or Settings()
     database = engine if engine is not None else build_engine(settings)
 
+    cache = SnapshotCache(settings, database)
+
     @asynccontextmanager
     async def lifespan(application: FastAPI):
         ensure_logging(settings)
-        logger.info('Application ready')
+        cache.start()
+        logger.info('Application ready cache_enabled=%s', settings.cache_enabled)
         try:
             yield
         finally:
+            await asyncio.to_thread(cache.stop)
             database.dispose()
             logger.info('Application shutdown complete')
 
     application = FastAPI(title=settings.app_name, version='1.0.0', lifespan=lifespan)
+    application.state.cache = cache
     application.state.session_factory = sessionmaker(bind=database, autoflush=False)
     application.add_middleware(CORSMiddleware, allow_origins=settings.cors_origins,
-                               allow_methods=['GET'], allow_headers=['Content-Type'])
+                               allow_methods=['GET', 'POST'], allow_headers=['Content-Type', 'Authorization'])
+
+    @application.exception_handler(CacheUnavailable)
+    async def cache_unavailable(request: Request, exc: CacheUnavailable):
+        return JSONResponse(status_code=503, content={'detail': str(exc), 'code': 'CACHE_NOT_READY'})
 
     @application.exception_handler(SQLAlchemyError)
     async def database_error(request: Request, exc: SQLAlchemyError):
@@ -41,8 +52,9 @@ def create_app(settings: Settings | None = None, engine: Engine | None = None) -
         logger.error('Database request failed: %s method=%s path=%s',
                      type(exc).__name__, request.method, request.url.path, exc_info=True)
         return JSONResponse(status_code=503, content={
-            'detail': '暂时无法读取数据，请检查后端数据库连接后重试。',
-            'code': 'DATABASE_UNAVAILABLE',
+            'detail': ('暂时无法读取本地快照，请查看数据同步状态并重新同步。' if settings.cache_enabled
+                       else '暂时无法读取数据，请检查后端数据库连接后重试。'),
+            'code': 'CACHE_READ_FAILED' if settings.cache_enabled else 'DATABASE_UNAVAILABLE',
         })
 
     application.include_router(router)

@@ -74,7 +74,7 @@ export function ETFPage() {
       ) : data && !data.end_date ? (
         <EmptyState
           title="暂无ETF份额数据"
-          description="请先在聚宽运行 ETF份额_数据库版.py，将份额数据写入同一数据库，再刷新页面。"
+          description="请先在聚宽运行 ETF份额_数据库版.py，将份额数据写入同一数据库，再在「数据同步」中更新本地快照。"
         />
       ) : (
         data && (

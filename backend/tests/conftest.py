@@ -31,3 +31,9 @@ def client(engine, tmp_path):
     with TestClient(app) as client:
         yield client
     logging.shutdown()
+
+
+@pytest.fixture(autouse=True)
+def direct_database_for_existing_tests(monkeypatch):
+    # Existing repository/API tests intentionally verify source queries. Cache tests opt in explicitly.
+    monkeypatch.setenv('CACHE_ENABLED', 'false')

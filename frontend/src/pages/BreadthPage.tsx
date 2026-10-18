@@ -52,7 +52,7 @@ export function BreadthPage() {
       ) : !latest || !data ? (
         <EmptyState
           title="暂无微盘新高新低数据"
-          description="请先在聚宽运行微盘新高新低数量统计_数据库版.py，或运行新版批量采集脚本，完成入库后刷新。"
+          description="请先在聚宽运行微盘新高新低数量统计_数据库版.py，或运行新版批量采集脚本，完成入库后，在「数据同步」中更新本地快照。"
         />
       ) : (
         <>

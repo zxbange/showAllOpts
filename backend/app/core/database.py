@@ -1,6 +1,6 @@
 from collections.abc import Iterator
 
-from fastapi import Request
+from fastapi import Request, Response
 from sqlalchemy import create_engine
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import Session
@@ -17,7 +17,16 @@ def build_engine(settings: Settings) -> Engine:
     )
 
 
-def get_session(request: Request) -> Iterator[Session]:
-    # This API only selects existing data. No schema creation or commit paths.
-    with request.app.state.session_factory() as session:
-        yield session
+def get_session(request: Request, response: Response) -> Iterator[Session]:
+    cache = request.app.state.cache
+    if cache.settings.cache_enabled:
+        module = request.url.path.split('/')[3]
+        with cache.session(module) as session:
+            response.headers['X-Data-Source'] = 'local-cache'
+            response.headers['X-Data-Updated-At'] = session.info['cache_updated_at']
+            response.headers['Cache-Control'] = 'no-store'
+            yield session
+    else:
+        with request.app.state.session_factory() as session:
+            response.headers['X-Data-Source'] = 'database'
+            yield session
