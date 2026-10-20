@@ -1,6 +1,18 @@
 from sqlalchemy import Column, Date, DateTime, Integer, JSON, Numeric, String, Index
 from app.models.base import Base
 
+class Bar(Base):
+    __tablename__ = 'etf_momentum_bar'
+    trade_date = Column(Date, primary_key=True)
+    code = Column(String(16), primary_key=True)
+    name = Column(String(128), nullable=False)
+    close = Column(Numeric(24, 8))
+    adjusted_close = Column(Numeric(24, 8))
+    paused = Column(Integer, nullable=False)
+    observation_start = Column(Date, nullable=False)
+    updated_at = Column(DateTime, nullable=False)
+    __table_args__ = (Index('ix_etf_bar_code_date', 'code', 'trade_date'),)
+
 class Heat(Base):
     __tablename__ = 'etf_momentum_heat'
     trade_date = Column(Date, primary_key=True)

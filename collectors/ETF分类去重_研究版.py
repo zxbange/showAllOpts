@@ -24,7 +24,8 @@ CROSS_BORDER_CODES = {
     '513690.XSHG', '513130.XSHG', '159550.XSHE',
 }
 BOND_CODES = {'511220.XSHG'}
-EXTRA_LOF_CODES = {'501018.XSHG'}
+INCLUDE_LOF = True  # 国内 LOF，仍排除跨境和债券 LOF
+EXTRA_LOF_CODES = set()  # 保留变量兼容旧配置；不再使用单只基金例外
 MAX_LOF_REPORT_AGE_DAYS = 180  # LOF 使用已披露的对应份额类别净资产，不用场内份额代替
 # 非股票指数型产品可能没有 FUND_INVEST_TARGET 记录，采用明示方向补充。
 COMMODITY_DIRECTIONS = {
@@ -34,7 +35,7 @@ COMMODITY_DIRECTIONS = {
     '159980.XSHE': ('有色金属期货方向', 'commodity:nonferrous'),
 }
 FOCUS_CODES = tuple(COMMODITY_DIRECTIONS)
-CATEGORIES = ['宽基ETF', '行业ETF', '主题ETF', '策略/风格ETF', '跨境ETF', '商品ETF', '债券ETF']
+CATEGORIES = ['宽基ETF', '行业ETF', '主题ETF', '策略/风格ETF', '跨境ETF', '商品ETF', '债券ETF', '国内LOF']
 # 支持按基金代码或指数代码配置，基金代码优先。
 # OVERRIDES = {'510300.XSHG': {'category': '宽基ETF'}}
 # 合并不同指数到同一方向：为相关基金/指数设置相同的 group 和 category。
@@ -137,6 +138,49 @@ def permitted(code, category):
     return None
 
 
+def lof_catalog(universe, day):
+    """Use fund master classification; unknown/foreign/bond types fail closed."""
+    if universe.empty:
+        return [], []
+    table = finance.FUND_MAIN_INFO
+    codes = [str(c)[:6] for c in universe.index]
+    info, audit, records = {}, [], []
+    for offset in range(0, len(codes), BATCH_SIZE):
+        frame = read_pages(table, (table.main_code.in_(codes[offset:offset+BATCH_SIZE]), table.start_date <= day))
+        for row in frame.to_dict('records'):
+            if text(row.get('end_date')) and pd.Timestamp(row['end_date']).date() < day:
+                continue
+            info.setdefault(text(row['main_code']), []).append(row)
+    foreign = ('QDII', '跨境', '海外', '境外', '全球', '环球', '香港', '港股', '沪港深',
+               '纳指', '纳斯达克', '恒生', '标普', '美国', '日本', '德国', '亚太', '原油')
+    for code, fund in universe.iterrows():
+        name = text(fund['display_name'])
+        rows = info.get(code[:6], [])
+        if len(rows) != 1:
+            audit.append(dict(code=code, name=name, reason='LOF 主体信息缺失或冲突，无法确认国内投资范围'))
+            continue
+        row = rows[0]
+        description = ' '.join(text(row.get(k)) for k in ('name', 'underlying_asset_type', 'invest_style', 'operate_mode')) + ' ' + name
+        description = description.upper()
+        if builtins.any(word in description for word in foreign):
+            audit.append(dict(code=code, name=name, reason='跨境/海外 LOF 不在七只 ETF 白名单中'))
+            continue
+        asset = text(row.get('underlying_asset_type'))
+        if '债' in asset or '债券' in description:
+            audit.append(dict(code=code, name=name, reason='债券仅允许城投债 ETF，不纳入债券 LOF'))
+            continue
+        if not builtins.any(word in asset for word in ('股票', '混合')):
+            audit.append(dict(code=code, name=name, reason='LOF 投资类型不在已确认的国内股票/混合范围', details=description))
+            continue
+        # Actively managed LOFs have no common tracking index. Do not merge unrelated portfolios.
+        records.append(dict(code=code, name=name, category='国内LOF', fund_type='LOF',
+                            target_code='', target_name=text(row.get('name')) or name,
+                            group='lof:'+code, target_source='FUND_MAIN_INFO 主体信息',
+                            classification_reason='国内股票/混合 LOF，按基金代码独立保留',
+                            listed_date=text(fund.get('start_date'))[:10]))
+    return records, audit
+
+
 def target_catalog(universe, day):
     table = finance.FUND_INVEST_TARGET
     frame = read_pages(table, (table.pub_date <= day, table.start_date <= day))
@@ -190,7 +234,7 @@ def target_catalog(universe, day):
             audit.append(dict(code=code, name=name, reason=excluded))
             continue
         records.append(dict(code=code, name=name, category=category,
-                            fund_type='LOF' if code in EXTRA_LOF_CODES else 'ETF',
+                            fund_type='ETF', listed_date=text(info.get('start_date'))[:10],
                             target_code=target_code, target_name=target_name, group=group,
                             target_source=source, classification_reason=reason))
     return records, audit
@@ -326,19 +370,15 @@ def run():
     lof = api('get_all_securities')(types=['lof'], date=days[-1])
     if lof is None:
         raise ValueError('LOF 列表查询失败')
-    extra = lof.loc[lof.index.isin(EXTRA_LOF_CODES)]
-    universe = pd.concat([universe, extra])
-    universe = universe.loc[~universe.index.duplicated()]
+    lof = lof.loc[~lof.index.isin(universe.index)] if INCLUDE_LOF else lof.iloc[0:0]
     print('截止日期：{}；聚宽 ETF 数量：{}'.format(days[-1], len(universe)), flush=True)
     print('规模门槛：严格大于 {} 亿元；跨境七只白名单；债券仅城投债。'.format(MIN_SIZE_YI))
     print('ETF 规模 = 同日份额 × 单位净值；LOF = 最新已披露对应份额类别净资产。', flush=True)
     records, audit = target_catalog(universe, days[-1])
-    daily_records = [r for r in records if r['code'] not in EXTRA_LOF_CODES]
-    lof_records = [r for r in records if r['code'] in EXTRA_LOF_CODES]
-    # 两种规模频率不能混组比较；原油例外只有指定的 501018 A 类。
-    if len({r['group'] for r in lof_records}) != len(lof_records) or \
-            {r['group'] for r in lof_records} & {r['group'] for r in daily_records}:
-        raise ValueError('LOF 披露规模与 ETF 日规模不能混组比较，请调整 OVERRIDES')
+    daily_records = records
+    lof_records, lof_audit = lof_catalog(lof, days[-1]) if not lof.empty else ([], [])
+    audit.extend(lof_audit)
+    records = daily_records + lof_records
     sizes = load_sizes([row['code'] for row in daily_records], days)
     selected, issues, candidates = select_largest(daily_records, sizes, days)
     lof_selected, lof_issues, lof_candidates = load_lof_reports(lof_records, days[-1]) if lof_records else ([], [], [])
@@ -347,7 +387,7 @@ def run():
     selected.sort(key=lambda r: (CATEGORIES.index(r['category']), -r['size_yuan'], r['code']))
     audit.extend(issues + lof_issues)
     for code in FOCUS_CODES:
-        if code not in universe.index:
+        if code not in universe.index and code not in lof.index:
             audit.append(dict(code=code, reason='指定基金不在截止日期的聚宽上市名单中'))
     for code in FOCUS_CODES:
         chosen = next((r for r in selected if r['code'] == code), None)

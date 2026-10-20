@@ -15,35 +15,9 @@ import { useResource } from '../hooks/useResource'
 import { EmptyState, ErrorState, LoadingState } from '../components/States'
 import { StatCard } from '../components/StatCard'
 import { TrendChart } from '../components/TrendChart'
-import type { HeatPoint } from '../types/etfHeat'
 import '../styles/etfHeat.css'
 
 const number = (n: number | null | undefined, digits = 4) => (n == null ? '—' : n.toFixed(digits))
-const condition = (value: boolean | null) =>
-  value === null ? '条件数据不足' : value ? '收盘参考条件通过' : '收盘参考条件未通过'
-const labels: Record<string, string> = {
-  score_range: '0 < 得分 < 6',
-  drawdown: '近三段跌幅限制',
-  intraday: '当日跌幅限制',
-  volume_daily: '日成交量不超过均量2倍',
-  rsrs: 'RSRS 与均线',
-}
-function CheckDetails({ point }: { point: HeatPoint }) {
-  return (
-    <div className="etf-checks">
-      {point.details.checks ? (
-        Object.entries(point.details.checks).map(([key, value]) => (
-          <span key={key} className={value === null ? '' : value ? 'passed' : 'failed'}>
-            {labels[key] ?? key} · {value === null ? '待定' : value ? '通过' : '未通过'}
-          </span>
-        ))
-      ) : (
-        <span>{point.details.reason ?? '暂无计算结果'}</span>
-      )}
-    </div>
-  )
-}
-
 export function ETFHeatPage() {
   const { data, error, loading, reload } = useResource(getETFHeat)
   const [search, setSearch] = useState('')
@@ -101,7 +75,7 @@ export function ETFHeatPage() {
               label="当前候选"
               value={items.length}
               suffix="只"
-              note="规模大于30亿元 · 按标的去重"
+              note="规模大于30亿元 · ETF 按标的去重"
               icon={<Layers size={18} />}
             />
             <StatCard
@@ -119,10 +93,10 @@ export function ETFHeatPage() {
               accent
             />
             <StatCard
-              label="参考条件通过"
-              value={items.filter((i) => i.reference_pass === true).length}
-              suffix="只"
-              note="收盘口径参考，非买入信号"
+              label="覆盖类别"
+              value={categories.length - 1}
+              suffix="类"
+              note="ETF 与国内股票／混合 LOF"
               icon={<CheckCircle2 size={18} />}
             />
           </div>
@@ -193,7 +167,7 @@ export function ETFHeatPage() {
                       <h3>{i.name}</h3>
                       <strong>{number(i.score)}</strong>
                       <span className="etf-tile-code">{i.code}</span>
-                      <small>{condition(i.reference_pass)}</small>
+                      <small>{i.fund.fund_type}</small>
                     </Link>
                   )
                 })}
@@ -207,8 +181,8 @@ export function ETFHeatPage() {
             </div>
           </section>
           <div className="etf-method-note">
-            历史回补使用当前候选池，不代表历史每天实际入选名单。收盘参考条件包含日成交量检查，与原策略
-            11:00 的交易判断不同。规模数据可能有披露延迟，详见基金详情。
+            历史回补使用当前候选池，不代表历史每天实际入选名单。聚宽采集基础行情，项目同步时计算热度。LOF
+            采用已披露的份额类别净资产，规模可能有披露延迟。
           </div>
         </>
       )}
@@ -289,7 +263,7 @@ export function ETFHeatDetailPage() {
               note={data.fund?.size_date ?? '已不在当前候选池'}
             />
           </div>
-          {last && <CheckDetails point={last} />}
+
           <section className="panel trend-panel">
             <div className="panel-heading">
               <div>
@@ -318,14 +292,14 @@ export function ETFHeatDetailPage() {
           <section className="panel trend-panel">
             <div className="panel-heading">
               <div>
-                <h2>复权收盘价</h2>
-                <p>各次采集的复权基准可能变化；此图作趋势参考，不拼接计算实际收益。</p>
+                <h2>收盘价（不复权）</h2>
+                <p>展示实际收盘价格；热度使用后复权收盘价计算，避免分红、拆分造成的价格跳变。</p>
               </div>
             </div>
             <TrendChart
               points={points('close')}
               name={data.name}
-              seriesLabel="复权收盘价"
+              seriesLabel="收盘价（不复权）"
               precision={4}
             />
           </section>
@@ -334,8 +308,7 @@ export function ETFHeatDetailPage() {
               ? `${data.fund.category} · ${data.fund.target_name} · ${data.fund.size_source}`
               : '该基金已不在当前候选池，历史记录继续保留。'}
             <br />
-            历史仅表示当前或曾经候选基金的走势。RSRS
-            需要250期历史，上市时间不足时标为待定；参考条件未通过的基金仍保留热度。
+            历史仅表示当前或曾经候选基金的走势。热度需要连续26期有效价格，数据不足或当日停牌时留空。
           </div>
         </>
       ) : (

@@ -151,3 +151,22 @@ def test_lof_disclosed_class_assets(script, net_assets, expected):
     # Old reports must not silently satisfy today's size threshold.
     chosen, audit, candidates = script['load_lof_reports']([record], dt.date(2027, 2, 1))
     assert not chosen and not candidates and '过旧' in audit[0]['reason']
+
+def test_domestic_lof_scope_and_missing_master(script):
+    import pandas as pd
+    from types import SimpleNamespace
+    class Field:
+        def in_(self, values): return values
+        def __le__(self, value): return value
+    universe=pd.DataFrame({'display_name':['国内股票','国内混合','全球QDII','纯债','未知','缺失'],
+                           'start_date':[dt.date(2020,1,1)]*6}, index=['160001.XSHE','160002.XSHE','160003.XSHE','160004.XSHE','160005.XSHE','160006.XSHE'])
+    frame=pd.DataFrame([dict(main_code='16000'+str(i),name=name,underlying_asset_type=asset)
+                       for i,name,asset in [(1,'股票基金','股票型'),(2,'混合基金','混合型'),(3,'海外QDII','股票型'),(4,'债券基金','债券型'),(5,'未知基金','其他')]])
+    script['pd']=pd
+    script['finance']=SimpleNamespace(FUND_MAIN_INFO=SimpleNamespace(main_code=Field(),start_date=Field()))
+    script['read_pages']=lambda *args:frame
+    rows,audit=script['lof_catalog'](universe,dt.date(2026,10,20))
+    assert [r['code'] for r in rows]==['160001.XSHE','160002.XSHE']
+    assert len(audit)==4
+    assert rows[0]['group']!=rows[1]['group']
+    assert rows[0]['listed_date']=='2020-01-01'

@@ -1,5 +1,5 @@
-﻿from datetime import date, datetime
-from app.models.etf_heat import Heat, Pool
+from datetime import date, datetime
+from app.models.etf_heat import Bar, Heat, Pool
 
 
 def seed(session):
@@ -40,6 +40,11 @@ def test_cache_incremental_and_disconnected_source(engine,session,tmp_path):
     from app.core.config import Settings
     from app.main import create_app
     seed(session)
+    session.get(Pool,1).rule_version='etf_raw_market_v1'
+    for c in ['A','B','C']:
+        session.add(Bar(trade_date=date(2026,10,20),code=c,name=c,close=2,adjusted_close=2,paused=0,
+                        observation_start=date(2026,10,20),updated_at=datetime(2026,10,20)))
+    session.commit()
     settings=Settings(_env_file=None,cache_enabled=True,cache_auto_refresh=False,log_dir=tmp_path/'log')
     cache=SnapshotCache(settings,engine);cache.refresh('etf-momentum',background=False)
     previous=cache.read_state()['modules']['etf-momentum']['file']

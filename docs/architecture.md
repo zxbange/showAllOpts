@@ -98,4 +98,4 @@ Windows 集成测试创建随机本地端口的子进程和孙进程，分别验
 
 ## ETF动量热度模块
 
-两张表 `etf_momentum_pool`、`etf_momentum_heat` 由聚宽独立/批量脚本写入；候选池当前快照与按日基金历史分离。后端沿用模型、仓储、服务和路由层，从模块本地SQLite读取排名和曲线。前端 `/etf-momentum` 热力图与 `/etf-momentum/funds/:code` 详情页共享趋势图组件，支持负值坐标。详见 [ETF动量热度](etf-momentum.md)。
+两张源表 `etf_momentum_pool`、`etf_momentum_bar` 由聚宽独立/批量脚本写入；`etf_momentum_heat` 在同步时计算并仅写入本地SQLite；候选池当前快照与按日基金历史分离。后端沿用模型、仓储、服务和路由层，从模块本地SQLite读取排名和曲线。前端 `/etf-momentum` 热力图与 `/etf-momentum/funds/:code` 详情页共享趋势图组件，支持负值坐标。详见 [ETF动量热度](etf-momentum.md)。

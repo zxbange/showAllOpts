@@ -18,7 +18,8 @@ from sqlalchemy.pool import NullPool
 
 from app.core.cache_errors import failure_details, retryable_source_error
 from app.core.cache_sync import sync_tables
-from app.models.etf_heat import Heat, Pool
+from app.models.etf_heat import Bar, Heat, Pool
+from app.services.etf_calculation import CALCULATION_VERSION, rebuild_snapshot
 from app.models.growth import GrowthSnapshot, GrowthStock
 from app.models.momentum import IndustryMomentum
 from app.models.crowding import MarketCrowding
@@ -39,7 +40,7 @@ MODULES = {
     'microcap-breadth': ('微盘新高新低', (MicrocapBreadth,)),
     'dividend-selection': ('高股息选股', (DividendSnapshot, DividendStock)),
     'high-growth': ('高增长', (GrowthSnapshot, GrowthStock)),
-    'etf-momentum': ('ETF动量热度', (Pool, Heat)),
+    'etf-momentum': ('ETF动量热度', (Pool, Bar)),
 }
 
 
@@ -66,7 +67,7 @@ class SnapshotCache:
         schema = [(key, [(m.__tablename__, [(c.name, str(c.type)) for c in m.__table__.columns])
                          for m in models]) for key, (_, models) in MODULES.items()]
         identity = [source.url.drivername, source.url.host, source.url.port, source.url.database,
-                    source.url.username, schema, 1]
+                    source.url.username, schema, CALCULATION_VERSION]
         key = hashlib.sha256(json.dumps(identity, ensure_ascii=True).encode()).hexdigest()[:20]
         self.root = settings.cache_path / key
         self.state_file = self.root / 'state.json'
@@ -167,12 +168,15 @@ class SnapshotCache:
                 # Published files are immutable: copy locally before applying changes.
                 shutil.copyfile(previous, path)
             tables = [model.__table__ for model in models]
-            tables[0].metadata.create_all(destination, tables=tables)
+            tables[0].metadata.create_all(destination, tables=tables + ([Heat.__table__] if module == 'etf-momentum' else []))
             with self.source.connect() as source:
                 if self.source.dialect.name == 'mysql':
                     source = source.execution_options(isolation_level='REPEATABLE READ')
                 with source.begin(), destination.begin() as target:
                     count = sync_tables(source, target, tables, module, incremental)
+                    if module == 'etf-momentum':
+                        calculated = rebuild_snapshot(target)
+                        logger.info('ETF local calculation completed rows=%s version=%s', calculated, CALCULATION_VERSION)
                     if module == 'industry-momentum':
                         target.execute(text('CREATE INDEX IF NOT EXISTS ix_local_momentum_type_date ON industry_momentum (industry_type, trade_date)'))
                         target.execute(text('CREATE INDEX IF NOT EXISTS ix_local_momentum_history ON industry_momentum (industry_type, industry_code, trade_date)'))

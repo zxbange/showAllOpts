@@ -1,4 +1,4 @@
-﻿import { expect, test } from '@playwright/test'
+import { expect, test } from '@playwright/test'
 const funds = [
   ['518880.XSHG', '黄金ETF', '商品ETF', 1.2345, true],
   ['513100.XSHG', '纳指ETF', '跨境ETF', 0.41, false],
@@ -68,7 +68,8 @@ test('ETF heat rankings, filter, drilldown and responsive curves', async ({ page
   await page.goto('/etf-momentum')
   await expect(page.locator('.etf-heat-tile')).toHaveCount(4)
   await expect(page.locator('.etf-heat-tile').nth(2)).toContainText('-0.1600')
-  await expect(page.locator('.etf-heat-tile').nth(3)).toContainText('条件数据不足')
+  await expect(page.locator('.etf-heat-tile').nth(3)).toContainText('—')
+  await expect(page.getByText('收盘参考条件通过', { exact: true })).toHaveCount(0)
   await page.getByRole('button', { name: '商品ETF', exact: true }).click()
   await expect(page.locator('.etf-heat-tile')).toHaveCount(1)
   await page.getByRole('button', { name: '全部', exact: true }).click()
@@ -86,7 +87,7 @@ test('ETF heat rankings, filter, drilldown and responsive curves', async ({ page
   await page.locator('.etf-heat-tile').first().click()
   await expect(page.getByRole('heading', { name: '黄金ETF', exact: true })).toBeVisible()
   await expect(page.getByRole('heading', { name: '动量热度曲线' })).toBeVisible()
-  await expect(page.getByRole('heading', { name: '复权收盘价' })).toBeVisible()
+  await expect(page.getByRole('heading', { name: '收盘价（不复权）' })).toBeVisible()
   await expect(page.locator('canvas')).toHaveCount(2)
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(
     true,

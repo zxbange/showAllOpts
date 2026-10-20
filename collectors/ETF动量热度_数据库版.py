@@ -22,7 +22,6 @@ from urllib.parse import quote, quote_plus
 
 import jqdata as jq
 import pandas as pd
-import numpy as np
 from sqlalchemy import (BigInteger, Column, Date, DateTime, Index, Integer, JSON,
                         Numeric, String, Text, and_, or_, create_engine, func)
 from sqlalchemy.engine.url import URL
@@ -56,7 +55,7 @@ _RUN_LOCK = globals().get('_RUN_LOCK') or threading.Lock()
 _API_NAMES = ('get_all_securities', 'get_trade_days', 'get_price', 'get_extras',
               'get_industries', 'get_industry_stocks', 'get_industry', 'get_fundamentals',
               'query', 'valuation', 'indicator', 'income', 'finance', 'jy')
-_PREVIEW_COLUMNS = {'ETF动量热度': ('trade_date', 'code', 'name', 'score', 'reference_pass')}
+_PREVIEW_COLUMNS = {'ETF动量热度': ('trade_date', 'code', 'name', 'close', 'adjusted_close')}
 
 
 _PROGRESS_LOCAL = threading.local()
@@ -403,7 +402,9 @@ def _etf_heat_strategy(_apis, _config):
 
     BOND_CODES = {'511220.XSHG'}
 
-    EXTRA_LOF_CODES = {'501018.XSHG'}
+    INCLUDE_LOF = True
+
+    EXTRA_LOF_CODES = set()
 
     MAX_LOF_REPORT_AGE_DAYS = 180
 
@@ -416,7 +417,7 @@ def _etf_heat_strategy(_apis, _config):
 
     FOCUS_CODES = tuple(COMMODITY_DIRECTIONS)
 
-    CATEGORIES = ['宽基ETF', '行业ETF', '主题ETF', '策略/风格ETF', '跨境ETF', '商品ETF', '债券ETF']
+    CATEGORIES = ['宽基ETF', '行业ETF', '主题ETF', '策略/风格ETF', '跨境ETF', '商品ETF', '债券ETF', '国内LOF']
 
     OVERRIDES = {}
 
@@ -508,6 +509,48 @@ def _etf_heat_strategy(_apis, _config):
             return '债券仅允许城投债 ETF 511220.XSHG'
         return None
 
+    def lof_catalog(universe, day):
+        """Use fund master classification; unknown/foreign/bond types fail closed."""
+        if universe.empty:
+            return [], []
+        table = finance.FUND_MAIN_INFO
+        codes = [str(c)[:6] for c in universe.index]
+        info, audit, records = {}, [], []
+        for offset in range(0, len(codes), BATCH_SIZE):
+            frame = read_pages(table, (table.main_code.in_(codes[offset:offset+BATCH_SIZE]), table.start_date <= day))
+            for row in frame.to_dict('records'):
+                if text(row.get('end_date')) and pd.Timestamp(row['end_date']).date() < day:
+                    continue
+                info.setdefault(text(row['main_code']), []).append(row)
+        foreign = ('QDII', '跨境', '海外', '境外', '全球', '环球', '香港', '港股', '沪港深',
+                   '纳指', '纳斯达克', '恒生', '标普', '美国', '日本', '德国', '亚太', '原油')
+        for code, fund in universe.iterrows():
+            name = text(fund['display_name'])
+            rows = info.get(code[:6], [])
+            if len(rows) != 1:
+                audit.append(dict(code=code, name=name, reason='LOF 主体信息缺失或冲突，无法确认国内投资范围'))
+                continue
+            row = rows[0]
+            description = ' '.join(text(row.get(k)) for k in ('name', 'underlying_asset_type', 'invest_style', 'operate_mode')) + ' ' + name
+            description = description.upper()
+            if builtins.any(word in description for word in foreign):
+                audit.append(dict(code=code, name=name, reason='跨境/海外 LOF 不在七只 ETF 白名单中'))
+                continue
+            asset = text(row.get('underlying_asset_type'))
+            if '债' in asset or '债券' in description:
+                audit.append(dict(code=code, name=name, reason='债券仅允许城投债 ETF，不纳入债券 LOF'))
+                continue
+            if not builtins.any(word in asset for word in ('股票', '混合')):
+                audit.append(dict(code=code, name=name, reason='LOF 投资类型不在已确认的国内股票/混合范围', details=description))
+                continue
+            # Actively managed LOFs have no common tracking index. Do not merge unrelated portfolios.
+            records.append(dict(code=code, name=name, category='国内LOF', fund_type='LOF',
+                                target_code='', target_name=text(row.get('name')) or name,
+                                group='lof:'+code, target_source='FUND_MAIN_INFO 主体信息',
+                                classification_reason='国内股票/混合 LOF，按基金代码独立保留',
+                                listed_date=text(fund.get('start_date'))[:10]))
+        return records, audit
+
     def target_catalog(universe, day):
         table = finance.FUND_INVEST_TARGET
         frame = read_pages(table, (table.pub_date <= day, table.start_date <= day))
@@ -561,7 +604,7 @@ def _etf_heat_strategy(_apis, _config):
                 audit.append(dict(code=code, name=name, reason=excluded))
                 continue
             records.append(dict(code=code, name=name, category=category,
-                                fund_type='LOF' if code in EXTRA_LOF_CODES else 'ETF',
+                                fund_type='ETF', listed_date=text(info.get('start_date'))[:10],
                                 target_code=target_code, target_name=target_name, group=group,
                                 target_source=source, classification_reason=reason))
         return records, audit
@@ -693,19 +736,15 @@ def _etf_heat_strategy(_apis, _config):
         lof = api('get_all_securities')(types=['lof'], date=days[-1])
         if lof is None:
             raise ValueError('LOF 列表查询失败')
-        extra = lof.loc[lof.index.isin(EXTRA_LOF_CODES)]
-        universe = pd.concat([universe, extra])
-        universe = universe.loc[~universe.index.duplicated()]
+        lof = lof.loc[~lof.index.isin(universe.index)] if INCLUDE_LOF else lof.iloc[0:0]
         print('截止日期：{}；聚宽 ETF 数量：{}'.format(days[-1], len(universe)), flush=True)
         print('规模门槛：严格大于 {} 亿元；跨境七只白名单；债券仅城投债。'.format(MIN_SIZE_YI))
         print('ETF 规模 = 同日份额 × 单位净值；LOF = 最新已披露对应份额类别净资产。', flush=True)
         records, audit = target_catalog(universe, days[-1])
-        daily_records = [r for r in records if r['code'] not in EXTRA_LOF_CODES]
-        lof_records = [r for r in records if r['code'] in EXTRA_LOF_CODES]
-        # 两种规模频率不能混组比较；原油例外只有指定的 501018 A 类。
-        if len({r['group'] for r in lof_records}) != len(lof_records) or \
-                {r['group'] for r in lof_records} & {r['group'] for r in daily_records}:
-            raise ValueError('LOF 披露规模与 ETF 日规模不能混组比较，请调整 OVERRIDES')
+        daily_records = records
+        lof_records, lof_audit = lof_catalog(lof, days[-1]) if not lof.empty else ([], [])
+        audit.extend(lof_audit)
+        records = daily_records + lof_records
         sizes = load_sizes([row['code'] for row in daily_records], days)
         selected, issues, candidates = select_largest(daily_records, sizes, days)
         lof_selected, lof_issues, lof_candidates = load_lof_reports(lof_records, days[-1]) if lof_records else ([], [], [])
@@ -714,7 +753,7 @@ def _etf_heat_strategy(_apis, _config):
         selected.sort(key=lambda r: (CATEGORIES.index(r['category']), -r['size_yuan'], r['code']))
         audit.extend(issues + lof_issues)
         for code in FOCUS_CODES:
-            if code not in universe.index:
+            if code not in universe.index and code not in lof.index:
                 audit.append(dict(code=code, reason='指定基金不在截止日期的聚宽上市名单中'))
         for code in FOCUS_CODES:
             chosen = next((r for r in selected if r['code'] == code), None)
@@ -745,26 +784,24 @@ def _etf_heat_strategy(_apis, _config):
             for label, frame in [('结果', result), ('待核对', review), ('候选明细', all_candidates)]:
                 frame.to_csv('ETF分类去重_{}_{}.csv'.format(label, days[-1]), index=False, encoding='utf-8-sig')
         return result, review, all_candidates
-    # Parameters inherited from the shared selector; collector never exports CSV files.
+    # The collector stores provider data; the application computes all momentum scores.
     settings = strategy_settings('ETF动量热度')
     EXPORT_CSV = False
     MIN_SIZE_YI = Decimal(str(settings['min_size_yi']))
-    RULE_VERSION = 'etf_close_momentum_v1'
+    RULE_VERSION = 'etf_raw_market_v1'
     Base = declarative_base()
 
-    class Heat(Base):
-        __tablename__ = 'etf_momentum_heat'
+    class Bar(Base):
+        __tablename__ = 'etf_momentum_bar'
         trade_date = Column(Date, primary_key=True)
         code = Column(String(16), primary_key=True)
         name = Column(String(128), nullable=False)
-        score = Column(Numeric(28, 10))
         close = Column(Numeric(24, 8))
-        annual_return = Column(Numeric(28, 10))
-        r2 = Column(Numeric(24, 10))
-        reference_pass = Column(Integer)
-        details = Column(JSON, nullable=False)
+        adjusted_close = Column(Numeric(24, 8))
+        paused = Column(Integer, nullable=False)
+        observation_start = Column(Date, nullable=False)
         updated_at = Column(DateTime, nullable=False)
-        __table_args__ = (Index('ix_etf_heat_code_date', 'code', 'trade_date'),)
+        __table_args__ = (Index('ix_etf_bar_code_date', 'code', 'trade_date'),)
 
     class Pool(Base):
         __tablename__ = 'etf_momentum_pool'
@@ -775,81 +812,28 @@ def _etf_heat_strategy(_apis, _config):
         updated_at = Column(DateTime, nullable=False)
 
 
-    def rounded(value):
-        if value is None or not math.isfinite(float(value)):
+    def price_value(value):
+        if not positive(value):
             return None
-        value = Decimal(str(value)).quantize(Decimal('0.0000000001'))
-        if abs(value) >= Decimal('1e18'):
-            raise ValueError('计算结果超出数据库精度，拒绝截断')
-        return value
+        result = Decimal(str(value)).quantize(Decimal('0.00000001'))
+        if result >= Decimal('1e16'):
+            raise ValueError('价格超出数据库精度')
+        return result
 
 
-    def metrics(frame):
-        """Last row is signal day's close; prior observations never include later dates."""
-        empty = dict(score=None, close=None, annual_return=None, r2=None, reference_pass=None,
-                     details={'status': 'missing', 'reason': '有效价格不足26期或当日停牌'})
-        if len(frame) < 26:
-            return empty
-        current = frame.iloc[-1]
-        if current.get('paused', 0) or not positive(current['close']) or not positive(current['open']):
-            return empty
-        prices = np.asarray(frame['close'].iloc[-26:].values, dtype=float)
-        if not np.isfinite(prices).all() or (prices <= 0).any():
-            return empty
-        log_prices = np.log(prices)
-        x = np.arange(26)
-        weights = np.linspace(1, 2, 26)
-        slope, intercept = np.polyfit(x, log_prices, 1, w=weights)
-        annual = math.expm1(float(slope) * 250)
-        ss_res = np.sum(weights * (log_prices - (slope*x + intercept))**2)
-        ss_tot = np.sum(weights * (log_prices - np.mean(log_prices))**2)
-        r2 = float(1 - ss_res / ss_tot) if ss_tot > 1e-25 else 0.0
-        score = annual * r2  # Raw score: do not zero out drawdown failures.
-        drawdown_ok = bool(np.min(prices[-3:] / prices[-4:-1]) >= 0.95)
-        intraday_ok = bool(float(current['close']) / float(current['open']) - 1 > -0.03)
-        score_ok = bool(0 < score < 6)
-        prior = frame.iloc[:-1]
-        volumes = np.asarray(prior['volume'].iloc[-7:].values, dtype=float)
-        volume_ratio = None
-        if len(volumes) == 7 and np.isfinite(volumes).all() and np.mean(volumes) > 0 and np.isfinite(current['volume']):
-            volume_ratio = float(current['volume'] / np.mean(volumes))
-        volume_ok = volume_ratio <= 2 if volume_ratio is not None else None
-        rsrs_ok, beta, strength = None, None, None
-        if len(prior) >= 250:
-            low = np.asarray(prior['low'].iloc[-250:].values, dtype=float)
-            high = np.asarray(prior['high'].iloc[-250:].values, dtype=float)
-            if np.isfinite(low).all() and np.isfinite(high).all() and (low > 0).all() and np.var(low[-18:]) > 0:
-                slopes = []
-                for offset in range(231):
-                    lx, hy = low[offset:offset+20], high[offset:offset+20]
-                    variance = np.mean(lx*lx) - np.mean(lx)**2
-                    if variance > 0:
-                        slopes.append((np.mean(lx*hy) - np.mean(lx)*np.mean(hy)) / variance)
-                if slopes:
-                    beta = float(np.mean(slopes) - 2*np.std(slopes))
-                    now_slope = float(np.polyfit(low[-18:], high[-18:], 1)[0])
-                    if beta != 0 and math.isfinite(beta):
-                        strength = (now_slope-beta) / abs(beta)
-                        last = float(current['close'])
-                        rsrs_ok = bool(now_slope > beta and (strength > .15 or
-                            (strength > .03 and last > prior['close'].iloc[-5:].mean()) or
-                            last > prior['close'].iloc[-10:].mean()))
-        checks = dict(score_range=score_ok, drawdown=drawdown_ok, intraday=intraday_ok,
-                      volume_daily=volume_ok, rsrs=rsrs_ok)
-        passed = False if False in checks.values() else (None if None in checks.values() else True)
-        return dict(score=rounded(score), close=Decimal(str(current['close'])).quantize(Decimal('0.00000001')), annual_return=rounded(annual),
-                    r2=rounded(r2), reference_pass=None if passed is None else int(passed),
-                    details=dict(status='ok', checks=checks, volume_ratio=volume_ratio,
-                                 rsrs_beta=beta, rsrs_strength=strength))
-
-
-    def save_day(Session, day, records):
-        if len({r['code'] for r in records}) != len(records) or builtins.any(r['trade_date'] != day for r in records):
-            raise ValueError('交易日记录重复或日期不一致')
+    def save_rows(Session, records):
+        keys = {(r['trade_date'], r['code']) for r in records}
+        if len(keys) != len(records):
+            raise ValueError('交易日和基金代码重复')
+        if not records:
+            return []
         with session_scope(Session) as session:
-            existing = {r[0] for r in session.query(Heat.code).filter(Heat.trade_date == day).all()}
-            added = [r for r in records if r['code'] not in existing]
-            session.add_all([Heat(**r) for r in added])
+            existing = set(session.query(Bar.trade_date, Bar.code).filter(
+                Bar.code.in_(set(r['code'] for r in records)),
+                Bar.trade_date >= builtins.min(r['trade_date'] for r in records),
+                Bar.trade_date <= builtins.max(r['trade_date'] for r in records)).all())
+            added = [r for r in records if (r['trade_date'], r['code']) not in existing]
+            session.add_all([Bar(**r) for r in added])
             session.commit()
             return added
 
@@ -863,69 +847,90 @@ def _etf_heat_strategy(_apis, _config):
         if requested > now.date():
             raise ValueError('结束日期不能晚于今天')
         end = requested - datetime.timedelta(days=1) if requested == now.date() and now.hour < 16 else requested
-        raw_days = api('get_trade_days')(end_date=end, count=settings['initial_trade_days'])
-        days = [as_date(d) for d in raw_days]
+        days = [as_date(d) for d in api('get_trade_days')(end_date=end, count=settings['initial_trade_days'])]
         if not days or days != sorted(set(days)):
             raise ValueError('交易日历无效')
         AS_OF_DATE = str(days[-1])
-        _progress_note('按当前规模和白名单筛选 ETF 池')
+        _progress_note('筛选 ETF/LOF 候选池；仅采集行情，热度由项目同步时计算')
         chosen, audit, candidates = select_pool()
         if chosen.empty:
             raise ValueError('本次未取得有效候选池，保留旧快照；请运行分类研究脚本查看待核对清单')
         members = []
         for row in chosen.to_dict('records'):
-            members.append({key: (str(value) if isinstance(value, Decimal) else (None if pd.isna(value) else (value.item() if isinstance(value, np.generic) else value)))
+            members.append({key: (str(value) if isinstance(value, Decimal) else
+                            (None if pd.isna(value) else (value.item() if hasattr(value, 'item') else value)))
                             for key, value in row.items()})
-        # JSON serialisation also rejects accidental pandas/numpy objects before opening a write transaction.
         members = json.loads(json.dumps(members, ensure_ascii=False, allow_nan=False))
-        start_days = api('get_trade_days')(end_date=days[0], count=251)
-        if not len(start_days):
-            raise ValueError('无法取得指标预热日期')
-        start = as_date(start_days[0])
         output = []
         with database_scope(Base, _config) as Session:
             with session_scope(Session) as session:
                 head = session.query(Pool).filter_by(id=1).first()
-                if head and (head.as_of_date > days[-1] or head.rule_version != RULE_VERSION):
-                    raise ValueError('已有更新日期或不同规则版本，拒绝混用')
-                have = set(session.query(Heat.trade_date, Heat.code).filter(Heat.trade_date >= days[0], Heat.trade_date <= days[-1]).all())
-            pending = {d: [] for d in days}
-            for member in _progress_items(members, 'ETF 收盘热度', lambda r: r['name']):
+                if head and (head.as_of_date > days[-1] or head.rule_version not in (RULE_VERSION, 'etf_close_momentum_v1')):
+                    raise ValueError('已有更新日期或未知规则版本，拒绝混用')
+            for member in _progress_items(members, 'ETF/LOF 行情采集', lambda r: r['name']):
                 code = member['code']
-                missing = [d for d in days if (d, code) not in have]
+                with session_scope(Session) as session:
+                    existing = {r.trade_date: (r.adjusted_close, r.observation_start)
+                                for r in session.query(Bar).filter(Bar.code == code).all()}
+                observation_start = builtins.min([days[0]] + [v[1] for v in existing.values()])
+                # Include any long collection gap, plus the 25 prior observations needed for regression.
+                first = builtins.min(days[0], builtins.max(existing)) if existing else days[0]
+                warm = [as_date(d) for d in api('get_trade_days')(end_date=first, count=26)]
+                if not warm:
+                    raise ValueError('无法取得行情预热日期')
+                calendar = [as_date(d) for d in api('get_trade_days')(start_date=warm[0], end_date=days[-1])]
+                listed = as_date(member['listed_date']) if member.get('listed_date') else calendar[0]
+                expected = [d for d in calendar if d >= listed]
+                missing = [d for d in expected if d not in existing]
                 if not missing:
                     continue
-                frame = api('get_price')(code, start_date=start, end_date=days[-1], frequency='daily',
-                                         fields=['open', 'close', 'high', 'low', 'volume', 'paused'],
-                                         skip_paused=False, fq='pre')
-                if frame is None or frame.empty:
-                    raise ValueError(code + ' 价格接口无数据，未发布新候选池')
-                frame = frame.copy()
-                frame.index = pd.Index(pd.to_datetime(frame.index).date)
-                if frame.index.has_duplicates or not frame.index.is_monotonic_increasing:
-                    raise ValueError('价格日期重复或乱序')
+                # Overlap one stored day to detect inconsistent provider adjustment bases.
+                overlap = [d for d in existing if d < builtins.min(missing)]
+                start = builtins.min(builtins.min(missing), builtins.max(overlap)) if overlap else builtins.min(missing)
+                frames = []
+                for fields, adjustment in [(['close', 'paused'], None), (['close'], 'post')]:
+                    frame = api('get_price')(code, start_date=start, end_date=days[-1], frequency='daily',
+                                             fields=fields, skip_paused=False, fq=adjustment)
+                    if frame is None or frame.empty:
+                        raise ValueError(code + ' 行情接口无数据，未发布新候选池')
+                    frame = frame.copy()
+                    frame.index = pd.Index(pd.to_datetime(frame.index).date)
+                    if frame.index.has_duplicates or not frame.index.is_monotonic_increasing:
+                        raise ValueError(code + ' 行情日期重复或乱序')
+                    frames.append(frame)
+                raw, adjusted = frames
+                for day in set(existing).intersection(adjusted.index):
+                    previous = existing[day][0]
+                    current = price_value(adjusted.loc[day, 'close'])
+                    if previous is not None and current is not None and abs(float(current-previous)) > builtins.max(1e-7, abs(float(previous))*1e-7):
+                        raise ValueError(code + ' 后复权历史发生变化，请核对数据源后重建该基金行情；拒绝拼接不同基准')
+                records = []
                 for day in missing:
-                    # Pre-listing days and absent source dates are missing, never fabricated zeros.
-                    window = frame.loc[frame.index <= day]
-                    if day not in frame.index:
-                        continue
-                    item = dict(trade_date=day, code=code, name=member['name'], updated_at=china_now(), **metrics(window))
-                    pending[day].append(item)
-            for day in _progress_items(days, '逐日增量入库'):
-                if pending[day]:
-                    output.extend(save_day(Session, day, pending[day]))
+                    if day not in raw.index or day not in adjusted.index:
+                        raise ValueError('{} {} 行情缺失，保留已提交数据和旧候选池'.format(code, day))
+                    paused = raw.loc[day, 'paused']
+                    if pd.isna(paused):
+                        raise ValueError(code + ' 停牌状态缺失')
+                    close = price_value(raw.loc[day, 'close'])
+                    adj = price_value(adjusted.loc[day, 'close'])
+                    if not paused and (close is None or adj is None):
+                        raise ValueError('{} {} 有效交易日价格缺失'.format(code, day))
+                    records.append(dict(trade_date=day, code=code, name=member['name'], close=close,
+                                        adjusted_close=adj, paused=int(paused), observation_start=observation_start,
+                                        updated_at=china_now()))
+                _progress_note('{} 批量入库 {} 条基础行情'.format(code, len(records)))
+                output.extend(save_rows(Session, records))
             with session_scope(Session) as session:
-                # Publish current membership only once all current-day prices have been collected.
-                codes = {r[0] for r in session.query(Heat.code).filter(Heat.trade_date == days[-1]).all()}
+                codes = {r[0] for r in session.query(Bar.code).filter(Bar.trade_date == days[-1]).all()}
                 if set(m['code'] for m in members) - codes:
-                    raise ValueError('最新交易日价格尚未完整到达，保留上一候选池快照')
+                    raise ValueError('最新交易日行情不完整，保留上一候选池快照')
                 head = session.query(Pool).filter_by(id=1).with_for_update().first()
                 if head and head.as_of_date > days[-1]:
                     raise ValueError('并发采集已有更新快照，拒绝回退')
                 if head is None:
                     session.add(Pool(id=1, as_of_date=days[-1], rule_version=RULE_VERSION, members=members, updated_at=china_now()))
-                elif head.as_of_date != days[-1] or head.members != members:
-                    head.as_of_date, head.members, head.updated_at = days[-1], members, china_now()
+                elif head.as_of_date != days[-1] or head.members != members or head.rule_version != RULE_VERSION:
+                    head.as_of_date, head.members, head.rule_version, head.updated_at = days[-1], members, RULE_VERSION, china_now()
                 session.commit()
         return pd.DataFrame(output)
     return SimpleNamespace(**locals())

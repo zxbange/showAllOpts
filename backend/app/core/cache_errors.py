@@ -7,11 +7,17 @@ import traceback
 from sqlalchemy.exc import DBAPIError, TimeoutError as PoolTimeout
 
 
+class SnapshotDataError(ValueError):
+    """Only static, non-sensitive explanations may be supplied here."""
+
+
 def failure_details(exc):
     original = getattr(exc, 'orig', exc)
     code = 'UNKNOWN'
     hint = '请检查应用错误日志中的失败位置、数据库连接及表结构。'
-    if isinstance(original, sqlite3.Error):
+    if isinstance(exc, SnapshotDataError):
+        code, hint = 'SOURCE_DATA_INCOMPLETE', str(exc)
+    elif isinstance(original, sqlite3.Error):
         code = getattr(original, 'sqlite_errorname', 'SQLITE_ERROR')
         number = getattr(original, 'sqlite_errorcode', 0) & 255
         hint = {
