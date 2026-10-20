@@ -16,6 +16,7 @@ def script():
         or isinstance(node, ast.ImportFrom) and node.module == 'jqdata')]
     env = {'__name__': 'offline_test'}
     exec(compile(tree, str(path), 'exec'), env)
+    env['MIN_SIZE_YI'] = Decimal('0')  # Small fixtures isolate ranking from production threshold.
     return env
 
 
@@ -80,3 +81,73 @@ def test_manual_category(script):
 @pytest.mark.parametrize('value', [0, -1, 'NaN', 'Infinity', None, 'bad'])
 def test_invalid_sizes(script, value):
     assert script['positive'](value) is None
+
+
+@pytest.mark.parametrize('value,passes', [('2999999999', False), ('3000000000', False), ('3000000001', True)])
+def test_strict_30_yi_yuan_boundary(script, value, passes):
+    script['MIN_SIZE_YI'] = Decimal('30')
+    day = dt.date(2026, 10, 19)
+    selected, audit, candidates = script['select_largest']([row('a')],
+        {'a': {day: (Decimal(value), 1, 1)}}, [day])
+    assert bool(selected) is passes
+    assert bool(audit) is not passes
+    assert len(candidates) == 1
+
+
+@pytest.mark.parametrize('code,name,group', [
+    ('518880.XSHG', '黄金ETF', 'commodity:gold'),
+    ('159980.XSHE', '有色期货', 'commodity:nonferrous'),
+    ('159985.XSHE', '豆粕ETF', 'commodity:soymeal'),
+    ('501018.XSHG', '南方原油', 'commodity:oil'),
+    ('other', '黄金ETF', 'commodity:gold'),
+])
+def test_commodity_direction_fallback(script, code, name, group):
+    assert script['commodity_direction'](code, name)[1] == group
+
+
+def test_gold_equity_not_commodity(script):
+    assert script['commodity_direction']('other', '黄金股ETF') is None
+
+
+def test_exact_cross_border_and_bond_allowlists(script):
+    assert script['CROSS_BORDER_CODES'] == {
+        '513100.XSHG', '159509.XSHE', '513030.XSHG', '513520.XSHG',
+        '513690.XSHG', '513130.XSHG', '159550.XSHE'}
+    for code in script['CROSS_BORDER_CODES']:
+        assert script['permitted'](code, '跨境ETF') is None
+    assert script['permitted']('513500.XSHG', '跨境ETF')
+    assert script['permitted']('511010.XSHG', '债券ETF')
+    assert script['permitted']('511220.XSHG', '债券ETF') is None
+
+@pytest.mark.parametrize('net_assets,expected', [('1224223000', False), ('3100000000', True)])
+def test_lof_disclosed_class_assets(script, net_assets, expected):
+    from types import SimpleNamespace
+    class Field:
+        def __eq__(self, value): return ('code', value)
+        def __le__(self, value): return ('before', value)
+    class Frame:
+        empty = False
+        def to_dict(self, orient):
+            return [dict(id=1, code='501018', period_end='2026-06-30', pub_date='2026-08-31',
+                         total_tna=net_assets, nav='1.4937')]
+    calls = []
+    def read(table, filters):
+        calls.append(filters)
+        return Frame()
+    script['finance'] = SimpleNamespace(FUND_FIN_INDICATOR=SimpleNamespace(
+        code=Field(), pub_date=Field(), period_end=Field()))
+    script['pd'] = SimpleNamespace(Timestamp=lambda value: SimpleNamespace(date=lambda: dt.date.fromisoformat(str(value))))
+    script['read_pages'] = read
+    script['MIN_SIZE_YI'] = Decimal('30')
+    record = row('501018.XSHG', 'commodity:oil', '商品ETF')
+    chosen, audit, candidates = script['load_lof_reports']([record], dt.date(2026, 10, 19))
+    assert bool(chosen) is expected
+    assert bool(audit) is not expected
+    assert candidates[0]['size_yuan'] == Decimal(net_assets)
+    assert candidates[0]['size_date'] == '2026-06-30'
+    assert candidates[0]['size_pub_date'] == '2026-08-31'
+    assert candidates[0]['shares'] is None
+    assert calls[0][0] == ('code', '501018')
+    # Old reports must not silently satisfy today's size threshold.
+    chosen, audit, candidates = script['load_lof_reports']([record], dt.date(2027, 2, 1))
+    assert not chosen and not candidates and '过旧' in audit[0]['reason']
