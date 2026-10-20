@@ -93,6 +93,27 @@ CLI 默认增量同步；`--full` 可重建所选模块，不指定 `--module` �
 
 升级仍执行 `bash deploy.sh`；Windows 更新后重启 `start.cmd`。无需新增定时服务或端口，无需重建 MySQL 表，不写入或清理源数据库。新增 Python 导入 `portalocker`，项目锁定依赖已包含该包。所有建表、索引与数据写入均发生在本地 SQLite；MySQL 账号保持只读权限即可。
 
+同步失败时，面板显示脱敏错误码和对应提示；`log/error.log` 记录 `module`、`error_type`、`code`、`hint` 与 `frames`（文件名、行号、函数名），不打印 SQL、参数、原始驱动错误或连接凭据。`log/app.log` 还记录轻量清单读取开始及待增删条数，用于区分清单读取与后续数据传输阶段。
+
+Linux 查看行业动量最近的失败记录：
+
+```bash
+cd /home/ubuntu/showAllOpts
+grep 'Cache refresh failed module=industry-momentum' log/error.log | tail -n 3
+```
+
+自定义 `LOG_DIR` 时替换日志目录。常见错误码：
+
+| 错误码 | 排查方向 |
+| --- | --- |
+| `MYSQL_2013` / `MYSQL_2006` | 源库连接中断或读取超时；检查公网链路、源查询耗时及数据库连接设置，不能仅凭此码断定缺索引 |
+| `MYSQL_1045` / `MYSQL_1142` | 服务使用的配置、账号认证或 SELECT 权限 |
+| `MYSQL_1054` / `MYSQL_1146` | 采集器与项目的字段、表是否一致，是否连接到正确数据库 |
+| `SQLITE_READONLY` / `SQLITE_CANTOPEN` / `OS_13` | 服务账号对缓存目录及文件的读写权限、所有者、systemd 可写路径 |
+| `SQLITE_FULL` / `OS_28` | 缓存盘剩余空间 |
+| `SQLITE_CORRUPT` / `SQLITE_NOTADB` | 本地缓存损坏；可在同一运行账号下对该模块执行 `--full` 重建 |
+| `UNKNOWN` | 检查日志 `error_type` 与 `frames`；不要根据通用提示猜测原因 |
+
 - 首次一直待同步：查看 `log/error.log` 中对应模块和异常类型，确认数据库连接、新模块的表已由聚宽采集器建立且账号有 SELECT 权限。
 - 最新数据未出现：确认聚宽已完成入库，检查面板“上次成功同步”，再手动同步。18:00之后才入库的数据会等到下次同步；可修改时间或手动更新。
 - CLI 成功、网页仍旧：确认 CLI 和 systemd 使用相同账号、配置、数据库、`LOG_DIR` 和源码版本。原生部署与 Docker 若是不同运行环境，应在实际服务环境中执行同步。

@@ -16,6 +16,7 @@ from sqlalchemy import create_engine, text
 from sqlalchemy.orm import Session
 from sqlalchemy.pool import NullPool
 
+from app.core.cache_errors import failure_details
 from app.core.cache_sync import sync_tables
 from app.models.momentum import IndustryMomentum
 from app.models.crowding import MarketCrowding
@@ -203,8 +204,10 @@ class SnapshotCache:
                     entry.update(file=filename, rows=rows, updated_at=now().isoformat(), error=None)
                     logger.info('Cache refresh complete module=%s rows=%s seconds=%.2f', module, rows, time.monotonic()-started)
                 except Exception as exc:
-                    entry['error'] = '同步失败，保留上次成功数据；请检查数据库连接、表结构及读取权限。'
-                    logger.error('Cache refresh failed module=%s error_type=%s', module, type(exc).__name__)
+                    code, hint, frames = failure_details(exc)
+                    entry['error'] = '同步失败，保留上次成功数据。[{}] {}'.format(code, hint)
+                    logger.error('Cache refresh failed module=%s error_type=%s code=%s hint=%s frames=%s',
+                                 module, type(exc).__name__, code, hint, frames)
                 state['pending'].remove(module)
                 self.write_state(state)
             self.cleanup(state)

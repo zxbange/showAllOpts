@@ -47,11 +47,14 @@ def sync_history(source, target, table):
     """Compare keys/timestamps, including late backfills and removed source rows."""
     keys = list(table.primary_key.columns)
     columns = keys + [table.c.updated_at]
+    logger.info('Cache metadata read started table=%s', table.name)
     remote = read_map(source, columns, len(keys))
     local = read_map(target, columns, len(keys))
     changed = {key for key, stamp in remote.items()
                if key not in local or stamp != local[key] or stamp == (None,)}
     removed = local.keys() - remote.keys()
+    logger.info('Cache changes planned table=%s changed=%s deleted=%s total=%s',
+                table.name, len(changed), len(removed), len(remote))
     for batch in chunks(changed | removed):
         target.execute(table.delete().where(key_filter(table, batch)))
     fetched = 0
