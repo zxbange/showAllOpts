@@ -1,0 +1,135 @@
+.etf-heat-filters {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  padding: 0 24px 18px;
+}
+.etf-heat-filters button {
+  border: 1px solid var(--border);
+  background: transparent;
+  border-radius: 20px;
+  padding: 7px 14px;
+  color: var(--text);
+  cursor: pointer;
+}
+.etf-heat-filters button.active {
+  background: #c44837;
+  color: white;
+  border-color: #c44837;
+}
+.etf-heat-legend {
+  display: flex;
+  justify-content: flex-end;
+  gap: 16px;
+  padding: 0 24px 16px;
+  font-size: 12px;
+  color: var(--muted);
+}
+.etf-heat-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(190px, 1fr));
+  gap: 10px;
+  padding: 0 24px 24px;
+}
+.etf-heat-tile {
+  min-width: 0;
+  min-height: 180px;
+  border: 1px solid rgba(120, 70, 45, 0.12);
+  border-radius: 14px;
+  padding: 17px;
+  color: #332720;
+  text-decoration: none;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  transition:
+    transform 0.18s,
+    box-shadow 0.18s;
+}
+.etf-heat-tile:hover {
+  transform: translateY(-3px);
+  box-shadow: 0 8px 22px #55332218;
+}
+.etf-heat-tile:focus-visible {
+  outline: 3px solid #a63727;
+  outline-offset: 2px;
+}
+.etf-tile-meta {
+  display: flex;
+  justify-content: space-between;
+  font-size: 10px;
+  gap: 8px;
+}
+.etf-heat-tile h3 {
+  font-size: 15px;
+  margin: 5px 0;
+  overflow-wrap: anywhere;
+}
+.etf-heat-tile strong {
+  font-size: 28px;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -1px;
+}
+.etf-tile-code,
+.etf-heat-tile small {
+  font-size: 11px;
+  opacity: 0.8;
+}
+.etf-method-note {
+  padding: 20px 4px;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.9;
+}
+.etf-checks {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin: 0 0 20px;
+}
+.etf-checks span {
+  padding: 8px 12px;
+  border-radius: 8px;
+  background: #eee9e3;
+  color: #6b625a;
+  font-size: 12px;
+}
+.etf-checks .passed {
+  background: #e0eee7;
+  color: #286a50;
+}
+.etf-checks .failed {
+  background: #f8e7df;
+  color: #9c4730;
+}
+@media (max-width: 600px) {
+  .etf-heat-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    padding: 0 12px 12px;
+    gap: 8px;
+  }
+  .etf-heat-tile {
+    padding: 12px;
+    min-height: 172px;
+  }
+  .etf-heat-tile strong {
+    font-size: 24px;
+  }
+  .etf-tile-meta {
+    flex-direction: column;
+    gap: 3px;
+  }
+  .etf-heat-filters {
+    padding: 0 12px 16px;
+  }
+  .etf-heat-legend {
+    gap: 8px;
+    padding: 0 12px 12px;
+    font-size: 10px;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .etf-heat-tile {
+    transition: none;
+  }
+}

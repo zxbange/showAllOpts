@@ -23,7 +23,19 @@ use([
   CanvasRenderer,
 ])
 
-export function TrendChart({ points, name }: { points: HistoryPoint[]; name: string }) {
+export function TrendChart({
+  points,
+  name,
+  allowNegative = false,
+  precision = 2,
+  seriesLabel = '动量热力值',
+}: {
+  points: HistoryPoint[]
+  name: string
+  allowNegative?: boolean
+  precision?: number
+  seriesLabel?: string
+}) {
   const element = useRef<HTMLDivElement>(null)
   const chart = useRef<EChartsType | null>(null)
   useEffect(() => {
@@ -54,7 +66,7 @@ export function TrendChart({ points, name }: { points: HistoryPoint[]; name: str
           borderColor: chartColors.border,
           textStyle: { color: chartColors.text, fontSize: 12 },
           valueFormatter: (value: unknown) =>
-            value == null || value === '-' ? '暂无记录' : Number(value).toFixed(2),
+            value == null || value === '-' ? '暂无记录' : Number(value).toFixed(precision),
           axisPointer: { type: 'line', lineStyle: { color: chartColors.coral, type: 'dashed' } },
         },
         xAxis: {
@@ -72,7 +84,7 @@ export function TrendChart({ points, name }: { points: HistoryPoint[]; name: str
         },
         yAxis: {
           type: 'value',
-          min: 0,
+          min: allowNegative ? undefined : 0,
           splitNumber: 4,
           axisLabel: { color: chartColors.muted, fontSize: 11 },
           splitLine: { lineStyle: { color: chartColors.grid, type: 'dashed' } },
@@ -100,12 +112,12 @@ export function TrendChart({ points, name }: { points: HistoryPoint[]; name: str
         ],
         series: [
           {
-            name: '动量热力值',
+            name: seriesLabel,
             type: 'line',
             data: points.map((p) => p.momentum),
             connectNulls: false,
             smooth: false,
-            showSymbol: points.length < 3,
+            showSymbol: points.length < 3 || points.some((point) => point.momentum === null),
             symbol: 'circle',
             symbolSize: 7,
             lineStyle: { width: 2.5, color: chartColors.coral },
@@ -133,7 +145,7 @@ export function TrendChart({ points, name }: { points: HistoryPoint[]; name: str
       },
       { notMerge: true },
     )
-  }, [points, name])
+  }, [points, name, allowNegative, precision, seriesLabel])
   return (
     <div
       ref={element}

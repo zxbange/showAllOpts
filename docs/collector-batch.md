@@ -1,13 +1,13 @@
 # 聚宽单文件批量采集
 
-`collectors/策略批量采集_数据库版.py` 包含八个完整策略，依次串行调用。依赖统一在文件开头导入，参数按策略集中配置；数据库连接、重试、会话回滚关闭和日期转换共用一套实现。每个策略保留独立模型和计算函数，代码直接定义在文件中，不把源码存成字符串，也不使用 `exec` 动态执行。
+`collectors/策略批量采集_数据库版.py` 包含九个完整策略，依次串行调用。依赖统一在文件开头导入，参数按策略集中配置；数据库连接、重试、会话回滚关闭和日期转换共用一套实现。每个策略保留独立模型和计算函数，代码直接定义在文件中，不把源码存成字符串，也不使用 `exec` 动态执行。
 
-**运行时不读取其他策略文件、配置文件或日志文件，不使用 `__file__`，也不创建日志或锁文件。** 仍需聚宽研究平台自带的 API，以及 pandas、SQLAlchemy、MySQLdb 等常规 Python 依赖；数据库通过网络连接。
+**运行时不读取其他策略文件、配置文件或日志文件，不使用 `__file__`，也不创建日志或锁文件。** 仍需聚宽研究平台自带的 API，以及 numpy、pandas、SQLAlchemy、MySQLdb 等常规 Python 依赖；数据库通过网络连接。
 
 ## 运行方法
 
-1. 打开单文件，在顶部 `DB_CONFIG` 填写真实数据库连接。八个策略共用这套配置；不要将真实值提交到 GitHub。
-2. 将完整代码粘贴到聚宽 Notebook 单元格执行即可，无需上传另外八个策略文件。
+1. 打开单文件，在顶部 `DB_CONFIG` 填写真实数据库连接。九个策略共用这套配置；不要将真实值提交到 GitHub。
+2. 将完整代码粘贴到聚宽 Notebook 单元格执行即可，无需上传另外九个策略文件。
 3. 也可以只上传这一份文件，然后执行：
 
    ```python
@@ -25,7 +25,7 @@
 
 | 配置 | 用途 |
 | --- | --- |
-| `DB_CONFIG` | 八个策略共用的数据库地址、端口、库名及凭据 |
+| `DB_CONFIG` | 九个策略共用的数据库地址、端口、库名及凭据 |
 | `DB_OPTIONS` | 连接超时、连接重试次数/间隔、连接池回收时间 |
 | `PROGRESS_ENABLED` | 默认 `True`，显示每个策略的控制台进度条 |
 | `PROGRESS_INTERVAL_SECONDS` | 默认 `5.0`，等待接口/数据库时的进度刷新间隔（秒，须为有限正数） |
@@ -142,6 +142,10 @@ batch_summary = run_all(
 
 ## 维护方式
 
-完整策略代码直接位于批量文件内的 `_momentum_strategy`、`_crowding_strategy`、`_microcap_strategy`、`_etf_strategy`、`_earnings_strategy`、`_breadth_strategy`、`_dividend_strategy`、`_growth_strategy` 八个函数中，由 `STRATEGIES` 注册并按 `STRATEGY_ORDER` 调用。后续发布只需更新这一份批量文件。
+完整策略代码直接位于批量文件内的 `_momentum_strategy`、`_crowding_strategy`、`_microcap_strategy`、`_etf_strategy`、`_earnings_strategy`、`_breadth_strategy`、`_dividend_strategy`、`_growth_strategy`、`_etf_heat_strategy` 九个函数中，由 `STRATEGIES` 注册并按 `STRATEGY_ORDER` 调用。后续发布只需更新这一份批量文件。
 
 仓库仍保留独立采集脚本供单独使用；它们不是批量文件的运行依赖。修改业务算法时，需要同步独立脚本和批量文件内对应策略；公共连接/会话工具只维护一份。离线测试检查核心计算、选股规则和表结构与独立脚本一致，并验证配置生效、连接重试、会话回滚关闭、无 `__file__` 的 Notebook 执行、无外部策略文件、串行顺序和只新增规则。真实行情权限及 MySQL 连通性仍需在聚宽验证。
+
+## ETF动量热度（第九项）
+
+已加入默认执行顺序的末尾，`STRATEGY_CONFIG['ETF动量热度']` 配置日期、180日回补窗口和30亿元门槛。候选筛选和热度计算全部在批量文件内，无外部文件依赖。价格记录按日期+基金只新增，候选池在最新行情完整后更新；控制台展示进度。详见 [ETF动量热度](etf-momentum.md)。

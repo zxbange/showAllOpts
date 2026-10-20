@@ -1,4 +1,5 @@
 from fastapi import APIRouter
+from app.api.routes.etf_heat import router as etf_heat_router
 from app.api.routes.growth import router as growth_router
 from app.api.routes.cache import router as cache_router
 from app.api.routes.dividend import router as dividend_router
@@ -20,6 +21,7 @@ router.include_router(breadth_router)
 router.include_router(dividend_router)
 router.include_router(cache_router)
 router.include_router(growth_router)
+router.include_router(etf_heat_router)
 
 
 @router.get('/modules', tags=['模块'])
@@ -56,6 +58,10 @@ def modules():
         'id': 'high-growth', 'name': '高增长',
         'description': '年报与三类季报分别检验归母净利润及 EPS 的持续增长。',
         'path': '/high-growth', 'status': 'available',
+    }, {
+        'id': 'etf-momentum', 'name': 'ETF动量热度',
+        'description': '收盘动量热力排名与基金历史走势。',
+        'path': '/etf-momentum', 'status': 'available',
     }]}
 
 

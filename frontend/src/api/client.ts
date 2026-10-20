@@ -86,3 +86,11 @@ export async function refreshCache(module: string | null) {
 
 export const getGrowthOverview = (signal?: AbortSignal) =>
   request<GrowthOverview>('/high-growth/latest', signal)
+
+export const getETFHeat = (signal?: AbortSignal) =>
+  request<import('../types/etfHeat').HeatSnapshot>('/etf-momentum/latest', signal)
+export const getETFHeatHistory = (code: string, days: number, signal?: AbortSignal) =>
+  request<import('../types/etfHeat').HeatHistory>(
+    `/etf-momentum/funds/${encodeURIComponent(code)}/history?days=${days}`,
+    signal,
+  )

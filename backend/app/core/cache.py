@@ -18,6 +18,7 @@ from sqlalchemy.pool import NullPool
 
 from app.core.cache_errors import failure_details, retryable_source_error
 from app.core.cache_sync import sync_tables
+from app.models.etf_heat import Heat, Pool
 from app.models.growth import GrowthSnapshot, GrowthStock
 from app.models.momentum import IndustryMomentum
 from app.models.crowding import MarketCrowding
@@ -38,6 +39,7 @@ MODULES = {
     'microcap-breadth': ('微盘新高新低', (MicrocapBreadth,)),
     'dividend-selection': ('高股息选股', (DividendSnapshot, DividendStock)),
     'high-growth': ('高增长', (GrowthSnapshot, GrowthStock)),
+    'etf-momentum': ('ETF动量热度', (Pool, Heat)),
 }
 
 

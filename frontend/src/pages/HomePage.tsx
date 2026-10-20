@@ -8,7 +8,28 @@ import '../styles/overview.css'
 function ModuleIllustration({ kind }: { kind: ResearchModule['illustration'] }) {
   return (
     <div className={`module-illustration illustration-${kind}`} aria-hidden="true">
-      {kind === 'growth' ? (
+      {kind === 'etf-heat' ? (
+        <svg className="illustration-share-trends" viewBox="0 0 320 130" fill="none">
+          {[0, 1, 2, 3, 4, 5, 6, 7].map((n) => (
+            <rect
+              key={n}
+              x={20 + (n % 4) * 72}
+              y={15 + Math.floor(n / 4) * 54}
+              width="62"
+              height="44"
+              rx="8"
+              fill={n < 4 ? '#c44837' : '#3f9576'}
+              opacity={0.2 + (7 - n) * 0.08}
+            />
+          ))}
+          <path
+            d="M38 100 L110 82 L182 54 L254 28"
+            stroke="#aa3828"
+            strokeWidth="4"
+            strokeLinecap="round"
+          />
+        </svg>
+      ) : kind === 'growth' ? (
         <svg
           className="illustration-share-trends"
           viewBox="0 0 260 100"
@@ -139,21 +160,23 @@ function ModuleIllustration({ kind }: { kind: ResearchModule['illustration'] }) 
         </div>
       )}
       <span className="illustration-caption">
-        {kind === 'growth'
-          ? '四类报告 · 持续增长'
-          : kind === 'dividend'
-            ? '分红与估值'
-            : kind === 'heatmap'
-              ? '行业强弱'
-              : kind === 'concentration'
-                ? '成交集中'
-                : kind === 'earnings'
-                  ? '业绩与价格'
-                  : kind === 'breadth'
-                    ? '新高与新低'
-                    : kind === 'shares'
-                      ? '份额变化'
-                      : '估值与交易'}{' '}
+        {kind === 'etf-heat'
+          ? 'ETF MOMENTUM'
+          : kind === 'growth'
+            ? '四类报告 · 持续增长'
+            : kind === 'dividend'
+              ? '分红与估值'
+              : kind === 'heatmap'
+                ? '行业强弱'
+                : kind === 'concentration'
+                  ? '成交集中'
+                  : kind === 'earnings'
+                    ? '业绩与价格'
+                    : kind === 'breadth'
+                      ? '新高与新低'
+                      : kind === 'shares'
+                        ? '份额变化'
+                        : '估值与交易'}{' '}
         · 视觉示意
       </span>
     </div>

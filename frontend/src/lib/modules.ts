@@ -31,9 +31,23 @@ export interface ResearchModule {
     | 'breadth'
     | 'dividend'
     | 'growth'
+    | 'etf-heat'
 }
 
 export const researchModules: ResearchModule[] = [
+  {
+    id: 'etf-momentum',
+    name: 'ETF动量热度',
+    path: '/etf-momentum',
+    category: '趋势观察',
+    english: 'ETF MOMENTUM AT THE CLOSE',
+    question: '不同资产的趋势，谁更强？',
+    description: '按标的与规模筛选基金，以收盘动量热力图观察强弱，点击查看历史曲线。',
+    tags: ['ETF热力图', '跨资产', '收盘动量'],
+    icon: TrendingUp,
+    tone: 'coral',
+    illustration: 'etf-heat',
+  },
   {
     id: 'high-growth',
     name: '高增长',

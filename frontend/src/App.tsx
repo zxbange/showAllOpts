@@ -5,6 +5,13 @@ import { HomePage } from './pages/HomePage'
 import { MomentumPage } from './pages/MomentumPage'
 import { LoadingState } from './components/States'
 
+const ETFHeatPage = lazy(() =>
+  import('./pages/ETFHeatPage').then((m) => ({ default: m.ETFHeatPage })),
+)
+const ETFHeatDetailPage = lazy(() =>
+  import('./pages/ETFHeatPage').then((m) => ({ default: m.ETFHeatDetailPage })),
+)
+
 const GrowthPage = lazy(() => import('./pages/GrowthPage').then((m) => ({ default: m.GrowthPage })))
 
 const DividendPage = lazy(() =>
@@ -44,6 +51,22 @@ export default function App() {
       <Routes>
         <Route element={<Layout />}>
           <Route index element={<HomePage />} />
+          <Route
+            path="etf-momentum"
+            element={
+              <Suspense fallback={<LoadingState />}>
+                <ETFHeatPage />
+              </Suspense>
+            }
+          />
+          <Route
+            path="etf-momentum/funds/:code"
+            element={
+              <Suspense fallback={<LoadingState />}>
+                <ETFHeatDetailPage />
+              </Suspense>
+            }
+          />
           <Route
             path="high-growth"
             element={
