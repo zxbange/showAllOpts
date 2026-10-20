@@ -47,6 +47,7 @@ def test_real_sqlite_write_error_is_distinguished_from_source_failure(tmp_path):
 
 def test_cache_reports_safe_details_and_retains_old_snapshot(cached, monkeypatch, caplog):
     _, cache = cached
+    monkeypatch.setattr(cache.settings, 'cache_sync_attempts', 1)
     cache.refresh('industry-momentum', background=False)
     previous = cache.read_state()['modules']['industry-momentum'].copy()
     def fail(module):

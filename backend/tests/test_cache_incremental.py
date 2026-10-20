@@ -64,7 +64,7 @@ def test_history_incremental_backfill_corrections_deletions_and_no_change(cached
         assert all(sql.lstrip().startswith('SELECT') for sql, _ in statements)
         assert '.' + value_column not in statements[0][0]
         assert 'WHERE' in statements[1][0]
-        assert len(statements[1][1]) == 3 * len(old.__table__.primary_key.columns)
+        assert len(statements[1][1][:-2]) == 3 * len(old.__table__.primary_key.columns)
         statements.clear()
         cache.refresh(module, background=False)
         assert len(statements) == 1
@@ -85,7 +85,7 @@ def test_many_changed_keys_are_batched_without_duplicate_rows(cached, session, e
     try: cache.refresh('industry-momentum', background=False)
     finally: event.remove(engine, 'before_cursor_execute', capture)
     assert len(statements) == 4
-    assert [len(params) for _, params in statements[1:]] == [750, 750, 3]
+    assert [len(params[:-2]) for _, params in statements[1:]] == [750, 750, 3]
     assert_matches(cache, session, 'industry-momentum')
 
 
@@ -114,7 +114,7 @@ def test_earnings_only_downloads_changed_quarters_and_tracks_membership(cached, 
     try:
         cache.refresh('earnings-gap', background=False)
         details = [(sql, params) for sql, params in statements if 'earnings_gap_stock.events' in sql]
-        assert len(details) == 1 and details[0][1] == (str(current),)
+        assert len(details) == 1 and details[0][1][:-2] == (str(current),)
         statements.clear()
         cache.refresh('earnings-gap', background=False)
         assert len(statements) == 2

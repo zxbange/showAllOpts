@@ -1,10 +1,11 @@
 """Read-only source reconciliation into an unpublished local SQLite snapshot."""
 import logging
 
-from sqlalchemy import func, select, tuple_
+from sqlalchemy import and_, func, or_, select, tuple_
 
 logger = logging.getLogger(__name__)
 OMIT = {'member_codes', 'analysis', 'analysis_basis'}
+READ_PAGE_SIZE = 2000
 KEY_BATCH = 250  # At most 750 bound values for the current composite primary keys.
 
 
@@ -18,28 +19,45 @@ def key_filter(table, keys):
     return tuple_(*table.primary_key.columns).in_(keys)
 
 
+def after_key(columns, values):
+    # Explicit lexicographic ranges also work with older MySQL composite indexes.
+    return or_(*(and_(*(columns[j] == values[j] for j in range(i)), column > values[i])
+                 for i, column in enumerate(columns)))
+
+
+def read_batches(connection, columns, keys, condition=None):
+    """Buffer a bounded page; no unbuffered cursor remains open during local writes."""
+    last = None
+    while True:
+        query = select(*columns).order_by(*keys).limit(READ_PAGE_SIZE)
+        if condition is not None:
+            query = query.where(condition)
+        if last is not None:
+            query = query.where(after_key(keys, last))
+        with connection.execution_options(stream_results=False).execute(query) as result:
+            batch = result.all()
+        if not batch:
+            return
+        yield batch
+        if len(batch) < READ_PAGE_SIZE:
+            return
+        last = tuple(batch[-1]._mapping[key] for key in keys)
+
+
 def read_map(connection, columns, key_size):
-    result = connection.execution_options(stream_results=True).execute(select(*columns))
-    try:
-        return {tuple(row[:key_size]): tuple(row[key_size:]) for row in result}
-    finally:
-        result.close()
+    return {tuple(row[:key_size]): tuple(row[key_size:])
+            for batch in read_batches(connection, columns, columns[:key_size]) for row in batch}
 
 
 def transfer(source, target, table, condition=None):
     columns = [c for c in table.columns if c.name not in OMIT]
-    query = select(*columns)
-    if condition is not None:
-        query = query.where(condition)
-    result = source.execution_options(stream_results=True).execute(query)
+    keys = list(table.primary_key.columns)
     count = 0
-    try:
-        for batch in result.mappings().partitions(2000):
-            values = [dict(row, **{c.name: '' for c in table.columns if c.name in OMIT}) for row in batch]
-            target.execute(table.insert(), values)
-            count += len(values)
-    finally:
-        result.close()
+    for batch in read_batches(source, columns, keys, condition):
+        values = [dict(row._mapping, **{c.name: '' for c in table.columns if c.name in OMIT})
+                  for row in batch]
+        target.execute(table.insert(), values)
+        count += len(values)
     return count
 
 

@@ -16,7 +16,7 @@ from sqlalchemy import create_engine, text
 from sqlalchemy.orm import Session
 from sqlalchemy.pool import NullPool
 
-from app.core.cache_errors import failure_details
+from app.core.cache_errors import failure_details, retryable_source_error
 from app.core.cache_sync import sync_tables
 from app.models.momentum import IndustryMomentum
 from app.models.crowding import MarketCrowding
@@ -183,6 +183,23 @@ class SnapshotCache:
         finally:
             destination.dispose()
 
+    def copy_with_retry(self, module, full=False):
+        for attempt in range(1, self.settings.cache_sync_attempts + 1):
+            if self.stop_event.is_set():
+                return None
+            try:
+                return self.copy_module(module, full=True) if full else self.copy_module(module)
+            except Exception as exc:
+                if not retryable_source_error(exc) or attempt == self.settings.cache_sync_attempts:
+                    raise
+                delay = min(2 ** attempt, 16)
+                code, _, _ = failure_details(exc)
+                logger.warning('Cache refresh retry module=%s attempt=%s/%s code=%s delay_seconds=%s',
+                               module, attempt, self.settings.cache_sync_attempts, code, delay)
+                # A failed copy was removed; retry opens a new source transaction and fresh local copy.
+                if self.stop_event.wait(delay):
+                    return None
+
     def _refresh_locked(self, lock, modules, reason, slot=None, full=False):
         try:
             state = self.read_state()
@@ -200,7 +217,10 @@ class SnapshotCache:
                 entry['last_attempt_at'] = now().isoformat()
                 logger.info('Cache refresh started module=%s reason=%s', module, reason)
                 try:
-                    filename, rows = self.copy_module(module, full=True) if full else self.copy_module(module)
+                    result = self.copy_with_retry(module, full)
+                    if result is None:
+                        break  # Leave this module pending so a restart can resume it.
+                    filename, rows = result
                     entry.update(file=filename, rows=rows, updated_at=now().isoformat(), error=None)
                     logger.info('Cache refresh complete module=%s rows=%s seconds=%.2f', module, rows, time.monotonic()-started)
                 except Exception as exc:

@@ -30,7 +30,7 @@ def main(argv=None):
     try:
         settings = Settings()
         configure_logging(settings)
-        source = build_engine(settings)
+        source = build_engine(settings, for_cache=True)
         cache = SnapshotCache(settings, source)
         if options.status:
             print(json.dumps(cache.status(), ensure_ascii=False, indent=2))

@@ -71,6 +71,9 @@ class Settings(BaseSettings):
     cache_auto_refresh: bool = True
     cache_refresh_time: str = Field(default='18:00', pattern=r'^(?:[01]\d|2[0-3]):[0-5]\d$')
 
+    cache_db_read_timeout: int = Field(default=120, ge=5, le=600)
+    cache_sync_attempts: int = Field(default=3, ge=1, le=5)
+
     @property
     def cache_path(self) -> Path:
         return self.log_path / 'cache'

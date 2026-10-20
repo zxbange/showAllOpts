@@ -20,7 +20,7 @@ logger = logging.getLogger(__name__)
 
 def create_app(settings: Settings | None = None, engine: Engine | None = None) -> FastAPI:
     settings = settings or Settings()
-    database = engine if engine is not None else build_engine(settings)
+    database = engine if engine is not None else build_engine(settings, for_cache=settings.cache_enabled)
 
     cache = SnapshotCache(settings, database)
 

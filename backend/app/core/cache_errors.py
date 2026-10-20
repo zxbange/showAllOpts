@@ -55,3 +55,10 @@ def failure_details(exc):
     frames = ' > '.join('{}:{}:{}'.format(Path(f.filename).name, f.lineno, f.name)
                         for f in traceback.extract_tb(exc.__traceback__))
     return code, hint, frames or '-'
+
+
+def retryable_source_error(exc):
+    original = getattr(exc, 'orig', None)
+    args = getattr(original, 'args', ())
+    return (isinstance(exc, DBAPIError) and not isinstance(original, sqlite3.Error)
+            and bool(args) and args[0] in (2003, 2006, 2013, 2055))
