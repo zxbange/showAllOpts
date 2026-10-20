@@ -1,6 +1,5 @@
-"""Cache state is public; expensive manual synchronization requires a configured secret."""
-import hmac
-from fastapi import APIRouter, Header, HTTPException, Request, Response
+"""Manual module synchronization; concurrent refresh jobs share a single lock."""
+from fastapi import APIRouter, HTTPException, Request, Response
 from pydantic import BaseModel, Field
 from app.core.cache import MODULES
 
@@ -18,11 +17,8 @@ def status(request: Request, response: Response):
 
 
 @router.post('/refresh', status_code=202)
-def refresh(body: RefreshRequest, request: Request, authorization: str = Header(default='')):
+def refresh(body: RefreshRequest, request: Request):
     cache = request.app.state.cache
-    secret = cache.settings.cache_refresh_token.get_secret_value()
-    if not secret or not hmac.compare_digest(authorization.encode(), ('Bearer '+secret).encode()):
-        raise HTTPException(status_code=403, detail='手动同步未授权，请填写服务器配置的同步密钥。')
     if not cache.settings.cache_enabled:
         raise HTTPException(status_code=409, detail='当前未启用本地缓存。')
     if body.module is not None and body.module not in MODULES:

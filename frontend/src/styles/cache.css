@@ -126,7 +126,7 @@
 }
 .cache-fields {
   display: grid;
-  grid-template-columns: 1fr 1.3fr;
+  grid-template-columns: 1fr;
   gap: 12px;
   margin: 14px 0;
 }
@@ -134,8 +134,7 @@
   font-size: 12px;
   color: var(--muted);
 }
-.cache-fields select,
-.cache-fields input {
+.cache-fields select {
   display: block;
   width: 100%;
   min-width: 0;

@@ -35,7 +35,7 @@ const fixture = {
   })),
 }
 
-test('cache panel shows old snapshot and allows authorized module synchronization', async ({
+test('cache panel shows old snapshot and allows module synchronization without credentials', async ({
   page,
 }, testInfo) => {
   let running = false
@@ -52,7 +52,7 @@ test('cache panel shows old snapshot and allows authorized module synchronizatio
     }),
   )
   await page.route('**/api/v1/cache/refresh', async (route) => {
-    expect(route.request().headers()['authorization']).toBe('Bearer test-sync-key')
+    expect(route.request().headers()['authorization']).toBeUndefined()
     posted = route.request().postDataJSON()
     running = true
     await route.fulfill({ status: 202, json: { accepted: true } })
@@ -65,29 +65,60 @@ test('cache panel shows old snapshot and allows authorized module synchronizatio
   await expect(panel.getByText('保留旧快照', { exact: true })).toBeVisible()
   await expect(panel.locator('.cache-row')).toHaveCount(7)
   await page.getByLabel('同步范围', { exact: true }).selectOption('dividend-selection')
-  await page.getByLabel('同步密钥', { exact: true }).fill('test-sync-key')
+  await expect(panel.locator('input')).toHaveCount(0)
   await page.getByRole('button', { name: '立即同步', exact: true }).click()
   await expect(page.getByRole('button', { name: '同步进行中…', exact: true })).toBeDisabled()
   expect(posted).toEqual({ module: 'dividend-selection' })
-  await expect(page.getByLabel('同步密钥', { exact: true })).toHaveValue('')
-  expect(
-    await page.evaluate(() => JSON.stringify(localStorage) + JSON.stringify(sessionStorage)),
-  ).not.toContain('test-sync-key')
   await page.screenshot({ path: testInfo.outputPath('cache-panel.png'), fullPage: true })
   expect(await panel.evaluate((el) => el.scrollWidth <= el.clientWidth)).toBe(true)
   await page.getByRole('button', { name: '关闭数据同步' }).click()
   await expect(panel).not.toBeVisible()
 })
 
-test('web sync can be disabled without hiding existing cached data', async ({ page }) => {
+test('all modules and each individual module can be synchronized directly', async ({ page }) => {
+  const posted: unknown[] = []
+  await page.route('**/api/v1/cache/status', (route) => route.fulfill({ json: fixture }))
+  await page.route('**/api/v1/cache/refresh', (route) => {
+    expect(route.request().headers()['authorization']).toBeUndefined()
+    posted.push(route.request().postDataJSON())
+    return route.fulfill({ status: 202, json: { accepted: true } })
+  })
+  await page.goto('/')
+  await page.getByRole('button', { name: '数据同步状态', exact: true }).click()
+  const select = page.getByLabel('同步范围', { exact: true })
+  const button = page.getByRole('button', { name: '立即同步', exact: true })
+  await expect(button).toBeEnabled()
+  const choices = ['', ...fixture.modules.map((item) => item.id)]
+  for (const [index, module] of choices.entries()) {
+    await select.selectOption(module)
+    await button.click()
+    await expect.poll(() => posted.length).toBe(index + 1)
+    await expect(button).toBeEnabled()
+    expect(posted[index]).toEqual({ module: module || null })
+  }
+})
+
+test('direct database mode has no cache sync action', async ({ page }) => {
   await page.route('**/api/v1/cache/status', (route) =>
-    route.fulfill({ json: { ...fixture, manual_enabled: false } }),
+    route.fulfill({ json: { ...fixture, enabled: false, manual_enabled: false, modules: [] } }),
   )
   await page.goto('/')
   await page.getByRole('button', { name: '数据同步状态', exact: true }).click()
-  await expect(page.getByRole('dialog')).toContainText('网页手动同步尚未启用')
-  await expect(page.getByRole('dialog').locator('.cache-row')).toHaveCount(7)
+  await expect(page.getByRole('dialog')).toContainText('当前使用数据库直连')
   await expect(page.getByRole('button', { name: '立即同步', exact: true })).toHaveCount(0)
+})
+
+test('refresh failure is shown and the action becomes available again', async ({ page }) => {
+  await page.route('**/api/v1/cache/status', (route) => route.fulfill({ json: fixture }))
+  await page.route('**/api/v1/cache/refresh', (route) =>
+    route.fulfill({ status: 409, json: { detail: '已有同步任务正在执行，请等待完成。' } }),
+  )
+  await page.goto('/')
+  await page.getByRole('button', { name: '数据同步状态', exact: true }).click()
+  const button = page.getByRole('button', { name: '立即同步', exact: true })
+  await button.click()
+  await expect(page.getByRole('dialog')).toContainText('已有同步任务正在执行，请等待完成。')
+  await expect(button).toBeEnabled()
 })
 
 test('completed snapshots reload an already open module', async ({ page }) => {

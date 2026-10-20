@@ -70,7 +70,6 @@ class Settings(BaseSettings):
     cache_enabled: bool = True
     cache_auto_refresh: bool = True
     cache_refresh_time: str = Field(default='18:00', pattern=r'^(?:[01]\d|2[0-3]):[0-5]\d$')
-    cache_refresh_token: SecretStr = SecretStr('')
 
     @property
     def cache_path(self) -> Path:

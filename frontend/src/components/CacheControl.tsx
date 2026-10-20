@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { Database, RefreshCw, X, ShieldCheck } from 'lucide-react'
+import { Database, RefreshCw, X } from 'lucide-react'
 import { getCacheStatus, refreshCache } from '../api/client'
 import type { CacheStatus } from '../types/cache'
 import '../styles/cache.css'
@@ -15,7 +15,6 @@ export function CacheControl() {
   const [error, setError] = useState('')
   const [message, setMessage] = useState('')
   const [open, setOpen] = useState(false)
-  const [token, setToken] = useState('')
   const [module, setModule] = useState('')
   const [submitting, setSubmitting] = useState(false)
   const dialog = useRef<HTMLDialogElement>(null)
@@ -61,11 +60,11 @@ export function CacheControl() {
   const busy = submitting || status?.refreshing
   const issues = status?.modules.filter((m) => !m.ready || m.error).length ?? 0
   async function sync() {
+    if (busy) return
     setSubmitting(true)
     setMessage('')
     try {
-      await refreshCache(token, module || null)
-      setToken('')
+      await refreshCache(module || null)
       setMessage('同步任务已启动，完成后页面会自动读取新快照。')
       await load()
     } catch (reason) {
@@ -93,10 +92,7 @@ export function CacheControl() {
         ref={dialog}
         className="cache-dialog"
         aria-labelledby="cache-title"
-        onClose={() => {
-          setOpen(false)
-          setToken('')
-        }}
+        onClose={() => setOpen(false)}
       >
         <div className="cache-heading">
           <div>
@@ -145,50 +141,32 @@ export function CacheControl() {
               }}
             >
               <div className="cache-form-title">
-                <ShieldCheck size={17} />
+                <Database size={17} />
                 <strong>从数据库同步</strong>
               </div>
-              {status.manual_enabled ? (
-                <>
-                  <p>同步密钥仅用于本次请求，不保存在浏览器中。</p>
-                  <div className="cache-fields">
-                    <label>
-                      同步范围
-                      <select
-                        aria-label="同步范围"
-                        value={module}
-                        onChange={(e) => setModule(e.target.value)}
-                        disabled={busy}
-                      >
-                        <option value="">全部模块</option>
-                        {status.modules.map((item) => (
-                          <option key={item.id} value={item.id}>
-                            {item.name}
-                          </option>
-                        ))}
-                      </select>
-                    </label>
-                    <label>
-                      同步密钥
-                      <input
-                        type="password"
-                        autoComplete="off"
-                        value={token}
-                        onChange={(e) => setToken(e.target.value)}
-                        placeholder="输入同步密钥"
-                        required
-                        disabled={busy}
-                      />
-                    </label>
-                  </div>
-                  <button type="submit" className="cache-submit" disabled={busy || !token.trim()}>
-                    <RefreshCw size={15} className={busy ? 'cache-spin' : ''} />
-                    {busy ? '同步进行中…' : '立即同步'}
-                  </button>
-                </>
-              ) : (
-                <p>网页手动同步尚未启用，请由管理员配置同步密钥。仍可使用服务器命令手动同步。</p>
-              )}
+              <p>选择全部模块或指定模块，点击即可同步最新数据。</p>
+              <div className="cache-fields">
+                <label>
+                  同步范围
+                  <select
+                    aria-label="同步范围"
+                    value={module}
+                    onChange={(e) => setModule(e.target.value)}
+                    disabled={busy}
+                  >
+                    <option value="">全部模块</option>
+                    {status.modules.map((item) => (
+                      <option key={item.id} value={item.id}>
+                        {item.name}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              </div>
+              <button type="submit" className="cache-submit" disabled={busy}>
+                <RefreshCw size={15} className={busy ? 'cache-spin' : ''} />
+                {busy ? '同步进行中…' : '立即同步'}
+              </button>
               {message && (
                 <p role="status" className="cache-message">
                   {message}

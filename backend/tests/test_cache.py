@@ -24,7 +24,7 @@ def cached(engine, session, tmp_path):
     dividend_seed(session)
     earnings_seed(session)
     settings = Settings(_env_file=None, cache_enabled=True, cache_auto_refresh=False,
-                        cache_refresh_token='test-sync-key', log_dir=tmp_path/'log')
+                        log_dir=tmp_path/'log')
     cache = SnapshotCache(settings, engine)
     return settings, cache
 
@@ -144,25 +144,44 @@ def test_daily_schedule_and_restart_do_not_duplicate_completed_slot(cached, engi
     assert latest_slot(morning,'18:00').isoformat() == '2026-10-17T18:00:00+08:00'
 
 
-def test_api_missing_cache_never_falls_back_and_manual_auth(cached, engine, monkeypatch):
+def test_api_missing_cache_never_falls_back_and_sync_needs_no_secret(cached, engine, monkeypatch):
     settings, cache = cached
     app = create_app(settings,engine)
     with TestClient(app) as client:
         missing = client.get('/api/v1/industry-momentum/latest')
         assert missing.status_code == 503 and missing.json()['code'] == 'CACHE_NOT_READY'
-        for auth in ('', 'Bearer wrong'):
-            assert client.post('/api/v1/cache/refresh',json={},headers={'Authorization':auth}).status_code == 403
         calls = []
         monkeypatch.setattr(app.state.cache,'refresh', lambda module: calls.append(module) or True)
-        headers={'Authorization':'Bearer test-sync-key'}
-        assert client.post('/api/v1/cache/refresh',json={'module':'industry-momentum'},headers=headers).status_code == 202
-        assert calls == ['industry-momentum']
-        assert client.post('/api/v1/cache/refresh',json={'module':'unknown'},headers=headers).status_code == 422
+        assert client.post('/api/v1/cache/refresh',json={}).status_code == 202
+        assert client.post('/api/v1/cache/refresh',json={'module':None}).status_code == 202
+        for module in MODULES:
+            assert client.post('/api/v1/cache/refresh',json={'module':module}).status_code == 202
+        assert calls == [None, None, *MODULES]
+        assert client.post('/api/v1/cache/refresh',json={'module':'unknown'}).status_code == 422
         monkeypatch.setattr(app.state.cache,'refresh',lambda module: False)
-        assert client.post('/api/v1/cache/refresh',json={},headers=headers).status_code == 409
+        assert client.post('/api/v1/cache/refresh',json={}).status_code == 409
         status = client.get('/api/v1/cache/status')
         assert status.headers['cache-control'] == 'no-store'
-        assert 'test-sync-key' not in status.text
+        assert status.json()['manual_enabled'] is True
+
+
+def test_cache_disabled_still_rejects_refresh(cached, engine, monkeypatch):
+    settings, _ = cached
+    app = create_app(settings.model_copy(update={'cache_enabled':False}),engine)
+    calls = []
+    monkeypatch.setattr(app.state.cache, 'refresh', lambda module: calls.append(module) or True)
+    with TestClient(app) as client:
+        assert client.post('/api/v1/cache/refresh',json={}).status_code == 409
+        assert client.get('/api/v1/cache/status').json()['manual_enabled'] is False
+    assert calls == []
+
+
+def test_legacy_secret_config_is_ignored(tmp_path):
+    config = tmp_path / 'app.config'
+    config.write_text('CACHE_REFRESH_TOKEN=unused-legacy-setting',encoding='utf-8')
+    settings = Settings(_env_file=config, cache_enabled=True)
+    assert settings.cache_enabled
+    assert 'cache_refresh_token' not in settings.model_dump()
 
 
 def test_source_change_does_not_reuse_snapshot(cached, tmp_path):
@@ -202,7 +221,7 @@ def test_real_background_refresh_and_lifespan_shutdown(cached, engine):
     settings, _ = cached
     app = create_app(settings,engine)
     with TestClient(app) as client:
-        response=client.post('/api/v1/cache/refresh',json={},headers={'Authorization':'Bearer test-sync-key'})
+        response=client.post('/api/v1/cache/refresh',json={})
         assert response.status_code == 202
         app.state.cache.worker.join(timeout=5)
         assert not app.state.cache.worker.is_alive()

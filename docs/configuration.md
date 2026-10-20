@@ -98,6 +98,6 @@ Compose 在宿主机读取文件，将键值注入后端容器环境。`config/`
 
 ## 本地缓存配置
 
-默认使用磁盘快照，`CACHE_ENABLED=true`、`CACHE_AUTO_REFRESH=true`、`CACHE_REFRESH_TIME=18:00`（北京时间）。快照目录固定为当前 `LOG_DIR` 下的 `cache/`，可复用现有目录权限和持久化挂载。`CACHE_REFRESH_TOKEN` 留空则不开放网页手动同步；需要此功能时在真实配置中设置私有随机密钥，前端不内置密钥。CLI 不需要该密钥，但必须使用与服务相同的配置和运行账号。
+默认使用磁盘快照，`CACHE_ENABLED=true`、`CACHE_AUTO_REFRESH=true`、`CACHE_REFRESH_TIME=18:00`（北京时间）。快照目录固定为当前 `LOG_DIR` 下的 `cache/`，可复用现有目录权限和持久化挂载。网页可直接选择全部模块或指定模块同步，无需密钥；旧的 `CACHE_REFRESH_TOKEN` 配置已不再使用。CLI 仍须使用与服务相同的配置和运行账号。
 
 修改这些配置后重启后端。缓存开关和命令用法见[本地缓存说明](local-cache.md)，真实配置仍按本文规则排除 GitHub。

@@ -132,7 +132,7 @@ class SnapshotCache:
                           'updated_at': entry.get('updated_at'), 'last_attempt_at': entry.get('last_attempt_at'),
                           'rows': entry.get('rows'), 'error': entry.get('error')})
         return {'enabled': True, 'refreshing': self.refreshing(),
-                'manual_enabled': bool(self.settings.cache_refresh_token.get_secret_value()),
+                'manual_enabled': True,
                 'daily_time': self.settings.cache_refresh_time, 'timezone': 'Asia/Shanghai',
                 'auto_refresh': self.settings.cache_auto_refresh, 'modules': items}
 

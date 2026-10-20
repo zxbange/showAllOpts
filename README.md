@@ -220,13 +220,11 @@ bash scripts/setup.sh --python python3.11
 CACHE_ENABLED=true
 CACHE_AUTO_REFRESH=true
 CACHE_REFRESH_TIME=18:00
-# 网页手动同步的私有随机密钥；留空则禁用网页触发，仍可使用下面的命令
-CACHE_REFRESH_TOKEN=
 ```
 
-如需网页手动更新，给 `CACHE_REFRESH_TOKEN` 填入自行生成的随机值，重启后在同步面板输入相同密钥。它不会进入前端构建或浏览器存储；真实配置继续不提交 GitHub。密钥通过请求头发送，公开访问建议使用 HTTPS。
+网页手动同步无需密钥：点击右上角“数据同步”，选择“全部模块”或任意单个模块，再点击“立即同步”。同步期间按钮禁用，后端文件锁避免并发重复执行。旧配置中的 `CACHE_REFRESH_TOKEN` 已不再使用，保留或删除均可。
 
-也可直接在服务器命令行同步，无需网页密钥：
+也可直接在服务器命令行同步：
 
 ```bash
 cd /home/ubuntu/showAllOpts
@@ -534,7 +532,7 @@ npm run dev
 | --- | --- |
 | `GET /api/v1/health` | 服务存活状态，不代表数据库连通或缓存已就绪 |
 | `GET /api/v1/cache/status` | 本地快照的同步状态、更新时间与每日计划 |
-| `POST /api/v1/cache/refresh` | 手动同步一个或全部模块，要求 Bearer 同步密钥 |
+| `POST /api/v1/cache/refresh` | 手动同步一个或全部模块，无需密钥；重复任务返回409 |
 | `GET /api/v1/modules` | 模块目录 |
 | `GET /api/v1/earnings-gap/stocks` | 净利润断层名单，支持季度/行业/公告类型/搜索/排序/分页 |
 | `GET /api/v1/earnings-gap/stocks/{code}?period=2026-09-30` | 股票财务、公告及价格详情 |

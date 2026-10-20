@@ -17,6 +17,3 @@ LOG_RETENTION_DAYS=30
 CACHE_ENABLED=true
 CACHE_AUTO_REFRESH=true
 CACHE_REFRESH_TIME=18:00
-# Optional secret for the web "sync from database" button. Blank disables web-triggered sync.
-# Set a private random value here; never commit it. CLI refresh does not require this token.
-CACHE_REFRESH_TOKEN=
