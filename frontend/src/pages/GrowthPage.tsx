@@ -32,7 +32,7 @@ function ProfitBars({ reports, label }: { reports: GrowthReport[]; label: string
   const low = Math.min(0, ...values),
     high = Math.max(0, ...values)
   const span = high - low || 1
-  const y = (v: number) => 68 - ((v - low) / span) * 58
+  const y = (v: number) => 82 - ((v - low) / span) * 58
   const zero = y(0)
   return (
     <div className="growth-mini">
@@ -40,7 +40,7 @@ function ProfitBars({ reports, label }: { reports: GrowthReport[]; label: string
         <strong>{label}</strong>
         <small>归母净利润 / 亿元</small>
       </div>
-      <svg viewBox="0 0 180 94" role="img" aria-label={label + '最近三期归母净利润'}>
+      <svg viewBox="0 0 180 108" role="img" aria-label={label + '最近三期归母净利润'}>
         <line x1="9" x2="171" y1={zero} y2={zero} stroke="var(--border)" />
         {reports.map((r, i) => (
           <g key={r.report_period}>
@@ -58,7 +58,15 @@ function ProfitBars({ reports, label }: { reports: GrowthReport[]; label: string
               fill={values[i] < 0 ? '#277d70' : '#c74736'}
               opacity={0.4 + i * 0.3}
             />
-            <text x={35 + i * 55} y="87" textAnchor="middle">
+            <text
+              className="growth-bar-value"
+              x={35 + i * 55}
+              y={Math.min(y(values[i]), zero) - 5}
+              textAnchor="middle"
+            >
+              {number(values[i])}
+            </text>
+            <text x={35 + i * 55} y="101" textAnchor="middle">
               {r.report_period.slice(0, 4)}
             </text>
           </g>
@@ -100,10 +108,6 @@ function StockCard({ stock }: { stock: GrowthItem }) {
         <span>
           总市值 <b>{number(stock.market_cap)} 亿</b>
         </span>
-        <em>
-          <CheckCheck size={14} />
-          四类报告全部通过
-        </em>
       </div>
       <div className="growth-charts">
         {groups.map(([key, name]) => (

@@ -126,14 +126,6 @@
   color: var(--text);
   font-size: 14px;
 }
-.growth-valuations em {
-  display: flex;
-  align-items: center;
-  gap: 5px;
-  margin-left: auto;
-  color: #277d70;
-  font-style: normal;
-}
 .growth-charts {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
@@ -167,6 +159,11 @@
 .growth-mini text {
   fill: #8e7f75;
   font-size: 10px;
+}
+.growth-mini .growth-bar-value {
+  fill: var(--text);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
 }
 .growth-mini-footer {
   display: flex;
@@ -267,9 +264,6 @@
   }
   .growth-valuations {
     gap: 10px 18px;
-  }
-  .growth-valuations em {
-    margin-left: 0;
   }
   .growth-charts {
     grid-template-columns: repeat(2, minmax(0, 1fr));
