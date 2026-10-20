@@ -11,7 +11,7 @@ from sqlalchemy.orm import declarative_base, sessionmaker
 
 @pytest.fixture
 def collector(tmp_path):
-    source = Path(__file__).resolve().parents[2] / 'collectors' / '行业动量计算_数据库版.py'
+    source = Path(__file__).resolve().parents[2] / 'collectors' / 'legacy' / '行业动量计算_数据库版.py'
     tree = ast.parse(source.read_text(encoding='utf-8'))
     names = {'IndustryMomentum', 'as_date', 'save_day', 'get_last_saved_date',
              'get_retention_start', 'cleanup_old_data', 'run'}

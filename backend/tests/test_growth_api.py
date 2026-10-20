@@ -42,7 +42,7 @@ def test_latest_evidence_and_readonly_single_query(client,session,engine):
     assert len(stock['reports'])==4 and all(len(r)==3 for r in stock['reports'].values())
     assert stock['reports']['q2'][0]['report_period']=='2023-06-30'
     assert stock['reports']['annual'][0]['net_profit']==100000000
-    assert len(statements)==1 and statements[0].lstrip().startswith('SELECT')
+    assert len(statements)==3 and statements[-1].lstrip().startswith('SELECT')
     assert client.post('/api/v1/high-growth/latest').status_code==405
 
 

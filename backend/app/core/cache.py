@@ -12,12 +12,14 @@ import time
 import uuid
 
 import portalocker
-from sqlalchemy import create_engine, text
+from sqlalchemy import create_engine, func, select, text
 from sqlalchemy.orm import Session
 from sqlalchemy.pool import NullPool
 
-from app.core.cache_errors import failure_details, retryable_source_error
-from app.core.cache_sync import sync_tables
+from app.core.cache_errors import failure_details, retryable_source_error, SnapshotDataError
+from app.core.cache_sync import sync_tables, sync_history, sync_earnings, raw_available, source_table_exists
+from app.models.raw import RAW_MODELS
+from app.services.raw_calculation import RAW_CALC_VERSION, rebuild_raw
 from app.models.etf_heat import Bar, Heat, Pool
 from app.services.etf_calculation import CALCULATION_VERSION, rebuild_snapshot
 from app.models.growth import GrowthSnapshot, GrowthStock
@@ -67,7 +69,7 @@ class SnapshotCache:
         schema = [(key, [(m.__tablename__, [(c.name, str(c.type)) for c in m.__table__.columns])
                          for m in models]) for key, (_, models) in MODULES.items()]
         identity = [source.url.drivername, source.url.host, source.url.port, source.url.database,
-                    source.url.username, schema, CALCULATION_VERSION]
+                    source.url.username, schema, CALCULATION_VERSION, RAW_CALC_VERSION]
         key = hashlib.sha256(json.dumps(identity, ensure_ascii=True).encode()).hexdigest()[:20]
         self.root = settings.cache_path / key
         self.state_file = self.root / 'state.json'
@@ -168,12 +170,33 @@ class SnapshotCache:
                 # Published files are immutable: copy locally before applying changes.
                 shutil.copyfile(previous, path)
             tables = [model.__table__ for model in models]
-            tables[0].metadata.create_all(destination, tables=tables + ([Heat.__table__] if module == 'etf-momentum' else []))
+            raw_model = RAW_MODELS.get(module)
+            extra = [raw_model.__table__] if raw_model is not None else []
+            tables[0].metadata.create_all(destination, tables=tables + extra + ([Heat.__table__] if module == 'etf-momentum' else []))
             with self.source.connect() as source:
                 if self.source.dialect.name == 'mysql':
                     source = source.execution_options(isolation_level='REPEATABLE READ')
                 with source.begin(), destination.begin() as target:
-                    count = sync_tables(source, target, tables, module, incremental)
+                    use_raw = raw_model is not None and raw_available(source, raw_model)
+                    if not use_raw and raw_model is not None and incremental and target.execute(select(raw_model.__table__.c.part).limit(1)).first() is not None:
+                        raise SnapshotDataError('源原始数据已清空或表不存在，拒绝回退旧结果；请恢复采集数据后再同步。')
+                    if use_raw:
+                        had_raw = target.execute(select(raw_model.__table__.c.part).limit(1)).first() is not None
+                        changed = sync_history(source, target, raw_model.__table__)
+                        if module == 'earnings-gap' and not had_raw:
+                            # Import the immutable legacy baseline only on first/full build.
+                            if all(source_table_exists(source,t.name) for t in tables):
+                                sync_earnings(source,target,tables)
+                        if changed or not incremental:
+                            try:
+                                rebuild_raw(target,module)
+                            except ValueError as exc:
+                                raise SnapshotDataError('原始数据未通过完整性或计算校验，请检查采集器版本及错误日志，原缓存已保留。') from exc
+                        else:
+                            logger.info('Local calculation skipped module=%s raw inputs unchanged',module)
+                        count = sum(target.scalar(select(func.count()).select_from(t)) for t in tables)
+                    else:
+                        count = sync_tables(source, target, tables, module, incremental)
                     if module == 'etf-momentum':
                         calculated = rebuild_snapshot(target)
                         logger.info('ETF local calculation completed rows=%s version=%s', calculated, CALCULATION_VERSION)

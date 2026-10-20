@@ -1,4 +1,4 @@
-﻿"""Offline tests: synthetic JoinQuant data and SQLite only."""
+"""Offline tests: synthetic JoinQuant data and SQLite only."""
 import ast
 import datetime as dt
 import importlib.util
@@ -13,7 +13,7 @@ from sqlalchemy.orm import sessionmaker
 from app.models.growth import GrowthSnapshot as WebSnapshot, GrowthStock as WebStock
 
 ROOT = Path(__file__).resolve().parents[2]
-SOURCE = ROOT/'collectors'/'高增长_数据库版.py'
+SOURCE = ROOT/'collectors'/'legacy'/'高增长_数据库版.py'
 DAY = dt.date(2026, 10, 16)
 
 

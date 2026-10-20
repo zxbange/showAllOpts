@@ -26,7 +26,7 @@ class Frame:
 
 @pytest.fixture
 def collector(tmp_path):
-    source = Path(__file__).resolve().parents[2] / 'collectors' / '微盘温度计_数据库版.py'
+    source = Path(__file__).resolve().parents[2] / 'collectors' / 'legacy' / '微盘温度计_数据库版.py'
     tree = ast.parse(source.read_text(encoding='utf-8'))
     tree.body = [node for node in tree.body
                  if not (isinstance(node, ast.ImportFrom) and node.module == 'jqdata')

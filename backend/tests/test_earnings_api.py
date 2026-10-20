@@ -65,7 +65,7 @@ def test_read_only_queries_and_no_large_payload_in_listing(client,session,engine
     finally: event.remove(engine,'before_cursor_execute',capture)
     assert response.status_code==200
     assert all(q.lstrip().startswith('SELECT') for q in statements)
-    assert len(statements)==5
+    assert len(statements)==7  # Two raw-mode probes plus legacy queries.
     assert 'earnings_gap_stock.events' not in statements[-1]
     assert 'earnings_gap_stock.prices' not in statements[-1]
     assert 'LIMIT' in statements[-1]

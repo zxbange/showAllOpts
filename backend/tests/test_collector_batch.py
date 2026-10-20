@@ -80,7 +80,7 @@ def test_calculation_and_model_definitions_keep_original_rules(batch):
     factories = {n.name: n for n in tree.body if isinstance(n, ast.FunctionDef)}
     compared = 0
     for name, filename in FILES.items():
-        original = ast.parse((TARGET.parent/filename).read_text(encoding='utf-8'))
+        original = ast.parse(((TARGET.parent/'legacy'/filename) if name != 'ETF份额' else (TARGET.parent/filename)).read_text(encoding='utf-8'))
         body = factories[batch.STRATEGIES[name].__name__].body
         for node in original.body:
             if not isinstance(node, (ast.FunctionDef, ast.ClassDef)):
@@ -140,6 +140,8 @@ def test_pasted_notebook_without_file_or_sibling_files(batch, monkeypatch, tmp_p
             return []
         return lambda apis, config: SimpleNamespace(run=run)
     namespace['STRATEGIES'] = {n: factory(n) for n in namespace['STRATEGY_ORDER']}
+    namespace['_raw_run'] = lambda name, ns, apis, config, **options: ns.run(**options)
+    namespace['_raw_run'] = lambda name, ns, apis, config, **options: ns.run(**options)
     rows = namespace['run_all'](db_config=CONFIG)
     assert events == namespace['STRATEGY_ORDER']
     assert all(r['status'] == 'SUCCESS' for r in rows)
@@ -178,10 +180,10 @@ def test_serial_order_quiet_console_and_no_logs(batch, monkeypatch, tmp_path, ca
 
 def test_preview_only_displays_selected_fields_and_tail(batch, monkeypatch, capsys):
     class Frame:
-        columns = ['code', 'name', 'events', 'prices']
+        columns = ['trade_date', 'scope', 'raw_parts', 'events', 'prices']
         def __len__(self): return 20
         def __getitem__(self, columns):
-            assert columns == ['code', 'name']
+            assert columns == ['trade_date', 'scope', 'raw_parts']
             return self
         def tail(self, rows):
             assert rows == 5
@@ -503,7 +505,7 @@ def test_progress_visible_through_quiet_stream_for_each_strategy(batch, monkeypa
     output = capsys.readouterr().out
     assert '【1/1 ' + name + '】' in output
     assert '0/2 0%' in output and '2/2 100%' in output and '2026-10-16' in output
-    assert '新增 1 条' in output and 'internal details' not in output
+    assert ('原始快照 1 条' if name in batch.RAW_TABLES else '新增 1 条') in output and 'internal details' not in output
     assert len(processed) == 2 and result[0]['rows'] == 1
     assert batch._PROGRESS_LOCAL.current is None
 
@@ -536,7 +538,7 @@ def test_heartbeat_refreshes_during_blocking_call_and_stops(batch, monkeypatch):
         return []
     monkeypatch.setattr(batch, '_load_strategy', lambda *_: run)
     batch.run_all(['行业动量'], db_config=CONFIG)
-    assert '已用' in stream.getvalue() and '无新增数据' in stream.getvalue()
+    assert '已用' in stream.getvalue() and '无重复写入' in stream.getvalue()
     assert reports[0].stopped.is_set() and not reports[0].thread.is_alive()
     assert sys.stdout is stream and batch._PROGRESS_LOCAL.current is None
 
@@ -613,7 +615,7 @@ def test_progress_throttles_frequent_updates_and_handles_empty_work(batch, monke
     monkeypatch.setattr(batch, '_load_strategy', lambda *_: lambda **kw: list(batch._progress_items([], '交易日')))
     batch.run_all(['行业动量'], db_config=CONFIG)
     output = capsys.readouterr().out
-    assert '0/0 无待处理项' in output and '无新增数据' in output
+    assert '0/0 无待处理项' in output and '无重复写入' in output
 
 
 @pytest.mark.parametrize('interval', [0, -1, True, '5', float('inf'), float('nan')])
@@ -652,4 +654,4 @@ def test_latest_dividend_mode_does_not_receive_insert_only_flag(batch, monkeypat
     batch.run_all(['高股息选股','行业动量'],preview_rows=0)
     assert received==[('高股息选股',{}),('行业动量',{'skip_existing':True})]
     output=capsys.readouterr().out
-    assert '当前选股结果 2 条' in output and '新增 2 条' in output
+    assert output.count('原始快照 2 条') == 2

@@ -1,24 +1,6 @@
 # 净利润断层观察名单
 
-> 默认启用本地缓存：采集入库后，等待每天北京时间 18:00 自动同步，或在网页“数据同步”/服务器命令中手动同步。页面刷新读取当前快照，详见[本地缓存说明](local-cache.md)。
-
-
-> 批量采集入口使用只新增模式：同季度已入库股票不再获取或覆盖，保留首次入库时的估值、公告和信号；只新增尚未入库的股票。运行元数据按实际变化更新，命中数为该季度累计保留数量。下文“整批替换”说明针对独立脚本默认模式；单独调用 `run(skip_existing=True)` 也可使用只新增模式。详见 [批量采集说明](collector-batch.md)。
-
-## 使用方式
-
-1. 将 `collectors/净利润断层_数据库版.py` 上传到聚宽研究环境。在私有副本的 `MysqlEarnings` 中填写与项目相同的 MySQL 数据库连接信息。
-2. 直接粘贴运行，或在 Notebook 中执行：
-
-   ```python
-   %run -i 净利润断层_数据库版.py
-   ```
-
-3. 采集账号需要建表、查询、插入、删除权限；网页账号只需 SELECT。脚本自动创建 `earnings_gap_run`、`earnings_gap_stock` 两张 InnoDB / utf8mb4 表，不修改现有业务表。
-4. 运行成功后，打开“发奋墙 → 净利润断层”。列表支持搜索、季度、行业、触发公告类型、排序和分页。点击股票查看三类公告原始数据以及信号前 10、后最多 20 个交易日日线。
-5. 每次需要更新时在聚宽重新运行。网页不会自动执行聚宽，也不包含下单逻辑。
-
-仓库中的采集脚本只包含脱敏配置。本地 `original` 私有副本与网页的 `config/app.config` / `backend/.env` 均不应上传真实凭据。
+本模块已切换为聚宽原始采集、项目同步时本地计算，结果保存到本地SQLite供网页查询。独立及批量文件名不变，顶部使用 `DB_CONFIG` 和按策略分组的 `STRATEGY_CONFIG`。运行、首次迁移、原始表、增量和保留规则以[原始采集与本地计算](raw-pipeline.md)为准；下文说明计算口径。
 
 ## 筛选口径
 
@@ -55,42 +37,3 @@
 - 只在所有数据获取、校验成功后连接业务数据库，以一次事务替换该季度快照和元数据，保留其他季度。合法“零命中”会保存零数量，不冒充尚未采集。接口异常或写入异常时旧快照保留。
 - 这是每季度最新观察快照，重采会替换该季度结果，不是每天的历史名单存档。列表默认请求当前目标季度，没有数据时不自动回退旧季度。
 - 列表在数据库分页，最多 100 条/页，不读取公告及日线 JSON 大字段；详情按季度和代码复合主键读取。行业和信号日期有联合索引，减少公网数据库传输。
-
-## 更新网页项目
-
-Linux（既有生产环境）：
-
-```bash
-cd /home/ubuntu/showAllOpts
-git pull --ff-only
-bash scripts/build.sh
-sudo rsync -rlt --chmod=D755,F644 frontend/dist/ /var/www/showallopts/
-sudo systemctl restart showallopts-api
-sudo systemctl status showallopts-api --no-pager
-```
-
-以上沿用现有 `showallopts-api` 服务和 `/var/www/showallopts` 静态目录。Nginx 配置不需要新增路径规则，沿用现有 SPA 和 `/api/` 代理。第一次先运行聚宽采集创建表，否则接口会返回数据库不可用；没有写入真实业务数据前，页面不展示模拟股票。
-
-Windows：更新项目后关闭旧开发启动器，再执行 `start.cmd`，确保旧后端已退出；新增 API 需要重启后端。
-
-API：
-
-- `GET /api/v1/earnings-gap/stocks`：`period`、`search`、`industry`、`source`、`sort`、`direction`、`page`、`page_size`。
-- `GET /api/v1/earnings-gap/stocks/{code}?period=YYYY-MM-DD`：股票详情，代码使用聚宽完整代码。
-
-## MySQL 小数精度警告
-
-出现 `1265 Data truncated for column 'open_gap_pct' / 'intraday_pct'` 时，常见原因是涨幅计算结果的小数位超过表中 `DECIMAL(20,6)` 的 6 位精度。MySQL 对超出的小数位进行舍入并产生提示，不表示整个字段被清空；应结合日志确认事务是否已提交。
-
-采集器在写入前按每个 Numeric 字段的声明使用 Decimal 和 ROUND_HALF_UP 量化：比例、市值及估值保留 6 位小数，归母净利润金额保留 4 位。直接将 Decimal 交给驱动，避免转回 float 引入长尾；同时拒绝非有限值和超出字段范围的值。原始价格筛选先于量化，严格大于 3% 的条件不变。极接近阈值的命中值可能显示为 3.000000%，详情中的原始公告信号仍保留计算值。
-
-上传更新后的私有采集脚本到聚宽重新运行，即可刷新当前季度结果；不需要删表、清空历史或修改网页。脚本不会屏蔽数据库警告，也不关闭严格模式。如果更新后仍有相同警告，请核对实际表的 DECIMAL 精度是否与脚本定义一致，`create_all` 不会修改已有列。
-
-参考：[MySQL 定点数舍入说明](https://dev.mysql.com/doc/refman/8.0/en/precision-math-expressions.html)。
-
-## 数据文档依据与验证范围
-
-- [聚宽财务 API](https://cdn.joinquant.com/help/img/JoinQuantAPI.pdf)：`date` 查询截止日可见数据，`statDate` 与 `date` 不同时使用。
-- [聚宽官方数据常见疑问](https://test.demo.joinquant.com/community/post/detailMobile?postId=21247)：单季度数据与报告期累计数据的区别。
-
-离线测试使用合成数据与 SQLite 验证边界、分页、覆盖事务、数据口径和 API；浏览器测试使用接口模拟。开发环境无法代替你的聚宽数据权限和 MySQL 部署，首次运行仍需核验实际源表字段和少量公告样本。

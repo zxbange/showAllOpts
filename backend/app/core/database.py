@@ -1,6 +1,6 @@
 from collections.abc import Iterator
 
-from fastapi import Request, Response
+from fastapi import HTTPException, Request, Response
 from sqlalchemy import create_engine
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import Session
@@ -30,5 +30,10 @@ def get_session(request: Request, response: Response) -> Iterator[Session]:
             yield session
     else:
         with request.app.state.session_factory() as session:
+            from app.models.raw import RAW_MODELS
+            from app.core.cache_sync import raw_available
+            model = RAW_MODELS.get(request.url.path.split('/')[3])
+            if model is not None and raw_available(session.connection(), model):
+                raise HTTPException(503, '该模块已使用原始采集，请开启 CACHE_ENABLED 并同步本地计算结果。')
             response.headers['X-Data-Source'] = 'database'
             yield session

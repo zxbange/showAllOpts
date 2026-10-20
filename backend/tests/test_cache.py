@@ -110,7 +110,7 @@ def test_refresh_selects_only_source_columns_and_does_not_write_source(cached, e
     event.listen(engine,'before_cursor_execute',record)
     try: cache.refresh(background=False)
     finally: event.remove(engine,'before_cursor_execute',record)
-    assert len(statements) == sum(len(models) for _, models in MODULES.values())
+    assert len(statements) == sum(len(models) for _, models in MODULES.values()) + 14  # Seven raw table/presence checks. + 14  # Seven raw table/presence checks.
     assert all(s.lstrip().startswith('SELECT') for s in statements)
     assert all('member_codes' not in s and 'analysis' not in s for s in statements)
 

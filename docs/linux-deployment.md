@@ -323,3 +323,7 @@ npm run build
 ## ETF 份额模块升级
 
 已有部署接入 ETF 仪表盘时，先在聚宽创建并填充 `etf_share_daily`，给网页账号授予该表 SELECT 权限，再更新代码、构建并发布 `frontend/dist/`、重启 `showallopts-api`。无需更换 Nginx 端口、systemd 服务或真实数据库配置。完整命令与字段口径见 [ETF 份额仪表盘](etf-shares.md#已有部署升级)。
+
+## 原始采集版本升级
+
+本次升级需先运行新版聚宽批量/独立脚本，完成原始历史采集，再执行 `bash deploy.sh` 安装后端新增pandas依赖并重启。保持 `CACHE_ENABLED=true`，在页面手动同步对应模块。旧结果不能还原原始数据，首次采集及同步需要额外时间和空间。详见[迁移说明](raw-pipeline.md)。

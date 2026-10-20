@@ -56,7 +56,9 @@ def test_history_incremental_backfill_corrections_deletions_and_no_change(cached
     session.add_all([factory(date(2025, 12, 1)), factory(date(2026, 1, 12))])
     session.commit()
     statements = []
-    def capture(conn, cursor, sql, parameters, *args): statements.append((sql, parameters))
+    def capture(conn, cursor, sql, parameters, *args):
+        if 'sqlite_master' not in sql and 'raw_' not in sql:  # Mode detection is tested separately.
+            statements.append((sql, parameters))
     event.listen(engine, 'before_cursor_execute', capture)
     try:
         cache.refresh(module, background=False)
@@ -80,7 +82,9 @@ def test_many_changed_keys_are_batched_without_duplicate_rows(cached, session, e
     session.add_all([momentum_row(date(2026, 1, 7), str(i), i) for i in range(501)])
     session.commit()
     statements = []
-    def capture(conn, cursor, sql, parameters, *args): statements.append((sql, parameters))
+    def capture(conn, cursor, sql, parameters, *args):
+        if 'sqlite_master' not in sql and 'raw_' not in sql:  # Mode detection is tested separately.
+            statements.append((sql, parameters))
     event.listen(engine, 'before_cursor_execute', capture)
     try: cache.refresh('industry-momentum', background=False)
     finally: event.remove(engine, 'before_cursor_execute', capture)
@@ -109,7 +113,9 @@ def test_earnings_only_downloads_changed_quarters_and_tracks_membership(cached, 
     # Even if a writer forgets to update the header, new stock keys are discovered.
     earnings_seed(session, code='600002.XSHG')
     statements = []
-    def capture(conn, cursor, sql, parameters, *args): statements.append((sql, parameters))
+    def capture(conn, cursor, sql, parameters, *args):
+        if 'sqlite_master' not in sql and 'raw_' not in sql:  # Mode detection is tested separately.
+            statements.append((sql, parameters))
     event.listen(engine, 'before_cursor_execute', capture)
     try:
         cache.refresh('earnings-gap', background=False)

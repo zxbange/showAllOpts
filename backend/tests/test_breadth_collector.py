@@ -1,4 +1,4 @@
-﻿import ast
+import ast
 import datetime as dt
 import importlib.util
 import math
@@ -12,7 +12,7 @@ from sqlalchemy.orm import sessionmaker
 from app.models.breadth import MicrocapBreadth as WebModel
 
 ROOT = Path(__file__).resolve().parents[2]
-SOURCE = ROOT/'collectors'/'微盘新高新低数量统计_数据库版.py'
+SOURCE = ROOT/'collectors'/'legacy'/'微盘新高新低数量统计_数据库版.py'
 
 class Frame:
     def __init__(self, rows=None, columns=None):
