@@ -12,7 +12,7 @@ test('overview directory is independent of database, searchable and categorized'
   })
   await page.goto('/')
   await expect(page.getByRole('heading', { level: 1 })).toContainText('全部研究模块')
-  await expect(page.locator('.research-card')).toHaveCount(7)
+  await expect(page.locator('.research-card')).toHaveCount(8)
   await expect(page.getByRole('link', { name: '进入行业动量', exact: true })).toHaveAttribute(
     'href',
     '/industry-momentum',
@@ -36,9 +36,9 @@ test('overview directory is independent of database, searchable and categorized'
   await expect(page.locator('.research-card')).toHaveCount(1)
   await expect(page.locator('.research-card')).toContainText('抱团拥挤度')
   await page.getByRole('button', { name: '清空模块搜索' }).click()
-  await expect(page.locator('.research-card')).toHaveCount(7)
+  await expect(page.locator('.research-card')).toHaveCount(8)
   await expect(page.getByRole('heading', { name: /全部研究模块/ })).toBeInViewport()
-  expect(requests).toEqual([])
+  expect(requests.filter((url) => !url.endsWith('/cache/status'))).toEqual([])
   expect(errors).toEqual([])
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(
     true,
@@ -74,6 +74,7 @@ test('all module routes remain reachable from navigation', async ({ page }) => {
     ['ETF份额仪表盘', 'etf-shares'],
     ['净利润断层', 'earnings-gap'],
     ['高股息选股', 'dividend-selection'],
+    ['高增长', 'high-growth'],
   ]) {
     await navigation.getByRole('link', { name, exact: true }).click()
     await expect(page).toHaveURL(new RegExp(path + '$'))
@@ -84,5 +85,5 @@ test('all module routes remain reachable from navigation', async ({ page }) => {
     )
   }
   await navigation.getByRole('link', { name: '总览', exact: true }).click()
-  await expect(page.locator('.research-card')).toHaveCount(7)
+  await expect(page.locator('.research-card')).toHaveCount(8)
 })

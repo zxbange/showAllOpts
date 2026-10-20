@@ -1,4 +1,5 @@
 from fastapi import APIRouter
+from app.api.routes.growth import router as growth_router
 from app.api.routes.cache import router as cache_router
 from app.api.routes.dividend import router as dividend_router
 
@@ -18,6 +19,7 @@ router.include_router(earnings_router)
 router.include_router(breadth_router)
 router.include_router(dividend_router)
 router.include_router(cache_router)
+router.include_router(growth_router)
 
 
 @router.get('/modules', tags=['模块'])
@@ -50,6 +52,10 @@ def modules():
         'id': 'dividend-selection', 'name': '高股息选股',
         'description': '两种高股息规则，各取前 25，只读展示最新选股结果。',
         'path': '/dividend-selection', 'status': 'available',
+    }, {
+        'id': 'high-growth', 'name': '高增长',
+        'description': '年报与三类季报分别检验归母净利润及 EPS 的持续增长。',
+        'path': '/high-growth', 'status': 'available',
     }]}
 
 

@@ -9,7 +9,7 @@ test('real database: homepage, all industries, and yearly trend', async ({ page 
   const screenshotDir = '../.runtime/screenshots'
   fs.mkdirSync(screenshotDir, { recursive: true })
   await page.goto('/')
-  await expect(page.locator('.research-card')).toHaveCount(7)
+  await expect(page.locator('.research-card')).toHaveCount(8)
   await page.screenshot({
     path: `${screenshotDir}/home-${testInfo.project.name}.png`,
     fullPage: true,

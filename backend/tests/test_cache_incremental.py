@@ -170,3 +170,20 @@ def test_pending_full_rebuild_survives_restart(cached, session, engine):
     cache.write_state(state)
     SnapshotCache(settings, engine).tick()
     assert_matches(cache, session, 'industry-momentum')
+
+
+def test_high_growth_snapshot_replaces_removed_stocks_and_preserves_evidence(cached,session):
+    from app.models.growth import GrowthStock, GrowthSnapshot
+    _,cache=cached
+    cache.refresh('high-growth',background=False)
+    assert_matches(cache,session,'high-growth')
+    stock=session.query(GrowthStock).one()
+    stock.pe_ttm=23
+    session.commit()
+    cache.refresh('high-growth',background=False)
+    assert_matches(cache,session,'high-growth')
+    session.delete(stock)
+    session.query(GrowthSnapshot).one().matched_count=0
+    session.commit()
+    cache.refresh('high-growth',background=False)
+    assert_matches(cache,session,'high-growth')

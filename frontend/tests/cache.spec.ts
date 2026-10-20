@@ -8,6 +8,7 @@ const modules = [
   '净利润断层',
   '微盘新高新低',
   '高股息选股',
+  '高增长',
 ]
 const fixture = {
   enabled: true,
@@ -25,6 +26,7 @@ const fixture = {
       'earnings-gap',
       'microcap-breadth',
       'dividend-selection',
+      'high-growth',
     ][i],
     name,
     ready: true,
@@ -63,7 +65,7 @@ test('cache panel shows old snapshot and allows module synchronization without c
   await expect(panel).toBeVisible()
   await expect(panel).toContainText('每天北京时间 18:00 自动同步')
   await expect(panel.getByText('保留旧快照', { exact: true })).toBeVisible()
-  await expect(panel.locator('.cache-row')).toHaveCount(7)
+  await expect(panel.locator('.cache-row')).toHaveCount(8)
   await page.getByLabel('同步范围', { exact: true }).selectOption('dividend-selection')
   await expect(panel.locator('input')).toHaveCount(0)
   await page.getByRole('button', { name: '立即同步', exact: true }).click()
@@ -145,7 +147,7 @@ test('completed snapshots reload an already open module', async ({ page }) => {
   await page.goto('/industry-momentum')
   await expect.poll(() => pageReads).toBeGreaterThan(0)
   await page.getByRole('button', { name: '数据同步状态', exact: true }).click()
-  await expect(page.getByRole('dialog').locator('.cache-row')).toHaveCount(7)
+  await expect(page.getByRole('dialog').locator('.cache-row')).toHaveCount(8)
   const initial = pageReads
   updated = '2026-10-18T18:10:00+08:00'
   await expect.poll(() => pageReads, { timeout: 10000 }).toBeGreaterThan(initial)

@@ -1,4 +1,5 @@
 import {
+  TrendingUp,
   Coins,
   ArrowUpDown,
   FileSearch,
@@ -22,10 +23,30 @@ export interface ResearchModule {
   icon: LucideIcon
   tone: 'coral' | 'jade' | 'gold'
   illustration:
-    'heatmap' | 'concentration' | 'temperature' | 'shares' | 'earnings' | 'breadth' | 'dividend'
+    | 'heatmap'
+    | 'concentration'
+    | 'temperature'
+    | 'shares'
+    | 'earnings'
+    | 'breadth'
+    | 'dividend'
+    | 'growth'
 }
 
 export const researchModules: ResearchModule[] = [
+  {
+    id: 'high-growth',
+    name: '高增长',
+    path: '/high-growth',
+    category: '业绩观察',
+    english: 'SUSTAINED EARNINGS GROWTH',
+    question: '盈利的增长，能否穿越四类报告？',
+    description: '年报与三个季度分开检查，寻找归母净利润和 EPS 持续增长的公司。',
+    tags: ['四类财报', '持续增长', '净利润与EPS'],
+    icon: TrendingUp,
+    tone: 'coral',
+    illustration: 'growth',
+  },
   {
     id: 'dividend-selection',
     name: '高股息选股',

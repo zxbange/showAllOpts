@@ -87,6 +87,11 @@ Windows 集成测试创建随机本地端口的子进程和孙进程，分别验
 
 ## 本地快照查询层
 
-`get_session` 默认按 API 模块选择 `SnapshotCache` 的只读 SQLite 会话，现有 repository/service 查询和响应格式保持一致。只有同步任务连接源 MySQL，网页查询没有自动回源分支；`CACHE_ENABLED=false` 恢复原会话工厂。七个模块、九张表按模块分事务复制，详情 JSON 保留，不复制网页不用的成分股和已删除分析字段。MySQL 使用 REPEATABLE READ，确保同一模块的快照头和明细来自同一事务。
+`get_session` 默认按 API 模块选择 `SnapshotCache` 的只读 SQLite 会话，现有 repository/service 查询和响应格式保持一致。只有同步任务连接源 MySQL，网页查询没有自动回源分支；`CACHE_ENABLED=false` 恢复原会话工厂。八个模块、十一张表按模块分事务复制，详情 JSON 保留，不复制网页不用的成分股和已删除分析字段。MySQL 使用 REPEATABLE READ，确保同一模块的快照头和明细来自同一事务。
 
 每次生成一个新的 SQLite 文件，完成写入与完整性检查后原子替换元信息；已有请求继续读取旧版本，新请求读取新版本。源数据库保持只读，建表和索引操作仅发生在本地 SQLite。独立文件锁协调 Uvicorn 多进程、每日调度和 CLI/网页手动同步。未完成模块记录在元信息中，进程中断后可继续；数据库/账号/映射结构变化会切换缓存命名空间，避免复用错误数据。详情见[本地缓存说明](local-cache.md)。
+
+
+## 高增长模块
+
+`finance.STK_INCOME_STATEMENT` 累计合并财报由聚宽采集脚本读取，四类报告分别检查净利润和基本 EPS 的两段同比。`high_growth_snapshot` + `high_growth_stock` 保存最新名单与12期财报证据，每次事务替换；股票代码、排名均保证唯一。后端沿用 model/repository/service/schema/API 分层，`GET /api/v1/high-growth/latest` 仅一次只读查询。前端的 `/high-growth` 展示四组微缩柱状图、估值及可展开明细。缓存按 `high-growth` 整体替换最新名单，支持原有定时和手动同步。详细口径见 [高增长](high-growth.md)。

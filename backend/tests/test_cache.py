@@ -13,6 +13,7 @@ from app.core.config import Settings
 from app.main import create_app
 from app.models.momentum import IndustryMomentum
 from test_momentum_api import row
+from test_growth_api import seed as growth_seed
 from test_dividend_api import seed as dividend_seed
 from test_earnings_api import seed as earnings_seed
 
@@ -21,6 +22,7 @@ from test_earnings_api import seed as earnings_seed
 def cached(engine, session, tmp_path):
     session.add_all([row(datetime(2026,1,5).date(), 'A', 3), row(datetime(2026,1,6).date(), 'A', 5)])
     session.commit()
+    growth_seed(session)
     dividend_seed(session)
     earnings_seed(session)
     settings = Settings(_env_file=None, cache_enabled=True, cache_auto_refresh=False,
@@ -33,7 +35,7 @@ PATHS = ['/industry-momentum/latest', '/industry-momentum/industries/A/history',
          '/market-crowding/history', '/microcap-temperature/history', '/etf-shares/history',
          '/earnings-gap/stocks?period=2026-09-30&search=测试&sort=profit_yoy',
          '/earnings-gap/stocks/600001.XSHG?period=2026-09-30',
-         '/microcap-breadth/history', '/dividend-selection/latest']
+         '/microcap-breadth/history', '/dividend-selection/latest', '/high-growth/latest']
 
 
 def test_all_modules_and_detail_read_locally_with_source_disconnected(cached, engine):
@@ -108,7 +110,7 @@ def test_refresh_selects_only_source_columns_and_does_not_write_source(cached, e
     event.listen(engine,'before_cursor_execute',record)
     try: cache.refresh(background=False)
     finally: event.remove(engine,'before_cursor_execute',record)
-    assert len(statements) == 9
+    assert len(statements) == 11
     assert all(s.lstrip().startswith('SELECT') for s in statements)
     assert all('member_codes' not in s and 'analysis' not in s for s in statements)
 
@@ -260,8 +262,8 @@ def test_missing_module_retries_after_five_minutes_not_every_request(cached, mon
         return original(module)
     monkeypatch.setattr(cache,'copy_module',copy)
     cache.tick(clock)
-    assert len(calls)==7
+    assert len(calls)==len(MODULES)
     cache.tick(clock+timedelta(minutes=1))
-    assert len(calls)==7
+    assert len(calls)==len(MODULES)
     cache.tick(clock+timedelta(minutes=5))
-    assert calls[7:]==['industry-momentum']
+    assert calls[len(MODULES):]==['industry-momentum']

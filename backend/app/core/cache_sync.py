@@ -104,7 +104,7 @@ def sync_earnings(source, target, tables):
 
 
 def sync_tables(source, target, tables, module, incremental):
-    if not incremental or module == 'dividend-selection':
+    if not incremental or module in ('dividend-selection', 'high-growth'):
         for table in tables:
             target.execute(table.delete())
             fetched = transfer(source, target, table)

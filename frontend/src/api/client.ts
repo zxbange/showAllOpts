@@ -1,3 +1,4 @@
+import type { GrowthOverview } from '../types/growth'
 import type { DividendOverview } from '../types/dividend'
 import type { BreadthHistory } from '../types/breadth'
 import type { EarningsOverview, EarningsDetail } from '../types/earnings'
@@ -82,3 +83,6 @@ export async function refreshCache(module: string | null) {
     throw new Error(typeof body?.detail === 'string' ? body.detail : '无法启动同步，请稍后重试。')
   }
 }
+
+export const getGrowthOverview = (signal?: AbortSignal) =>
+  request<GrowthOverview>('/high-growth/latest', signal)

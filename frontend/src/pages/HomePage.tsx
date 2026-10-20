@@ -8,7 +8,33 @@ import '../styles/overview.css'
 function ModuleIllustration({ kind }: { kind: ResearchModule['illustration'] }) {
   return (
     <div className={`module-illustration illustration-${kind}`} aria-hidden="true">
-      {kind === 'dividend' ? (
+      {kind === 'growth' ? (
+        <svg
+          className="illustration-share-trends"
+          viewBox="0 0 260 100"
+          fill="none"
+          focusable="false"
+        >
+          {[0, 1, 2, 3].map((i) => (
+            <g key={i} transform={`translate(${12 + i * 63},0)`}>
+              <path d="M0 84H48" stroke="#dbc4af" />
+              {[26, 43, 63].map((h, j) => (
+                <rect
+                  key={j}
+                  x={j * 16}
+                  y={84 - h - i * 4}
+                  width="11"
+                  height={h + i * 4}
+                  rx="3"
+                  fill={i % 2 ? '#b88c4b' : '#c74736'}
+                  opacity={0.4 + j * 0.3}
+                />
+              ))}
+              <circle cx="22" cy="94" r="2" fill="#277d70" />
+            </g>
+          ))}
+        </svg>
+      ) : kind === 'dividend' ? (
         <svg
           className="illustration-share-trends"
           viewBox="0 0 260 100"
@@ -113,19 +139,21 @@ function ModuleIllustration({ kind }: { kind: ResearchModule['illustration'] }) 
         </div>
       )}
       <span className="illustration-caption">
-        {kind === 'dividend'
-          ? '分红与估值'
-          : kind === 'heatmap'
-            ? '行业强弱'
-            : kind === 'concentration'
-              ? '成交集中'
-              : kind === 'earnings'
-                ? '业绩与价格'
-                : kind === 'breadth'
-                  ? '新高与新低'
-                  : kind === 'shares'
-                    ? '份额变化'
-                    : '估值与交易'}{' '}
+        {kind === 'growth'
+          ? '四类报告 · 持续增长'
+          : kind === 'dividend'
+            ? '分红与估值'
+            : kind === 'heatmap'
+              ? '行业强弱'
+              : kind === 'concentration'
+                ? '成交集中'
+                : kind === 'earnings'
+                  ? '业绩与价格'
+                  : kind === 'breadth'
+                    ? '新高与新低'
+                    : kind === 'shares'
+                      ? '份额变化'
+                      : '估值与交易'}{' '}
         · 视觉示意
       </span>
     </div>
