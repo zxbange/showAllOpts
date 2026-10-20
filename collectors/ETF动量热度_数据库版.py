@@ -793,7 +793,7 @@ def _etf_heat_strategy(_apis, _config):
         current = frame.iloc[-1]
         if current.get('paused', 0) or not positive(current['close']) or not positive(current['open']):
             return empty
-        prices = frame['close'].iloc[-26:].to_numpy(dtype=float)
+        prices = np.asarray(frame['close'].iloc[-26:].values, dtype=float)
         if not np.isfinite(prices).all() or (prices <= 0).any():
             return empty
         log_prices = np.log(prices)
@@ -809,15 +809,15 @@ def _etf_heat_strategy(_apis, _config):
         intraday_ok = bool(float(current['close']) / float(current['open']) - 1 > -0.03)
         score_ok = bool(0 < score < 6)
         prior = frame.iloc[:-1]
-        volumes = prior['volume'].iloc[-7:].to_numpy(dtype=float)
+        volumes = np.asarray(prior['volume'].iloc[-7:].values, dtype=float)
         volume_ratio = None
         if len(volumes) == 7 and np.isfinite(volumes).all() and np.mean(volumes) > 0 and np.isfinite(current['volume']):
             volume_ratio = float(current['volume'] / np.mean(volumes))
         volume_ok = volume_ratio <= 2 if volume_ratio is not None else None
         rsrs_ok, beta, strength = None, None, None
         if len(prior) >= 250:
-            low = prior['low'].iloc[-250:].to_numpy(dtype=float)
-            high = prior['high'].iloc[-250:].to_numpy(dtype=float)
+            low = np.asarray(prior['low'].iloc[-250:].values, dtype=float)
+            high = np.asarray(prior['high'].iloc[-250:].values, dtype=float)
             if np.isfinite(low).all() and np.isfinite(high).all() and (low > 0).all() and np.var(low[-18:]) > 0:
                 slopes = []
                 for offset in range(231):

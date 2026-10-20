@@ -149,3 +149,16 @@ def test_selector_logic_is_shared_with_research_script():
     for name in ['classify','permitted','commodity_direction','target_catalog','load_sizes','load_lof_reports','select_largest']:
         actual=next(n for n in factory.body if isinstance(n,ast.FunctionDef) and n.name==name)
         assert ast.dump(actual)==ast.dump(originals[name]), name
+
+
+def test_legacy_pandas_without_series_to_numpy(ns, monkeypatch):
+    frame=prices()
+    frame['close'] *= 1 + .01*np.sin(np.arange(len(frame))*.8)
+    expected=ns.metrics(frame)
+    def unavailable(*args, **kwargs):
+        raise AttributeError("'Series' object has no attribute 'to_numpy'")
+    monkeypatch.setattr(pd.Series, 'to_numpy', unavailable)
+    actual=ns.metrics(frame)
+    assert actual == expected
+    assert actual['details']['rsrs_beta'] is not None
+    assert actual['details']['volume_ratio'] == 1
