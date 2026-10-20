@@ -16,10 +16,10 @@ import type { GrowthItem, GrowthReport, ReportGroup } from '../types/growth'
 import '../styles/growth.css'
 
 const groups: [ReportGroup, string][] = [
-  ['annual', '年报'],
   ['q1', 'Q1 · 一季度'],
   ['q2', 'Q2 · 半年报'],
   ['q3', 'Q3 · 前三季'],
+  ['annual', '年报'],
 ]
 const number = (v: number | null | undefined, digits = 2) =>
   v == null
