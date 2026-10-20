@@ -1,5 +1,5 @@
-from datetime import date, datetime
-from app.models.etf_heat import Bar, Heat, Pool
+﻿from datetime import date, datetime
+from app.models.etf_heat import Heat, Pool
 
 
 def seed(session):
@@ -40,11 +40,6 @@ def test_cache_incremental_and_disconnected_source(engine,session,tmp_path):
     from app.core.config import Settings
     from app.main import create_app
     seed(session)
-    session.get(Pool,1).rule_version='etf_raw_market_v1'
-    for c in ['A','B','C']:
-        session.add(Bar(trade_date=date(2026,10,20),code=c,name=c,close=2,adjusted_close=2,paused=0,
-                        observation_start=date(2026,10,20),updated_at=datetime(2026,10,20)))
-    session.commit()
     settings=Settings(_env_file=None,cache_enabled=True,cache_auto_refresh=False,log_dir=tmp_path/'log')
     cache=SnapshotCache(settings,engine);cache.refresh('etf-momentum',background=False)
     previous=cache.read_state()['modules']['etf-momentum']['file']
@@ -60,3 +55,49 @@ def test_cache_incremental_and_disconnected_source(engine,session,tmp_path):
             assert len(response.json()['items'])==1
             assert local.get('/api/v1/etf-momentum/funds/A/history').status_code==200
     finally:event.remove(engine,'before_cursor_execute',no_remote)
+
+
+def test_raw_version_and_incomplete_result_preserve_published_cache(engine, session, tmp_path):
+    from app.core.cache import SnapshotCache
+    from app.core.config import Settings
+    seed(session)
+    cache=SnapshotCache(Settings(_env_file=None,cache_enabled=True,cache_auto_refresh=False,log_dir=tmp_path/'log'),engine)
+    cache.refresh('etf-momentum',background=False)
+    before=cache.read_state()['modules']['etf-momentum']['file']
+    head=session.get(Pool,1)
+    head.rule_version='etf_raw_market_v1';head.updated_at=datetime(2026,10,21);session.commit()
+    cache.refresh('etf-momentum',background=False)
+    assert cache.read_state()['modules']['etf-momentum']['file']==before
+    assert next(m for m in cache.status()['modules'] if m['id']=='etf-momentum')['error']
+    head.rule_version='etf_close_momentum_v2';head.members=head.members+[{'code':'MISSING'}]
+    head.updated_at=datetime(2026,10,22);session.commit()
+    cache.refresh('etf-momentum',background=False)
+    assert cache.read_state()['modules']['etf-momentum']['file']==before
+
+
+def test_direct_access_rejects_raw_pool_without_calculating(client, session):
+    seed(session)
+    session.get(Pool,1).rule_version='etf_raw_market_v1';session.commit()
+    result=client.get('/api/v1/etf-momentum/latest')
+    assert result.status_code==503
+
+
+def test_cache_ignores_old_raw_tables_and_preserves_source_scores(engine, session, tmp_path):
+    from sqlalchemy import event, text
+    from app.core.cache import SnapshotCache
+    from app.core.config import Settings
+    seed(session)
+    with engine.begin() as c:
+        c.execute(text('CREATE TABLE etf_momentum_bar (ignored TEXT)'))
+        c.execute(text('CREATE TABLE raw_industry_momentum (ignored TEXT)'))
+    statements=[]
+    def capture(c,cur,sql,*args):statements.append(sql)
+    event.listen(engine,'before_cursor_execute',capture)
+    try:
+        cache=SnapshotCache(Settings(_env_file=None,cache_enabled=True,cache_auto_refresh=False,log_dir=tmp_path/'log'),engine)
+        cache.refresh(background=False)
+    finally:event.remove(engine,'before_cursor_execute',capture)
+    assert all(m['ready'] and not m['error'] for m in cache.status()['modules'])
+    assert all('etf_momentum_bar' not in s and 'raw_industry_momentum' not in s for s in statements)
+    with cache.session('etf-momentum') as local:
+        assert local.get(Heat,(date(2026,10,20),'A')).score==3

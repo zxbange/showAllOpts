@@ -206,7 +206,7 @@ sudo systemctl disable --now showallopts-api
 
 ### 本地数据缓存
 
-默认缓存覆盖全部业务模块，每天北京时间 18:00 同步；缓存目录为项目 `log/cache/`，沿用现有 `ReadWritePaths` 和运行账号，不需要另开端口或新增 systemd timer。首次启动后台准备数据；通常在下次定时同步前直接使用已有磁盘快照。网页右上角提供同步状态，可配置私有密钥启用手动同步，也可运行 `backend/.venv/bin/python scripts/refresh_cache.py`。命令与服务须使用同一账号、配置文件及 `LOG_DIR`。
+默认缓存覆盖全部业务模块，每天北京时间 20:00 同步；缓存目录为项目 `log/cache/`，沿用现有 `ReadWritePaths` 和运行账号，不需要另开端口或新增 systemd timer。首次启动后台准备数据；通常在下次定时同步前直接使用已有磁盘快照。网页右上角提供同步状态，无需密钥即可按模块手动同步，也可运行 `backend/.venv/bin/python scripts/refresh_cache.py`。命令与服务须使用同一账号、配置文件及 `LOG_DIR`。
 
 数据库不可用时仍可读取已有快照；采集刚入库的数据需先同步才会出现在页面中。关闭自动同步或恢复直连的配置见[本地缓存说明](local-cache.md)。Docker 的现有 `./log:/app/log` 卷已保留缓存，避免用清理日志的命令递归删除整个 `log/`。
 
@@ -323,7 +323,3 @@ npm run build
 ## ETF 份额模块升级
 
 已有部署接入 ETF 仪表盘时，先在聚宽创建并填充 `etf_share_daily`，给网页账号授予该表 SELECT 权限，再更新代码、构建并发布 `frontend/dist/`、重启 `showallopts-api`。无需更换 Nginx 端口、systemd 服务或真实数据库配置。完整命令与字段口径见 [ETF 份额仪表盘](etf-shares.md#已有部署升级)。
-
-## 原始采集版本升级
-
-本次升级需先运行新版聚宽批量/独立脚本，完成原始历史采集，再执行 `bash deploy.sh` 安装后端新增pandas依赖并重启。保持 `CACHE_ENABLED=true`，在页面手动同步对应模块。旧结果不能还原原始数据，首次采集及同步需要额外时间和空间。详见[迁移说明](raw-pipeline.md)。

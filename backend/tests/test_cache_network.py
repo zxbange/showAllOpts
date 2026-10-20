@@ -33,9 +33,6 @@ def test_reads_use_bounded_buffered_pages_across_composite_key_boundaries(cached
     session.commit()
     statements=[]
     def capture(conn, cursor, sql, params, context, many):
-        if 'sqlite_master' in sql or 'raw_' in sql:
-            assert sql.lstrip().startswith('SELECT')
-            return
         assert context.execution_options.get('stream_results') is False
         assert 'ORDER BY' in sql and 'LIMIT' in sql
         assert params[-2:] == (2, 0)  # Each SQLite test query uses LIMIT 2, OFFSET 0; seek advances it.

@@ -1,7 +1,7 @@
 """Read-only source reconciliation into an unpublished local SQLite snapshot."""
 import logging
 
-from sqlalchemy import LargeBinary, and_, func, or_, select, text, tuple_
+from sqlalchemy import and_, func, or_, select, tuple_
 
 logger = logging.getLogger(__name__)
 OMIT = {'member_codes', 'analysis', 'analysis_basis'}
@@ -28,9 +28,8 @@ def after_key(columns, values):
 def read_batches(connection, columns, keys, condition=None):
     """Buffer a bounded page; no unbuffered cursor remains open during local writes."""
     last = None
-    page_size = 32 if any(isinstance(c.type, LargeBinary) for c in columns) else READ_PAGE_SIZE
     while True:
-        query = select(*columns).order_by(*keys).limit(page_size)
+        query = select(*columns).order_by(*keys).limit(READ_PAGE_SIZE)
         if condition is not None:
             query = query.where(condition)
         if last is not None:
@@ -40,7 +39,7 @@ def read_batches(connection, columns, keys, condition=None):
         if not batch:
             return
         yield batch
-        if len(batch) < page_size:
+        if len(batch) < READ_PAGE_SIZE:
             return
         last = tuple(batch[-1]._mapping[key] for key in keys)
 
@@ -66,8 +65,6 @@ def sync_history(source, target, table):
     """Compare keys/timestamps, including late backfills and removed source rows."""
     keys = list(table.primary_key.columns)
     columns = keys + [table.c.updated_at]
-    if 'digest' in table.c:
-        columns.append(table.c.digest)  # Detect raw snapshot changes even within one timestamp second.
     logger.info('Cache metadata read started table=%s', table.name)
     remote = read_map(source, columns, len(keys))
     local = read_map(target, columns, len(keys))
@@ -83,7 +80,6 @@ def sync_history(source, target, table):
         fetched += transfer(source, target, table, key_filter(table, batch))
     logger.info('Cache table sync table=%s mode=incremental downloaded=%s deleted=%s total=%s',
                 table.name, fetched, len(removed), len(remote))
-    return bool(changed or removed)
 
 
 def sync_earnings(source, target, tables):
@@ -119,13 +115,3 @@ def sync_tables(source, target, tables, module, incremental):
         for table in tables:
             sync_history(source, target, table)
     return sum(target.scalar(select(func.count()).select_from(table)) for table in tables)
-
-
-def source_table_exists(connection, table_name):
-    if connection.dialect.name == 'sqlite':
-        return connection.execute(text("SELECT name FROM sqlite_master WHERE type='table' AND name=:name"), {'name':table_name}).first() is not None
-    return connection.execute(text('SELECT TABLE_NAME FROM information_schema.TABLES WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME=:name'), {'name':table_name}).first() is not None
-
-
-def raw_available(connection, model):
-    return source_table_exists(connection, model.__tablename__) and connection.execute(select(model.__table__.c.part).limit(1)).first() is not None

@@ -1,4 +1,4 @@
-from datetime import date, datetime, timedelta
+﻿from datetime import date, datetime, timedelta
 import math
 import pytest
 from sqlalchemy import event
@@ -46,8 +46,8 @@ def test_query_is_bounded_read_only_and_excludes_constituents(client,engine,sess
     event.listen(engine,'before_cursor_execute',capture)
     try: assert client.get('/api/v1/microcap-breadth/history').status_code==200
     finally: event.remove(engine,'before_cursor_execute',capture)
-    assert len(statements)==3 and statements[-1].lstrip().startswith('SELECT')
-    assert 'LIMIT' in statements[-1] and 'member_codes' not in statements[-1]
+    assert len(statements)==1 and statements[0].lstrip().startswith('SELECT')
+    assert 'LIMIT' in statements[0] and 'member_codes' not in statements[0]
 
 
 @pytest.mark.parametrize('query',['days=0','days=1','days=301','days=oops','end_date=invalid'])

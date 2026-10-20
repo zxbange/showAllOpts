@@ -16,7 +16,7 @@ LOG_RETENTION_DAYS=30
 # Persistent local snapshots; daily refresh uses Asia/Shanghai, regardless of server timezone.
 CACHE_ENABLED=true
 CACHE_AUTO_REFRESH=true
-CACHE_REFRESH_TIME=18:00
+CACHE_REFRESH_TIME=20:00
 # Background cache reads only; direct database page queries retain their shorter timeout.
 CACHE_DB_READ_TIMEOUT=120
 # Total attempts per module for transient MySQL connection failures (1 disables retry).

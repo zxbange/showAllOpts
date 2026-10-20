@@ -55,7 +55,7 @@ _RUN_LOCK = globals().get('_RUN_LOCK') or threading.Lock()
 _API_NAMES = ('get_all_securities', 'get_trade_days', 'get_price', 'get_extras',
               'get_industries', 'get_industry_stocks', 'get_industry', 'get_fundamentals',
               'query', 'valuation', 'indicator', 'income', 'finance', 'jy')
-_PREVIEW_COLUMNS = {'ETF动量热度': ('trade_date', 'code', 'name', 'close', 'adjusted_close')}
+_PREVIEW_COLUMNS = {'ETF动量热度': ('trade_date', 'code', 'name', 'score', 'annual_return', 'r2')}
 
 
 _PROGRESS_LOCAL = threading.local()
@@ -784,24 +784,27 @@ def _etf_heat_strategy(_apis, _config):
             for label, frame in [('结果', result), ('待核对', review), ('候选明细', all_candidates)]:
                 frame.to_csv('ETF分类去重_{}_{}.csv'.format(label, days[-1]), index=False, encoding='utf-8-sig')
         return result, review, all_candidates
-    # The collector stores provider data; the application computes all momentum scores.
+    # Collect and calculate in JoinQuant; MySQL contains final display results.
     settings = strategy_settings('ETF动量热度')
     EXPORT_CSV = False
     MIN_SIZE_YI = Decimal(str(settings['min_size_yi']))
-    RULE_VERSION = 'etf_raw_market_v1'
+    RULE_VERSION = 'etf_close_momentum_v2'
+    CALCULATION_VERSION = 'weighted-momentum-26-v1'
     Base = declarative_base()
 
-    class Bar(Base):
-        __tablename__ = 'etf_momentum_bar'
+    class Heat(Base):
+        __tablename__ = 'etf_momentum_heat'
         trade_date = Column(Date, primary_key=True)
         code = Column(String(16), primary_key=True)
         name = Column(String(128), nullable=False)
+        score = Column(Numeric(28, 10))
         close = Column(Numeric(24, 8))
-        adjusted_close = Column(Numeric(24, 8))
-        paused = Column(Integer, nullable=False)
-        observation_start = Column(Date, nullable=False)
+        annual_return = Column(Numeric(28, 10))
+        r2 = Column(Numeric(24, 10))
+        reference_pass = Column(Integer)
+        details = Column(JSON, nullable=False)
         updated_at = Column(DateTime, nullable=False)
-        __table_args__ = (Index('ix_etf_bar_code_date', 'code', 'trade_date'),)
+        __table_args__ = (Index('ix_etf_heat_code_date', 'code', 'trade_date'),)
 
     class Pool(Base):
         __tablename__ = 'etf_momentum_pool'
@@ -811,6 +814,35 @@ def _etf_heat_strategy(_apis, _config):
         members = Column(JSON, nullable=False)
         updated_at = Column(DateTime, nullable=False)
 
+
+    def metrics(prices, paused=False):
+        empty = dict(score=None, annual_return=None, r2=None, reference_pass=None,
+                     details={'status': 'missing', 'reason': '有效价格不足26期或当日停牌'})
+        if paused or len(prices) != 26 or any(p is None or not math.isfinite(float(p)) or p <= 0 for p in prices):
+            return empty
+        # A constant price scale does not affect regression slope or R².
+        y = [math.log(float(p) / float(prices[0])) for p in prices]
+        weights = [1 + i / 25 for i in range(26)]
+        squared = [w*w for w in weights]
+        total = sum(squared)
+        mx = sum(w*i for i, w in enumerate(squared)) / total
+        my = sum(w*v for w, v in zip(squared, y)) / total
+        slope = sum(w*(i-mx)*(v-my) for i, (w,v) in enumerate(zip(squared,y))) / sum(w*(i-mx)**2 for i,w in enumerate(squared))
+        intercept = my-slope*mx
+        residual = sum(w*(v-(slope*i+intercept))**2 for i,(w,v) in enumerate(zip(weights,y)))
+        average = sum(y)/26
+        variance = sum(w*(v-average)**2 for w,v in zip(weights,y))
+        r2 = 1-residual/variance if variance > 1e-25 else 0.0
+        try:
+            annual = math.expm1(slope*250)
+            values = [annual*r2, annual, r2]
+            if any(not math.isfinite(v) or abs(v) >= 1e18 for v in values):
+                raise OverflowError
+        except OverflowError:
+            return dict(empty, details={'status': 'missing', 'reason': '异常价格导致计算越界'})
+        score, annual, r2 = [Decimal(str(v)).quantize(Decimal('0.0000000001')) for v in values]
+        return dict(score=score, annual_return=annual, r2=r2, reference_pass=None,
+                    details={'status': 'ok', 'calculation_version': CALCULATION_VERSION})
 
     def price_value(value):
         if not positive(value):
@@ -828,12 +860,12 @@ def _etf_heat_strategy(_apis, _config):
         if not records:
             return []
         with session_scope(Session) as session:
-            existing = set(session.query(Bar.trade_date, Bar.code).filter(
-                Bar.code.in_(set(r['code'] for r in records)),
-                Bar.trade_date >= builtins.min(r['trade_date'] for r in records),
-                Bar.trade_date <= builtins.max(r['trade_date'] for r in records)).all())
+            existing = set(session.query(Heat.trade_date, Heat.code).filter(
+                Heat.code.in_(set(r['code'] for r in records)),
+                Heat.trade_date >= builtins.min(r['trade_date'] for r in records),
+                Heat.trade_date <= builtins.max(r['trade_date'] for r in records)).all())
             added = [r for r in records if (r['trade_date'], r['code']) not in existing]
-            session.add_all([Bar(**r) for r in added])
+            session.add_all([Heat(**r) for r in added])
             session.commit()
             return added
 
@@ -848,10 +880,10 @@ def _etf_heat_strategy(_apis, _config):
             raise ValueError('结束日期不能晚于今天')
         end = requested - datetime.timedelta(days=1) if requested == now.date() and now.hour < 16 else requested
         days = [as_date(d) for d in api('get_trade_days')(end_date=end, count=settings['initial_trade_days'])]
-        if not days or days != sorted(set(days)):
+        if not days or days != sorted(set(days)) or days[-1] > end:
             raise ValueError('交易日历无效')
         AS_OF_DATE = str(days[-1])
-        _progress_note('筛选 ETF/LOF 候选池；仅采集行情，热度由项目同步时计算')
+        _progress_note('筛选 ETF/LOF 候选池，计算热度后入库')
         chosen, audit, candidates = select_pool()
         if chosen.empty:
             raise ValueError('本次未取得有效候选池，保留旧快照；请运行分类研究脚本查看待核对清单')
@@ -865,33 +897,34 @@ def _etf_heat_strategy(_apis, _config):
         with database_scope(Base, _config) as Session:
             with session_scope(Session) as session:
                 head = session.query(Pool).filter_by(id=1).first()
-                if head and (head.as_of_date > days[-1] or head.rule_version not in (RULE_VERSION, 'etf_close_momentum_v1')):
+                if head and (head.as_of_date > days[-1] or head.rule_version not in
+                             (RULE_VERSION, 'etf_close_momentum_v1', 'etf_raw_market_v1')):
                     raise ValueError('已有更新日期或未知规则版本，拒绝混用')
-            for member in _progress_items(members, 'ETF/LOF 行情采集', lambda r: r['name']):
+            for member in _progress_items(members, 'ETF/LOF 热度计算', lambda r: r['name']):
                 code = member['code']
                 with session_scope(Session) as session:
-                    existing = {r.trade_date: (r.adjusted_close, r.observation_start)
-                                for r in session.query(Bar).filter(Bar.code == code).all()}
-                observation_start = builtins.min([days[0]] + [v[1] for v in existing.values()])
-                # Include any long collection gap, plus the 25 prior observations needed for regression.
+                    existing = {r[0] for r in session.query(Heat.trade_date).filter(Heat.code == code).all()}
+                if existing and builtins.max(existing) > days[-1]:
+                    raise ValueError('已有更新日期的基金结果，拒绝回退')
                 first = builtins.min(days[0], builtins.max(existing)) if existing else days[0]
-                warm = [as_date(d) for d in api('get_trade_days')(end_date=first, count=26)]
-                if not warm:
-                    raise ValueError('无法取得行情预热日期')
-                calendar = [as_date(d) for d in api('get_trade_days')(start_date=warm[0], end_date=days[-1])]
+                calendar = [as_date(d) for d in api('get_trade_days')(start_date=first, end_date=days[-1])]
+                if not calendar or calendar != sorted(set(calendar)) or calendar[-1] != days[-1]:
+                    raise ValueError('增量交易日历无效')
                 listed = as_date(member['listed_date']) if member.get('listed_date') else calendar[0]
-                expected = [d for d in calendar if d >= listed]
-                missing = [d for d in expected if d not in existing]
+                missing = [d for d in calendar if d >= listed and d not in existing]
                 if not missing:
                     continue
-                # Overlap one stored day to detect inconsistent provider adjustment bases.
-                overlap = [d for d in existing if d < builtins.min(missing)]
-                start = builtins.min(builtins.min(missing), builtins.max(overlap)) if overlap else builtins.min(missing)
+                warm = [as_date(d) for d in api('get_trade_days')(end_date=missing[0], count=26)]
+                if not warm or warm != sorted(set(warm)) or warm[-1] != missing[0]:
+                    raise ValueError('无法取得行情预热日期')
+                window_days = [as_date(d) for d in api('get_trade_days')(start_date=warm[0], end_date=days[-1])]
+                if window_days != sorted(set(window_days)) or not set(missing).issubset(window_days):
+                    raise ValueError('计算窗口交易日历无效')
                 frames = []
                 for fields, adjustment in [(['close', 'paused'], None), (['close'], 'post')]:
-                    frame = api('get_price')(code, start_date=start, end_date=days[-1], frequency='daily',
+                    frame = api('get_price')(code, start_date=warm[0], end_date=days[-1], frequency='daily',
                                              fields=fields, skip_paused=False, fq=adjustment)
-                    if frame is None or frame.empty:
+                    if frame is None or frame.empty or not set(fields).issubset(frame.columns):
                         raise ValueError(code + ' 行情接口无数据，未发布新候选池')
                     frame = frame.copy()
                     frame.index = pd.Index(pd.to_datetime(frame.index).date)
@@ -899,31 +932,32 @@ def _etf_heat_strategy(_apis, _config):
                         raise ValueError(code + ' 行情日期重复或乱序')
                     frames.append(frame)
                 raw, adjusted = frames
-                for day in set(existing).intersection(adjusted.index):
-                    previous = existing[day][0]
-                    current = price_value(adjusted.loc[day, 'close'])
-                    if previous is not None and current is not None and abs(float(current-previous)) > builtins.max(1e-7, abs(float(previous))*1e-7):
-                        raise ValueError(code + ' 后复权历史发生变化，请核对数据源后重建该基金行情；拒绝拼接不同基准')
-                records = []
-                for day in missing:
+                # Each regression window comes from one provider request and one adjustment basis.
+                for day in window_days:
+                    if day < listed:
+                        continue
                     if day not in raw.index or day not in adjusted.index:
                         raise ValueError('{} {} 行情缺失，保留已提交数据和旧候选池'.format(code, day))
                     paused = raw.loc[day, 'paused']
-                    if pd.isna(paused):
-                        raise ValueError(code + ' 停牌状态缺失')
-                    close = price_value(raw.loc[day, 'close'])
-                    adj = price_value(adjusted.loc[day, 'close'])
-                    if not paused and (close is None or adj is None):
+                    if pd.isna(paused) or paused not in (0, 1):
+                        raise ValueError(code + ' 停牌状态缺失或无效')
+                    if not paused and (positive(raw.loc[day, 'close']) is None or positive(adjusted.loc[day, 'close']) is None):
                         raise ValueError('{} {} 有效交易日价格缺失'.format(code, day))
-                    records.append(dict(trade_date=day, code=code, name=member['name'], close=close,
-                                        adjusted_close=adj, paused=int(paused), observation_start=observation_start,
-                                        updated_at=china_now()))
-                _progress_note('{} 批量入库 {} 条基础行情'.format(code, len(records)))
+                positions = {day: i for i, day in enumerate(window_days)}
+                records = []
+                for day in missing:
+                    i = positions[day]
+                    dates = window_days[builtins.max(0, i-25):i+1]
+                    prices = [positive(adjusted.loc[d, 'close']) if d in adjusted.index else None for d in dates]
+                    values = metrics(prices, bool(raw.loc[day, 'paused']))
+                    records.append(dict(trade_date=day, code=code, name=member['name'],
+                                        close=price_value(raw.loc[day, 'close']), updated_at=china_now(), **values))
+                _progress_note('{} 计算完成，入库 {} 条热度结果'.format(code, len(records)))
                 output.extend(save_rows(Session, records))
             with session_scope(Session) as session:
-                codes = {r[0] for r in session.query(Bar.code).filter(Bar.trade_date == days[-1]).all()}
+                codes = {r[0] for r in session.query(Heat.code).filter(Heat.trade_date == days[-1]).all()}
                 if set(m['code'] for m in members) - codes:
-                    raise ValueError('最新交易日行情不完整，保留上一候选池快照')
+                    raise ValueError('最新交易日热度结果不完整，保留上一候选池快照')
                 head = session.query(Pool).filter_by(id=1).with_for_update().first()
                 if head and head.as_of_date > days[-1]:
                     raise ValueError('并发采集已有更新快照，拒绝回退')

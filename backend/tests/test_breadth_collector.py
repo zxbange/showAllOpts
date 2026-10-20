@@ -1,4 +1,4 @@
-import ast
+﻿import ast
 import datetime as dt
 import importlib.util
 import math
@@ -12,7 +12,7 @@ from sqlalchemy.orm import sessionmaker
 from app.models.breadth import MicrocapBreadth as WebModel
 
 ROOT = Path(__file__).resolve().parents[2]
-SOURCE = ROOT/'collectors'/'legacy'/'微盘新高新低数量统计_数据库版.py'
+SOURCE = ROOT/'collectors'/'微盘新高新低数量统计_数据库版.py'
 
 class Frame:
     def __init__(self, rows=None, columns=None):
@@ -81,7 +81,7 @@ def test_schema_and_single_file_factory_parity(module, scenario):
                 return self.visit(node.args[0])
             return self.generic_visit(node)
     nodes=[]
-    for path in (ROOT/'collectors'/SOURCE.name, ROOT/'collectors'/'策略批量采集_数据库版.py'):
+    for path in (SOURCE, ROOT/'collectors'/'策略批量采集_数据库版.py'):
         tree=ast.parse(path.read_text(encoding='utf-8'),feature_version=(3,6))
         nodes.append(ast.dump(WithoutProgress().visit(next(n for n in tree.body if isinstance(n,ast.FunctionDef) and n.name=='_breadth_strategy')),include_attributes=False))
     assert nodes[0]==nodes[1]

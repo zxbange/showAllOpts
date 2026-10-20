@@ -110,7 +110,7 @@ def test_refresh_selects_only_source_columns_and_does_not_write_source(cached, e
     event.listen(engine,'before_cursor_execute',record)
     try: cache.refresh(background=False)
     finally: event.remove(engine,'before_cursor_execute',record)
-    assert len(statements) == sum(len(models) for _, models in MODULES.values()) + 14  # Seven raw table/presence checks. + 14  # Seven raw table/presence checks.
+    assert len(statements) == sum(len(models) for _, models in MODULES.values())
     assert all(s.lstrip().startswith('SELECT') for s in statements)
     assert all('member_codes' not in s and 'analysis' not in s for s in statements)
 
@@ -136,14 +136,18 @@ def test_daily_schedule_and_restart_do_not_duplicate_completed_slot(cached, engi
     first = cache.read_state()['modules']['industry-momentum']['file']
     SnapshotCache(settings,engine).tick(morning)
     assert cache.read_state()['modules']['industry-momentum']['file'] == first
-    evening = morning.replace(hour=18)
+    assert settings.cache_refresh_time == '20:00'
+    cache.tick(morning.replace(hour=18))
+    cache.tick(morning.replace(hour=19, minute=59))
+    assert cache.read_state()['modules']['industry-momentum']['file'] == first
+    evening = morning.replace(hour=20)
     monkeypatch.setattr('app.core.cache.now', lambda: evening)
     cache.tick(evening)
     second = cache.read_state()['modules']['industry-momentum']['file']
     assert second != first
     cache.tick(evening+timedelta(seconds=30))
     assert cache.read_state()['modules']['industry-momentum']['file'] == second
-    assert latest_slot(morning,'18:00').isoformat() == '2026-10-17T18:00:00+08:00'
+    assert latest_slot(morning,'20:00').isoformat() == '2026-10-17T20:00:00+08:00'
 
 
 def test_api_missing_cache_never_falls_back_and_sync_needs_no_secret(cached, engine, monkeypatch):

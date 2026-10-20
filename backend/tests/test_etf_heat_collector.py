@@ -10,7 +10,7 @@ import pandas as pd
 import pytest
 from sqlalchemy import Column, Date, Integer, Numeric, String, create_engine, event
 from sqlalchemy.orm import declarative_base, sessionmaker, Query
-from app.models.etf_heat import Bar as WebBar, Pool as WebPool
+from app.models.etf_heat import Heat as WebHeat, Pool as WebPool
 
 ROOT = Path(__file__).resolve().parents[2]
 SOURCE = ROOT/'collectors'/'ETF动量热度_数据库版.py'
@@ -36,14 +36,14 @@ def prices(count=280, falling=False):
 
 
 def test_schema_shared_and_atomic_insert_only(ns, tmp_path):
-    for collector, web in [(ns.Bar,WebBar),(ns.Pool,WebPool)]:
+    for collector, web in [(ns.Heat,WebHeat),(ns.Pool,WebPool)]:
         assert [(c.name,str(c.type),c.primary_key) for c in collector.__table__.columns]==[(c.name,str(c.type),c.primary_key) for c in web.__table__.columns]
     engine=create_engine('sqlite:///'+str(tmp_path/'heat.sqlite'));ns.Base.metadata.create_all(engine)
     Session=sessionmaker(bind=engine)
-    row=dict(trade_date=dt.date(2026,10,20),code='A',name='A',updated_at=dt.datetime(2026,10,20),close=2,adjusted_close=3,paused=0,observation_start=dt.date(2026,10,20))
+    row=dict(trade_date=dt.date(2026,10,20),code='A',name='A',updated_at=dt.datetime(2026,10,20),close=2,score=3,annual_return=4,r2=.75,reference_pass=None,details={'status':'ok'})
     assert len(ns.save_rows(Session,[row]))==1
     assert ns.save_rows(Session,[dict(row,close=999)])==[]
-    with Session() as s: assert s.query(ns.Bar).one().close==row['close']
+    with Session() as s: assert s.query(ns.Heat).one().close==row['close']
     with pytest.raises(ValueError):ns.save_rows(Session,[row,row])
     engine.dispose()
 
@@ -93,12 +93,22 @@ def test_full_run_repeat_and_partial_latest_preserve_head(mod, monkeypatch, tmp_
               get_extras=lambda info,batch,**kw:pd.DataFrame({c:10. for c in batch},index=pd.bdate_range(kw['start_date'],kw['end_date'])),
               get_price=get_price)
     strategy=mod._etf_heat_strategy(apis,mod.DB_CONFIG)
-    assert len(strategy.run())==28
+    strategy.Base.metadata.create_all(database)
+    with sessionmaker(bind=database)() as s:
+        s.add(strategy.Pool(id=1,as_of_date=dt.date(2026,10,20),rule_version='etf_raw_market_v1',
+                            members=[{'code':'518880.XSHG'}],updated_at=dt.datetime(2026,10,19)))
+        s.commit()
+    assert len(strategy.run())==3
+    from sqlalchemy import inspect
+    assert set(inspect(database).get_table_names())=={'etf_momentum_heat','etf_momentum_pool'}
+    with sessionmaker(bind=database)() as s:
+        assert s.query(strategy.Pool).one().rule_version=='etf_close_momentum_v2'
+        assert all(r.score is not None for r in s.query(strategy.Heat))
     assert len(strategy.run())==0
     assert len(price_calls)==2
     with sessionmaker(bind=database)() as s:
         before=s.query(strategy.Pool).one().updated_at
-        assert s.query(strategy.Bar).count()==28
+        assert s.query(strategy.Heat).count()==3
     now[0]=dt.datetime(2026,10,21,17);partial[0]=True
     with pytest.raises(ValueError,match='行情缺失'): strategy.run()
     with sessionmaker(bind=database)() as s:
@@ -106,7 +116,7 @@ def test_full_run_repeat_and_partial_latest_preserve_head(mod, monkeypatch, tmp_
         assert s.query(strategy.Pool).one().updated_at==before
     partial[0]=False
     assert len(strategy.run())==1
-    with sessionmaker(bind=database)() as s: assert s.query(strategy.Bar).count()==29
+    with sessionmaker(bind=database)() as s: assert s.query(strategy.Heat).count()==4
     source.dispose();database.dispose()
 
 
@@ -118,3 +128,21 @@ def test_selector_logic_is_shared_with_research_script():
     for name in ['classify','permitted','commodity_direction','target_catalog','load_sizes','load_lof_reports','select_largest','lof_catalog']:
         actual=next(n for n in factory.body if isinstance(n,ast.FunctionDef) and n.name==name)
         assert ast.dump(actual)==ast.dump(originals[name]), name
+
+
+@pytest.mark.parametrize('direction', [1, -1, 0])
+def test_collector_score_matches_weighted_regression(ns, direction):
+    values=np.exp(np.linspace(0,.1*direction,26))*(1+.003*np.sin(np.arange(26)))
+    y=np.log(values); x=np.arange(26); w=np.linspace(1,2,26)
+    slope, intercept=np.polyfit(x,y,1,w=w)
+    expected=np.expm1(slope*250)*(1-np.sum(w*(y-slope*x-intercept)**2)/np.sum(w*(y-y.mean())**2))
+    assert float(ns.metrics(list(values))['score'])==pytest.approx(expected,abs=1e-9)
+    assert ns.metrics(list(values))['score']==ns.metrics(list(values*100))['score']
+
+
+def test_collector_invalid_and_flat_prices(ns):
+    assert ns.metrics([1]*26)['score']==0
+    assert ns.metrics([1]*25)['score'] is None
+    assert ns.metrics([1]*25+[None])['score'] is None
+    assert ns.metrics([1]*26,True)['score'] is None
+    assert ns.metrics([1]*25+[.9])['score']<0

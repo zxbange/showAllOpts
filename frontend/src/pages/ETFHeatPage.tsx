@@ -181,7 +181,7 @@ export function ETFHeatPage() {
             </div>
           </section>
           <div className="etf-method-note">
-            历史回补使用当前候选池，不代表历史每天实际入选名单。聚宽采集基础行情，项目同步时计算热度。LOF
+            历史回补使用当前候选池，不代表历史每天实际入选名单。聚宽采集行情并计算热度后入库，项目同步结果展示。LOF
             采用已披露的份额类别净资产，规模可能有披露延迟。
           </div>
         </>

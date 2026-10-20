@@ -12,7 +12,7 @@ from sqlalchemy.orm import sessionmaker
 
 @pytest.fixture
 def collector(tmp_path):
-    source = Path(__file__).resolve().parents[2] / 'collectors' / 'legacy' / '抱团拥挤度_数据库版.py'
+    source = Path(__file__).resolve().parents[2] / 'collectors' / '抱团拥挤度_数据库版.py'
     tree = ast.parse(source.read_text(encoding='utf-8'))
     tree.body = [node for node in tree.body
                  if not (isinstance(node, ast.ImportFrom) and node.module == 'jqdata')
@@ -85,10 +85,10 @@ def test_zero_total_small_universe_duplicate_and_invalid_pct(collector):
 
 def test_first_run_backfills_2020_to_today_and_rerun_refreshes_last(collector):
     c = collector
-    assert len(c.env['run']()) == 3
+    assert len(c.env['run'](skip_existing=False)) == 3
     assert [r.trade_date for r in rows(c)] == c.days
     c.calculated.clear()
-    c.env['run']()
+    c.env['run'](skip_existing=False)
     assert c.calculated == [c.days[-1]]
     assert len(rows(c)) == 3
 
@@ -98,7 +98,7 @@ def test_incremental_keeps_historical_gap_and_other_top_pct(collector):
     seed(c, c.days[0])
     seed(c, c.days[-1], ratio=.1)
     seed(c, c.days[-1], pct=.1)
-    c.env['run']()
+    c.env['run'](skip_existing=False)
     assert c.calculated == [c.days[-1]]
     assert len(rows(c)) == 3
     assert rows(c)[0].trade_date.year == 2020
@@ -113,10 +113,10 @@ def test_failure_stops_and_next_run_resumes(collector):
         return calculate(day, pct)
     c.env['calculate_crowding'] = fail
     with pytest.raises(ValueError):
-        c.env['run']()
+        c.env['run'](skip_existing=False)
     assert len(rows(c)) == 1
     c.env['calculate_crowding'] = calculate
-    c.env['run']()
+    c.env['run'](skip_existing=False)
     assert len(rows(c)) == 3
 
 
@@ -140,7 +140,7 @@ def test_bad_calendar_never_writes_records(collector, bad_days):
     c = collector
     c.env['get_trade_days'] = lambda **kwargs: bad_days
     with pytest.raises(ValueError):
-        c.env['run']()
+        c.env['run'](skip_existing=False)
     assert not rows(c) and not c.calculated
 
 
@@ -151,12 +151,12 @@ def test_runtime_today_and_no_trade_day(collector):
         dates.append(end_date)
         return []
     c.env['get_trade_days'] = calendar
-    assert c.env['run']() == []
+    assert c.env['run'](skip_existing=False) == []
     c.env['china_now'] = lambda: datetime.datetime(2026, 10, 18)
-    assert c.env['run']() == []
+    assert c.env['run'](skip_existing=False) == []
     assert dates == [datetime.date(2026, 10, 17), datetime.date(2026, 10, 18)]
     with pytest.raises(ValueError):
-        c.env['run'](end_date='2026-10-19')
+        c.env['run'](end_date='2026-10-19', skip_existing=False)
 
 
 def test_price_adapter_validates_universe_dates_and_missing_fields(collector):
@@ -203,7 +203,7 @@ def test_incremental_queries_one_latest_date_and_only_recent_calendar(collector)
     c.env['get_trade_days'] = checked_calendar
     event.listen(c.engine, 'before_cursor_execute', capture)
     try:
-        c.env['run']()
+        c.env['run'](skip_existing=False)
     finally:
         event.remove(c.engine, 'before_cursor_execute', capture)
     assert calendar_calls == [(c.days[1], datetime.date(2026, 10, 17))]
@@ -218,7 +218,7 @@ def test_manual_backfill_repairs_older_gap_and_refreshes_value(collector):
     seed(c, c.days[0], ratio=.1)
     seed(c, c.days[-1])
     c.env['get_last_saved_date'] = lambda *args: pytest.fail('Manual mode must not query latest')
-    c.env['run'](start_date=c.days[0], end_date=c.days[1], incremental=False)
+    c.env['run'](start_date=c.days[0], end_date=c.days[1], incremental=False, skip_existing=False)
     assert c.calculated == c.days[:2]
     assert [row.trade_date for row in rows(c)] == c.days
     assert rows(c)[0].ratio == Decimal('.4')
@@ -228,7 +228,7 @@ def test_latest_after_end_skips_calendar_and_preserves_records(collector):
     c = collector
     seed(c, c.days[-1])
     c.env['get_trade_days'] = lambda **kwargs: pytest.fail('No calendar query needed')
-    assert c.env['run'](end_date=c.days[1]) == []
+    assert c.env['run'](end_date=c.days[1], skip_existing=False) == []
     assert len(rows(c)) == 1 and not c.calculated
 
 
@@ -236,7 +236,7 @@ def test_future_database_date_stops_instead_of_silently_skipping(collector):
     c = collector
     seed(c, datetime.date(2026, 10, 18))
     with pytest.raises(ValueError, match='数据库最新日期'):
-        c.env['run']()
+        c.env['run'](skip_existing=False)
     assert len(rows(c)) == 1 and not c.calculated
 
 

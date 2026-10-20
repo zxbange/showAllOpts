@@ -11,7 +11,7 @@ from sqlalchemy.orm import declarative_base, sessionmaker
 
 @pytest.fixture
 def collector(tmp_path):
-    source = Path(__file__).resolve().parents[2] / 'collectors' / 'legacy' / '行业动量计算_数据库版.py'
+    source = Path(__file__).resolve().parents[2] / 'collectors' / '行业动量计算_数据库版.py'
     tree = ast.parse(source.read_text(encoding='utf-8'))
     names = {'IndustryMomentum', 'as_date', 'save_day', 'get_last_saved_date',
              'get_retention_start', 'cleanup_old_data', 'run'}
@@ -87,7 +87,7 @@ def test_bad_calendar_stops_before_database_connection(collector, invalid):
     c.env['get_trade_days'] = lambda **kwargs: invalid
     c.env['MysqlMomentum'].connect_to_mysql = lambda: pytest.fail('Must not connect on invalid calendar')
     with pytest.raises(ValueError):
-        c.env['run']()
+        c.env['run'](skip_existing=False)
 
 
 def test_cleanup_keeps_boundary_zero_scores_and_all_classifications(collector):
@@ -121,7 +121,7 @@ def test_run_cleans_before_calculation_and_keeps_last_day_refresh(collector):
         assert all(saved_day >= c.cutoff for saved_day, _ in saved(c))
         return original(day, kind)
     c.env['calculate_momentum'] = calculate
-    c.env['run']()
+    c.env['run'](skip_existing=False)
     assert c.calculated == [c.days[-1]]
     assert len(saved(c)) == 360
 
@@ -131,23 +131,23 @@ def test_empty_or_long_stale_database_never_backfills_expired_days(collector, ol
     c = collector
     if old_records:
         seed(c, c.days[:5])
-    c.env['run']()
+    c.env['run'](skip_existing=False)
     assert c.calculated == c.days[-180:]
     assert len(saved(c)) == 180
-    c.env['run']()
+    c.env['run'](skip_existing=False)
     assert len(saved(c)) == 180
 
 
 def test_explicit_start_within_window_is_honored(collector):
     c = collector
-    c.env['run'](start_date=c.days[-3])
+    c.env['run'](start_date=c.days[-3], skip_existing=False)
     assert c.calculated == c.days[-3:]
 
 
 def test_historical_end_does_not_shift_retention_or_restore_old_data(collector):
     c = collector
     seed(c, c.days, ('sw_l1', 'sw_l2'))
-    c.env['run'](end_date=c.days[0])
+    c.env['run'](end_date=c.days[0], skip_existing=False)
     assert not c.calculated
     assert len(saved(c)) == 360
 
@@ -158,7 +158,7 @@ def test_cleanup_failure_stops_run(collector):
         raise RuntimeError('Injected cleanup failure')
     c.env['cleanup_old_data'] = fail
     with pytest.raises(RuntimeError):
-        c.env['run']()
+        c.env['run'](skip_existing=False)
     assert not c.calculated
 
 
@@ -171,7 +171,7 @@ def test_bad_backfill_calendar_cannot_reinsert_expired_data(collector):
         return [c.days[0], c.days[-1]]
     c.env['get_trade_days'] = calendar
     with pytest.raises(ValueError):
-        c.env['run']()
+        c.env['run'](skip_existing=False)
     assert not c.calculated
     assert saved(c) == []
 

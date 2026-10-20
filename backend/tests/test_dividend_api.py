@@ -1,4 +1,4 @@
-from datetime import date, datetime
+﻿from datetime import date, datetime
 from decimal import Decimal
 import pytest
 from sqlalchemy import event
@@ -37,7 +37,7 @@ def test_latest_order_units_overlap_and_single_read_only_query(client,session,en
     assert [r['rank'] for r in data['groups'][0]['items']]==[1,2]
     assert data['groups'][0]['items'][0]['dividend_yield_1y']==5
     assert data['overlap_codes']==['000001.XSHE']
-    assert len(statements)==3 and statements[-1].lstrip().startswith('SELECT')
+    assert len(statements)==1 and statements[0].lstrip().startswith('SELECT')
     assert client.post('/api/v1/dividend-selection/latest').status_code==405
 
 

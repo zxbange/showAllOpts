@@ -214,7 +214,7 @@ def probe(code='510300.XSHG', end_date=None):
     return pd.DataFrame(records, columns=RESULT_COLUMNS)
 
 
-def run(start_date=START_DATE, end_date=END_DATE, incremental=True, lookback_days=LOOKBACK_DAYS, groups=None, skip_existing=False):
+def run(start_date=START_DATE, end_date=END_DATE, incremental=True, lookback_days=LOOKBACK_DAYS, groups=None, skip_existing=True):
     today = china_now().date()
     end = today if end_date is None else as_date(end_date)
     start = None if start_date is None else as_date(start_date)

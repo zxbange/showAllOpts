@@ -22,7 +22,7 @@ class Frame:
 
 @pytest.fixture
 def c(tmp_path):
-    source = Path(__file__).resolve().parents[2] / 'collectors' / 'legacy' / '净利润断层_数据库版.py'
+    source = Path(__file__).resolve().parents[2] / 'collectors' / '净利润断层_数据库版.py'
     tree = ast.parse(source.read_text(encoding='utf-8-sig'))
     tree.body = [n for n in tree.body if not (
         isinstance(n, ast.ImportFrom) and n.module == 'jqdata') and not (
@@ -166,7 +166,7 @@ def test_source_failure_never_connects_or_overwrites(c):
     def fail(*a): raise RuntimeError('source unavailable')
     c.env['fetch_events']=fail
     c.env['MysqlEarnings'].connect_to_mysql=lambda:pytest.fail('must not connect')
-    with pytest.raises(RuntimeError): c.env['run']()
+    with pytest.raises(RuntimeError): c.env['run'](skip_existing=False)
 
 
 

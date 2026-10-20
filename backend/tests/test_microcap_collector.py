@@ -26,7 +26,7 @@ class Frame:
 
 @pytest.fixture
 def collector(tmp_path):
-    source = Path(__file__).resolve().parents[2] / 'collectors' / 'legacy' / '微盘温度计_数据库版.py'
+    source = Path(__file__).resolve().parents[2] / 'collectors' / '微盘温度计_数据库版.py'
     tree = ast.parse(source.read_text(encoding='utf-8'))
     tree.body = [node for node in tree.body
                  if not (isinstance(node, ast.ImportFrom) and node.module == 'jqdata')
@@ -73,7 +73,7 @@ def test_original_parameters_and_first_run_grid(collector):
     c = collector
     assert c.env['START_DATE'] == '2021-01-01'
     assert c.env['MICRO_NUM'] == 1000 and c.env['SAMPLE_STEP'] == 5
-    c.env['run'](micro_num=2)
+    c.env['run'](micro_num=2, skip_existing=False)
     rows = saved(c)
     assert [row['trade_date'] for row in rows] == c.days[::5]
     assert [row['sample_count'] for row in rows] == [1, 2, 3, 4]
@@ -82,28 +82,28 @@ def test_original_parameters_and_first_run_grid(collector):
 
 def test_incremental_equals_full_and_latest_refresh_is_idempotent(collector):
     c = collector
-    c.env['run'](micro_num=2, end_date=c.days[6])
-    c.env['run'](micro_num=2, end_date=c.days[12])
-    c.env['run'](micro_num=2)
+    c.env['run'](micro_num=2, end_date=c.days[6], skip_existing=False)
+    c.env['run'](micro_num=2, end_date=c.days[12], skip_existing=False)
+    c.env['run'](micro_num=2, skip_existing=False)
     incremental = saved(c)
     c.calculated.clear()
-    c.env['run'](micro_num=2)
+    c.env['run'](micro_num=2, skip_existing=False)
     assert c.calculated == [c.days[15]]
     assert saved(c) == incremental
     with c.Session() as session:
         session.query(c.env['MicrocapTemperature']).delete()
         session.commit()
-    c.env['run'](micro_num=2)
+    c.env['run'](micro_num=2, skip_existing=False)
     assert saved(c) == incremental
 
 
 def test_refresh_before_next_sampling_day_does_not_shift_schedule(collector):
     c = collector
-    c.env['run'](micro_num=2, end_date=c.days[7])
+    c.env['run'](micro_num=2, end_date=c.days[7], skip_existing=False)
     c.calculated.clear()
-    c.env['run'](micro_num=2, end_date=c.days[9])
+    c.env['run'](micro_num=2, end_date=c.days[9], skip_existing=False)
     assert c.calculated == [c.days[5]]
-    c.env['run'](micro_num=2, end_date=c.days[10])
+    c.env['run'](micro_num=2, end_date=c.days[10], skip_existing=False)
     assert [row['trade_date'] for row in saved(c)] == c.days[:11:5]
 
 
@@ -116,16 +116,16 @@ def test_failure_stops_and_resume_preserves_prior_index(collector):
         return calculate(day, previous, micro_num)
     c.env['calculate_period'] = fail
     with pytest.raises(ValueError):
-        c.env['run'](micro_num=2)
+        c.env['run'](micro_num=2, skip_existing=False)
     assert len(saved(c)) == 1
     c.env['calculate_period'] = calculate
-    c.env['run'](micro_num=2)
+    c.env['run'](micro_num=2, skip_existing=False)
     assert saved(c)[-1]['micro_index'] == 1331
 
 
 def test_rollback_preserves_whole_snapshot_and_members(collector):
     c = collector
-    c.env['run'](micro_num=2, end_date=c.days[0])
+    c.env['run'](micro_num=2, end_date=c.days[0], skip_existing=False)
     old = saved(c)[0]
     class FailCommit(c.Session.class_):
         def commit(self):
@@ -236,12 +236,12 @@ def test_calculation_adapters_five_day_turnover_and_nullable_profit(collector):
 
 def test_missing_old_sample_is_detected(collector):
     c = collector
-    c.env['run'](micro_num=2)
+    c.env['run'](micro_num=2, skip_existing=False)
     with c.Session() as session:
         session.query(c.env['MicrocapTemperature']).filter_by(trade_date=c.days[5]).delete()
         session.commit()
     with pytest.raises(ValueError, match='历史样本不连续'):
-        c.env['run'](micro_num=2)
+        c.env['run'](micro_num=2, skip_existing=False)
 
 
 @pytest.mark.parametrize('bad_days', [None, ['2020-12-31'], ['2021-02-01'], ['2021-01-04']*2])
@@ -249,7 +249,7 @@ def test_bad_calendar_prevents_writes(collector, bad_days):
     c = collector
     c.env['get_trade_days'] = lambda **kwargs: bad_days
     with pytest.raises(ValueError):
-        c.env['run'](micro_num=2)
+        c.env['run'](micro_num=2, skip_existing=False)
     assert saved(c) == []
 
 
@@ -258,7 +258,7 @@ def test_future_end_and_nonpositive_parameters_never_connect(collector):
     c.env['MysqlMicrocap'].connect_to_mysql = lambda: pytest.fail('Should not connect')
     for kwargs in ({'end_date': '2021-02-01'}, {'micro_num': 0}, {'sample_step': True}):
         with pytest.raises(ValueError):
-            c.env['run'](**kwargs)
+            c.env['run'](**kwargs, skip_existing=False)
 
 
 def test_fundamentals_batching_and_requested_fields(collector):
@@ -293,7 +293,7 @@ def test_fundamentals_batching_and_requested_fields(collector):
 def test_latest_query_is_index_bounded_and_baseline_has_only_four_metrics(collector):
     from sqlalchemy import event
     c = collector
-    c.env['run'](micro_num=2)
+    c.env['run'](micro_num=2, skip_existing=False)
     statements = []
     def capture(conn, cursor, statement, parameters, context, executemany):
         if statement.lstrip().startswith('SELECT'):

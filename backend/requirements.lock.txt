@@ -35,9 +35,3 @@ watchfiles==1.3.0
 websockets==17.2
 concurrent-log-handler==0.9.30
 portalocker==4.4.0
-pandas==2.3.3
-numpy==2.4.6
-python-dateutil==2.9.0.post0
-pytz==2026.5
-tzdata==2026.5
-six==1.17.0

@@ -91,13 +91,13 @@ def test_catalog_schema_and_default_300_trading_days(collector):
         return result[-count:] if count else result
     c.env['get_trade_days']=calendar
     for day in calendar_days:c.source['510300.XSHG',day]=100
-    result=c.env['run']()
+    result=c.env['run'](skip_existing=False)
     expected=calendar_days[-300:]
     assert len(result)==300 and [r.trade_date for r in rows(c)]==expected
     assert requests[0]==(None,end,300)
     assert expected[-1]==dt.date(2026,10,16) and expected[0]<end-dt.timedelta(days=365)
     # Explicit rescan upgrades an existing shorter initial history without duplicates.
-    c.env['run'](incremental=False)
+    c.env['run'](incremental=False, skip_existing=False)
     assert len(rows(c))==300
 
 
@@ -108,10 +108,10 @@ def test_incremental_per_fund_refresh_and_idempotence(collector):
         for day in c.days[1:c.days.index(last)+1]:
             c.env['save_window'](c.Session,code,[record(c,day,100,code)])
         for day in c.days[1:]: c.source[code,day]=200
-    result=c.env['run'](groups=['hs300'],lookback_days=1)
+    result=c.env['run'](groups=['hs300'],lookback_days=1, skip_existing=False)
     assert [(x[0],x[1]) for x in c.requested]==[('510300.XSHG',c.days[2]),('510310.XSHG',c.days[3])]
     assert len(result)==7 and len(rows(c))==10
-    c.env['run'](groups=['hs300'],lookback_days=1)
+    c.env['run'](groups=['hs300'],lookback_days=1, skip_existing=False)
     assert len(rows(c))==10
     assert all(r.shares==200 for r in rows(c) if r.trade_date>=c.days[3])
 
@@ -120,7 +120,7 @@ def test_first_collection_only_published_records_no_zero_fill(collector):
     c=collector;c.env['ETF_GROUPS']={'hs300':ETF_GROUPS['hs300'][:1]}
     # The calendar includes a prior trade day outside the selected range.
     for day in c.days[2:4]:c.source['510300.XSHG',day]=0
-    result=c.env['run'](start_date=c.days[1])
+    result=c.env['run'](start_date=c.days[1], skip_existing=False)
     assert [r['trade_date'] for r in result]==c.days[2:4] and all(r.shares==0 for r in rows(c))
 
 
@@ -133,11 +133,11 @@ def test_source_hole_and_leading_loss_do_not_advance(collector):
     c=collector;c.env['ETF_GROUPS']={'hs300':ETF_GROUPS['hs300'][:1]}
     for day in c.days[1:3]: c.env['save_window'](c.Session,'510300.XSHG',[record(c,day)])
     c.source.update({('510300.XSHG',day):100 for day in c.days[2:]})
-    with pytest.raises(RuntimeError):c.env['run'](lookback_days=2)
+    with pytest.raises(RuntimeError):c.env['run'](lookback_days=2, skip_existing=False)
     assert max(r.trade_date for r in rows(c))==c.days[2]
     c.source['510300.XSHG',c.days[1]]=100
     del c.source['510300.XSHG',c.days[3]]
-    with pytest.raises(RuntimeError):c.env['run'](lookback_days=2)
+    with pytest.raises(RuntimeError):c.env['run'](lookback_days=2, skip_existing=False)
     assert len(rows(c))==2
 
 
@@ -164,17 +164,17 @@ def test_rollback_and_other_fund_continues(collector):
     for day in c.days[1:]:
         c.source['510300.XSHG',day]=-1
         c.source['510310.XSHG',day]=300
-    with pytest.raises(RuntimeError):c.env['run'](start_date=c.days[1])
+    with pytest.raises(RuntimeError):c.env['run'](start_date=c.days[1], skip_existing=False)
     assert len([r for r in rows(c) if r.fund_code=='510310.XSHG'])==5
 
 
 def test_windowing_and_manual_backfill(collector):
     c=collector;c.env['ETF_GROUPS']={'hs300':ETF_GROUPS['hs300'][:1]};c.env['WINDOW_SIZE']=2
     for day in c.days[1:]:c.source['510300.XSHG',day]=100
-    c.env['run'](start_date=c.days[1])
+    c.env['run'](start_date=c.days[1], skip_existing=False)
     assert len(c.requested)==3 and len(rows(c))==5
     c.requested.clear(); c.source['510300.XSHG',c.days[1]]=200
-    c.env['run'](start_date=c.days[1],end_date=c.days[2],incremental=False)
+    c.env['run'](start_date=c.days[1],end_date=c.days[2],incremental=False, skip_existing=False)
     assert rows(c)[0].shares==200 and len(rows(c))==5
 
 
@@ -185,9 +185,9 @@ def test_probe_and_invalid_parameters_do_not_connect(collector):
     for day in c.days[1:]:c.source['510300.XSHG',day]=123
     assert len(c.env['probe']())==5
     for kwargs in ({'end_date':'2099-01-01'},{'lookback_days':0},{'groups':['bad']},{'incremental':'yes'}):
-        with pytest.raises(ValueError):c.env['run'](**kwargs)
+        with pytest.raises(ValueError):c.env['run'](**kwargs, skip_existing=False)
     del c.env['finance']
-    with pytest.raises(ValueError):c.env['run']()
+    with pytest.raises(ValueError):c.env['run'](skip_existing=False)
 
 
 def test_long_pause_resumes_before_rolling_year_and_partial_window_checkpoint(collector):
@@ -205,11 +205,11 @@ def test_long_pause_resumes_before_rolling_year_and_partial_window_checkpoint(co
     for day in c.days:c.source['510300.XSHG',day]=100
     c.env['WINDOW_SIZE']=2
     c.source['510300.XSHG',c.days[2]]=-1
-    with pytest.raises(RuntimeError):c.env['run'](lookback_days=1)
+    with pytest.raises(RuntimeError):c.env['run'](lookback_days=1, skip_existing=False)
     assert requested[0]==old  # A year-long outage must not skip uncollected history.
     assert [r.trade_date for r in rows(c)]==[old,c.days[0]]
     c.source['510300.XSHG',c.days[2]]=100
-    c.env['run'](lookback_days=1)
+    c.env['run'](lookback_days=1, skip_existing=False)
     assert len(rows(c))==7 and rows(c)[-1].trade_date==c.days[-1]
 
 
@@ -219,7 +219,7 @@ def test_notebook_numpy_any_does_not_shadow_python_validation(collector):
     c.env['any']=shadowed
     c.env['ETF_GROUPS']={'hs300':ETF_GROUPS['hs300'][:1]}
     for day in c.days[1:]:c.source['510300.XSHG',day]=100
-    assert len(c.env['run'](start_date=c.days[1]))==5
+    assert len(c.env['run'](start_date=c.days[1], skip_existing=False))==5
 
 
 def test_empty_initial_calendar_does_not_connect(collector):
@@ -227,7 +227,7 @@ def test_empty_initial_calendar_does_not_connect(collector):
     c.env['get_trade_days']=lambda **kwargs:[]
     def forbidden():raise AssertionError('database touched')
     c.env['MysqlETF'].connect_to_mysql=forbidden
-    with pytest.raises(ValueError,match='交易日历'):c.env['run']()
+    with pytest.raises(ValueError,match='交易日历'):c.env['run'](skip_existing=False)
 
 
 def test_insert_only_etf_requests_only_new_dates_and_protects_existing(collector):

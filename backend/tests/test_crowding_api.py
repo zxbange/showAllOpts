@@ -85,7 +85,7 @@ def test_one_read_only_query(client, engine, session):
         assert response.json()['summary']['change_pp'] == 0
     finally:
         event.remove(engine, 'before_cursor_execute', capture)
-    assert statements == ['SELECT'] * 3  # Two raw-mode probes plus legacy query.
+    assert statements == ['SELECT']
 
 
 def test_error_redaction(client, monkeypatch):

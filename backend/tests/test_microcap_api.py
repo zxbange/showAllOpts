@@ -75,8 +75,8 @@ def test_single_select_does_not_read_constituents(client, engine, session):
         assert client.get('/api/v1/microcap-temperature/history').status_code == 200
     finally:
         event.remove(engine, 'before_cursor_execute', capture)
-    assert len(statements) == 3 and statements[-1].lstrip().startswith('SELECT')
-    assert 'member_codes' not in statements[-1]
+    assert len(statements) == 1 and statements[0].lstrip().startswith('SELECT')
+    assert 'member_codes' not in statements[0]
 
 
 @pytest.mark.parametrize('query', ['days=1', 'days=-1', 'days=366', 'days=no', 'end_date=bad'])
