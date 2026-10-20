@@ -65,7 +65,7 @@ def test_schemas_and_embedded_factory_match(ns):
         assert [(c.name,str(c.type),c.nullable,c.primary_key) for c in local.__table__.columns] == [
             (c.name,str(c.type),c.nullable,c.primary_key) for c in web.__table__.columns]
     nodes=[]
-    for path in (SOURCE,ROOT/'collectors/策略批量采集_数据库版.py'):
+    for path in (ROOT/'collectors'/SOURCE.name,ROOT/'collectors/策略批量采集_数据库版.py'):
         tree=ast.parse(path.read_text(encoding='utf-8'),feature_version=(3,6))
         nodes.append(ast.dump(next(n for n in tree.body if isinstance(n,ast.FunctionDef) and n.name=='_dividend_strategy')))
     assert nodes[0]==nodes[1]

@@ -3,7 +3,6 @@
 本策略在本文件内独立实现；不读取外部策略、配置或日志文件。
 依赖和参数集中在开头；共用连接、会话及日期工具。用法见 docs/collector-batch.md。
 """
-import bisect
 import decimal
 import gzip
 import hashlib
@@ -18,15 +17,13 @@ import threading
 import time
 from contextlib import contextmanager, redirect_stderr, redirect_stdout
 from copy import deepcopy
-from decimal import Decimal, InvalidOperation, ROUND_HALF_UP, localcontext
-from statistics import median
+from decimal import Decimal
 from types import SimpleNamespace
 from urllib.parse import quote, quote_plus
 
 import jqdata as jq
 import pandas as pd
-from sqlalchemy import (BigInteger, Column, Date, DateTime, Index, Integer, JSON, LargeBinary,
-                        Numeric, String, Text, and_, or_, create_engine, func)
+from sqlalchemy import Column, Date, DateTime, Integer, LargeBinary, String, and_, or_, create_engine, func
 from sqlalchemy.engine.url import URL
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
@@ -386,42 +383,15 @@ def run_all(strategy_names=None, options=None, db_config=None, preview_rows=None
 
 # ---------- 行业动量 ----------
 def _breadth_strategy(_apis, _config):
-    """微盘 400 新高新低：每日动态选股，一次历史行情计算四个周期。"""
+    """仅提供原始采集依赖的接口与校验，不计算策略结果。"""
     settings = strategy_settings('微盘新高新低')
     get_all_securities = _apis.get('get_all_securities')
     get_trade_days = _apis.get('get_trade_days')
     get_extras = _apis.get('get_extras')
     get_fundamentals = _apis.get('get_fundamentals')
-    get_price = _apis.get('get_price')
     query = _apis.get('query')
     valuation = _apis.get('valuation')
-    PERIODS = (5, 10, 20, 30)
-    START_DATE = settings['start_date']
-    END_DATE = settings['end_date']
-    MICRO_NUM = settings['micro_num']
-    INITIAL_DAYS = settings['initial_days']
     BATCH_SIZE = settings['batch_size']
-    PRICE_BATCH_SIZE = settings['price_batch_size']
-    Base = declarative_base()
-
-    class MicrocapBreadth(Base):
-        __tablename__ = 'microcap_breadth'
-        __table_args__ = {'mysql_engine': 'InnoDB', 'mysql_charset': 'utf8mb4'}
-        series_id = Column(String(64), primary_key=True)
-        trade_date = Column(Date, primary_key=True)
-        sample_count = Column(Integer, nullable=False)
-        high_5 = Column(Integer, nullable=False)
-        low_5 = Column(Integer, nullable=False)
-        high_10 = Column(Integer, nullable=False)
-        low_10 = Column(Integer, nullable=False)
-        high_20 = Column(Integer, nullable=False)
-        low_20 = Column(Integer, nullable=False)
-        high_30 = Column(Integer, nullable=False)
-        low_30 = Column(Integer, nullable=False)
-        member_codes = Column(Text, nullable=False)
-        updated_at = Column(DateTime, nullable=False)
-
-    RESULT_COLUMNS = [c.name for c in MicrocapBreadth.__table__.columns if c.name != 'member_codes']
 
     def series_key(micro_num):
         return 'micro{}_hl_v1'.format(micro_num)
@@ -486,113 +456,6 @@ def _breadth_strategy(_apis, _config):
         if len(selected) != micro_num:
             raise ValueError('可选股票不足 {} 只。'.format(micro_num))
         return selected
-
-    def high_low_counts(closes):
-        if len(closes) != 31 or builtins.any(not math.isfinite(float(p)) or p <= 0 for p in closes):
-            raise ValueError('新高新低需要连续 31 个有效交易日收盘价。')
-        current = closes[-1]
-        return {key: int(hit) for period in PERIODS for key, hit in (
-            ('high_{}'.format(period), current >= builtins.max(closes[-period-1:-1])),
-            ('low_{}'.format(period), current <= builtins.min(closes[-period-1:-1])),
-        )}
-
-    def count_prices(frame, codes, calendar):
-        if frame is None or not {'code', 'time', 'close'}.issubset(frame.columns):
-            raise ValueError('历史行情字段缺失。')
-        rows = frame.to_dict('records')
-        if len(rows) != len(codes)*len(calendar):
-            raise ValueError('历史行情未完整返回，拒绝将缺失记录按零统计。')
-        prices = {code: {} for code in codes}
-        for row in rows:
-            code, day = str(row['code']), as_date(row['time'])
-            if code not in prices or day not in calendar or day in prices[code]:
-                raise ValueError('行情包含重复、越界日期或股票。')
-            try:
-                price = float(row['close'])
-            except (TypeError, ValueError):
-                raise ValueError('收盘价无效。') from None
-            if not math.isfinite(price) or price <= 0:
-                raise ValueError('收盘价缺失或非正数。')
-            prices[code][day] = price
-        counts = {'{}_{}'.format(side, period): 0 for period in PERIODS for side in ('high', 'low')}
-        for code in codes:
-            if set(prices[code]) != set(calendar):
-                raise ValueError('个股历史行情缺失。')
-            for key, value in high_low_counts([prices[code][day] for day in calendar]).items():
-                counts[key] += value
-        return counts
-
-    def calculate_day(day, micro_num=MICRO_NUM):
-        codes = choose_stocks(day, micro_num)
-        calendar = trade_calendar(end=day, count=31)
-        if calendar[-1] != day:
-            raise ValueError('采集日期不是交易日。')
-        counts = {'{}_{}'.format(side, period): 0 for period in PERIODS for side in ('high', 'low')}
-        for offset in range(0, len(codes), PRICE_BATCH_SIZE):
-            batch = codes[offset:offset+PRICE_BATCH_SIZE]
-            _progress_note('行情批次 {} / {}'.format(offset//PRICE_BATCH_SIZE+1, (len(codes)+PRICE_BATCH_SIZE-1)//PRICE_BATCH_SIZE))
-            frame = get_price(batch, start_date=calendar[0], end_date=day, frequency='daily',
-                              fields=['close'], fq='pre', skip_paused=False, panel=False)
-            for key, value in count_prices(frame, batch, calendar).items():
-                counts[key] += value
-        return dict(counts, series_id=series_key(micro_num), trade_date=day, sample_count=micro_num,
-                    member_codes=json.dumps(codes), updated_at=china_now())
-
-    def last_date(Session, series_id):
-        with session_scope(Session) as session:
-            return session.query(func.max(MicrocapBreadth.trade_date)).filter_by(series_id=series_id).scalar()
-
-    def save_day(Session, record):
-        _progress_note('写入当日新高新低统计')
-        size = record['sample_count']
-        if isinstance(size, bool) or not isinstance(size, int) or size <= 0:
-            raise ValueError('样本数量须为正整数。')
-        if record['series_id'] != series_key(size):
-            raise ValueError('序列与样本数量不一致。')
-        members = json.loads(record['member_codes'])
-        if not isinstance(members, list) or len(members) != size or len(set(members)) != size:
-            raise ValueError('成分股名单与样本数量不一致。')
-        for period in PERIODS:
-            for side in ('high', 'low'):
-                value = record['{}_{}'.format(side, period)]
-                if isinstance(value, bool) or not isinstance(value, int) or not 0 <= value <= size:
-                    raise ValueError('新高新低数量超出范围。')
-                if period > 5 and value > record['{}_5'.format(side)]:
-                    raise ValueError('长期新高新低数量不能超过 5 日数量。')
-        with session_scope(Session) as session:
-            if session.query(MicrocapBreadth).filter_by(
-                    series_id=record['series_id'], trade_date=record['trade_date']).first() is not None:
-                return False
-            session.add(MicrocapBreadth(**record))
-            session.commit()
-            return True
-
-    def run(start_date=START_DATE, end_date=END_DATE, micro_num=MICRO_NUM, skip_existing=True):
-        if skip_existing is not True:
-            raise ValueError('微盘新高新低仅支持只新增，不覆盖已入库快照。')
-        if isinstance(micro_num, bool) or not isinstance(micro_num, int) or micro_num <= 0:
-            raise ValueError('micro_num 必须为正整数。')
-        now = china_now()
-        end = as_date(end_date) if end_date is not None else now.date()
-        initial = as_date(start_date) if start_date is not None else end-datetime.timedelta(days=INITIAL_DAYS)
-        if end > now.date() or initial > end:
-            raise ValueError('日期范围无效或结束日期晚于今天。')
-        if end == now.date() and now.hour < 16:
-            end -= datetime.timedelta(days=1)
-        output = []
-        with database_scope(Base, _config) as Session:
-            latest = last_date(Session, series_key(micro_num))
-            if latest and latest > now.date():
-                raise ValueError('数据库最新日期晚于今天。')
-            start = latest+datetime.timedelta(days=1) if latest else initial
-            if start > end:
-                return pd.DataFrame(columns=RESULT_COLUMNS)
-            for day in _progress_items(trade_calendar(start=start, end=end), '交易日'):
-                record = calculate_day(day, micro_num)
-                # 每日一个事务；任何缺失或失败立即停止，不越过缺失日续传。
-                if save_day(Session, record):
-                    output.append({key: record[key] for key in RESULT_COLUMNS})
-        return pd.DataFrame(output, columns=RESULT_COLUMNS)
     return SimpleNamespace(**locals())
 RAW_VERSION = 'strategy_inputs_v1'
 

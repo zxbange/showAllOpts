@@ -68,7 +68,7 @@ def test_schemas_factory_and_python36_compatibility(ns):
         assert [(c.name,str(c.type),c.nullable,c.primary_key) for c in local.__table__.columns]==[
             (c.name,str(c.type),c.nullable,c.primary_key) for c in web.__table__.columns]
     nodes=[]
-    for p in (SOURCE,ROOT/'collectors/策略批量采集_数据库版.py'):
+    for p in (ROOT/'collectors'/SOURCE.name,ROOT/'collectors/策略批量采集_数据库版.py'):
         tree=ast.parse(p.read_text(encoding='utf-8'),feature_version=(3,6))
         nodes.append(ast.dump(next(n for n in tree.body if isinstance(n,ast.FunctionDef) and n.name=='_growth_strategy')))
     assert nodes[0]==nodes[1]

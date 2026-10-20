@@ -3,7 +3,6 @@
 本策略在本文件内独立实现；不读取外部策略、配置或日志文件。
 依赖和参数集中在开头；共用连接、会话及日期工具。用法见 docs/collector-batch.md。
 """
-import bisect
 import decimal
 import gzip
 import hashlib
@@ -18,15 +17,13 @@ import threading
 import time
 from contextlib import contextmanager, redirect_stderr, redirect_stdout
 from copy import deepcopy
-from decimal import Decimal, InvalidOperation, ROUND_HALF_UP, localcontext
-from statistics import median
+from decimal import Decimal
 from types import SimpleNamespace
 from urllib.parse import quote, quote_plus
 
 import jqdata as jq
 import pandas as pd
-from sqlalchemy import (BigInteger, Column, Date, DateTime, Index, Integer, JSON, LargeBinary,
-                        Numeric, String, Text, and_, or_, create_engine, func)
+from sqlalchemy import Column, Date, DateTime, Integer, LargeBinary, String, and_, or_, create_engine, func
 from sqlalchemy.engine.url import URL
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
@@ -386,152 +383,10 @@ def run_all(strategy_names=None, options=None, db_config=None, preview_rows=None
 
 # ---------- 行业动量 ----------
 def _momentum_strategy(_apis, _config):
-    """独立作用域隔离模型、参数和函数，返回本策略的接口。"""
+    """仅提供原始采集依赖的接口与校验，不计算策略结果。"""
     settings = strategy_settings('行业动量')
-    get_all_securities = _apis.get('get_all_securities')
     get_trade_days = _apis.get('get_trade_days')
-    get_price = _apis.get('get_price')
-    get_industries = _apis.get('get_industries')
-    get_industry_stocks = _apis.get('get_industry_stocks')
-    query = _apis.get('query')
-
-    START_DATE = settings['start_date']
-    END_DATE = settings['end_date']
-    INDUSTRY_TYPE = settings['industry_type']
     RETENTION_TRADE_DAYS = settings['retention_trade_days']
-    Base = declarative_base()
-    RESULT_COLUMNS = [
-        'trade_date', 'industry_type', 'industry_code', 'industry_name',
-        'momentum', 'momentum_rank', 'front_stock_count', 'industry_stock_count',
-    ]
-
-    class IndustryMomentum(Base):
-        __tablename__ = 'industry_momentum'
-        __table_args__ = {'mysql_engine': 'InnoDB', 'mysql_charset': 'utf8mb4'}
-
-        trade_date = Column(Date, primary_key=True)
-        industry_type = Column(String(16), primary_key=True)
-        industry_code = Column(String(32), primary_key=True)
-        industry_name = Column(String(128), nullable=False)
-        momentum = Column(Numeric(18, 2), nullable=False)
-        momentum_rank = Column(Integer, nullable=False)
-        front_stock_count = Column(Integer, nullable=False)
-        industry_stock_count = Column(Integer, nullable=False)
-        updated_at = Column(DateTime, nullable=False, default=datetime.datetime.now)
-
-    def calculate_momentum(trade_date, industry_type=INDUSTRY_TYPE):
-        """计算一个交易日的全部行业；仅获取数据，不连接数据库。"""
-        _progress_note('获取行业成分及行情，计算动量')
-        day = as_date(trade_date)
-        date_text = day.isoformat()
-        industries = get_industries(name=industry_type, date=date_text)
-        if industries is None or industries.empty:
-            raise ValueError('{} 未获取到行业列表，停止写入。'.format(date_text))
-
-        # 同一行业只请求一次，计数和归属使用完全相同的成分股数据。
-        members = {}
-        for code in industries.index:
-            members[code] = set(get_industry_stocks(code, date=date_text))
-
-        securities = get_all_securities(types=['stock'], date=date_text)
-        if securities is None or securities.empty:
-            raise ValueError('{} 未获取到股票列表，停止写入。'.format(date_text))
-        cutoff = day - datetime.timedelta(days=150)
-        eligible = securities[
-            (securities['end_date'].map(as_date) > day)
-            & (securities['start_date'].map(as_date) < cutoff)
-        ].index.tolist()
-        if not eligible:
-            raise ValueError('{} 没有符合上市期限条件的股票，停止写入。'.format(date_text))
-
-        # 20 日涨幅需要 21 个交易日。用交易日定位端点，避免缺行时取错日期。
-        window = [as_date(d) for d in get_trade_days(end_date=date_text, count=21)]
-        if len(window) != 21 or window[-1] != day:
-            raise ValueError('{} 不是交易日或历史交易日不足 21 天。'.format(date_text))
-        prices = get_price(
-            eligible, start_date=None, end_date=date_text, frequency='daily',
-            fields=['close'], skip_paused=False, fq='pre', count=25, panel=False,
-        )
-        if prices is None or prices.empty:
-            raise ValueError('{} 行情为空，停止写入，避免误存全零结果。'.format(date_text))
-        prices = prices.copy()
-        prices['price_date'] = pd.to_datetime(prices['time']).dt.date
-        front_stocks = set()
-        valid_count = 0
-        for code, group in prices.groupby('code'):
-            if group['price_date'].duplicated().any():
-                raise ValueError('{} {} 行情日期重复。'.format(date_text, code))
-            close = group.set_index('price_date')['close']
-            if window[0] not in close.index or day not in close.index:
-                continue
-            start_close, end_close = close.loc[window[0]], close.loc[day]
-            if pd.isnull(start_close) or pd.isnull(end_close):
-                continue
-            start_close, end_close = float(start_close), float(end_close)
-            if not (math.isfinite(start_close) and math.isfinite(end_close)):
-                continue
-            if start_close <= 0 or end_close <= 0:
-                continue
-            valid_count += 1
-            if (end_close - start_close) / start_close > 0.2:
-                front_stocks.add(code)
-        if not valid_count:
-            raise ValueError('{} 没有可计算涨幅的股票，停止写入。'.format(date_text))
-
-        records = []
-        for code in industries.index:
-            total = len(members[code])
-            count = len(members[code] & front_stocks)
-            score = count * count / total if total else 0.0
-            records.append({
-                'trade_date': day,
-                'industry_type': industry_type,
-                'industry_code': str(code),
-                'industry_name': str(industries.loc[code, 'name']),
-                'momentum': Decimal(format(score, '.2f')),
-                'front_stock_count': count,
-                'industry_stock_count': total,
-            })
-        # 与原程序相同：先按两位小数的得分降序，再按行业代码降序。
-        records.sort(key=lambda r: (r['momentum'], r['industry_code']), reverse=True)
-        for rank, record in enumerate(records, 1):
-            record['momentum_rank'] = rank
-        return records
-
-    def save_day(Session, trade_date, industry_type, records, skip_existing=False):
-        """默认事务替换日快照；只新增模式按主键过滤已存在记录。"""
-        _progress_note('写入当日行业动量')
-        day = as_date(trade_date)
-        if not records:
-            raise ValueError('拒绝写入空结果。')
-        # 不使用 any(生成器)：研究环境中的同名函数可能是 numpy.any，
-        # 对生成器的处理与 Python 内置 any 不同，会把一致的结果误判为异常。
-        for record in records:
-            if record['trade_date'] != day or record['industry_type'] != industry_type:
-                raise ValueError(
-                    '结果中的日期或行业分类不一致：行业代码={!r}，'
-                    '预期日期={!r}、分类={!r}；实际日期={!r}、分类={!r}。'.format(
-                        record.get('industry_code'), day, industry_type,
-                        record['trade_date'], record['industry_type']))
-        with session_scope(Session) as session:
-            query = session.query(IndustryMomentum).filter_by(trade_date=day, industry_type=industry_type)
-            if skip_existing:
-                existing = {row[0] for row in query.with_entities(IndustryMomentum.industry_code).all()}
-                records = [record for record in records if record['industry_code'] not in existing]
-                if not records:
-                    return []
-            else:
-                query.delete(synchronize_session=False)
-            session.add_all([IndustryMomentum(**record) for record in records])
-            session.commit()
-            return records
-
-    def get_last_saved_date(Session, industry_type):
-        """按行业分类查询最后已提交的交易日期；没有记录时返回 None。"""
-        with session_scope(Session) as session:
-            return session.query(func.max(IndustryMomentum.trade_date)).filter(
-                IndustryMomentum.industry_type == industry_type,
-            ).scalar()
 
     def get_retention_start(reference_date, count=RETENTION_TRADE_DAYS):
         """先验证交易日历，再允许清理；避免接口异常导致误删。"""
@@ -551,66 +406,6 @@ def _momentum_strategy(_apis, _config):
                 raise ValueError('交易日历存在未来日期、重复或乱序，未清理数据库。')
             previous = day
         return days[0]
-
-    def cleanup_old_data(Session, retention_start):
-        """一个事务清理整张表的过期数据，保留边界日及之后的快照。"""
-        _progress_note('清理过期行业动量数据')
-        cutoff = as_date(retention_start)
-        with session_scope(Session) as session:
-            deleted = session.query(IndustryMomentum).filter(
-                IndustryMomentum.trade_date < cutoff,
-            ).delete(synchronize_session=False)
-            session.commit()
-            return deleted
-
-    def run(start_date=START_DATE, end_date=END_DATE, industry_type=INDUSTRY_TYPE, skip_existing=False):
-        """先清理过期数据；skip_existing=True 时从最新日期之后只新增。"""
-        now_china = china_now()
-        today_china = now_china.date()
-        if end_date is None:
-            end_date = today_china
-        initial_start, end = as_date(start_date), as_date(end_date)
-        if end > today_china:
-            raise ValueError('结束日期不能晚于运行当天。')
-        if skip_existing and end == today_china and now_china.hour < 16:
-            end = today_china - datetime.timedelta(days=1)
-        # 即使手动指定历史 end_date，保留范围仍以实际运行当天为基准。
-        # 日历验证在任何数据库修改之前完成，节假日自动使用最近交易日。
-        retention_start = get_retention_start(today_china, RETENTION_TRADE_DAYS)
-        all_records = []
-        with database_scope(Base, _config) as Session:
-            cleanup_old_data(Session, retention_start)
-            if end < retention_start:
-                return pd.DataFrame(columns=RESULT_COLUMNS)
-            last_date = get_last_saved_date(Session, industry_type)
-            if last_date is None:
-                start = initial_start
-                if start < retention_start:
-                    start = retention_start
-                if start > end:
-                    raise ValueError('首次入库的开始日期不能晚于结束日期。')
-            else:
-                start = as_date(last_date)
-                if skip_existing:
-                    start += datetime.timedelta(days=1)
-                if start < retention_start:
-                    start = retention_start
-                if start > end:
-                    return pd.DataFrame(columns=RESULT_COLUMNS)
-            trade_days = [as_date(day) for day in get_trade_days(start_date=start, end_date=end)]
-            # 先检查整个补录日历，避免异常接口将过期或越界日期写回。
-            previous = None
-            for day in trade_days:
-                if day < start or day > end or (previous is not None and day <= previous):
-                    raise ValueError('补录交易日历越界、重复或乱序，停止入库。')
-                previous = day
-            if not trade_days:
-                return pd.DataFrame(columns=RESULT_COLUMNS)
-            for day in _progress_items(trade_days, '交易日'):
-                records = calculate_momentum(day, industry_type)
-                records = save_day(Session, day, industry_type, records, skip_existing=skip_existing)
-                all_records.extend(records)
-        return pd.DataFrame(all_records, columns=RESULT_COLUMNS)
     return SimpleNamespace(**locals())
 RAW_VERSION = 'strategy_inputs_v1'
 

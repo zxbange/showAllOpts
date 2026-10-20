@@ -81,7 +81,7 @@ def test_schema_and_single_file_factory_parity(module, scenario):
                 return self.visit(node.args[0])
             return self.generic_visit(node)
     nodes=[]
-    for path in (SOURCE, ROOT/'collectors'/'策略批量采集_数据库版.py'):
+    for path in (ROOT/'collectors'/SOURCE.name, ROOT/'collectors'/'策略批量采集_数据库版.py'):
         tree=ast.parse(path.read_text(encoding='utf-8'),feature_version=(3,6))
         nodes.append(ast.dump(WithoutProgress().visit(next(n for n in tree.body if isinstance(n,ast.FunctionDef) and n.name=='_breadth_strategy')),include_attributes=False))
     assert nodes[0]==nodes[1]

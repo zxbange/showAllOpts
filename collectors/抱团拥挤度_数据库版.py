@@ -3,7 +3,6 @@
 本策略在本文件内独立实现；不读取外部策略、配置或日志文件。
 依赖和参数集中在开头；共用连接、会话及日期工具。用法见 docs/collector-batch.md。
 """
-import bisect
 import decimal
 import gzip
 import hashlib
@@ -18,15 +17,13 @@ import threading
 import time
 from contextlib import contextmanager, redirect_stderr, redirect_stdout
 from copy import deepcopy
-from decimal import Decimal, InvalidOperation, ROUND_HALF_UP, localcontext
-from statistics import median
+from decimal import Decimal
 from types import SimpleNamespace
 from urllib.parse import quote, quote_plus
 
 import jqdata as jq
 import pandas as pd
-from sqlalchemy import (BigInteger, Column, Date, DateTime, Index, Integer, JSON, LargeBinary,
-                        Numeric, String, Text, and_, or_, create_engine, func)
+from sqlalchemy import Column, Date, DateTime, Integer, LargeBinary, String, and_, or_, create_engine, func
 from sqlalchemy.engine.url import URL
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
@@ -386,170 +383,7 @@ def run_all(strategy_names=None, options=None, db_config=None, preview_rows=None
 
 # ---------- 行业动量 ----------
 def _crowding_strategy(_apis, _config):
-    """独立作用域隔离模型、参数和函数，返回本策略的接口。"""
-    settings = strategy_settings('抱团拥挤度')
-    get_all_securities = _apis.get('get_all_securities')
-    get_trade_days = _apis.get('get_trade_days')
-    get_price = _apis.get('get_price')
-    query = _apis.get('query')
-
-    START_DATE = settings['start_date']
-    END_DATE = settings['end_date']
-    TOP_PCT = settings['top_pct']
-    Base = declarative_base()
-    RESULT_COLUMNS = ['trade_date', 'top_pct', 'ratio', 'top_money', 'total_money',
-                      'stock_count', 'top_stock_count', 'updated_at']
-
-    class MarketCrowding(Base):
-        __tablename__ = 'market_crowding'
-        __table_args__ = {'mysql_engine': 'InnoDB', 'mysql_charset': 'utf8mb4'}
-
-        # 查询固定 TOP_PCT 后按日期范围读取，复合主键同时支持去重与查询。
-        top_pct = Column(Numeric(8, 6), primary_key=True)
-        trade_date = Column(Date, primary_key=True)
-        ratio = Column(Numeric(18, 10), nullable=False)
-        top_money = Column(Numeric(24, 2), nullable=False)
-        total_money = Column(Numeric(24, 2), nullable=False)
-        stock_count = Column(Integer, nullable=False)
-        top_stock_count = Column(Integer, nullable=False)
-        updated_at = Column(DateTime, nullable=False)
-
-    def summarize_money(pairs, top_pct=TOP_PCT):
-        """纯计算：零成交额股票计入总数量；无效/负数/重复数据拒绝入库。"""
-        pct = Decimal(str(top_pct))
-        if not pct.is_finite() or not Decimal('0') < pct <= Decimal('1'):
-            raise ValueError('TOP_PCT 必须在 (0, 1] 内。')
-        if pct != pct.quantize(Decimal('0.000001')):
-            raise ValueError('TOP_PCT 最多支持六位小数。')
-        values = []
-        codes = set()
-        for code, money in pairs:
-            if code in codes:
-                raise ValueError('单日行情存在重复股票，停止写入。')
-            codes.add(code)
-            try:
-                amount = Decimal(str(money))
-            except (InvalidOperation, ValueError):
-                raise ValueError('成交额不是有效数值，停止写入。') from None
-            if not amount.is_finite() or amount < 0:
-                raise ValueError('成交额缺失、非有限或为负数，停止写入。')
-            values.append(amount)
-        if len(values) < 100:
-            raise ValueError('有效股票不足 100 只，停止写入。')
-        count = builtins.max(int(Decimal(len(values)) * pct), 1)
-        total = builtins.sum(values, Decimal('0'))
-        if total <= 0:
-            raise ValueError('全市场成交额为零，停止写入。')
-        top = builtins.sum(sorted(values, reverse=True)[:count], Decimal('0'))
-        return dict(top_pct=pct, ratio=(top / total).quantize(Decimal('0.0000000001')),
-                    top_money=top.quantize(Decimal('0.01')),
-                    total_money=total.quantize(Decimal('0.01')),
-                    stock_count=len(values), top_stock_count=count)
-
-    def calculate_crowding(trade_date, top_pct=TOP_PCT):
-        _progress_note('获取全市场成交额，计算拥挤度')
-        day = as_date(trade_date)
-        securities = get_all_securities(types=['stock'], date=day.isoformat())
-        if securities is None or securities.empty:
-            raise ValueError('{} 股票列表为空。'.format(day))
-        stocks = securities.index.tolist()
-        prices = get_price(
-            security=stocks, end_date=day.isoformat(), count=1, frequency='daily',
-            fields=['money'], skip_paused=False, panel=False,
-        )
-        if prices is None or prices.empty:
-            raise ValueError('{} 行情为空。'.format(day))
-        if not {'code', 'time', 'money'}.issubset(prices.columns):
-            raise ValueError('行情缺少 code、time 或 money 字段。')
-        # 防止接口部分返回或返回上一交易日行情，被当成当日完整快照。
-        if set(prices['code']) != set(stocks):
-            raise ValueError('{} 行情股票与当日列表不一致，停止写入。'.format(day))
-        for value in prices['time']:
-            if as_date(value) != day:
-                raise ValueError('{} 行情日期不一致，停止写入。'.format(day))
-        record = summarize_money(zip(prices['code'], prices['money']), top_pct)
-        record.update(trade_date=day, updated_at=china_now())
-        return record
-
-    def save_day(Session, day, top_pct, record, skip_existing=False):
-        _progress_note('写入当日拥挤度')
-        if record['trade_date'] != as_date(day) or record['top_pct'] != Decimal(str(top_pct)):
-            raise ValueError('结果日期或 TOP_PCT 不一致，拒绝入库。')
-        with session_scope(Session) as session:
-            query = session.query(MarketCrowding).filter_by(
-                trade_date=as_date(day), top_pct=Decimal(str(top_pct)))
-            if skip_existing:
-                if query.first() is not None:
-                    return False
-            else:
-                query.delete(synchronize_session=False)
-            session.add(MarketCrowding(**record))
-            session.commit()
-            return True
-
-    def get_last_saved_date(Session, top_pct):
-        """利用 (top_pct, trade_date) 主键，仅查询当前口径的最新日期。"""
-        with session_scope(Session) as session:
-            row = session.query(MarketCrowding.trade_date).filter(
-                MarketCrowding.top_pct == Decimal(str(top_pct)),
-            ).order_by(MarketCrowding.trade_date.desc()).first()
-            return as_date(row[0]) if row is not None else None
-
-    def run(start_date=START_DATE, end_date=END_DATE, top_pct=TOP_PCT, incremental=True, skip_existing=False):
-        """默认从最后已入库日（含）增量更新；手动补历史时传 incremental=False。"""
-        now = china_now()
-        today = now.date()
-        start = as_date(start_date)
-        end = today if end_date is None else as_date(end_date)
-        if start > end or end > today:
-            raise ValueError('开始日期不能晚于结束日期，结束日期不能晚于运行当天。')
-        if skip_existing and end == today and now.hour < 16:
-            end = today - datetime.timedelta(days=1)
-        pct = Decimal(str(top_pct))
-        if not pct.is_finite() or not Decimal('0') < pct <= Decimal('1'):
-            raise ValueError('TOP_PCT 必须在 (0, 1] 内。')
-        if pct != pct.quantize(Decimal('0.000001')):
-            raise ValueError('TOP_PCT 最多支持六位小数。')
-        if not isinstance(incremental, bool):
-            raise ValueError('incremental 必须是 True 或 False。')
-        records = []
-        with database_scope(Base, _config) as Session:
-            if incremental:
-                last = get_last_saved_date(Session, top_pct)
-                if last is not None:
-                    if last > today:
-                        raise ValueError('数据库最新日期晚于运行当天，请检查已有数据。')
-                    start = builtins.max(start, last + datetime.timedelta(days=1) if skip_existing else last)
-            else:
-                pass
-            if start > end:
-                return pd.DataFrame(columns=RESULT_COLUMNS)
-            # 仅请求实际增量区间的日历；全部验证通过后才计算、写入日记录。
-            raw_days = get_trade_days(start_date=start, end_date=end)
-            if raw_days is None:
-                raise ValueError('获取交易日历失败，未写入数据。')
-            days = [as_date(day) for day in raw_days]
-            previous = None
-            for day in days:
-                if day < start or day > end or (previous is not None and day <= previous):
-                    raise ValueError('交易日历越界、重复或乱序，未写入数据。')
-                previous = day
-            if not days:
-                return pd.DataFrame(columns=RESULT_COLUMNS)
-            # 默认模式刷新末日；skip_existing=True 仅新增，更早缺口不自动扫描。
-            for index, day in enumerate(_progress_items(days, '交易日'), 1):
-                try:
-                    record = calculate_crowding(day, top_pct)
-                    written = save_day(Session, day, top_pct, record, skip_existing=skip_existing)
-                    if not written:
-                        continue
-                except Exception as exc:
-                    # 不输出数据库异常全文，避免日志泄露账号、地址或 SQL。
-                    if isinstance(exc, ValueError):
-                        raise
-                    raise RuntimeError('{} 采集失败，请检查聚宽接口、数据权限和数据库连接。'.format(day)) from None
-                records.append(record)
-        return pd.DataFrame(records, columns=RESULT_COLUMNS)
+    """仅提供原始采集依赖的接口与校验，不计算策略结果。"""
     return SimpleNamespace(**locals())
 RAW_VERSION = 'strategy_inputs_v1'
 

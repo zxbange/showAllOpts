@@ -3,7 +3,6 @@
 本策略在本文件内独立实现；不读取外部策略、配置或日志文件。
 依赖和参数集中在开头；共用连接、会话及日期工具。用法见 docs/collector-batch.md。
 """
-import bisect
 import decimal
 import gzip
 import hashlib
@@ -18,15 +17,13 @@ import threading
 import time
 from contextlib import contextmanager, redirect_stderr, redirect_stdout
 from copy import deepcopy
-from decimal import Decimal, InvalidOperation, ROUND_HALF_UP, localcontext
-from statistics import median
+from decimal import Decimal
 from types import SimpleNamespace
 from urllib.parse import quote, quote_plus
 
 import jqdata as jq
 import pandas as pd
-from sqlalchemy import (BigInteger, Column, Date, DateTime, Index, Integer, JSON, LargeBinary,
-                        Numeric, String, Text, and_, or_, create_engine, func)
+from sqlalchemy import Column, Date, DateTime, Integer, LargeBinary, String, and_, or_, create_engine, func
 from sqlalchemy.engine.url import URL
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
@@ -386,64 +383,15 @@ def run_all(strategy_names=None, options=None, db_config=None, preview_rows=None
 
 # ---------- 行业动量 ----------
 def _earnings_strategy(_apis, _config):
-    """独立作用域隔离模型、参数和函数，返回本策略的接口。"""
+    """仅提供原始采集依赖的接口与校验，不计算策略结果。"""
     settings = strategy_settings('净利润断层')
-    get_all_securities = _apis.get('get_all_securities')
-    get_trade_days = _apis.get('get_trade_days')
-    get_price = _apis.get('get_price')
-    get_industry = _apis.get('get_industry')
     get_fundamentals = _apis.get('get_fundamentals')
     query = _apis.get('query')
-    valuation = _apis.get('valuation')
     indicator = _apis.get('indicator')
     income = _apis.get('income')
     finance = _apis.get('finance')
     jy = _apis.get('jy')
-
-    END_DATE = settings['end_date']
-    RULE_VERSION = 'announcement-open-v1'
     PAGE_SIZE = settings['page_size']
-    Base = declarative_base()
-
-    class EarningsRun(Base):
-        __tablename__ = 'earnings_gap_run'
-        report_period = Column(Date, primary_key=True)
-        as_of_date = Column(Date, nullable=False)
-        updated_at = Column(DateTime, nullable=False)
-        universe_count = Column(Integer, nullable=False)
-        matched_count = Column(Integer, nullable=False)
-        rule_version = Column(String(32), nullable=False)
-
-    class EarningsStock(Base):
-        __tablename__ = 'earnings_gap_stock'
-        __table_args__ = (
-            Index('ix_earnings_period_industry', 'report_period', 'industry_code'),
-            Index('ix_earnings_period_signal', 'report_period', 'signal_date'),
-        )
-        report_period = Column(Date, primary_key=True)
-        code = Column(String(16), primary_key=True)
-        name = Column(String(128), nullable=False)
-        industry_code = Column(String(32), nullable=True)
-        industry_name = Column(String(128), nullable=True)
-        industry_level = Column(String(16), nullable=True)
-        signal_date = Column(Date, nullable=False)
-        announcement_date = Column(Date, nullable=False)
-        signal_source = Column(String(16), nullable=False)
-        profit_basis = Column(String(32), nullable=False)
-        profit_yoy = Column(Numeric(24, 6), nullable=False)
-        net_profit = Column(Numeric(28, 4), nullable=True)
-        open_gap_pct = Column(Numeric(20, 6), nullable=False)
-        intraday_pct = Column(Numeric(20, 6), nullable=False)
-        market_cap = Column(Numeric(24, 6), nullable=True)
-        circulating_market_cap = Column(Numeric(24, 6), nullable=True)
-        pe_ttm = Column(Numeric(24, 6), nullable=True)
-        pb = Column(Numeric(24, 6), nullable=True)
-        valuation_date = Column(Date, nullable=False)
-        # 兼容旧表的非空列；不再生成分析内容，新记录写入空字符串。
-        analysis = Column(Text, nullable=False, default='')
-        analysis_basis = Column(String(32), nullable=False, default='')
-        events = Column(JSON, nullable=False)
-        prices = Column(JSON, nullable=False)
 
     def latest_period(day):
         # 当前季度开始前一天；10 月运行统一取 9 月 30 日。
@@ -496,8 +444,6 @@ def _earnings_strategy(_apis, _config):
                 raise ValueError('公告分页顺序异常，取消本次入库。')
             rows.extend(page)
             after = ids[-1]
-
-    SOURCE_NAMES = {'express': '业绩快报', 'forecast': '业绩预告', 'formal': '正式财报'}
 
     def event(code, kind, pub, period, profit, growth, raw, growth_max=None):
         profit, growth = number(profit), number(growth)
@@ -564,215 +510,6 @@ def _earnings_strategy(_apis, _config):
                     events.append(event(row['code'], 'formal', pub, period, row['net_profit'], row['profit_yoy'], row))
         unique = {json.dumps(e, ensure_ascii=False, sort_keys=True): e for e in events}
         return sorted(unique.values(), key=lambda e: (e['code'], e['publication_date'], e['kind']))
-
-    def price_signal(previous_close, open_price, close_price):
-        values = [number(v) for v in (previous_close, open_price, close_price)]
-        if builtins.any(v is None or v <= 0 for v in values):
-            return None
-        previous, opening, closing = [Decimal(str(v)) for v in values]
-        # 精确等于 3% 不通过，避免二进制浮点边界误差。
-        if opening <= previous * Decimal('1.03') or closing < opening:
-            return None
-        return dict(open_gap_pct=float((opening / previous - 1) * 100),
-                    intraday_pct=float((closing / opening - 1) * 100))
-
-    def screen(codes, names, events, period, as_of):
-        grouped = {}
-        for e in events:
-            if e['report_period'] != str(period) or as_date(e['publication_date']) > as_of or e['code'] not in names:
-                raise ValueError('公告报告期、股票代码或截止日期异常。')
-            grouped.setdefault(e['code'], []).append(e)
-        results = []
-        for index, (code, disclosures) in enumerate(_progress_items(sorted(grouped.items()), '股票筛选', lambda item: item[0]), 1):
-            qualifying = [e for e in disclosures if e['eligible']]
-            if not qualifying:
-                continue
-            first = builtins.min(as_date(e['publication_date']) for e in qualifying)
-            calendar = [as_date(d) for d in get_trade_days(start_date=first-dt.timedelta(days=40), end_date=as_of)]
-            if not calendar or calendar != sorted(set(calendar)):
-                raise ValueError('交易日历为空或顺序异常。')
-            frame = get_price(code, start_date=calendar[0], end_date=as_of, frequency='daily',
-                              fields=['open', 'close', 'high', 'low', 'paused', 'volume'],
-                              skip_paused=False, fq='pre')
-            checked_rows(frame, ['open', 'close', 'high', 'low', 'paused', 'volume'], '股票行情')
-            bars = {as_date(day): row.to_dict() for day, row in frame.iterrows()}
-            hits = []
-            for e in qualifying:
-                pub = as_date(e['publication_date'])
-                # 原策略的公告日行情；非交易日公告对应下一个交易日，不倒取公告前行情。
-                day = next((d for d in calendar if d >= pub), None)
-                if day is None:
-                    continue
-                position = calendar.index(day)
-                if position == 0:
-                    continue
-                previous = calendar[position-1]
-                current, prior = bars.get(day), bars.get(previous)
-                if current is None or prior is None:
-                    raise ValueError('{} 行情缺失，取消本次入库。'.format(code))
-                if number(current['paused']) is None:
-                    raise ValueError('{} 停牌状态缺失。'.format(code))
-                if number(current['volume']) is None:
-                    raise ValueError('{} 成交量缺失。'.format(code))
-                if current['paused'] or number(current['volume']) == 0:
-                    continue
-                if builtins.any(number(current[k]) is None or number(current[k]) <= 0 for k in ('open', 'close', 'high', 'low')):
-                    raise ValueError('{} 已成交日的价格不完整。'.format(code))
-                # 上市前缺失前收盘，不构造跳空信号；不延迟到复牌日追认。
-                signal = price_signal(prior['close'], current['open'], current['close'])
-                if signal:
-                    signal['date'] = str(day)
-                    e['signal'] = signal
-                    hits.append(e)
-            if not hits:
-                continue
-            selected = sorted(hits, key=lambda e: (e['signal']['date'], e['signal']['open_gap_pct'], e['kind']))[-1]
-            industry_data = get_industry([code], date=as_of)
-            if not isinstance(industry_data, dict) or code not in industry_data:
-                raise ValueError('{} 行业接口返回异常。'.format(code))
-            industries = industry_data[code]
-            level = next((k for k in ('sw_l3', 'sw_l2', 'sw_l1') if industries.get(k)), None)
-            industry = industries.get(level, {})
-            signal_day = as_date(selected['signal']['date'])
-            offset = calendar.index(signal_day)
-            chart_days = calendar[builtins.max(0, offset-10):offset+21]
-            prices = [dict(date=str(d), **{k: number(bars[d][k]) for k in ('open', 'close', 'high', 'low')})
-                      for d in chart_days if d in bars]
-            record = dict(report_period=period, code=code, name=names[code],
-                          industry_code=industry.get('industry_code'), industry_name=industry.get('industry_name'),
-                          industry_level=level, signal_date=signal_day,
-                          announcement_date=as_date(selected['publication_date']), signal_source=selected['kind'],
-                          profit_basis=selected['profit_basis'], profit_yoy=selected['profit_yoy'],
-                          net_profit=selected['net_profit'], open_gap_pct=selected['signal']['open_gap_pct'],
-                          intraday_pct=selected['signal']['intraday_pct'], valuation_date=as_of,
-                          events=disclosures, prices=prices)
-            results.append(record)
-        selected_codes = [r['code'] for r in results]
-        valuations = {}
-        for start in _progress_items(range(0, len(selected_codes), 300), '入选股票估值批次', lambda offset: '股票 {}—{}'.format(offset+1, builtins.min(offset+300, len(selected_codes)))):
-            q = query(valuation.code, valuation.market_cap, valuation.circulating_market_cap,
-                      valuation.pe_ratio, valuation.pb_ratio).filter(valuation.code.in_(selected_codes[start:start+300]))
-            frame = get_fundamentals(q, date=as_of)
-            valuations.update({r['code']: r for r in checked_rows(frame,
-                ['code', 'market_cap', 'circulating_market_cap', 'pe_ratio', 'pb_ratio'], '估值')})
-        for r in results:
-            v = valuations.get(r['code'], {})
-            for target, source in [('market_cap', 'market_cap'), ('circulating_market_cap', 'circulating_market_cap'),
-                                   ('pe_ttm', 'pe_ratio'), ('pb', 'pb_ratio')]:
-                r[target] = number(v.get(source))
-        return results
-
-    def database_record(record):
-        """按表定义量化全部 DECIMAL 列，保留 Decimal 交给 MySQL 驱动。"""
-        result = dict(record)
-        for column in EarningsStock.__table__.columns:
-            if not isinstance(column.type, Numeric):
-                continue
-            value = record.get(column.name)
-            if value is None:
-                if not column.nullable:
-                    raise ValueError('{} 不允许为空。'.format(column.name))
-                result[column.name] = None
-                continue
-            precision, scale = column.type.precision, column.type.scale
-            try:
-                decimal_value = Decimal(str(value))
-                limit = Decimal(10) ** (precision - scale)
-                if not decimal_value.is_finite() or decimal_value.copy_abs() >= limit:
-                    raise ValueError('{} 不是有限值或超出字段范围。'.format(column.name))
-                with localcontext() as context:
-                    context.prec = precision + 2
-                    rounded = decimal_value.quantize(Decimal(1).scaleb(-scale), rounding=ROUND_HALF_UP)
-                if rounded.copy_abs() >= limit:
-                    raise ValueError('{} 四舍五入后超出字段范围。'.format(column.name))
-            except (InvalidOperation, TypeError):
-                raise ValueError('{} 无法转换为数据库定点数。'.format(column.name)) from None
-            result[column.name] = rounded
-        return result
-
-    def save_results(Session, period, as_of, universe_count, records, skip_existing=False):
-        _progress_note('写入本季度新入选股票')
-        if len({r['code'] for r in records}) != len(records):
-            raise ValueError('筛选结果包含重复股票。')
-        for r in records:
-            if (r['report_period'] != period or r['valuation_date'] != as_of
-                    or r['signal_date'] > as_of or r['announcement_date'] > r['signal_date']
-                    or r['open_gap_pct'] <= 3 or r['intraday_pct'] < 0 or r['profit_yoy'] < 20):
-                raise ValueError('筛选结果校验失败，拒绝覆盖数据库。')
-        # 先验证原始筛选阈值，再量化写入值；任何转换失败均发生在删除旧快照之前。
-        # 不修改原始 records 和公告 JSON，也不把 Decimal 转回 float。
-        db_records = [database_record(r) for r in records]
-        with session_scope(Session) as session:
-            if skip_existing:
-                # 股票快照只插入首次命中的结果；不覆盖、不删除已入库股票。
-                existing = {row[0] for row in session.query(EarningsStock.code).filter(
-                    EarningsStock.report_period == period).all()}
-                fresh = [record for record in records if record['code'] not in existing]
-                fresh_db = [record for record in db_records if record['code'] not in existing]
-                run = session.query(EarningsRun).filter(EarningsRun.report_period == period).first()
-                total = len(existing) + len(fresh_db)
-                # 元数据用于网页展示累计命中数量和扫描截止日；仅值有变化时更新。
-                metadata_changed = False
-                if run is None:
-                    session.add(EarningsRun(report_period=period, as_of_date=as_of, updated_at=china_now(),
-                        universe_count=universe_count, matched_count=total, rule_version=RULE_VERSION))
-                    metadata_changed = True
-                else:
-                    values = {'matched_count': total}
-                    if as_of >= run.as_of_date:
-                        values.update(as_of_date=as_of, universe_count=universe_count, rule_version=RULE_VERSION)
-                    for key, value in values.items():
-                        if getattr(run, key) != value:
-                            setattr(run, key, value)
-                            metadata_changed = True
-                    if metadata_changed:
-                        run.updated_at = china_now()
-                if not fresh_db and not metadata_changed:
-                    return []
-                session.add_all([EarningsStock(**record) for record in fresh_db])
-                session.commit()
-                return fresh
-            # 清空与重建只针对当前季度，并在同一个事务提交，合法零命中也有元数据。
-            session.query(EarningsStock).filter(EarningsStock.report_period == period).delete(synchronize_session=False)
-            session.query(EarningsRun).filter(EarningsRun.report_period == period).delete(synchronize_session=False)
-            session.add_all([EarningsStock(**r) for r in db_records])
-            session.add(EarningsRun(report_period=period, as_of_date=as_of, updated_at=china_now(),
-                                   universe_count=universe_count, matched_count=len(records), rule_version=RULE_VERSION))
-            session.commit()
-            return records
-
-    def run(end_date=END_DATE, skip_existing=False):
-        now = china_now()
-        requested = as_date(end_date) if end_date is not None else now.date()
-        if requested > now.date():
-            raise ValueError('结束日期不能晚于今天。')
-        period = latest_period(requested)
-        cutoff = requested - dt.timedelta(days=1) if requested == now.date() and now.hour < 16 else requested
-        days = get_trade_days(end_date=cutoff, count=1)
-        if days is None or len(days) != 1:
-            raise ValueError('无法获取最近完整交易日。')
-        as_of = as_date(days[0])
-        universe = get_all_securities(types=['stock'], date=as_of)
-        if universe is None or universe.empty or 'display_name' not in universe.columns:
-            raise ValueError('A 股股票池获取失败。')
-        # 平台提供的全部 A 股，不使用原行业白名单、黑名单、ST/持仓或数量限制。
-        names = {str(code): str(row['display_name']) for code, row in universe.iterrows()}
-        codes = sorted(names)
-        if not skip_existing:
-            events = fetch_events(codes, period, as_of)
-            records = screen(codes, names, events, period, as_of)
-        with database_scope(Base, _config) as Session:
-            # 显式指定 InnoDB，确保旧数据库默认引擎不会破坏整批事务。
-            if skip_existing:
-                with session_scope(Session) as session:
-                    existing = {row[0] for row in session.query(EarningsStock.code).filter(
-                        EarningsStock.report_period == period).all()}
-                _progress_note('已有 {} 只股票，本次仅筛选尚未入库股票'.format(len(existing)))
-                pending = [code for code in codes if code not in existing]
-                events = fetch_events(pending, period, as_of) if pending else []
-                records = screen(pending, names, events, period, as_of) if pending else []
-            records = save_results(Session, period, as_of, len(codes), records, skip_existing=skip_existing)
-        return pd.DataFrame(records)
     return SimpleNamespace(**locals())
 RAW_VERSION = 'strategy_inputs_v1'
 

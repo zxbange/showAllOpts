@@ -13,6 +13,8 @@ FILES = {
     '行业动量': '行业动量计算_数据库版.py', '抱团拥挤度': '抱团拥挤度_数据库版.py',
     '微盘温度计': '微盘温度计_数据库版.py', 'ETF份额': 'ETF份额_数据库版.py',
     '净利润断层': '净利润断层_数据库版.py',
+    '微盘新高新低': '微盘新高新低数量统计_数据库版.py',
+    '高股息选股': '高股息选股_数据库版.py', '高增长': '高增长_数据库版.py',
 }
 CONFIG = dict(host='fake.example.test', port=3306, dbname='fixture_database',
               dbuser='fixture_writer', dbpassword='secret/@ pass')
@@ -45,14 +47,20 @@ def test_factories_isolate_state_and_use_shared_config(batch, monkeypatch):
     fake_platform(monkeypatch)
     marker = object()
     namespaces = [factory({'get_price': marker, 'finance': None, 'query': None}, CONFIG) for factory in batch.STRATEGIES.values()]
-    assert len({id(n.Base) for n in namespaces}) == len(batch.STRATEGIES)
+    result_namespaces = [n for n in namespaces if hasattr(n, 'Base')]
+    assert len(result_namespaces) == 2  # Only the two existing ETF collectors own their models.
+    assert len({id(n.Base) for n in result_namespaces}) == 2
     for ns in namespaces:
         if hasattr(ns, 'get_price'):
             assert ns.get_price is marker
         assert ns._config == CONFIG
     fresh = batch.STRATEGIES['净利润断层']({}, CONFIG)
     assert fresh._config == CONFIG
-    assert namespaces[batch.STRATEGY_ORDER.index('净利润断层')].run is not fresh.run
+    assert namespaces[batch.STRATEGY_ORDER.index('净利润断层')].fetch_events is not fresh.fetch_events
+    for name, ns in zip(batch.STRATEGY_ORDER, namespaces):
+        if name in batch.RAW_TABLES:
+            assert not hasattr(ns, 'run')
+            assert not hasattr(ns, 'Base')
 
 
 def test_loader_supplies_notebook_platform_and_builtin_apis(batch, monkeypatch):
@@ -74,15 +82,17 @@ def test_loader_supplies_notebook_platform_and_builtin_apis(batch, monkeypatch):
     assert received[0][1] == CONFIG
 
 
-def test_calculation_and_model_definitions_keep_original_rules(batch):
-    # Formulas/screening/schema remain identical; connection lifecycles are tested separately.
+def test_retained_source_helpers_keep_original_rules(batch):
+    # Retained source filters/parsers must remain identical. Local formulas are tested separately.
     tree = ast.parse(TARGET.read_text(encoding='utf-8'), feature_version=(3, 6))
     factories = {n.name: n for n in tree.body if isinstance(n, ast.FunctionDef)}
     compared = 0
     for name, filename in FILES.items():
         original = ast.parse(((TARGET.parent/'legacy'/filename) if name != 'ETF份额' else (TARGET.parent/filename)).read_text(encoding='utf-8'))
         body = factories[batch.STRATEGIES[name].__name__].body
-        for node in original.body:
+        original_factory = next((n for n in original.body if isinstance(n, ast.FunctionDef)
+                                 and n.name == batch.STRATEGIES[name].__name__), None)
+        for node in (original_factory.body if original_factory else original.body):
             if not isinstance(node, (ast.FunctionDef, ast.ClassDef)):
                 continue
             if node.name.startswith('Mysql') or node.name in ('as_date', 'china_now'):
@@ -91,7 +101,10 @@ def test_calculation_and_model_definitions_keep_original_rules(batch):
             used = {n.id for n in ast.walk(node) if isinstance(n, ast.Name)}
             if 'Session' in used or 'engine' in used:
                 continue
-            actual = next(n for n in body if isinstance(n, type(node)) and n.name == node.name)
+            actual = next((n for n in body if isinstance(n, type(node)) and n.name == node.name), None)
+            if actual is None:
+                assert name != 'ETF份额'  # Only migrated strategies remove old result logic.
+                continue
             class WithoutProgressOutput(ast.NodeTransformer):
                 def visit_Expr(self, n):
                     if isinstance(n.value, ast.Call) and isinstance(n.value.func, ast.Name) and n.value.func.id in ('print', '_progress_note'):
@@ -140,7 +153,6 @@ def test_pasted_notebook_without_file_or_sibling_files(batch, monkeypatch, tmp_p
             return []
         return lambda apis, config: SimpleNamespace(run=run)
     namespace['STRATEGIES'] = {n: factory(n) for n in namespace['STRATEGY_ORDER']}
-    namespace['_raw_run'] = lambda name, ns, apis, config, **options: ns.run(**options)
     namespace['_raw_run'] = lambda name, ns, apis, config, **options: ns.run(**options)
     rows = namespace['run_all'](db_config=CONFIG)
     assert events == namespace['STRATEGY_ORDER']
@@ -297,42 +309,6 @@ def test_isolated_etf_api_validation_uses_strategy_scope(batch, monkeypatch):
         missing.share_table()
 
 
-def test_standalone_earnings_insert_only_preserves_first_snapshot(batch, monkeypatch):
-    import datetime as dt
-    from sqlalchemy import create_engine, event
-    from sqlalchemy.orm import sessionmaker
-    fake_platform(monkeypatch)
-    ns = batch.STRATEGIES['净利润断层']({}, CONFIG)
-    engine = create_engine('sqlite://')
-    ns.Base.metadata.create_all(engine)
-    Session = sessionmaker(bind=engine)
-    period, day = dt.date(2026, 9, 30), dt.date(2026, 10, 16)
-    first = dict(report_period=period, code='600001.XSHG', name='first snapshot',
-                 signal_date=day, announcement_date=day, signal_source='formal',
-                 profit_basis='single quarter', profit_yoy=25, net_profit=1e8,
-                 open_gap_pct=4, intraday_pct=0, market_cap=50, pe_ttm=10,
-                 valuation_date=day, events=[], prices=[])
-    try:
-        assert len(ns.save_results(Session, period, day, 6000, [first], skip_existing=True)) == 1
-        second = dict(first, code='600002.XSHG')
-        fresh = ns.save_results(Session, period, day, 6000,
-                                [dict(first, name='changed', pe_ttm=99), second], skip_existing=True)
-        assert [r['code'] for r in fresh] == [second['code']]
-        writes = []
-        def capture(conn, cursor, statement, *args):
-            if statement.lstrip().split()[0].upper() in ('INSERT', 'UPDATE', 'DELETE'):
-                writes.append(statement)
-        event.listen(engine, 'before_cursor_execute', capture)
-        assert ns.save_results(Session, period, day, 6000, [first, second], skip_existing=True) == []
-        assert not writes
-        with Session() as session:
-            stored = session.get(ns.EarningsStock, (period, first['code']))
-            assert stored.name == 'first snapshot' and stored.pe_ttm == 10
-            assert session.get(ns.EarningsRun, period).matched_count == 2
-    finally:
-        engine.dispose()
-
-
 @pytest.mark.parametrize('name,changes', [
     ('行业动量', {'start_date': '2025-02-01', 'end_date': '2026-10-16', 'industry_type': 'sw_l1'}),
     ('抱团拥挤度', {'start_date': '2024-01-01', 'top_pct': 0.1}),
@@ -340,11 +316,15 @@ def test_standalone_earnings_insert_only_preserves_first_snapshot(batch, monkeyp
     ('ETF份额', {'start_date': '2025-01-01', 'lookback_days': 7}),
     ('净利润断层', {'end_date': '2026-10-16'}),
 ])
-def test_grouped_configuration_changes_run_defaults(batch, name, changes):
+def test_grouped_configuration_changes_run_defaults(batch, monkeypatch, name, changes):
     import inspect
     batch.STRATEGY_CONFIG[name].update(changes)
-    strategy = batch.STRATEGIES[name]({}, CONFIG)
-    defaults = {k: p.default for k, p in inspect.signature(strategy.run).parameters.items()}
+    if name in batch.RAW_TABLES:
+        monkeypatch.setattr(batch, '_raw_run', lambda n, *args, **kwargs: batch.strategy_settings(n))
+        defaults = batch._load_strategy(name, CONFIG, {})()
+    else:
+        strategy = batch.STRATEGIES[name]({}, CONFIG)
+        defaults = {k: p.default for k, p in inspect.signature(strategy.run).parameters.items()}
     assert all(defaults[k] == v for k, v in changes.items())
 
 
@@ -448,10 +428,9 @@ def test_invalid_loop_limits_fail_before_connecting(batch, monkeypatch, name, ke
 
 
 @pytest.mark.parametrize('name,model_name', [
-    ('行业动量', 'IndustryMomentum'), ('抱团拥挤度', 'MarketCrowding'),
-    ('微盘温度计', 'MicrocapTemperature'), ('ETF份额', 'ETFShare'),
+    ('ETF份额', 'ETFShare'),
 ])
-def test_shared_sessions_keep_insert_only_across_strategies(batch, monkeypatch, name, model_name):
+def test_shared_sessions_keep_etf_insert_only(batch, monkeypatch, name, model_name):
     import datetime as dt
     from decimal import Decimal
     from sqlalchemy import create_engine, event, Date, DateTime, Integer, Numeric
@@ -655,3 +634,23 @@ def test_latest_dividend_mode_does_not_receive_insert_only_flag(batch, monkeypat
     assert received==[('高股息选股',{}),('行业动量',{'skip_existing':True})]
     output=capsys.readouterr().out
     assert output.count('原始快照 2 条') == 2
+
+
+def test_raw_factories_have_no_result_models_or_calculation_entrypoints(batch, monkeypatch):
+    # Applies to both the pasted batch and each independent single-file collector.
+    import pandas as pd
+    monkeypatch.setitem(sys.modules, 'pandas', pd)
+    forbidden = {'run', 'calculate', 'calculate_momentum', 'summarize_money',
+                 'summarize_universe', 'append_percentiles', 'count_prices', 'screen',
+                 'save_results', 'save_day', 'save_period', 'evaluate', 'select_stocks',
+                 'Base', 'RESULT_COLUMNS', 'META_COLUMNS'}
+    sources = [TARGET] + [TARGET.parent / FILES[n] for n in batch.RAW_TABLES]
+    for index, path in enumerate(sources):
+        module = load(path, 'pruned_collector_' + str(index))
+        for name, factory in module.STRATEGIES.items():
+            if name not in module.RAW_TABLES:
+                continue
+            namespace = factory({}, CONFIG)
+            assert not (forbidden & set(vars(namespace))), (path.name, name)
+            assert not any(isinstance(value, type) and hasattr(value, '__table__')
+                           for value in vars(namespace).values())

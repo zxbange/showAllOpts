@@ -3,7 +3,6 @@
 本策略在本文件内独立实现；不读取外部策略、配置或日志文件。
 依赖和参数集中在开头；共用连接、会话及日期工具。用法见 docs/collector-batch.md。
 """
-import bisect
 import decimal
 import gzip
 import hashlib
@@ -18,15 +17,13 @@ import threading
 import time
 from contextlib import contextmanager, redirect_stderr, redirect_stdout
 from copy import deepcopy
-from decimal import Decimal, InvalidOperation, ROUND_HALF_UP, localcontext
-from statistics import median
+from decimal import Decimal, InvalidOperation
 from types import SimpleNamespace
 from urllib.parse import quote, quote_plus
 
 import jqdata as jq
 import pandas as pd
-from sqlalchemy import (BigInteger, Column, Date, DateTime, Index, Integer, JSON, LargeBinary,
-                        Numeric, String, Text, and_, or_, create_engine, func)
+from sqlalchemy import Column, Date, DateTime, Integer, LargeBinary, String, and_, or_, create_engine, func
 from sqlalchemy.engine.url import URL
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
@@ -386,58 +383,14 @@ def run_all(strategy_names=None, options=None, db_config=None, preview_rows=None
 
 # ---------- 行业动量 ----------
 def _microcap_strategy(_apis, _config):
-    """独立作用域隔离模型、参数和函数，返回本策略的接口。"""
+    """仅提供原始采集依赖的接口与校验，不计算策略结果。"""
     settings = strategy_settings('微盘温度计')
     get_all_securities = _apis.get('get_all_securities')
-    get_trade_days = _apis.get('get_trade_days')
     get_price = _apis.get('get_price')
     get_extras = _apis.get('get_extras')
     get_fundamentals = _apis.get('get_fundamentals')
     query = _apis.get('query')
-    valuation = _apis.get('valuation')
-    indicator = _apis.get('indicator')
-
-    START_DATE = settings['start_date']
-    END_DATE = settings['end_date']
-    MICRO_NUM = settings['micro_num']
-    SAMPLE_STEP = settings['sample_step']
     BATCH_SIZE = settings['batch_size']
-    RAW_FIELDS = ('micro_median', 'relative_ratio', 'crowding_ratio', 'amount_crowding_ratio')
-    PCT_FIELDS = ('cap_pct', 'relative_pct', 'crowding_pct', 'amount_crowding_pct')
-    Q = Decimal('0.0000000001')
-    Base = declarative_base()
-
-    class MicrocapTemperature(Base):
-        __tablename__ = 'microcap_temperature'
-        __table_args__ = {'mysql_engine': 'InnoDB', 'mysql_charset': 'utf8mb4'}
-
-        series_id = Column(String(64), primary_key=True)
-        trade_date = Column(Date, primary_key=True)
-        micro_num = Column(Integer, nullable=False)
-        sample_step = Column(Integer, nullable=False)
-        sample_count = Column(Integer, nullable=False)
-        universe_count = Column(Integer, nullable=False)
-        profit_growth_count = Column(Integer, nullable=False)
-        micro_median = Column(Numeric(24, 10), nullable=False)
-        all_median = Column(Numeric(24, 10), nullable=False)
-        relative_ratio = Column(Numeric(24, 10), nullable=False)
-        crowding_ratio = Column(Numeric(24, 10), nullable=False)
-        amount_crowding_ratio = Column(Numeric(24, 10), nullable=False)
-        pe_median = Column(Numeric(24, 10), nullable=False)
-        pb_median = Column(Numeric(24, 10), nullable=False)
-        avg_np_growth = Column(Numeric(24, 10), nullable=True)
-        cap_pct = Column(Numeric(18, 10), nullable=False)
-        relative_pct = Column(Numeric(18, 10), nullable=False)
-        crowding_pct = Column(Numeric(18, 10), nullable=False)
-        amount_crowding_pct = Column(Numeric(18, 10), nullable=False)
-        score = Column(Numeric(18, 10), nullable=False)
-        micro_index = Column(Numeric(24, 8), nullable=False)
-        period_return = Column(Numeric(24, 10), nullable=False)
-        member_codes = Column(Text, nullable=False)  # JSON 成分股，供下一期指数续算。
-        updated_at = Column(DateTime, nullable=False)
-
-    RESULT_COLUMNS = [column.name for column in MicrocapTemperature.__table__.columns
-                      if column.name != 'member_codes']
 
     def number(value):
         try:
@@ -446,27 +399,12 @@ def _microcap_strategy(_apis, _config):
             return None
         return result if result.is_finite() else None
 
-    def rounded(value):
-        return Decimal(value).quantize(Q)
-
     def series_key(start, micro_num, sample_step):
         return 'micro{}_{}d_{}_v1'.format(micro_num, sample_step, as_date(start).strftime('%Y%m%d'))
 
     def chunks(codes):
         for offset in range(0, len(codes), BATCH_SIZE):
             yield codes[offset:offset + BATCH_SIZE]
-
-    def calendar(start, end):
-        raw = get_trade_days(start_date=as_date(start), end_date=as_date(end))
-        if raw is None:
-            raise ValueError('交易日历获取失败。')
-        days = [as_date(day) for day in raw]
-        previous = None
-        for day in days:
-            if day < as_date(start) or day > as_date(end) or (previous is not None and day <= previous):
-                raise ValueError('交易日历越界、重复或乱序。')
-            previous = day
-        return days
 
     def fundamental_rows(codes, table, fields, day):
         _progress_note('获取估值和财务指标')
@@ -528,200 +466,6 @@ def _microcap_strategy(_apis, _config):
                 if not value:
                     eligible.append(code)
         return eligible
-
-    def summarize_universe(rows, turnovers, amounts, micro_num):
-        valid = []
-        for code, row in rows.items():
-            cap, pe, pb = [number(row.get(field)) for field in ('market_cap', 'pe_ratio', 'pb_ratio')]
-            today_turnover = number(row.get('turnover_ratio'))
-            history = [value for value in turnovers.get(code, []) if value is not None and value >= 0]
-            money = amounts.get(code)
-            # 沿用原程序 dropna 口径：当期估值、当日换手率、成交额及过去换手率均须有值。
-            if cap is None or cap <= 0 or pe is None or pb is None or today_turnover is None:
-                continue
-            if today_turnover < 0 or not history or money is None or money < 0:
-                continue
-            valid.append(dict(code=code, market_cap=cap, pe=pe, pb=pb, money=money,
-                              turnover=builtins.sum(history) / len(history)))
-        if len(valid) < micro_num:
-            raise ValueError('完整有效股票不足 {} 只，停止写入。'.format(micro_num))
-        valid.sort(key=lambda row: (row['market_cap'], row['code']))
-        micro = valid[:micro_num]
-        micro_median = median([row['market_cap'] for row in micro])
-        all_median = median([row['market_cap'] for row in valid])
-        all_turnover = builtins.sum(row['turnover'] for row in valid) / len(valid)
-        micro_turnover = builtins.sum(row['turnover'] for row in micro) / micro_num
-        total_money = builtins.sum(row['money'] for row in valid)
-        if all_turnover <= 0 or total_money <= 0:
-            raise ValueError('市场换手率或成交额分母为零，停止写入。')
-        metrics = dict(
-            universe_count=len(valid), micro_median=rounded(micro_median), all_median=rounded(all_median),
-            relative_ratio=rounded(micro_median / all_median),
-            crowding_ratio=rounded(micro_turnover / all_turnover),
-            amount_crowding_ratio=rounded(builtins.sum(row['money'] for row in micro) / total_money),
-            pe_median=rounded(median([row['pe'] for row in micro])),
-            pb_median=rounded(median([row['pb'] for row in micro])),
-        )
-        return metrics, [row['code'] for row in micro]
-
-    def index_return(previous, day, micro_num):
-        if previous is None:
-            return Decimal('1000.00000000'), Decimal('0')
-        codes = json.loads(previous['member_codes'])
-        if len(codes) != micro_num or len(set(codes)) != micro_num:
-            raise ValueError('上一期成分股数量不一致，无法续算指数。')
-        start = as_date(previous['trade_date'])
-        prices = price_rows(codes, start, day, 'close')
-        returns = []
-        for code in codes:
-            before, after = prices.get((code, start)), prices.get((code, day))
-            if before is None or after is None or before <= 0 or after <= 0:
-                raise ValueError('{} 上期成分股 {} 端点价格缺失，停止，不能静默剔除后重配权重。'.format(day, code))
-            returns.append(after / before - 1)
-        period_return = builtins.sum(returns) / micro_num
-        index = (Decimal(previous['micro_index']) * (1 + period_return)).quantize(Decimal('0.00000001'))
-        return index, rounded(period_return)
-
-    def calculate_period(day, previous, micro_num=MICRO_NUM):
-        day = as_date(day)
-        codes = eligible_codes(day)
-        if len(codes) < micro_num:
-            raise ValueError('筛选后股票不足微盘样本数量。')
-        fields = ('market_cap', 'turnover_ratio', 'pe_ratio', 'pb_ratio')
-        rows = fundamental_rows(codes, valuation, fields, day)
-        if not rows:
-            raise ValueError('估值数据为空。')
-        raw_window = get_trade_days(end_date=day.isoformat(), count=5)
-        window = [] if raw_window is None else [as_date(value) for value in raw_window]
-        if len(window) != 5 or window[-1] != day or window != sorted(set(window)):
-            raise ValueError('近 5 个交易日窗口无效。')
-        turnovers = {}
-        for trade_day in window:
-            daily = rows if trade_day == day else fundamental_rows(codes, valuation, ('turnover_ratio',), trade_day)
-            if not daily:
-                raise ValueError('{} 换手率数据为空。'.format(trade_day))
-            for code, row in daily.items():
-                turnovers.setdefault(code, []).append(number(row.get('turnover_ratio')))
-        prices = price_rows(codes, day, day, 'money')
-        amounts = {code: prices.get((code, day)) for code in codes}
-        metrics, members = summarize_universe(rows, turnovers, amounts, micro_num)
-        growth_field = 'inc_net_profit_to_shareholders_year_on_year'
-        fundamentals = fundamental_rows(members, indicator, (growth_field,), day)
-        growth = [number(row.get(growth_field)) for row in fundamentals.values()]
-        growth = [value for value in growth if value is not None]
-        metrics.update(
-            trade_date=day, micro_num=micro_num, member_codes=json.dumps(members),
-            avg_np_growth=rounded(median(growth)) if growth else None,
-            profit_growth_count=len(growth), updated_at=china_now(),
-        )
-        metrics['micro_index'], metrics['period_return'] = index_return(previous, day, micro_num)
-        return metrics
-
-    def append_percentiles(record, histories):
-        # pandas rank(pct=True, method='average')，包括当前值；相等值取平均名次。
-        for raw_field, pct_field in zip(RAW_FIELDS, PCT_FIELDS):
-            # 先统一到数据库精度，避免一次性计算与从数据库续算的并列排名不同。
-            value = rounded(record[raw_field])
-            record[raw_field] = value
-            history = histories[raw_field]
-            left, right = bisect.bisect_left(history, value), bisect.bisect_right(history, value)
-            record[pct_field] = rounded(Decimal(left + right + 2) / (2 * (len(history) + 1)))
-            bisect.insort(history, value)
-        record['score'] = rounded(record['relative_pct'] * Decimal('0.50')
-                                  + record['crowding_pct'] * Decimal('0.25')
-                                  + record['amount_crowding_pct'] * Decimal('0.25'))
-        record['sample_count'] = len(histories[RAW_FIELDS[0]])
-
-    def load_resume(Session, series_id, include_latest=False):
-        with session_scope(Session) as session:
-            last = session.query(MicrocapTemperature.trade_date).filter_by(series_id=series_id).order_by(
-                MicrocapTemperature.trade_date.desc()).first()
-            histories = {field: [] for field in RAW_FIELDS}
-            if last is None:
-                return None, None, histories
-            day = as_date(last[0])
-            boundary = (MicrocapTemperature.trade_date <= day if include_latest
-                        else MicrocapTemperature.trade_date < day)
-            # 只新增时纳入最新一期；从已保存的分位基准和指数继续。
-            baseline = session.query(*[getattr(MicrocapTemperature, field) for field in RAW_FIELDS]).filter(
-                MicrocapTemperature.series_id == series_id, boundary).all()
-            for row in baseline:
-                for field, value in zip(RAW_FIELDS, row):
-                    histories[field].append(Decimal(value))
-            for history in histories.values():
-                history.sort()
-            prev = session.query(MicrocapTemperature).filter(
-                MicrocapTemperature.series_id == series_id, boundary,
-            ).order_by(MicrocapTemperature.trade_date.desc()).first()
-            previous = None if prev is None else {
-                column.name: getattr(prev, column.name) for column in MicrocapTemperature.__table__.columns}
-            if previous is not None and previous['sample_count'] != len(baseline):
-                raise ValueError('历史样本不连续，请检查历史删除或外部修改，不能直接续算分位。')
-            return day, previous, histories
-
-    def save_period(Session, record, skip_existing=False):
-        _progress_note('写入当前采样期温度数据')
-        required = RESULT_COLUMNS + ['member_codes']
-        for field in required:
-            if field not in record or (record[field] is None and field != 'avg_np_growth'):
-                raise ValueError('快照字段 {} 不完整。'.format(field))
-        for field in PCT_FIELDS + ('score',):
-            value = number(record[field])
-            if value is None or not 0 <= value <= 1:
-                raise ValueError('分位或温度不在 0～1 范围内。')
-        with session_scope(Session) as session:
-            query = session.query(MicrocapTemperature).filter_by(
-                series_id=record['series_id'], trade_date=record['trade_date'])
-            if skip_existing:
-                if query.first() is not None:
-                    return False
-            else:
-                query.delete(synchronize_session=False)
-            session.add(MicrocapTemperature(**record))
-            session.commit()
-            return True
-
-    def run(start_date=START_DATE, end_date=END_DATE, micro_num=MICRO_NUM, sample_step=SAMPLE_STEP, skip_existing=False):
-        start = as_date(start_date)
-        now = china_now()
-        today = now.date()
-        end = today if end_date is None else as_date(end_date)
-        if start > end or end > today:
-            raise ValueError('开始日期不能晚于结束日期，结束日期不能晚于今天。')
-        if skip_existing and end == today and now.hour < 16:
-            end = today - datetime.timedelta(days=1)
-        for value in (micro_num, sample_step):
-            if isinstance(value, builtins.bool) or not isinstance(value, builtins.int) or value <= 0:
-                raise ValueError('微盘数量和采样步长必须是正整数。')
-        series_id = series_key(start, micro_num, sample_step)
-        records = []
-        with database_scope(Base, _config) as Session:
-            last, previous, histories = load_resume(Session, series_id, include_latest=skip_existing)
-            if last is not None and last > today:
-                raise ValueError('最新入库日期晚于今天，请检查已有数据。')
-            begin = last or start
-            if begin > end:
-                return pd.DataFrame(columns=RESULT_COLUMNS)
-            days = calendar(begin, end)
-            if last is not None and (not days or days[0] != last):
-                raise ValueError('最新入库日不在交易日历中，停止写入。')
-            pending = days[sample_step::sample_step] if skip_existing and last is not None else days[::sample_step]
-            for day in _progress_items(pending, '采样日'):
-                try:
-                    record = calculate_period(day, previous, micro_num)
-                    if record['trade_date'] != day or record['micro_num'] != micro_num:
-                        raise ValueError('计算结果日期或微盘数量不一致。')
-                    record.update(series_id=series_id, sample_step=sample_step)
-                    append_percentiles(record, histories)
-                    if not save_period(Session, record, skip_existing=skip_existing):
-                        raise ValueError('该采样期已被其他任务写入，未覆盖；请重跑以加载已保存的指数和分位基准。')
-                except Exception as exc:
-                    if isinstance(exc, ValueError):
-                        raise
-                    raise RuntimeError('{} 采集失败，请检查聚宽接口、权限及数据库连接。'.format(day)) from None
-                previous = record
-                records.append({field: record[field] for field in RESULT_COLUMNS})
-        return pd.DataFrame(records, columns=RESULT_COLUMNS)
     return SimpleNamespace(**locals())
 RAW_VERSION = 'strategy_inputs_v1'
 

@@ -3,7 +3,6 @@
 本策略在本文件内独立实现；不读取外部策略、配置或日志文件。
 依赖和参数集中在开头；共用连接、会话及日期工具。用法见 docs/collector-batch.md。
 """
-import bisect
 import decimal
 import gzip
 import hashlib
@@ -18,15 +17,13 @@ import threading
 import time
 from contextlib import contextmanager, redirect_stderr, redirect_stdout
 from copy import deepcopy
-from decimal import Decimal, InvalidOperation, ROUND_HALF_UP, localcontext
-from statistics import median
+from decimal import Decimal, InvalidOperation
 from types import SimpleNamespace
 from urllib.parse import quote, quote_plus
 
 import jqdata as jq
 import pandas as pd
-from sqlalchemy import (BigInteger, Column, Date, DateTime, Index, Integer, JSON, LargeBinary,
-                        Numeric, String, Text, and_, or_, create_engine, func)
+from sqlalchemy import Column, Date, DateTime, Integer, LargeBinary, String, and_, or_, create_engine, func
 from sqlalchemy.engine.url import URL
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
@@ -386,50 +383,16 @@ def run_all(strategy_names=None, options=None, db_config=None, preview_rows=None
 
 # ---------- 行业动量 ----------
 def _growth_strategy(_apis, _config):
-    """四类累计财报，各取最新三期；归母净利润和基本 EPS 双增长。"""
+    """仅提供原始采集依赖的接口与校验，不计算策略结果。"""
     settings = strategy_settings('高增长')
     get_all_securities, get_trade_days, get_fundamentals, get_industry, query, valuation = [
         _apis.get(k) for k in ('get_all_securities', 'get_trade_days', 'get_fundamentals', 'get_industry', 'query', 'valuation')]
     BATCH_SIZE, PAGE_SIZE = settings['batch_size'], settings['page_size']
+
     if BATCH_SIZE > 500 or PAGE_SIZE > 3000:
         raise ValueError('batch_size 不得超过 500，page_size 不得超过 3000。')
-    END_DATE = settings['end_date']
-    RULE_VERSION = 'growth_cumulative_parent_eps_v1'
+
     GROUPS = {'annual': (12, 31), 'q1': (3, 31), 'q2': (6, 30), 'q3': (9, 30)}
-    Base = declarative_base()
-
-    class GrowthSnapshot(Base):
-        __tablename__ = 'high_growth_snapshot'
-        __table_args__ = {'mysql_engine': 'InnoDB', 'mysql_charset': 'utf8mb4'}
-        id = Column(Integer, primary_key=True)
-        as_of_date = Column(Date, nullable=False)
-        valuation_date = Column(Date, nullable=False)
-        updated_at = Column(DateTime, nullable=False)
-        rule_version = Column(String(48), nullable=False)
-        universe_count = Column(Integer, nullable=False)
-        evaluated_count = Column(Integer, nullable=False)
-        matched_count = Column(Integer, nullable=False)
-
-
-    class GrowthStock(Base):
-        __tablename__ = 'high_growth_stock'
-        __table_args__ = (Index('ux_high_growth_rank', 'rank', unique=True),
-                          {'mysql_engine': 'InnoDB', 'mysql_charset': 'utf8mb4'})
-        code = Column(String(16), primary_key=True)
-        as_of_date = Column(Date, nullable=False)
-        rank = Column(Integer, nullable=False)
-        name = Column(String(128), nullable=False)
-        industry_code = Column(String(32), nullable=True)
-        industry_name = Column(String(128), nullable=True)
-        industry_level = Column(String(16), nullable=True)
-        pe_ttm = Column(Numeric(24, 6), nullable=True)
-        pb = Column(Numeric(24, 6), nullable=True)
-        market_cap = Column(Numeric(24, 6), nullable=True)
-        annual_profit_growth = Column(Numeric(28, 8), nullable=False)
-        reports = Column(JSON, nullable=False)
-
-    RESULT_COLUMNS = [c.name for c in GrowthStock.__table__.columns]
-    META_COLUMNS = [c.name for c in GrowthSnapshot.__table__.columns if c.name not in ('id', 'updated_at')]
 
     def number(value):
         try:
@@ -437,14 +400,6 @@ def _growth_strategy(_apis, _config):
             return result if result.is_finite() else None
         except (InvalidOperation, ValueError, TypeError):
             return None
-
-    def rounded(value, places=6):
-        value = number(value)
-        if value is None:
-            return None
-        with localcontext() as ctx:
-            ctx.prec = 50
-            return value.quantize(Decimal(1).scaleb(-places), rounding=ROUND_HALF_UP)
 
     def rows(frame, required, label):
         if frame is None or not set(required).issubset(frame.columns):
@@ -478,48 +433,6 @@ def _growth_strategy(_apis, _config):
                 return None
             selected[name] = group
         return selected
-
-    def evaluate(groups):
-        if groups is None:
-            return None
-        evidence = {}
-        annual_growth = None
-        for name, group in groups.items():
-            if builtins.any(number(group[-1][key]) <= 0 for key in ('net_profit', 'eps')):
-                return None
-            output = []
-            for i, row in enumerate(group):
-                record = {key: str(row[key]) for key in ('report_period', 'publication_date')}
-                for field, target in (('net_profit', 'profit_growth'), ('eps', 'eps_growth')):
-                    value = number(row[field])
-                    record[field] = str(value)
-                    record[target] = None
-                    if i:
-                        previous = number(group[i-1][field])
-                        if previous == 0:
-                            return None
-                        # 先用原值交叉相乘判断，避免把 19.999...% 四舍五入成达标。
-                        if (value-previous)*100 < builtins.abs(previous)*20:
-                            return None
-                        rate = (value-previous)/builtins.abs(previous)*100
-                        record[target] = str(rounded(rate, 8))
-                        if name == 'annual' and i == 2 and field == 'net_profit':
-                            annual_growth = rate
-                output.append(record)
-            evidence[name] = output
-        return annual_growth, evidence
-
-    def select(all_reports, as_of):
-        chosen, evaluated = [], 0
-        for code in _progress_items(sorted(all_reports), '检查四类财报'):
-            groups = latest_reports(all_reports[code], as_of)
-            if groups is not None:
-                evaluated += 1
-                result = evaluate(groups)
-                if result is not None:
-                    chosen.append((code, result[0], result[1]))
-        chosen.sort(key=lambda item: (-item[1], item[0]))
-        return chosen, evaluated
 
     def financial_reports(codes, as_of):
         # 聚宽合并利润表：不使用 *_PARENT 母公司报表，也不把单季度 EPS 相加。
@@ -581,101 +494,6 @@ def _growth_strategy(_apis, _config):
                 if len(page) < PAGE_SIZE:
                     break
         return result
-
-    def calculate(as_of, valuation_day):
-        _progress_note('读取 A 股股票池')
-        frame = get_all_securities(types=['stock'], date=as_of)
-        if frame is None or frame.empty or 'display_name' not in frame.columns:
-            raise ValueError('股票池为空或缺少名称，保留原快照。')
-        names = {str(code): str(row['display_name']) for code, row in frame.iterrows()}
-        if len(names) != len(frame):
-            raise ValueError('股票代码重复。')
-        # get_all_securities(stock) 的平台 A 股范围，不额外剔除 ST、科创板、停牌或涨跌停。
-        all_reports = financial_reports(sorted(names), as_of)
-        if not builtins.any(all_reports.values()):
-            raise ValueError('全部财报为空，保留原快照。')
-        chosen, evaluated = select(all_reports, as_of)
-        if evaluated == 0:
-            raise ValueError('没有任何股票取得完整四类三期财报，检查数据权限及字段；保留原快照。')
-        codes = [item[0] for item in chosen]
-        caps, industries = {}, {}
-        for offset in _progress_items(range(0, len(codes), BATCH_SIZE), '补充估值与行业'):
-            batch = codes[offset:offset+BATCH_SIZE]
-            fields = ('code', 'pe_ratio', 'pb_ratio', 'market_cap')
-            q = query(*[getattr(valuation, f) for f in fields]).filter(valuation.code.in_(batch))
-            values = rows(get_fundamentals(q, date=valuation_day), fields, '估值')
-            for row in values:
-                code = str(row['code'])
-                if code not in batch or code in caps:
-                    raise ValueError('估值包含重复或越界股票。')
-                caps[code] = row
-            if set(batch)-set(caps):
-                raise ValueError('估值未完整返回，保留原快照。')
-            result = get_industry(batch, date=as_of)
-            if not isinstance(result, dict) or set(batch)-set(result):
-                raise ValueError('行业未完整返回，保留原快照。')
-            industries.update(result)
-        records = []
-        for rank, (code, growth, reports) in enumerate(chosen, 1):
-            info = industries.get(code) or {}
-            level = next((k for k in ('sw_l3', 'sw_l2', 'sw_l1') if info.get(k)), None)
-            industry = info.get(level, {})
-            cap = caps.get(code, {})
-            records.append(dict(code=code, as_of_date=as_of, rank=rank, name=names[code],
-                industry_code=industry.get('industry_code'), industry_name=industry.get('industry_name'), industry_level=level,
-                pe_ttm=rounded(cap.get('pe_ratio')), pb=rounded(cap.get('pb_ratio')), market_cap=rounded(cap.get('market_cap')),
-                annual_profit_growth=rounded(growth, 8), reports=reports))
-        meta = dict(as_of_date=as_of, valuation_date=valuation_day, rule_version=RULE_VERSION,
-                    universe_count=len(names), evaluated_count=evaluated, matched_count=len(records))
-        return meta, records
-
-    def save_latest(Session, meta, records):
-        if (len({r['code'] for r in records}) != len(records) or len(records) != meta['matched_count']
-                or sorted(r['rank'] for r in records) != list(range(1, len(records)+1))
-                or builtins.any(r['as_of_date'] != meta['as_of_date'] for r in records)):
-            raise ValueError('股票重复、日期、数量或排名与快照不一致。')
-        _progress_note('事务更新最新高增长名单')
-        with session_scope(Session) as session:
-            head = session.query(GrowthSnapshot).filter_by(id=1).with_for_update().first()
-            if head is not None and head.as_of_date > meta['as_of_date']:
-                raise ValueError('数据库已有更新日期，拒绝旧日期覆盖。')
-            existing = session.query(GrowthStock).all()
-            def signature(values):
-                return sorted(tuple(json.dumps(r[c], sort_keys=True, ensure_ascii=False) if c == 'reports' else r[c]
-                                    for c in RESULT_COLUMNS) for r in values)
-            old = [{c: getattr(r, c) for c in RESULT_COLUMNS} for r in existing]
-            if head is not None and builtins.all(getattr(head, c) == meta[c] for c in META_COLUMNS) and signature(old) == signature(records):
-                return False
-            if head is None:
-                head = GrowthSnapshot(id=1, updated_at=china_now(), **meta)
-                session.add(head)
-                session.flush()  # 并发首次创建时唯一键冲突会回滚，避免交叉覆盖。
-            else:
-                for key, value in meta.items():
-                    setattr(head, key, value)
-                head.updated_at = china_now()
-            for previous in existing:
-                session.expunge(previous)
-            session.query(GrowthStock).delete(synchronize_session=False)
-            session.add_all([GrowthStock(**r) for r in records])
-            session.commit()
-            return True
-
-    def run(end_date=END_DATE):
-        now = china_now()
-        as_of = as_date(end_date) if end_date is not None else now.date()
-        if as_of > now.date():
-            raise ValueError('结束日期不能晚于今天。')
-        valuation_end = as_of-datetime.timedelta(days=1) if as_of == now.date() and now.hour < 16 else as_of
-        days = get_trade_days(end_date=valuation_end, count=1)
-        if days is None or len(days) != 1 or as_date(days[0]) > valuation_end:
-            raise ValueError('交易日历无效。')
-        # 全部采集成功后再进入写入流程，任何源接口失败都不会清空旧名单。
-        meta, records = calculate(as_of, as_date(days[0]))
-        with database_scope(Base, _config) as Session:
-            if not save_latest(Session, meta, records):
-                _progress_note('名单与指标未变化，未重复写入')
-        return pd.DataFrame(records, columns=RESULT_COLUMNS)
     return SimpleNamespace(**locals())
 RAW_VERSION = 'strategy_inputs_v1'
 
