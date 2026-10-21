@@ -6,6 +6,7 @@
 import bisect
 import builtins
 import datetime
+import uuid
 import io
 import json
 import math
@@ -23,7 +24,7 @@ from urllib.parse import quote, quote_plus
 import jqdata as jq
 import pandas as pd
 from sqlalchemy import (BigInteger, Column, Date, DateTime, Index, Integer, JSON,
-                        Numeric, String, Text, and_, or_, create_engine, func)
+                        Numeric, String, Text, and_, or_, create_engine, func, event, tuple_)
 from sqlalchemy.engine.url import URL
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
@@ -3254,6 +3255,65 @@ def _ownership_strategy(_apis, _config):
         key = Column(String(32), primary_key=True)
         as_of = Column(Date, nullable=False)
 
+    class SyncHead(Base):
+        __tablename__ = 'ownership_sync_head'
+        id = Column(String(16), primary_key=True)
+        generation = Column(String(32), nullable=False)
+        revision = Column(BigInteger, nullable=False)
+
+    class Change(Base):
+        __tablename__ = 'ownership_change'
+        table_name = Column(String(32), primary_key=True)
+        code = Column(String(16), primary_key=True)
+        record_date = Column(Date, primary_key=True)
+        revision = Column(BigInteger, nullable=False, index=True)
+        deleted = Column(Integer, nullable=False)
+
+    def install_change_tracking(Session):
+        """Coalesced change keys, committed atomically with the business rows.
+
+        The locked head serializes writers before any tracked DML. Unlike an
+        auto-increment event ID, its committed order cannot skip a slow writer.
+        """
+        with session_scope(Session) as session:
+            if session.query(SyncHead).filter_by(id='main').first() is None:
+                session.add(SyncHead(id='main',generation=uuid.uuid4().hex,revision=0))
+                session.commit()
+        tracked = (OwnershipStock,OwnershipReport,OwnershipHolders)
+        def before_flush(session, flush_context, instances):
+            pending = [r for r in session.new if isinstance(r,tracked)]
+            pending.extend(r for r in session.dirty if isinstance(r,tracked) and session.is_modified(r,include_collections=False))
+            pending.extend(r for r in session.deleted if isinstance(r,tracked))
+            if not pending:
+                return
+            revision = session.info.get('ownership_revision')
+            if revision is None:
+                head = session.query(SyncHead).filter_by(id='main').populate_existing().with_for_update().one()
+                head.revision += 1
+                revision = head.revision
+                session.info['ownership_revision'] = revision
+            keys = {}
+            for row in pending:
+                date = getattr(row,'report_date',getattr(row,'end_date',datetime.date(1970,1,1)))
+                keys[(row.__tablename__,row.code,date)] = int(row in session.deleted)
+            # Bound SQL parameter counts even if a caller flushes a large batch.
+            key_list = list(keys)
+            for offset in range(0,len(key_list),200):
+                batch = key_list[offset:offset+200]
+                existing = {(r.table_name,r.code,r.record_date):r for r in session.query(Change).filter(
+                    tuple_(Change.table_name,Change.code,Change.record_date).in_(batch)).all()}
+                for key in batch:
+                    row = existing.get(key)
+                    if row is None:
+                        session.add(Change(table_name=key[0],code=key[1],record_date=key[2],revision=revision,deleted=keys[key]))
+                    else:
+                        row.revision, row.deleted = revision, keys[key]
+        def reset(session):
+            session.info.pop('ownership_revision',None)
+        event.listen(Session,'before_flush',before_flush)
+        event.listen(Session,'after_commit',reset)
+        event.listen(Session,'after_rollback',reset)
+
     CATEGORY_IDS = {'qfii': (307007,), 'social': (307004,),
                     'broker': (307002, 307015, 307022), 'insurance': (307006,307014,307023),
                     'trust': (307009,307016,307025), 'private': (307028,)}
@@ -3547,6 +3607,7 @@ def _ownership_strategy(_apis, _config):
         # Compact keys only: no raw rows or JSON payloads are accumulated for the preview.
         changed = set()
         with database_scope(Base,_config) as Session:
+            install_change_tracking(Session)
             with session_scope(Session) as session:
                 for batch in _progress_items(list(batches(codes)),'股票资料',lambda b:b[0]):
                     industries = _apis['get_industry'](batch,date=as_of)

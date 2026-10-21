@@ -18,6 +18,7 @@ from sqlalchemy.pool import NullPool
 
 from app.core.cache_errors import failure_details, retryable_source_error, SnapshotDataError
 from app.core.cache_sync import sync_tables
+from app.core.ownership_sync import copy_ownership
 from app.models.ownership import OwnershipStock, OwnershipReport, OwnershipHolders
 from app.models.etf_heat import Heat, Pool
 from app.models.growth import GrowthSnapshot, GrowthStock
@@ -158,6 +159,10 @@ class SnapshotCache:
             engine.dispose()
 
     def copy_module(self, module, full=False):
+        if module == 'institution-ownership':
+            result = copy_ownership(self, full)
+            if result is not None:
+                return result
         models = MODULES[module][1]
         filename = module + '-' + uuid.uuid4().hex + '.sqlite'
         path = self.root / filename
@@ -174,6 +179,9 @@ class SnapshotCache:
                 if self.source.dialect.name == 'mysql':
                     source = source.execution_options(isolation_level='REPEATABLE READ')
                 with source.begin(), destination.begin() as target:
+                    if module == 'institution-ownership':
+                        # Legacy fallback cannot certify an existing journal cursor.
+                        target.exec_driver_sql('DROP TABLE IF EXISTS ownership_cache_cursor')
                     count = sync_tables(source, target, tables, module, incremental)
                     if module == 'etf-momentum':
                         head = target.execute(select(Pool.__table__)).mappings().first()
@@ -235,7 +243,9 @@ class SnapshotCache:
                     if result is None:
                         break  # Leave this module pending so a restart can resume it.
                     filename, rows = result
-                    entry.update(file=filename, rows=rows, updated_at=now().isoformat(), error=None)
+                    if filename != entry.get('file') or not entry.get('updated_at'):
+                        entry['updated_at'] = now().isoformat()
+                    entry.update(file=filename, rows=rows, error=None)
                     logger.info('Cache refresh complete module=%s rows=%s seconds=%.2f', module, rows, time.monotonic()-started)
                 except Exception as exc:
                     code, hint, frames = failure_details(exc)

@@ -159,3 +159,6 @@ batch_summary = run_all(
 
 
 个股机构持仓默认每页 1,000 条、每批 50 只股票计算和写入，不累积整季源数据或全市场历史 JSON。可在该策略配置中调整 `page_size`、`stock_batch_size`；低内存环境建议 500 / 20，详见 [内存控制](institution-ownership.md#研究环境内存控制)。
+
+
+个股机构持仓采集器同时维护 `ownership_sync_head` / `ownership_change`，用于项目按变更序号快速同步。本模块内容没有变化时不会推进序号；应用首次升级需建立一次完整基线。不要与旧版机构持仓采集脚本混用，详情见 [同步加速](institution-ownership.md#本地同步加速)。

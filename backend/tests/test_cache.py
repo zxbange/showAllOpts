@@ -110,8 +110,11 @@ def test_refresh_selects_only_source_columns_and_does_not_write_source(cached, e
     event.listen(engine,'before_cursor_execute',record)
     try: cache.refresh(background=False)
     finally: event.remove(engine,'before_cursor_execute',record)
-    assert len(statements) == sum(len(models) for _, models in MODULES.values())
-    assert all(s.lstrip().startswith('SELECT') for s in statements)
+    selects = [s for s in statements if s.lstrip().startswith('SELECT')]
+    assert len(selects) == sum(len(models) for _, models in MODULES.values())
+    # Optional ownership journal is detected with read-only SQLite table introspection.
+    assert all(s.lstrip().startswith(('SELECT', 'PRAGMA main.table_info(', 'PRAGMA temp.table_info('))
+               for s in statements)
     assert all('member_codes' not in s and 'analysis' not in s for s in statements)
 
 

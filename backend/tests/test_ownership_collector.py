@@ -133,7 +133,11 @@ def test_full_collection_repeat_correction_future_filter_and_social(mod,monkeypa
         assert report.payload['social_entry']['first_appearance']
         assert session.query(n.OwnershipHolders).count()==1
         stamp=report.updated_at
+    with sessionmaker(bind=target)() as session:
+        revision_before=session.query(n.SyncHead).one().revision
     assert n.run().empty
+    with sessionmaker(bind=target)() as session:
+        assert session.query(n.SyncHead).one().revision==revision_before
     source_session.query(Floats).filter_by(id=11).update({'share_number':150});source_session.commit()
     assert len(n.run())==1
     with sessionmaker(bind=target)() as session:
