@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """聚宽单文件串行采集：直接粘贴到 Notebook，或 %run -i 本文件。
-九个策略在本文件内独立实现；不读取外部策略、配置或日志文件。
+十个策略在本文件内独立实现；不读取外部策略、配置或日志文件。
 依赖和参数集中在开头；共用连接、会话及日期工具。用法见 docs/collector-batch.md。
 """
 import bisect
@@ -43,6 +43,7 @@ DB_OPTIONS = {'connect_timeout': 10, 'retry_count': 5, 'retry_interval': 10, 'po
 
 # end_date=None：每次运行取北京时间当天。下列参数按策略分组配置。
 STRATEGY_CONFIG = {
+    '个股机构持仓': {'end_date': None, 'history_years': 5, 'refresh_quarters': 4, 'page_size': 2000},
     'ETF动量热度': {'retention_trade_days': 180, 'end_date': None, 'initial_trade_days': 180, 'min_size_yi': 30},
     '行业动量': {
         'start_date': '2025-01-01', 'end_date': None,
@@ -74,7 +75,7 @@ STRATEGY_CONFIG = {
     '微盘新高新低': {'start_date': None, 'end_date': None, 'micro_num': 400, 'initial_days': 180, 'batch_size': 500, 'price_batch_size': 100},
 }
 
-STRATEGY_ORDER = ['行业动量', '抱团拥挤度', '微盘温度计', 'ETF份额', '净利润断层', '微盘新高新低', '高股息选股', '高增长', 'ETF动量热度']
+STRATEGY_ORDER = ['行业动量', '抱团拥挤度', '微盘温度计', 'ETF份额', '净利润断层', '微盘新高新低', '高股息选股', '高增长', 'ETF动量热度', '个股机构持仓']
 STRATEGY_OPTIONS = {}  # 原六策略固定只新增；高股息选股和高增长每次重算并替换最新快照。
 PREVIEW_ROWS = 5  # 每个策略展示最后几条新增记录；0 表示仅展示条数。
 PROGRESS_ENABLED = True  # 控制台进度条；关闭后仍保留各策略结果和最终汇总。
@@ -86,6 +87,7 @@ _API_NAMES = ('get_all_securities', 'get_trade_days', 'get_price', 'get_extras',
               'get_industries', 'get_industry_stocks', 'get_industry', 'get_fundamentals',
               'query', 'valuation', 'indicator', 'income', 'finance', 'jy')
 _PREVIEW_COLUMNS = {
+    '个股机构持仓': ('kind', 'code', 'date'),
     'ETF动量热度': ('trade_date', 'code', 'name', 'score', 'annual_return', 'r2'),
     '高增长': ('rank', 'code', 'name', 'industry_name', 'annual_profit_growth', 'pe_ttm', 'pb'),
     '高股息选股': ('method', 'rank', 'code', 'name', 'dividend_yield_1y', 'dividend_ratio_3y', 'pe_ttm'),
@@ -347,7 +349,7 @@ def _safe_error(exc, config):
 
 def run_all(strategy_names=None, options=None, db_config=None, preview_rows=None,
             raise_on_failure=True, api_namespace=None):
-    """依次调用文件内策略；高股息/高增长替换最新结果，其余只新增；控制台展示进度及结果，失败后继续，最后统一报告。"""
+    """依次调用文件内策略；高股息/高增长替换最新结果，机构持仓更新变化，其余只新增；控制台展示进度及结果，失败后继续，最后统一报告。"""
     names = list(STRATEGY_ORDER if strategy_names is None else strategy_names)
     config = dict(DB_CONFIG if db_config is None else db_config)
     options = dict(STRATEGY_OPTIONS if options is None else options)
@@ -392,7 +394,7 @@ def run_all(strategy_names=None, options=None, db_config=None, preview_rows=None
             row['elapsed_seconds'] = builtins.round(time.monotonic() - started, 3)
             summary.append(row)
             if row['status'] == 'SUCCESS':
-                label = '当前选股结果' if name in ('高股息选股', '高增长') else '新增'
+                label = '新增或更新' if name == '个股机构持仓' else '当前选股结果' if name in ('高股息选股', '高增长') else '新增'
                 print('\n【{}】成功：{} {} 条，耗时 {:.2f} 秒。'.format(name, label, row['rows'], row['elapsed_seconds']))
                 if not row['rows']:
                     print('本次选股无匹配，最新结果已保存。' if name in ('高股息选股', '高增长')
@@ -407,7 +409,7 @@ def run_all(strategy_names=None, options=None, db_config=None, preview_rows=None
             else:
                 print('\n【{}】失败：{}；已提交部分保留，继续后续策略。'.format(name, row['error']))
             del result
-        print('\n采集结果汇总\n策略 | 结果 | 条数（高股息/高增长为当前结果，其余为新增） | 耗时（秒）')
+        print('\n采集结果汇总\n策略 | 结果 | 条数（高股息/高增长为当前结果，机构持仓为新增或更新，其余为新增） | 耗时（秒）')
         for row in summary:
             print('{} | {} | {} | {:.2f}'.format(row['strategy'], row['status'],
                   row['rows'] if row['rows'] is not None else '未完成', row['elapsed_seconds']))
@@ -3219,7 +3221,336 @@ def _etf_heat_strategy(_apis, _config):
 
 
 
+def _ownership_strategy(_apis, _config):
+    """披露持仓、股东户数与社保新进；仅公开披露口径，无交易操作。"""
+    settings = strategy_settings('个股机构持仓')
+    finance, query = _apis.get('finance'), _apis.get('query')
+    Base = declarative_base()
+
+    class OwnershipStock(Base):
+        __tablename__ = 'ownership_stock'
+        code = Column(String(16), primary_key=True)
+        name = Column(String(128), nullable=False, index=True)
+        industry = Column(String(128))
+        updated_at = Column(DateTime, nullable=False)
+
+    class OwnershipReport(Base):
+        __tablename__ = 'ownership_report'
+        code = Column(String(16), primary_key=True)
+        report_date = Column(Date, primary_key=True, index=True)
+        payload = Column(JSON, nullable=False)
+        updated_at = Column(DateTime, nullable=False)
+
+    class OwnershipHolders(Base):
+        __tablename__ = 'ownership_holders'
+        code = Column(String(16), primary_key=True)
+        end_date = Column(Date, primary_key=True)
+        pub_date = Column(Date)
+        payload = Column(JSON, nullable=False)
+        updated_at = Column(DateTime, nullable=False)
+
+    class Checkpoint(Base):
+        __tablename__ = 'ownership_checkpoint'
+        key = Column(String(32), primary_key=True)
+        as_of = Column(Date, nullable=False)
+
+    CATEGORY_IDS = {'qfii': (307007,), 'social': (307004,),
+                    'broker': (307002, 307015, 307022), 'insurance': (307006,307014,307023),
+                    'trust': (307009,307016,307025), 'private': (307028,)}
+
+    def number(value, integer=False):
+        if value is None or pd.isnull(value):
+            return None
+        n = float(value)
+        if not math.isfinite(n) or n < 0:
+            raise ValueError('持仓数据出现无效负值或非有限数')
+        return int(n) if integer else n
+
+    def text_value(value):
+        return '' if value is None or pd.isnull(value) else str(value).strip()
+
+    def day(value):
+        return None if value is None or pd.isnull(value) else as_date(value)
+
+    def previous_quarter(period):
+        return datetime.date(period.year, ((period.month-1)//3)*3+1, 1)-datetime.timedelta(days=1)
+
+    def pages(table, *conditions):
+        # ID keyset pagination: no silent 3000-row truncation, compatible with old pandas/JQ.
+        cursor, result = 0, []
+        size = builtins.min(settings['page_size'], 2000)
+        while True:
+            _progress_note('读取 {}，已读取 {} 条'.format(table.__name__, len(result)))
+            frame = finance.run_query(query(table).filter(table.id > cursor, *conditions).order_by(table.id).limit(size))
+            if frame is None:
+                raise ValueError('数据接口未返回结果')
+            if frame.empty:
+                break
+            rows = frame.to_dict('records')
+            ids = [int(r['id']) for r in rows]
+            if ids != sorted(set(ids)) or ids[0] <= cursor:
+                raise ValueError('数据接口分页未按 ID 递增')
+            result.extend(rows)
+            cursor = ids[-1]
+            # Continue to empty even if the upstream caps below requested page size.
+        return result
+
+    def aggregate(items, scope, method, close=None):
+        if not items:
+            return None  # absence of disclosure is not zero ownership
+        shares = [r.get('shares') for r in items]
+        values = [r.get('market_value') for r in items]
+        return {'shares': builtins.sum(shares) if builtins.all(v is not None for v in shares) else None,
+                'market_value': builtins.sum(values) if builtins.all(v is not None for v in values) else None,
+                'holder_count': len(items), 'scope': scope, 'value_method': method}
+
+    def float_snapshot(rows, close):
+        if not rows:
+            return [], False, None
+        latest = builtins.max(day(r['pub_date']) for r in rows)
+        rows = [r for r in rows if day(r['pub_date']) == latest]
+        by_rank = {}
+        for r in sorted(rows, key=lambda r: r['id']):
+            by_rank[int(r['shareholder_rank'])] = r
+        complete = set(by_rank) == set(range(1,11))
+        result = []
+        for rank, r in sorted(by_rank.items()):
+            shares = number(r['share_number'])
+            identity = text_value(r.get('shareholder_id'))
+            if identity.endswith('.0'):
+                identity = identity[:-2]
+            name = text_value(r['shareholder_name'])
+            category = number(r.get('shareholder_class_id'), True)
+            result.append({'id': identity or None, 'name': name, 'rank': rank,
+                           'class_id': category, 'shares': shares,
+                           'ratio': number(r.get('share_ratio')),
+                           'market_value': shares*close if shares is not None and close is not None else None})
+        # Unknown classifications or identities make absence/newness unreliable.
+        complete = complete and builtins.all(r['class_id'] is not None and r['name'] for r in result)
+        return result, bool(complete), latest.isoformat()
+
+    def social_entry(current, previous):
+        empty = {'status': 'unknown', 'first_appearance': False, 'new_combinations': [],
+                 'new_shares': None, 'new_market_value': None}
+        if not previous or not current.get('float_complete') or not previous.get('float_complete'):
+            return empty
+        current_members = [r for r in current['float_members'] if r['class_id'] == 307004]
+        previous_members = previous['float_members']
+        def same(a, b):
+            return (a.get('id') and b.get('id') and a['id'] == b['id']) or re.sub(r'\s+', '', a['name']) == re.sub(r'\s+', '', b['name'])
+        # Compare all prior shareholders: reclassification is not a new holding.
+        new = [r for r in current_members if not builtins.any(same(r,p) for p in previous_members)]
+        old_social = [r for r in previous_members if r['class_id'] == 307004]
+        totals = aggregate(new, 'top10_float', 'estimated') or {}
+        return {'status': 'comparable', 'first_appearance': bool(new) and not old_social,
+                'new_combinations': new, 'new_shares': totals.get('shares'),
+                'new_market_value': totals.get('market_value')}
+
+    def upsert(session, model, keys, values, existing=None, loaded=False):
+        row = existing if loaded else session.query(model).filter_by(**keys).first()
+        if row is not None and builtins.all(getattr(row,k) == v for k,v in values.items()):
+            return False
+        if row is None:
+            session.add(model(updated_at=china_now(), **dict(keys, **values)))
+        else:
+            for k,v in values.items():
+                setattr(row,k,v)
+            row.updated_at = china_now()
+        return True
+
+    def prices(codes, period):
+        if not codes:
+            return {}
+        trade_days = _apis['get_trade_days'](end_date=period, count=1)
+        if trade_days is None or len(trade_days) != 1:
+            raise ValueError('报告期末交易日不可用')
+        price_date = as_date(trade_days[0])
+        result = {}
+        for offset in range(0,len(codes),300):
+            frame = _apis['get_price'](codes[offset:offset+300], start_date=price_date,
+                end_date=price_date, frequency='daily', fields=['close'], fq=None, panel=False)
+            if frame is None:
+                raise ValueError('报告期末行情获取失败')
+            if not frame.empty:
+                for r in frame.to_dict('records'):
+                    v = number(r['close'])
+                    if v and v > 0:
+                        result[r['code']] = v
+        return result
+
+    def run(end_date=None, full_refresh=False, skip_existing=True):
+        as_of = as_date(end_date or settings.get('end_date') or china_now().date())
+        if as_of > china_now().date():
+            raise ValueError('结束日期不能晚于今天')
+        if not isinstance(settings['refresh_quarters'], int) or settings['refresh_quarters'] < 1:
+            raise ValueError('refresh_quarters 必须为正整数')
+        years = settings['history_years']
+        if not isinstance(years,int) or years < 1 or years > 20:
+            raise ValueError('history_years 必须在 1 到 20 之间')
+        start = as_of.replace(year=as_of.year-years, day=builtins.min(as_of.day,28))
+        periods = [datetime.date(y,m,d) for y in range(start.year,as_of.year+1)
+                   for m,d in ((3,31),(6,30),(9,30),(12,31))
+                   if start <= datetime.date(y,m,d) <= as_of]
+        # First visible quarter needs its immediate predecessor for new-entry comparisons.
+        periods.insert(0, previous_quarter(periods[0]))
+        securities = _apis['get_all_securities'](types=['stock'], date=as_of)
+        if securities is None or securities.empty:
+            raise ValueError('股票清单为空，停止写入')
+        code_map = {str(c).split('.')[0]: str(c) for c in securities.index}
+        codes = sorted(code_map.values())
+        industries = {}
+        for offset in range(0,len(codes),300):
+            values = _apis['get_industry'](codes[offset:offset+300], date=as_of)
+            if values is None:
+                raise ValueError('行业查询失败')
+            for code,value in values.items():
+                industries[code] = value.get('sw_l2',{}).get('industry_name')
+        # Deduplicate share classes only with a disclosed identity mapping, never by name suffix.
+        main = finance.FUND_MAIN_INFO
+        fund_map = {}
+        for r in pages(main):
+            fund = text_value(r.get('main_code')).split('.')[0]
+            canonical = text_value(r.get('statistics_main_code')).split('.')[0] or fund
+            if fund:
+                fund_map[fund] = canonical
+        changed = []
+        with database_scope(Base, _config) as Session:
+            with session_scope(Session) as session:
+                existing_stocks = {r.code:r for r in session.query(OwnershipStock).all()}
+                for code in codes:
+                    upsert(session, OwnershipStock, {'code':code},
+                           {'name':str(securities.loc[code,'display_name']), 'industry':industries.get(code)},
+                           existing=existing_stocks.get(code), loaded=True)
+                session.commit()
+            for period in _progress_items(periods, '报告期', str):
+                with session_scope(Session) as session:
+                    checkpoint = session.query(Checkpoint).get('report:'+str(period))
+                    if checkpoint and checkpoint.as_of > as_of:
+                        raise ValueError('已有较新采集结果，拒绝历史运行回退')
+                    if checkpoint and not full_refresh and period not in periods[-settings['refresh_quarters']:]:
+                        continue
+                t = finance.FUND_PORTFOLIO_STOCK
+                funds = pages(t, t.period_end == period, t.pub_date <= as_of)
+                t = finance.STK_SHAREHOLDER_FLOATING_TOP10
+                floats = pages(t, t.end_date == period, t.pub_date <= as_of,
+                               t.change_reason_id == 306019, t.sharesnature_id == 308007)
+                by_stock, fund_candidates = {}, {}
+                for r in floats:
+                    if r['code'] in codes:
+                        by_stock.setdefault(r['code'],[]).append(r)
+                closes = prices(sorted(by_stock), period)
+                portfolios = {}
+                for r in funds:
+                    fund = text_value(r['code']).split('.')[0]
+                    doc = (fund, day(r['pub_date']), int(r['report_type_id']))
+                    portfolios.setdefault(doc,[]).append(r)
+                selected = {}
+                for doc, holdings in portfolios.items():
+                    fund, published, report_type = doc
+                    canonical = fund_map.get(fund,fund)
+                    full = text_value(holdings[0].get('report_type')) in ('年度','年度报告','年报','半年度','半年度报告')
+                    priority = (int(full), published, int(fund == canonical), fund)
+                    if canonical not in selected or priority > selected[canonical][0]:
+                        selected[canonical] = (priority,holdings)
+                for canonical, (_,holdings) in selected.items():
+                    for r in sorted(holdings,key=lambda r:r['id']):
+                        code = code_map.get(text_value(r['symbol']).split('.')[0])
+                        if code:
+                            fund_candidates[(code,canonical)] = (None,r)
+                fund_groups = {}
+                for (code,fund), (_,r) in fund_candidates.items():
+                    fund_groups.setdefault(code,[]).append({'shares':number(r['shares']),
+                        'market_value':number(r['market_cap'])})
+                with session_scope(Session) as session:
+                    old_rows = {r.code:r for r in session.query(OwnershipReport).filter_by(report_date=period).all()}
+                    previous_rows = {r.code:r for r in session.query(OwnershipReport).filter_by(report_date=previous_quarter(period)).all()}
+                    changed_float_codes = set()
+                    for code in sorted(set(by_stock) | set(fund_groups) | set(old_rows)):
+                        members, complete, pub = float_snapshot(by_stock.get(code,[]), closes.get(code))
+                        categories = {'public_fund':aggregate(fund_groups.get(code,[]),'fund_disclosed','reported')}
+                        for category, ids in CATEGORY_IDS.items():
+                            records = [r for r in members if r['class_id'] in ids]
+                            categories[category] = aggregate(records,'top10_float','estimated')
+                        payload = {'schema_version':1, 'categories':categories, 'float_members':members,
+                                   'float_complete':complete, 'float_pub_date':pub,
+                                   'public_fund_scope':'full_disclosure' if period.month in (6,12) else 'quarterly_top_holdings',
+                                   'fund_identity_rule':'statistics_main_code_else_product_code',
+                                   'social_entry':{'status':'unknown'}}
+                        previous = previous_rows.get(code)
+                        payload['social_entry'] = social_entry(payload, previous.payload if previous else None)
+                        old_payload = old_rows[code].payload if code in old_rows else {}
+                        if old_payload.get('float_members') != members or old_payload.get('float_complete') != complete:
+                            changed_float_codes.add(code)
+                        if upsert(session,OwnershipReport,{'code':code,'report_date':period},{'payload':payload}, existing=old_rows.get(code), loaded=True):
+                            changed.append({'kind':'持仓','code':code,'date':period})
+                    # If interrupted before the next quarter refresh, do not expose a stale comparison.
+                    next_quarter = period + datetime.timedelta(days=95)
+                    next_period = previous_quarter(datetime.date(next_quarter.year, next_quarter.month, 1))
+                    if changed_float_codes:
+                        followers = session.query(OwnershipReport).filter_by(report_date=next_period).all()
+                        for follower in followers:
+                            if follower.code in changed_float_codes:
+                                follower.payload = dict(follower.payload, social_entry={'status':'unknown'})
+                                follower.updated_at = china_now()
+                    head = session.query(Checkpoint).get('report:'+str(period))
+                    if head is None:
+                        session.add(Checkpoint(key='report:'+str(period),as_of=as_of))
+                    else:
+                        head.as_of = as_of
+                    session.commit()
+            _progress_note('核对相邻季度，计算社保新进')
+            with session_scope(Session) as session:
+                records = session.query(OwnershipReport).order_by(OwnershipReport.code,OwnershipReport.report_date).all()
+                lookup = {(r.code,r.report_date):r for r in records}
+                for r in records:
+                    previous = lookup.get((r.code,previous_quarter(r.report_date)))
+                    social = social_entry(r.payload, previous.payload if previous else None)
+                    if r.payload.get('social_entry') != social:
+                        r.payload = dict(r.payload,social_entry=social)
+                        r.updated_at = china_now()
+                        changed.append({'kind':'持仓','code':r.code,'date':r.report_date})
+                session.commit()
+            t = finance.STK_HOLDER_NUM
+            with session_scope(Session) as session:
+                head = session.query(Checkpoint).get('holders')
+                if head and head.as_of > as_of:
+                    raise ValueError('股东户数已有较新结果，拒绝回退')
+                since = None if full_refresh or head is None else head.as_of-datetime.timedelta(days=30)
+            conditions = [t.end_date >= start, t.end_date <= as_of,
+                          or_(t.pub_date == None,t.pub_date <= as_of)]
+            if since is not None:
+                conditions.append(or_(t.pub_date >= since,t.end_date >= since))
+            rows = pages(t,*conditions)
+            latest = {}
+            for r in rows:
+                if r['code'] not in codes:
+                    continue
+                key = (r['code'],day(r['end_date']))
+                priority = (day(r['pub_date']) or datetime.date.min,int(r['id']))
+                if key not in latest or priority > latest[key][0]:
+                    latest[key] = (priority,r)
+            with session_scope(Session) as session:
+                existing_holders = {(r.code,r.end_date):r for r in session.query(OwnershipHolders).filter(OwnershipHolders.end_date >= start).all()}
+                for (code,end),(_,r) in latest.items():
+                    payload = {key:number(r[key],True) for key in
+                               ('share_holders','a_share_holders','b_share_holders','h_share_holders')}
+                    payload['schema_version'] = 1
+                    if upsert(session,OwnershipHolders,{'code':code,'end_date':end},
+                              {'pub_date':day(r['pub_date']),'payload':payload},
+                              existing=existing_holders.get((code,end)),loaded=True):
+                        changed.append({'kind':'户数','code':code,'date':end})
+                head = session.query(Checkpoint).get('holders')
+                if head is None:
+                    session.add(Checkpoint(key='holders',as_of=as_of))
+                else:
+                    head.as_of = as_of
+                session.commit()
+        return pd.DataFrame(changed, columns=['kind','code','date']).drop_duplicates(['kind','code','date'])
+    return SimpleNamespace(**locals())
+
+
 STRATEGIES = {
+    '个股机构持仓': _ownership_strategy,
     '行业动量': _momentum_strategy,
     '抱团拥挤度': _crowding_strategy,
     '微盘温度计': _microcap_strategy,

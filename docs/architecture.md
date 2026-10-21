@@ -87,7 +87,7 @@ Windows 集成测试创建随机本地端口的子进程和孙进程，分别验
 
 ## 本地快照查询层
 
-`get_session` 默认按 API 模块选择 `SnapshotCache` 的只读 SQLite 会话，现有 repository/service 查询和响应格式保持一致。只有同步任务连接源 MySQL，网页查询没有自动回源分支；`CACHE_ENABLED=false` 恢复原会话工厂。九个模块、十三张表按模块分事务复制，详情 JSON 保留，不复制网页不用的成分股和已删除分析字段。MySQL 使用 REPEATABLE READ，确保同一模块的快照头和明细来自同一事务。
+`get_session` 默认按 API 模块选择 `SnapshotCache` 的只读 SQLite 会话，现有 repository/service 查询和响应格式保持一致。只有同步任务连接源 MySQL，网页查询没有自动回源分支；`CACHE_ENABLED=false` 恢复原会话工厂。十个模块、十六张表按模块分事务复制，详情 JSON 保留，不复制网页不用的成分股和已删除分析字段。MySQL 使用 REPEATABLE READ，确保同一模块的快照头和明细来自同一事务。
 
 每次生成一个新的 SQLite 文件，完成写入与完整性检查后原子替换元信息；已有请求继续读取旧版本，新请求读取新版本。源数据库保持只读，建表和索引操作仅发生在本地 SQLite。独立文件锁协调 Uvicorn 多进程、每日调度和 CLI/网页手动同步。未完成模块记录在元信息中，进程中断后可继续；数据库/账号/映射结构变化会切换缓存命名空间，避免复用错误数据。详情见[本地缓存说明](local-cache.md)。
 
@@ -99,3 +99,8 @@ Windows 集成测试创建随机本地端口的子进程和孙进程，分别验
 ## ETF动量热度模块
 
 两张源表 `etf_momentum_pool`、`etf_momentum_heat` 由聚宽独立/批量脚本计算后写入；项目只同步计算结果到本地SQLite；候选池当前快照与按日基金历史分离。后端沿用模型、仓储、服务和路由层，从模块本地SQLite读取排名和曲线。前端 `/etf-momentum` 热力图与 `/etf-momentum/funds/:code` 详情页共享趋势图组件，支持负值坐标。详见 [ETF动量热度](etf-momentum.md)。
+
+
+## 个股机构持仓
+
+聚宽统一采集基金持仓、十大流通股东与股东户数，按股票和日期存入 JSON；社保新进在采集端比较相邻完整季度。项目只读取计算结果，三张展示表按主键和更新时间增量同步，采集断点表不进入缓存。入口 `/institution-ownership` 提供个股查询和社保新进，见 [详细说明](institution-ownership.md)。

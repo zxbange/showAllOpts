@@ -5,6 +5,10 @@ import { HomePage } from './pages/HomePage'
 import { MomentumPage } from './pages/MomentumPage'
 import { LoadingState } from './components/States'
 
+const OwnershipPage = lazy(() =>
+  import('./pages/OwnershipPage').then((m) => ({ default: m.OwnershipPage })),
+)
+
 const ETFHeatPage = lazy(() =>
   import('./pages/ETFHeatPage').then((m) => ({ default: m.ETFHeatPage })),
 )
@@ -51,6 +55,14 @@ export default function App() {
       <Routes>
         <Route element={<Layout />}>
           <Route index element={<HomePage />} />
+          <Route
+            path="institution-ownership"
+            element={
+              <Suspense fallback={<LoadingState />}>
+                <OwnershipPage />
+              </Suspense>
+            }
+          />
           <Route
             path="etf-momentum"
             element={

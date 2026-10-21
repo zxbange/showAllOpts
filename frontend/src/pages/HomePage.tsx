@@ -8,7 +8,32 @@ import '../styles/overview.css'
 function ModuleIllustration({ kind }: { kind: ResearchModule['illustration'] }) {
   return (
     <div className={`module-illustration illustration-${kind}`} aria-hidden="true">
-      {kind === 'etf-heat' ? (
+      {kind === 'ownership' ? (
+        <svg className="illustration-share-trends" viewBox="0 0 320 130" fill="none">
+          {[70, 160, 250].map((x, i) => (
+            <g key={x}>
+              <circle
+                cx={x}
+                cy={35 + i * 9}
+                r="14"
+                fill={['#eab66a', '#c94835', '#68a696'][i]}
+                opacity=".8"
+              />
+              <path
+                d={`M${x - 28} 99 Q${x - 28} ${57 + i * 5} ${x} ${57 + i * 5} Q${x + 28} ${57 + i * 5} ${x + 28} 99`}
+                fill={['#eab66a', '#c94835', '#68a696'][i]}
+                opacity=".3"
+              />
+            </g>
+          ))}
+          <path
+            d="M30 112H290M99 39H130M190 48H220"
+            stroke="#cdbba6"
+            strokeWidth="2"
+            strokeDasharray="4 4"
+          />
+        </svg>
+      ) : kind === 'etf-heat' ? (
         <svg className="illustration-share-trends" viewBox="0 0 320 130" fill="none">
           {[0, 1, 2, 3, 4, 5, 6, 7].map((n) => (
             <rect
@@ -160,23 +185,25 @@ function ModuleIllustration({ kind }: { kind: ResearchModule['illustration'] }) 
         </div>
       )}
       <span className="illustration-caption">
-        {kind === 'etf-heat'
-          ? 'ETF MOMENTUM'
-          : kind === 'growth'
-            ? '四类报告 · 持续增长'
-            : kind === 'dividend'
-              ? '分红与估值'
-              : kind === 'heatmap'
-                ? '行业强弱'
-                : kind === 'concentration'
-                  ? '成交集中'
-                  : kind === 'earnings'
-                    ? '业绩与价格'
-                    : kind === 'breadth'
-                      ? '新高与新低'
-                      : kind === 'shares'
-                        ? '份额变化'
-                        : '估值与交易'}{' '}
+        {kind === 'ownership'
+          ? '机构持仓 · 股东户数'
+          : kind === 'etf-heat'
+            ? 'ETF MOMENTUM'
+            : kind === 'growth'
+              ? '四类报告 · 持续增长'
+              : kind === 'dividend'
+                ? '分红与估值'
+                : kind === 'heatmap'
+                  ? '行业强弱'
+                  : kind === 'concentration'
+                    ? '成交集中'
+                    : kind === 'earnings'
+                      ? '业绩与价格'
+                      : kind === 'breadth'
+                        ? '新高与新低'
+                        : kind === 'shares'
+                          ? '份额变化'
+                          : '估值与交易'}{' '}
         · 视觉示意
       </span>
     </div>

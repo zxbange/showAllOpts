@@ -1,4 +1,5 @@
 import {
+  Users,
   TrendingUp,
   Coins,
   ArrowUpDown,
@@ -32,9 +33,23 @@ export interface ResearchModule {
     | 'dividend'
     | 'growth'
     | 'etf-heat'
+    | 'ownership'
 }
 
 export const researchModules: ResearchModule[] = [
+  {
+    id: 'institution-ownership',
+    name: '个股机构持仓',
+    path: '/institution-ownership',
+    category: '筹码观察',
+    english: 'INSTITUTION OWNERSHIP',
+    question: '谁在持有，筹码如何变化？',
+    description: '查询七类机构披露持仓与股东户数，发现季度新进的社保组合。',
+    tags: ['机构持仓', '股东户数', '社保新进'],
+    icon: Users,
+    tone: 'gold',
+    illustration: 'ownership',
+  },
   {
     id: 'etf-momentum',
     name: 'ETF动量热度',

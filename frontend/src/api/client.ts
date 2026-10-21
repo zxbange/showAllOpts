@@ -94,3 +94,20 @@ export const getETFHeatHistory = (code: string, days: number, signal?: AbortSign
     `/etf-momentum/funds/${encodeURIComponent(code)}/history?days=${days}`,
     signal,
   )
+
+export const searchOwnership = (q: string, signal?: AbortSignal) =>
+  request<{ stocks: import('../types/ownership').OwnershipStock[] }>(
+    '/institution-ownership/stocks?' + new URLSearchParams({ q }),
+    signal,
+  )
+export const getOwnership = (code: string, signal?: AbortSignal) =>
+  request<import('../types/ownership').OwnershipDetail>(
+    '/institution-ownership/stocks/' + encodeURIComponent(code),
+    signal,
+  )
+export const getSocialEntries = (period: string, mode: string, signal?: AbortSignal) =>
+  request<import('../types/ownership').SocialEntries>(
+    '/institution-ownership/social-entries?' +
+      new URLSearchParams({ ...(period ? { period } : {}), mode }),
+    signal,
+  )
