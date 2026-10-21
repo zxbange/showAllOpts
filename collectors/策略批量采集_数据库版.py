@@ -43,7 +43,7 @@ DB_OPTIONS = {'connect_timeout': 10, 'retry_count': 5, 'retry_interval': 10, 'po
 
 # end_date=None：每次运行取北京时间当天。下列参数按策略分组配置。
 STRATEGY_CONFIG = {
-    'ETF动量热度': {'end_date': None, 'initial_trade_days': 180, 'min_size_yi': 30},
+    'ETF动量热度': {'retention_trade_days': 180, 'end_date': None, 'initial_trade_days': 180, 'min_size_yi': 30},
     '行业动量': {
         'start_date': '2025-01-01', 'end_date': None,
         'industry_type': 'sw_l2', 'retention_trade_days': 180,
@@ -3085,6 +3085,25 @@ def _etf_heat_strategy(_apis, _config):
             return added + repaired
 
 
+    def get_retention_start(reference_date):
+        """Validate the complete calendar before allowing any database deletion."""
+        count = settings['retention_trade_days']
+        reference = as_date(reference_date)
+        raw = api('get_trade_days')(end_date=reference, count=count)
+        days = [] if raw is None else [as_date(day) for day in raw]
+        if len(days) != count or days != sorted(set(days)) or days[-1] > reference:
+            raise ValueError('保留范围交易日历不足、重复、乱序或含未来日期，未清理数据库')
+        return days[0]
+
+    def cleanup_old_data(Session, retention_start):
+        """Remove expired results for all funds, including funds outside the current pool."""
+        with session_scope(Session) as session:
+            deleted = session.query(Heat).filter(Heat.trade_date < retention_start).delete(synchronize_session=False)
+            session.commit()
+        _progress_note('保留最近 {} 个交易日（{} 起），已清理 {} 条过期热度'.format(
+            settings['retention_trade_days'], retention_start, deleted))
+        return deleted
+
     def run(end_date=None, skip_existing=True, repair_missing=False):
         nonlocal AS_OF_DATE
         if not isinstance(repair_missing, bool):
@@ -3095,23 +3114,29 @@ def _etf_heat_strategy(_apis, _config):
         requested = as_date(end_date or settings['end_date']) if (end_date or settings['end_date']) else now.date()
         if requested > now.date():
             raise ValueError('结束日期不能晚于今天')
+        # Retention follows the actual run date even when end_date is historical.
+        retention_start = get_retention_start(now.date())
         end = requested - datetime.timedelta(days=1) if requested == now.date() and now.hour < 16 else requested
         days = [as_date(d) for d in api('get_trade_days')(end_date=end, count=settings['initial_trade_days'])]
         if not days or days != sorted(set(days)) or days[-1] > end:
             raise ValueError('交易日历无效')
-        AS_OF_DATE = str(days[-1])
-        _progress_note('筛选 ETF/LOF 候选池，计算热度后入库')
-        chosen, audit, candidates = select_pool()
-        if chosen.empty:
-            raise ValueError('本次未取得有效候选池，保留旧快照；请运行分类研究脚本查看待核对清单')
-        members = []
-        for row in chosen.to_dict('records'):
-            members.append({key: (str(value) if isinstance(value, Decimal) else
-                            (None if pd.isna(value) else (value.item() if hasattr(value, 'item') else value)))
-                            for key, value in row.items()})
-        members = json.loads(json.dumps(members, ensure_ascii=False, allow_nan=False))
+        days = [day for day in days if day >= retention_start]
         output = []
         with database_scope(Base, _config) as Session:
+            cleanup_old_data(Session, retention_start)
+            if not days:
+                return pd.DataFrame(output)
+            AS_OF_DATE = str(days[-1])
+            _progress_note('筛选 ETF/LOF 候选池，计算热度后入库')
+            chosen, audit, candidates = select_pool()
+            if chosen.empty:
+                raise ValueError('本次未取得有效候选池，保留旧快照；请运行分类研究脚本查看待核对清单')
+            members = []
+            for row in chosen.to_dict('records'):
+                members.append({key: (str(value) if isinstance(value, Decimal) else
+                                (None if pd.isna(value) else (value.item() if hasattr(value, 'item') else value)))
+                                for key, value in row.items()})
+            members = json.loads(json.dumps(members, ensure_ascii=False, allow_nan=False))
             with session_scope(Session) as session:
                 head = session.query(Pool).filter_by(id=1).first()
                 if head and (head.as_of_date > days[-1] or head.rule_version not in
@@ -3128,9 +3153,10 @@ def _etf_heat_strategy(_apis, _config):
                     empty_dates = {r[0] for r in saved if r[1] is None} if repair else set()
                 if existing and builtins.max(existing) > days[-1]:
                     raise ValueError('已有更新日期的基金结果，拒绝回退')
-                first = builtins.min([days[0]] + ([builtins.max(existing)] if existing else []) + list(empty_dates))
+                first = builtins.max(retention_start, builtins.min(
+                    [days[0]] + ([builtins.max(existing)] if existing else []) + list(empty_dates)))
                 calendar = [as_date(d) for d in api('get_trade_days')(start_date=first, end_date=days[-1])]
-                if not calendar or calendar != sorted(set(calendar)) or calendar[-1] != days[-1]:
+                if not calendar or calendar != sorted(set(calendar)) or calendar[0] < first or calendar[-1] != days[-1]:
                     raise ValueError('增量交易日历无效')
                 listed = as_date(member['listed_date']) if member.get('listed_date') else calendar[0]
                 missing = [d for d in calendar if d >= listed and (d not in existing or d in empty_dates)]

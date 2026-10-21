@@ -104,3 +104,35 @@ def test_cache_ignores_old_raw_tables_and_preserves_source_scores(engine, sessio
     assert all('etf_momentum_bar' not in s and 'raw_industry_momentum' not in s for s in statements)
     with cache.session('etf-momentum') as local:
         assert local.get(Heat,(date(2026,10,20),'A')).score==3
+
+
+def test_incremental_cache_downloads_changes_and_removes_expired_heat(engine,session,tmp_path):
+    from sqlalchemy import event
+    from app.core.cache import SnapshotCache
+    from app.core.config import Settings
+    seed(session)
+    cache=SnapshotCache(Settings(_env_file=None,cache_enabled=True,cache_auto_refresh=False,log_dir=tmp_path/'log'),engine)
+    cache.refresh('etf-momentum',background=False)
+    session.query(Heat).filter(Heat.trade_date<date(2026,10,20)).delete()
+    row=session.get(Heat,(date(2026,10,20),'C'))
+    row.score=5;row.updated_at=datetime(2026,10,21)
+    session.commit()
+    statements=[]
+    def capture(c,cur,sql,*args):statements.append(sql)
+    event.listen(engine,'before_cursor_execute',capture)
+    try:
+        cache.refresh('etf-momentum',background=False)
+        downloads=[sql for sql in statements if 'etf_momentum_heat.score' in sql]
+        assert len(downloads)==1 and 'WHERE' in downloads[0]
+        with cache.session('etf-momentum') as local:
+            assert local.query(Heat).count()==4
+            assert local.get(Heat,(date(2026,10,19),'A')) is None
+            assert local.get(Heat,(date(2026,10,20),'C')).score==5
+            assert local.get(Heat,(date(2026,10,20),'A')).score==3
+        statements.clear()
+        cache.refresh('etf-momentum',background=False)
+        assert not any('etf_momentum_heat.score' in sql for sql in statements)
+        assert not any('etf_momentum_pool.members' in sql for sql in statements)
+        assert not next(m for m in cache.status()['modules'] if m['id']=='etf-momentum')['error']
+    finally:
+        event.remove(engine,'before_cursor_execute',capture)

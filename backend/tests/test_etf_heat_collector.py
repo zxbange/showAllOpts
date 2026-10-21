@@ -56,7 +56,8 @@ def test_same_factory_embedded_and_python36_syntax():
 
 
 @pytest.mark.parametrize('legacy_empty', [False, True])
-def test_full_run_repeat_and_partial_latest_preserve_head(mod, monkeypatch, tmp_path, legacy_empty):
+@pytest.mark.parametrize('retention', [180, 3])
+def test_full_run_repeat_and_partial_latest_preserve_head(mod, monkeypatch, tmp_path, legacy_empty, retention):
     Base=declarative_base()
     class Target(Base):
         __tablename__='target'
@@ -80,7 +81,7 @@ def test_full_run_repeat_and_partial_latest_preserve_head(mod, monkeypatch, tmp_
     finance=SimpleNamespace(FUND_INVEST_TARGET=Target,FUND_SHARE_DAILY=Shares,run_query=query_data)
     now=[dt.datetime(2026,10,20,17)]; price_calls=[]; partial=[False]
     monkeypatch.setattr(mod,'china_now',lambda:now[0])
-    mod.STRATEGY_CONFIG['ETF动量热度']['initial_trade_days']=3
+    mod.STRATEGY_CONFIG['ETF动量热度'].update(initial_trade_days=5 if retention==3 else 3, retention_trade_days=retention)
     database=create_engine('sqlite:///'+str(tmp_path/'output.sqlite'))
     monkeypatch.setattr(mod,'connect_database',lambda config:database)
     def get_price(code,**kwargs):
@@ -96,6 +97,9 @@ def test_full_run_repeat_and_partial_latest_preserve_head(mod, monkeypatch, tmp_
     strategy=mod._etf_heat_strategy(apis,mod.DB_CONFIG)
     strategy.Base.metadata.create_all(database)
     with sessionmaker(bind=database)() as s:
+        # Expired NULLs must be deleted, never reintroduced by upgrade repair.
+        s.add_all(strategy.Heat(trade_date=dt.date(2025,1,1),code=code,name=code,score=None,
+                  details={},updated_at=dt.datetime(2025,1,1)) for code in ['518880.XSHG','RETIRED'])
         s.add(strategy.Pool(id=1,as_of_date=dt.date(2026,10,20),rule_version='etf_close_momentum_v2' if legacy_empty else 'etf_raw_market_v1',
                             members=[{'code':'518880.XSHG'}],updated_at=dt.datetime(2026,10,19)))
         if legacy_empty:
@@ -124,7 +128,9 @@ def test_full_run_repeat_and_partial_latest_preserve_head(mod, monkeypatch, tmp_
         assert s.query(strategy.Pool).one().updated_at==before
     partial[0]=False
     assert len(strategy.run())==1
-    with sessionmaker(bind=database)() as s: assert s.query(strategy.Heat).count()==4
+    with sessionmaker(bind=database)() as s:
+        assert s.query(strategy.Heat).count()==min(4,retention)
+        assert min(r.trade_date for r in s.query(strategy.Heat)) >= pd.bdate_range(end=now[0].date(),periods=retention).date[0]
     with sessionmaker(bind=database)() as s:
         s.query(strategy.Heat).filter(strategy.Heat.trade_date==dt.date(2026,10,20)).update({'score':None})
         s.commit()
@@ -193,3 +199,54 @@ def test_null_repair_never_overwrites_valid_or_repeats_writes(ns):
     assert ns.save_rows(Session,[fixed,dict(fixed,code='B')],repair_missing=True)==[]
     assert not writes
     engine.dispose()
+
+
+@pytest.mark.parametrize('case', ['none', 'short', 'duplicate', 'reversed', 'future'])
+def test_retention_bad_calendar_never_opens_database(mod, monkeypatch, case):
+    today=dt.date(2026,10,20)
+    days=list(pd.bdate_range(end=today,periods=180).date)
+    variants={'none':None,'short':days[1:],'duplicate':days[:-1]+[days[-2]],
+              'reversed':days[::-1],'future':days[1:]+[today+dt.timedelta(days=1)]}
+    monkeypatch.setattr(mod,'china_now',lambda:dt.datetime(2026,10,20,17))
+    def forbidden(*args):raise AssertionError('Invalid calendar must not open database')
+    monkeypatch.setattr(mod,'connect_database',forbidden)
+    strategy=mod._etf_heat_strategy({'get_trade_days':lambda **kw:variants[case]},mod.DB_CONFIG)
+    with pytest.raises(ValueError,match='未清理数据库'):strategy.run()
+
+
+@pytest.mark.parametrize('historical', [True, False])
+def test_retention_cleanup_precedes_selection_and_prevents_expired_backfill(mod,monkeypatch,tmp_path,historical):
+    now=dt.datetime(2026,10,20,17)
+    monkeypatch.setattr(mod,'china_now',lambda:now)
+    calendar=lambda end_date,count=None,start_date=None:pd.bdate_range(start=start_date,end=end_date,periods=count).date
+    cutoff=calendar(now.date(),180)[0]
+    engine=create_engine('sqlite:///'+str(tmp_path/'retention.sqlite'))
+    monkeypatch.setattr(mod,'connect_database',lambda config:engine)
+    calls=[]
+    def unavailable(**kwargs):
+        calls.append('selection')
+        raise RuntimeError('selection unavailable')
+    strategy=mod._etf_heat_strategy({'get_trade_days':calendar,'get_all_securities':unavailable},mod.DB_CONFIG)
+    strategy.Base.metadata.create_all(engine)
+    Session=sessionmaker(bind=engine)
+    with Session() as s:
+        for day in [cutoff-dt.timedelta(days=1),cutoff,now.date()]:
+            for code in ['CURRENT','RETIRED']:
+                s.add(strategy.Heat(trade_date=day,code=code,name=code,score=1,details={},updated_at=now))
+        s.commit()
+    if historical:
+        assert strategy.run(end_date=cutoff-dt.timedelta(days=1),repair_missing=True).empty
+        assert not calls
+    else:
+        with pytest.raises(RuntimeError,match='selection unavailable'):strategy.run()
+        assert calls==['selection']
+    with Session() as s:
+        assert {(r.trade_date,r.code) for r in s.query(strategy.Heat)}=={
+            (day,code) for day in [cutoff,now.date()] for code in ['CURRENT','RETIRED']}
+    assert strategy.cleanup_old_data(Session,cutoff)==0
+    engine.dispose()
+
+
+def test_retention_weekend_keeps_same_boundary(mod):
+    strategy=mod._etf_heat_strategy({'get_trade_days':lambda end_date,count:pd.bdate_range(end=end_date,periods=count).date},mod.DB_CONFIG)
+    assert strategy.get_retention_start(dt.date(2026,10,23))==strategy.get_retention_start(dt.date(2026,10,25))
