@@ -43,7 +43,7 @@ DB_OPTIONS = {'connect_timeout': 10, 'retry_count': 5, 'retry_interval': 10, 'po
 
 # end_date=None：每次运行取北京时间当天。下列参数按策略分组配置。
 STRATEGY_CONFIG = {
-    '个股机构持仓': {'end_date': None, 'history_years': 5, 'refresh_quarters': 4, 'page_size': 2000},
+    '个股机构持仓': {'end_date': None, 'history_years': 5, 'refresh_quarters': 4, 'page_size': 1000, 'stock_batch_size': 50},
     'ETF动量热度': {'retention_trade_days': 180, 'end_date': None, 'initial_trade_days': 180, 'min_size_yi': 30},
     '行业动量': {
         'start_date': '2025-01-01', 'end_date': None,
@@ -3275,25 +3275,163 @@ def _ownership_strategy(_apis, _config):
     def previous_quarter(period):
         return datetime.date(period.year, ((period.month-1)//3)*3+1, 1)-datetime.timedelta(days=1)
 
-    def pages(table, *conditions):
-        # ID keyset pagination: no silent 3000-row truncation, compatible with old pandas/JQ.
-        cursor, result = 0, []
+    def pages(table, *conditions, columns=None):
+        """Yield one row at a time; only the current source page is retained."""
+        cursor, count = 0, 0
         size = builtins.min(settings['page_size'], 2000)
         while True:
-            _progress_note('读取 {}，已读取 {} 条'.format(table.__name__, len(result)))
-            frame = finance.run_query(query(table).filter(table.id > cursor, *conditions).order_by(table.id).limit(size))
+            _progress_note('读取 {}，已读取 {} 条'.format(table.__name__, count))
+            selection = query(*columns) if columns is not None else query(table)
+            frame = finance.run_query(selection.filter(table.id > cursor, *conditions).order_by(table.id).limit(size))
             if frame is None:
                 raise ValueError('数据接口未返回结果')
             if frame.empty:
                 break
             rows = frame.to_dict('records')
+            del frame
             ids = [int(r['id']) for r in rows]
             if ids != sorted(set(ids)) or ids[0] <= cursor:
                 raise ValueError('数据接口分页未按 ID 递增')
-            result.extend(rows)
             cursor = ids[-1]
-            # Continue to empty even if the upstream caps below requested page size.
-        return result
+            count += len(rows)
+            yield from rows
+            del rows, ids
+            # Query until empty even when upstream caps below requested page size.
+
+    def batches(items):
+        for offset in range(0, len(items), settings['stock_batch_size']):
+            yield items[offset:offset+settings['stock_batch_size']]
+
+    def fund_document(row, fund_map):
+        fund = text_value(row['code']).split('.')[0]
+        canonical = fund_map.get(fund, fund)
+        full = text_value(row.get('report_type')) in ('年度','年度报告','年报','半年度','半年度报告')
+        priority = (int(full), day(row['pub_date']), int(fund == canonical), fund)
+        document = (fund, day(row['pub_date']), int(row['report_type_id']))
+        return canonical, priority, document
+
+    def select_documents(period, as_of, fund_map):
+        # First pass retains only the winning document identity, not its holdings.
+        t = finance.FUND_PORTFOLIO_STOCK
+        selected = {}
+        columns = [t.id, t.code, t.pub_date, t.report_type_id, t.report_type]
+        for row in pages(t, t.period_end == period, t.pub_date <= as_of, columns=columns):
+            canonical, priority, document = fund_document(row, fund_map)
+            if canonical not in selected or priority > selected[canonical][0]:
+                selected[canonical] = (priority, document)
+        return selected
+
+    def batch_funds(codes, period, as_of, fund_map, selected):
+        # Select documents globally before stock filtering, otherwise an absent holding
+        # in a newer/A-class portfolio could resurrect an older/C-class position.
+        t = finance.FUND_PORTFOLIO_STOCK
+        code_map = {c.split('.')[0]:c for c in codes}
+        candidates = {}
+        columns = [t.id,t.code,t.symbol,t.pub_date,t.report_type_id,t.report_type,t.shares,t.market_cap]
+        for row in pages(t, t.period_end == period, t.pub_date <= as_of,
+                         t.symbol.in_(list(code_map)+list(codes)), columns=columns):
+            canonical, _, document = fund_document(row, fund_map)
+            if canonical not in selected or document != selected[canonical][1]:
+                continue
+            code = code_map.get(text_value(row['symbol']).split('.')[0])
+            if code:
+                # IDs are ascending, so the last occurrence wins within a document.
+                candidates[(code,canonical)] = (number(row['shares']),number(row['market_cap']))
+        totals = {}
+        for (code,_),(shares,value) in candidates.items():
+            if code not in totals:
+                totals[code] = {'shares':0.,'market_value':0.,'holder_count':0,
+                                'scope':'fund_disclosed','value_method':'reported'}
+            total = totals[code]
+            total['holder_count'] += 1
+            total['shares'] = None if shares is None or total['shares'] is None else total['shares']+shares
+            total['market_value'] = None if value is None or total['market_value'] is None else total['market_value']+value
+        return totals
+
+    def batch_floats(codes, period, as_of):
+        t = finance.STK_SHAREHOLDER_FLOATING_TOP10
+        latest = {}
+        for row in pages(t, t.end_date == period, t.pub_date <= as_of, t.code.in_(codes),
+                         t.change_reason_id == 306019, t.sharesnature_id == 308007):
+            code, pub = row['code'], day(row['pub_date'])
+            if code not in latest or pub > latest[code][0]:
+                latest[code] = (pub,{})
+            if pub == latest[code][0]:
+                latest[code][1][int(row['shareholder_rank'])] = row
+        return {code:list(ranks.values()) for code,(_,ranks) in latest.items()}
+
+    def save_report_batch(session, codes, period, as_of, fund_map, selected, changed):
+        fund_groups = batch_funds(codes,period,as_of,fund_map,selected)
+        by_stock = batch_floats(codes,period,as_of)
+        closes = prices(sorted(by_stock),period)
+        old_rows = {r.code:r for r in session.query(OwnershipReport).filter(
+            OwnershipReport.report_date == period,OwnershipReport.code.in_(codes)).all()}
+        previous_rows = {r.code:r for r in session.query(OwnershipReport).filter(
+            OwnershipReport.report_date == previous_quarter(period),OwnershipReport.code.in_(codes)).all()}
+        changed_float_codes = set()
+        for code in sorted(set(by_stock) | set(fund_groups) | set(old_rows)):
+            members, complete, pub = float_snapshot(by_stock.get(code,[]),closes.get(code))
+            categories = {'public_fund':fund_groups.get(code)}
+            for category, ids in CATEGORY_IDS.items():
+                categories[category] = aggregate([r for r in members if r['class_id'] in ids],'top10_float','estimated')
+            payload = {'schema_version':1, 'categories':categories, 'float_members':members,
+                       'float_complete':complete, 'float_pub_date':pub,
+                       'public_fund_scope':'full_disclosure' if period.month in (6,12) else 'quarterly_top_holdings',
+                       'fund_identity_rule':'statistics_main_code_else_product_code'}
+            previous = previous_rows.get(code)
+            payload['social_entry'] = social_entry(payload,previous.payload if previous else None)
+            old_payload = old_rows[code].payload if code in old_rows else {}
+            if old_payload.get('float_members') != members or old_payload.get('float_complete') != complete:
+                changed_float_codes.add(code)
+            if upsert(session,OwnershipReport,{'code':code,'report_date':period},{'payload':payload},
+                      existing=old_rows.get(code),loaded=True):
+                changed.add(('持仓',code,period))
+        next_quarter = period+datetime.timedelta(days=95)
+        next_period = previous_quarter(datetime.date(next_quarter.year,next_quarter.month,1))
+        if changed_float_codes:
+            followers = session.query(OwnershipReport).filter(OwnershipReport.report_date == next_period,
+                OwnershipReport.code.in_(changed_float_codes)).all()
+            for follower in followers:
+                follower.payload = dict(follower.payload,social_entry={'status':'unknown'})
+                follower.updated_at = china_now()
+        # Flush, not commit: release ORM state while retaining quarter-level rollback.
+        session.flush()
+        session.expunge_all()
+
+    def repair_social_batch(session, codes, changed):
+        records = session.query(OwnershipReport).filter(OwnershipReport.code.in_(codes)).all()
+        lookup = {(r.code,r.report_date):r for r in records}
+        for row in records:
+            previous = lookup.get((row.code,previous_quarter(row.report_date)))
+            social = social_entry(row.payload,previous.payload if previous else None)
+            if row.payload.get('social_entry') != social:
+                row.payload = dict(row.payload,social_entry=social)
+                row.updated_at = china_now()
+                changed.add(('持仓',row.code,row.report_date))
+        session.flush()
+        session.expunge_all()
+
+    def save_holder_batch(session, codes, conditions, start, changed):
+        t = finance.STK_HOLDER_NUM
+        latest = {}
+        for row in pages(t,t.code.in_(codes),*conditions):
+            key = (row['code'],day(row['end_date']))
+            priority = (day(row['pub_date']) or datetime.date.min,int(row['id']))
+            if key not in latest or priority > latest[key][0]:
+                latest[key] = (priority,row)
+        if not latest:
+            return
+        existing = {(r.code,r.end_date):r for r in session.query(OwnershipHolders).filter(
+            OwnershipHolders.end_date >= start,OwnershipHolders.code.in_(codes)).all()}
+        for (code,end),(_,row) in latest.items():
+            payload = {key:number(row[key],True) for key in
+                       ('share_holders','a_share_holders','b_share_holders','h_share_holders')}
+            payload['schema_version'] = 1
+            if upsert(session,OwnershipHolders,{'code':code,'end_date':end},
+                      {'pub_date':day(row['pub_date']),'payload':payload},existing=existing.get((code,end)),loaded=True):
+                changed.add(('户数',code,end))
+        session.flush()
+        session.expunge_all()
 
     def aggregate(items, scope, method, close=None):
         if not items:
@@ -3382,8 +3520,11 @@ def _ownership_strategy(_apis, _config):
         as_of = as_date(end_date or settings.get('end_date') or china_now().date())
         if as_of > china_now().date():
             raise ValueError('结束日期不能晚于今天')
-        if not isinstance(settings['refresh_quarters'], int) or settings['refresh_quarters'] < 1:
-            raise ValueError('refresh_quarters 必须为正整数')
+        for option in ('refresh_quarters','stock_batch_size'):
+            if isinstance(settings[option],bool) or not isinstance(settings[option],int) or settings[option] < 1:
+                raise ValueError(option+' 必须为正整数')
+        if settings['stock_batch_size'] > 300:
+            raise ValueError('stock_batch_size 最大为 300，防止研究环境内存溢出')
         years = settings['history_years']
         if not isinstance(years,int) or years < 1 or years > 20:
             raise ValueError('history_years 必须在 1 到 20 之间')
@@ -3391,124 +3532,61 @@ def _ownership_strategy(_apis, _config):
         periods = [datetime.date(y,m,d) for y in range(start.year,as_of.year+1)
                    for m,d in ((3,31),(6,30),(9,30),(12,31))
                    if start <= datetime.date(y,m,d) <= as_of]
-        # First visible quarter needs its immediate predecessor for new-entry comparisons.
         periods.insert(0, previous_quarter(periods[0]))
-        securities = _apis['get_all_securities'](types=['stock'], date=as_of)
+        securities = _apis['get_all_securities'](types=['stock'],date=as_of)
         if securities is None or securities.empty:
             raise ValueError('股票清单为空，停止写入')
-        code_map = {str(c).split('.')[0]: str(c) for c in securities.index}
-        codes = sorted(code_map.values())
-        industries = {}
-        for offset in range(0,len(codes),300):
-            values = _apis['get_industry'](codes[offset:offset+300], date=as_of)
-            if values is None:
-                raise ValueError('行业查询失败')
-            for code,value in values.items():
-                industries[code] = value.get('sw_l2',{}).get('industry_name')
-        # Deduplicate share classes only with a disclosed identity mapping, never by name suffix.
-        main = finance.FUND_MAIN_INFO
+        codes = sorted(str(code) for code in securities.index)
         fund_map = {}
-        for r in pages(main):
-            fund = text_value(r.get('main_code')).split('.')[0]
-            canonical = text_value(r.get('statistics_main_code')).split('.')[0] or fund
+        main = finance.FUND_MAIN_INFO
+        for row in pages(main,columns=[main.id,main.main_code,main.statistics_main_code]):
+            fund = text_value(row.get('main_code')).split('.')[0]
+            canonical = text_value(row.get('statistics_main_code')).split('.')[0] or fund
             if fund:
                 fund_map[fund] = canonical
-        changed = []
-        with database_scope(Base, _config) as Session:
+        # Compact keys only: no raw rows or JSON payloads are accumulated for the preview.
+        changed = set()
+        with database_scope(Base,_config) as Session:
             with session_scope(Session) as session:
-                existing_stocks = {r.code:r for r in session.query(OwnershipStock).all()}
-                for code in codes:
-                    upsert(session, OwnershipStock, {'code':code},
-                           {'name':str(securities.loc[code,'display_name']), 'industry':industries.get(code)},
-                           existing=existing_stocks.get(code), loaded=True)
+                for batch in _progress_items(list(batches(codes)),'股票资料',lambda b:b[0]):
+                    industries = _apis['get_industry'](batch,date=as_of)
+                    if industries is None:
+                        raise ValueError('行业查询失败')
+                    existing = {r.code:r for r in session.query(OwnershipStock).filter(OwnershipStock.code.in_(batch)).all()}
+                    for code in batch:
+                        industry = industries.get(code,{}).get('sw_l2',{}).get('industry_name')
+                        upsert(session,OwnershipStock,{'code':code},
+                               {'name':str(securities.loc[code,'display_name']),'industry':industry},
+                               existing=existing.get(code),loaded=True)
+                    session.flush()
+                    session.expunge_all()
+                    del existing, industries
                 session.commit()
-            for period in _progress_items(periods, '报告期', str):
+            for period in _progress_items(periods,'报告期',str):
                 with session_scope(Session) as session:
                     checkpoint = session.query(Checkpoint).get('report:'+str(period))
                     if checkpoint and checkpoint.as_of > as_of:
                         raise ValueError('已有较新采集结果，拒绝历史运行回退')
                     if checkpoint and not full_refresh and period not in periods[-settings['refresh_quarters']:]:
                         continue
-                t = finance.FUND_PORTFOLIO_STOCK
-                funds = pages(t, t.period_end == period, t.pub_date <= as_of)
-                t = finance.STK_SHAREHOLDER_FLOATING_TOP10
-                floats = pages(t, t.end_date == period, t.pub_date <= as_of,
-                               t.change_reason_id == 306019, t.sharesnature_id == 308007)
-                by_stock, fund_candidates = {}, {}
-                for r in floats:
-                    if r['code'] in codes:
-                        by_stock.setdefault(r['code'],[]).append(r)
-                closes = prices(sorted(by_stock), period)
-                portfolios = {}
-                for r in funds:
-                    fund = text_value(r['code']).split('.')[0]
-                    doc = (fund, day(r['pub_date']), int(r['report_type_id']))
-                    portfolios.setdefault(doc,[]).append(r)
-                selected = {}
-                for doc, holdings in portfolios.items():
-                    fund, published, report_type = doc
-                    canonical = fund_map.get(fund,fund)
-                    full = text_value(holdings[0].get('report_type')) in ('年度','年度报告','年报','半年度','半年度报告')
-                    priority = (int(full), published, int(fund == canonical), fund)
-                    if canonical not in selected or priority > selected[canonical][0]:
-                        selected[canonical] = (priority,holdings)
-                for canonical, (_,holdings) in selected.items():
-                    for r in sorted(holdings,key=lambda r:r['id']):
-                        code = code_map.get(text_value(r['symbol']).split('.')[0])
-                        if code:
-                            fund_candidates[(code,canonical)] = (None,r)
-                fund_groups = {}
-                for (code,fund), (_,r) in fund_candidates.items():
-                    fund_groups.setdefault(code,[]).append({'shares':number(r['shares']),
-                        'market_value':number(r['market_cap'])})
+                    # Only scalar codes; JSON payloads are loaded by bounded stock batch below.
+                    old_codes = [r[0] for r in session.query(OwnershipReport.code).filter_by(report_date=period).all()]
+                selected = select_documents(period,as_of,fund_map)
                 with session_scope(Session) as session:
-                    old_rows = {r.code:r for r in session.query(OwnershipReport).filter_by(report_date=period).all()}
-                    previous_rows = {r.code:r for r in session.query(OwnershipReport).filter_by(report_date=previous_quarter(period)).all()}
-                    changed_float_codes = set()
-                    for code in sorted(set(by_stock) | set(fund_groups) | set(old_rows)):
-                        members, complete, pub = float_snapshot(by_stock.get(code,[]), closes.get(code))
-                        categories = {'public_fund':aggregate(fund_groups.get(code,[]),'fund_disclosed','reported')}
-                        for category, ids in CATEGORY_IDS.items():
-                            records = [r for r in members if r['class_id'] in ids]
-                            categories[category] = aggregate(records,'top10_float','estimated')
-                        payload = {'schema_version':1, 'categories':categories, 'float_members':members,
-                                   'float_complete':complete, 'float_pub_date':pub,
-                                   'public_fund_scope':'full_disclosure' if period.month in (6,12) else 'quarterly_top_holdings',
-                                   'fund_identity_rule':'statistics_main_code_else_product_code',
-                                   'social_entry':{'status':'unknown'}}
-                        previous = previous_rows.get(code)
-                        payload['social_entry'] = social_entry(payload, previous.payload if previous else None)
-                        old_payload = old_rows[code].payload if code in old_rows else {}
-                        if old_payload.get('float_members') != members or old_payload.get('float_complete') != complete:
-                            changed_float_codes.add(code)
-                        if upsert(session,OwnershipReport,{'code':code,'report_date':period},{'payload':payload}, existing=old_rows.get(code), loaded=True):
-                            changed.append({'kind':'持仓','code':code,'date':period})
-                    # If interrupted before the next quarter refresh, do not expose a stale comparison.
-                    next_quarter = period + datetime.timedelta(days=95)
-                    next_period = previous_quarter(datetime.date(next_quarter.year, next_quarter.month, 1))
-                    if changed_float_codes:
-                        followers = session.query(OwnershipReport).filter_by(report_date=next_period).all()
-                        for follower in followers:
-                            if follower.code in changed_float_codes:
-                                follower.payload = dict(follower.payload, social_entry={'status':'unknown'})
-                                follower.updated_at = china_now()
+                    for batch in _progress_items(list(batches(sorted(set(codes)|set(old_codes)))), '持仓分批',lambda b:b[0]):
+                        save_report_batch(session,batch,period,as_of,fund_map,selected,changed)
                     head = session.query(Checkpoint).get('report:'+str(period))
                     if head is None:
                         session.add(Checkpoint(key='report:'+str(period),as_of=as_of))
                     else:
                         head.as_of = as_of
                     session.commit()
-            _progress_note('核对相邻季度，计算社保新进')
+                del selected, old_codes
+            # Include historical/delisted stock codes, but never load every historical JSON at once.
             with session_scope(Session) as session:
-                records = session.query(OwnershipReport).order_by(OwnershipReport.code,OwnershipReport.report_date).all()
-                lookup = {(r.code,r.report_date):r for r in records}
-                for r in records:
-                    previous = lookup.get((r.code,previous_quarter(r.report_date)))
-                    social = social_entry(r.payload, previous.payload if previous else None)
-                    if r.payload.get('social_entry') != social:
-                        r.payload = dict(r.payload,social_entry=social)
-                        r.updated_at = china_now()
-                        changed.append({'kind':'持仓','code':r.code,'date':r.report_date})
+                social_codes = [r[0] for r in session.query(OwnershipReport.code).distinct().all()]
+                for batch in _progress_items(list(batches(social_codes)),'社保比较',lambda b:b[0]):
+                    repair_social_batch(session,batch,changed)
                 session.commit()
             t = finance.STK_HOLDER_NUM
             with session_scope(Session) as session:
@@ -3516,36 +3594,19 @@ def _ownership_strategy(_apis, _config):
                 if head and head.as_of > as_of:
                     raise ValueError('股东户数已有较新结果，拒绝回退')
                 since = None if full_refresh or head is None else head.as_of-datetime.timedelta(days=30)
-            conditions = [t.end_date >= start, t.end_date <= as_of,
-                          or_(t.pub_date == None,t.pub_date <= as_of)]
+            conditions = [t.end_date >= start,t.end_date <= as_of,or_(t.pub_date == None,t.pub_date <= as_of)]
             if since is not None:
                 conditions.append(or_(t.pub_date >= since,t.end_date >= since))
-            rows = pages(t,*conditions)
-            latest = {}
-            for r in rows:
-                if r['code'] not in codes:
-                    continue
-                key = (r['code'],day(r['end_date']))
-                priority = (day(r['pub_date']) or datetime.date.min,int(r['id']))
-                if key not in latest or priority > latest[key][0]:
-                    latest[key] = (priority,r)
             with session_scope(Session) as session:
-                existing_holders = {(r.code,r.end_date):r for r in session.query(OwnershipHolders).filter(OwnershipHolders.end_date >= start).all()}
-                for (code,end),(_,r) in latest.items():
-                    payload = {key:number(r[key],True) for key in
-                               ('share_holders','a_share_holders','b_share_holders','h_share_holders')}
-                    payload['schema_version'] = 1
-                    if upsert(session,OwnershipHolders,{'code':code,'end_date':end},
-                              {'pub_date':day(r['pub_date']),'payload':payload},
-                              existing=existing_holders.get((code,end)),loaded=True):
-                        changed.append({'kind':'户数','code':code,'date':end})
+                for batch in _progress_items(list(batches(codes)),'股东户数',lambda b:b[0]):
+                    save_holder_batch(session,batch,conditions,start,changed)
                 head = session.query(Checkpoint).get('holders')
                 if head is None:
                     session.add(Checkpoint(key='holders',as_of=as_of))
                 else:
                     head.as_of = as_of
                 session.commit()
-        return pd.DataFrame(changed, columns=['kind','code','date']).drop_duplicates(['kind','code','date'])
+        return pd.DataFrame(sorted(changed),columns=['kind','code','date'])
     return SimpleNamespace(**locals())
 
 
