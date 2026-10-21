@@ -15,7 +15,7 @@ Linux 原生部署使用 `config/app.config`，Windows 默认 `backend/.env`，D
 | `CACHE_ENABLED` | `true` | 启用本地快照；false 时页面直连源数据库 |
 | `CACHE_AUTO_REFRESH` | `true` | 启动后台准备、缺失快照重试和每天定时同步 |
 | `CACHE_REFRESH_TIME` | `20:00` | 北京时间，24小时制 HH:MM；与服务器系统时区无关 |
-| `CACHE_DB_READ_TIMEOUT` | `120` | 后台同步数据库 socket 读取超时，秒，范围5～600；不是整个同步任务的总时限 |
+| `CACHE_DB_READ_TIMEOUT` | `600` | 后台同步数据库 socket 读取超时，秒，范围5～3600；不是整个同步任务的总时限 |
 | `CACHE_SYNC_ATTEMPTS` | `3` | 单个模块连接失败/中断时的总尝试次数，范围1～5；1表示不重试 |
 
 修改配置后重启后端。默认已改为20:00；已有私有配置若显式写了18点，需要手动改为 `CACHE_REFRESH_TIME=20:00`，部署脚本不会覆盖私有配置。网页手动同步无需配置或输入密钥。旧配置中的 `CACHE_REFRESH_TOKEN` 已不再使用，保留或删除均不影响运行。
@@ -137,9 +137,15 @@ grep 'Cache refresh failed module=industry-momentum' log/error.log | tail -n 3
 
 若堆栈位于 `cache_sync.read_map` / PyMySQL `fetchmany`，并显示 `Lost connection to MySQL server during query (timed out)`，表示从源库读取对比清单时等待网络数据超时。后续清理断开的流式游标可能再报 `NoneType ... read`，应先处理前面的2013错误。旧版本后台同步沿用20秒读取超时，新版本使用上述后台专用超时、主键分页和有限重试；关闭缓存后的直接页面查询仍保持20秒读取超时。
 
-Linux 在项目根目录执行 `bash deploy.sh` 更新并重启后端，再到页面仅同步“行业动量”验证。已有配置不添加新项也会采用120秒、3次的默认值。如需覆盖，在 `config/app.config` 添加以上参数并重启 `showallopts-api`。不要直接删除源数据或现有缓存；失败时旧缓存会继续服务。若持续出现2013，请提供日志中带 `code`、`frames` 的失败行及 `Cache refresh retry` 行，以检查具体失败阶段；延长客户端超时无法修复持续断网或数据库服务端主动断开。
+Linux 在项目根目录执行 `bash deploy.sh` 更新并重启后端，再到页面仅同步“行业动量”验证。已有配置不添加新项也会采用600秒、3次的默认值。如需覆盖，在 `config/app.config` 添加以上参数并重启 `showallopts-api`。不要直接删除源数据或现有缓存；失败时旧缓存会继续服务。若持续出现2013，请提供日志中带 `code`、`frames` 的失败行及 `Cache refresh retry` 行，以检查具体失败阶段；延长客户端超时无法修复持续断网或数据库服务端主动断开。
 
 
 ## 个股机构持仓的变更序号同步
 
 新版聚宽采集器维护事务性的变更序号和主键记录，本模块不再扫描全历史主键及更新时间。首次/升级建立一次完整基线，之后按序号查询新增、更正和删除；未变化时直接结束。所有写入须使用新版脚本，人工 SQL 改库后用 `--module institution-ownership --full` 复核。旧库没有变更表时兼容原扫描流程。详见 [机构持仓同步加速](institution-ownership.md#本地同步加速)。
+
+### 大数据量同步超时
+
+后台读取默认 600 秒，可设置 `CACHE_DB_READ_TIMEOUT=1800` 延长至 30 分钟，最大 3600 秒。这是数据库 socket 单次读取等待上限，不是整个同步任务的总时限；持续收到数据的任务可以运行更久。同步在后台执行，网页只提交任务和查询进度，无需为此延长 Nginx 请求超时。建立数据库连接仍为 8 秒，关闭缓存后的页面直查仍为 20 秒。
+
+Linux 修改 `config/app.config`，Windows 修改 `backend/.env`；如设置 `APP_ENV_FILE`，修改其指定文件。修改后重启后端。旧配置若显式设置 `CACHE_DB_READ_TIMEOUT=120`，需要改为 600，显式配置优先于默认值。提高超时也会延长发现网络故障及等待同步线程退出的时间，不能修复服务端主动断开的问题。

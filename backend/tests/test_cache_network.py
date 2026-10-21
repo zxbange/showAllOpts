@@ -177,9 +177,20 @@ def test_app_and_cli_select_the_background_timeout(cached, engine, monkeypatch, 
 
 
 @pytest.mark.parametrize('values',[
-    {'cache_db_read_timeout':0}, {'cache_db_read_timeout':601},
+    {'cache_db_read_timeout':0}, {'cache_db_read_timeout':3601},
     {'cache_sync_attempts':0}, {'cache_sync_attempts':6},
 ])
 def test_background_sync_limits_are_validated(values):
     with pytest.raises(ValidationError):
         Settings(_env_file=None,**values)
+
+
+@pytest.mark.parametrize('seconds', [None, 1800, 3600])
+def test_large_sync_read_timeout_reaches_driver(monkeypatch, seconds):
+    options = []
+    monkeypatch.setattr(database, 'create_engine', lambda url, **kwargs: options.append(kwargs))
+    monkeypatch.delenv('CACHE_DB_READ_TIMEOUT', raising=False)
+    values = {} if seconds is None else {'cache_db_read_timeout': seconds}
+    settings = Settings(_env_file=None, **values)
+    database.build_engine(settings, for_cache=True)
+    assert options[0]['connect_args']['read_timeout'] == (600 if seconds is None else seconds)

@@ -18,6 +18,6 @@ CACHE_ENABLED=true
 CACHE_AUTO_REFRESH=true
 CACHE_REFRESH_TIME=20:00
 # Background cache reads only; direct database page queries retain their shorter timeout.
-CACHE_DB_READ_TIMEOUT=120
+CACHE_DB_READ_TIMEOUT=600
 # Total attempts per module for transient MySQL connection failures (1 disables retry).
 CACHE_SYNC_ATTEMPTS=3
