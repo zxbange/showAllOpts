@@ -100,6 +100,11 @@ export function ETFHeatPage() {
               icon={<CheckCircle2 size={18} />}
             />
           </div>
+          {valid.length === 0 && (
+            <div className="etf-method-note" role="status">
+              当前快照的热度均为空，并非零分。请在聚宽运行最新版 ETF 动量热度采集脚本补算，完成后在“数据同步”中同步 ETF 动量热度模块。
+            </div>
+          )}
           <section className="panel heatmap-section">
             <div className="panel-heading">
               <div>
@@ -168,6 +173,7 @@ export function ETFHeatPage() {
                       <strong>{number(i.score)}</strong>
                       <span className="etf-tile-code">{i.code}</span>
                       <small>{i.fund.fund_type}</small>
+                      {i.score == null && <small>{i.details.reason ?? '暂无有效热度，请检查采集结果'}</small>}
                     </Link>
                   )
                 })}

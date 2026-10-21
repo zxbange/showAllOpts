@@ -10,7 +10,7 @@ class ETFHeatRepository:
 
     def head(self):
         head = self.session.get(Pool, 1)
-        if head and head.rule_version not in ('etf_close_momentum_v1', 'etf_close_momentum_v2'):
+        if head and head.rule_version not in ('etf_close_momentum_v1', 'etf_close_momentum_v2', 'etf_close_momentum_v3'):
             raise HTTPException(503, '请先在聚宽运行计算入库版 ETF/LOF 采集脚本，再同步热度结果。')
         return head
 

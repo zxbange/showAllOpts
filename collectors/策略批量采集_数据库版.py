@@ -2990,7 +2990,7 @@ def _etf_heat_strategy(_apis, _config):
     settings = strategy_settings('ETF动量热度')
     EXPORT_CSV = False
     MIN_SIZE_YI = Decimal(str(settings['min_size_yi']))
-    RULE_VERSION = 'etf_close_momentum_v2'
+    RULE_VERSION = 'etf_close_momentum_v3'
     CALCULATION_VERSION = 'weighted-momentum-26-v1'
     Base = declarative_base()
 
@@ -3020,25 +3020,25 @@ def _etf_heat_strategy(_apis, _config):
     def metrics(prices, paused=False):
         empty = dict(score=None, annual_return=None, r2=None, reference_pass=None,
                      details={'status': 'missing', 'reason': '有效价格不足26期或当日停牌'})
-        if paused or len(prices) != 26 or any(p is None or not math.isfinite(float(p)) or p <= 0 for p in prices):
+        if paused or len(prices) != 26 or builtins.any(p is None or not math.isfinite(float(p)) or p <= 0 for p in prices):
             return empty
         # A constant price scale does not affect regression slope or R².
         y = [math.log(float(p) / float(prices[0])) for p in prices]
         weights = [1 + i / 25 for i in range(26)]
         squared = [w*w for w in weights]
-        total = sum(squared)
-        mx = sum(w*i for i, w in enumerate(squared)) / total
-        my = sum(w*v for w, v in zip(squared, y)) / total
-        slope = sum(w*(i-mx)*(v-my) for i, (w,v) in enumerate(zip(squared,y))) / sum(w*(i-mx)**2 for i,w in enumerate(squared))
+        total = builtins.sum(squared)
+        mx = builtins.sum(w*i for i, w in enumerate(squared)) / total
+        my = builtins.sum(w*v for w, v in zip(squared, y)) / total
+        slope = builtins.sum(w*(i-mx)*(v-my) for i, (w,v) in enumerate(zip(squared,y))) / builtins.sum(w*(i-mx)**2 for i,w in enumerate(squared))
         intercept = my-slope*mx
-        residual = sum(w*(v-(slope*i+intercept))**2 for i,(w,v) in enumerate(zip(weights,y)))
-        average = sum(y)/26
-        variance = sum(w*(v-average)**2 for w,v in zip(weights,y))
+        residual = builtins.sum(w*(v-(slope*i+intercept))**2 for i,(w,v) in enumerate(zip(weights,y)))
+        average = builtins.sum(y)/26
+        variance = builtins.sum(w*(v-average)**2 for w,v in zip(weights,y))
         r2 = 1-residual/variance if variance > 1e-25 else 0.0
         try:
             annual = math.expm1(slope*250)
             values = [annual*r2, annual, r2]
-            if any(not math.isfinite(v) or abs(v) >= 1e18 for v in values):
+            if builtins.any(not math.isfinite(v) or abs(v) >= 1e18 for v in values):
                 raise OverflowError
         except OverflowError:
             return dict(empty, details={'status': 'missing', 'reason': '异常价格导致计算越界'})
@@ -3055,25 +3055,40 @@ def _etf_heat_strategy(_apis, _config):
         return result
 
 
-    def save_rows(Session, records):
+    def save_rows(Session, records, repair_missing=False):
         keys = {(r['trade_date'], r['code']) for r in records}
         if len(keys) != len(records):
             raise ValueError('交易日和基金代码重复')
         if not records:
             return []
         with session_scope(Session) as session:
-            existing = set(session.query(Heat.trade_date, Heat.code).filter(
+            existing = {(r[0], r[1]): r[2] for r in session.query(Heat.trade_date, Heat.code, Heat.score).filter(
                 Heat.code.in_(set(r['code'] for r in records)),
                 Heat.trade_date >= builtins.min(r['trade_date'] for r in records),
-                Heat.trade_date <= builtins.max(r['trade_date'] for r in records)).all())
+                Heat.trade_date <= builtins.max(r['trade_date'] for r in records)).all()}
             added = [r for r in records if (r['trade_date'], r['code']) not in existing]
             session.add_all([Heat(**r) for r in added])
+            repaired = []
+            if repair_missing:
+                for row in records:
+                    if (row['trade_date'], row['code']) not in existing or existing[(row['trade_date'], row['code'])] is not None or row['score'] is None:
+                        continue
+                    values = {key: value for key, value in row.items() if key not in ('trade_date', 'code')}
+                    changed = session.query(Heat).filter(
+                        Heat.trade_date == row['trade_date'], Heat.code == row['code'],
+                        Heat.score.is_(None)).update(values, synchronize_session=False)
+                    if changed:
+                        repaired.append(row)
             session.commit()
-            return added
+            if repaired:
+                _progress_note('修复 {} 条历史空热度，已有有效得分保持不变'.format(len(repaired)))
+            return added + repaired
 
 
-    def run(end_date=None, skip_existing=True):
+    def run(end_date=None, skip_existing=True, repair_missing=False):
         nonlocal AS_OF_DATE
+        if not isinstance(repair_missing, bool):
+            raise ValueError('repair_missing 须为 True 或 False')
         if skip_existing is not True:
             raise ValueError('只允许新增；已有日期和基金的记录不覆盖')
         now = china_now()
@@ -3100,20 +3115,25 @@ def _etf_heat_strategy(_apis, _config):
             with session_scope(Session) as session:
                 head = session.query(Pool).filter_by(id=1).first()
                 if head and (head.as_of_date > days[-1] or head.rule_version not in
-                             (RULE_VERSION, 'etf_close_momentum_v1', 'etf_raw_market_v1')):
+                             (RULE_VERSION, 'etf_close_momentum_v1', 'etf_close_momentum_v2', 'etf_raw_market_v1')):
                     raise ValueError('已有更新日期或未知规则版本，拒绝混用')
+                repair = repair_missing or head is None or head.rule_version != RULE_VERSION
+            if repair:
+                _progress_note('检查当前候选的历史空热度，重新计算后仅填补有效结果')
             for member in _progress_items(members, 'ETF/LOF 热度计算', lambda r: r['name']):
                 code = member['code']
                 with session_scope(Session) as session:
-                    existing = {r[0] for r in session.query(Heat.trade_date).filter(Heat.code == code).all()}
+                    saved = session.query(Heat.trade_date, Heat.score).filter(Heat.code == code).all()
+                    existing = {r[0] for r in saved}
+                    empty_dates = {r[0] for r in saved if r[1] is None} if repair else set()
                 if existing and builtins.max(existing) > days[-1]:
                     raise ValueError('已有更新日期的基金结果，拒绝回退')
-                first = builtins.min(days[0], builtins.max(existing)) if existing else days[0]
+                first = builtins.min([days[0]] + ([builtins.max(existing)] if existing else []) + list(empty_dates))
                 calendar = [as_date(d) for d in api('get_trade_days')(start_date=first, end_date=days[-1])]
                 if not calendar or calendar != sorted(set(calendar)) or calendar[-1] != days[-1]:
                     raise ValueError('增量交易日历无效')
                 listed = as_date(member['listed_date']) if member.get('listed_date') else calendar[0]
-                missing = [d for d in calendar if d >= listed and d not in existing]
+                missing = [d for d in calendar if d >= listed and (d not in existing or d in empty_dates)]
                 if not missing:
                     continue
                 warm = [as_date(d) for d in api('get_trade_days')(end_date=missing[0], count=26)]
@@ -3155,7 +3175,7 @@ def _etf_heat_strategy(_apis, _config):
                     records.append(dict(trade_date=day, code=code, name=member['name'],
                                         close=price_value(raw.loc[day, 'close']), updated_at=china_now(), **values))
                 _progress_note('{} 计算完成，入库 {} 条热度结果'.format(code, len(records)))
-                output.extend(save_rows(Session, records))
+                output.extend(save_rows(Session, records, repair_missing=repair))
             with session_scope(Session) as session:
                 codes = {r[0] for r in session.query(Heat.code).filter(Heat.trade_date == days[-1]).all()}
                 if set(m['code'] for m in members) - codes:

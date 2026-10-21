@@ -176,7 +176,7 @@ class SnapshotCache:
                     if module == 'etf-momentum':
                         head = target.execute(select(Pool.__table__)).mappings().first()
                         if head:
-                            if head['rule_version'] not in ('etf_close_momentum_v1', 'etf_close_momentum_v2'):
+                            if head['rule_version'] not in ('etf_close_momentum_v1', 'etf_close_momentum_v2', 'etf_close_momentum_v3'):
                                 raise SnapshotDataError('请先在聚宽运行计算入库版 ETF/LOF 采集脚本，再同步热度结果。')
                             codes = set(target.scalars(select(Heat.code).where(Heat.trade_date == head['as_of_date'])))
                             if {m['code'] for m in head['members']} - codes:

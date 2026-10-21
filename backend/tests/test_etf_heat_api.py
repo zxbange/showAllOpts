@@ -1,4 +1,5 @@
-﻿from datetime import date, datetime
+import pytest
+from datetime import date, datetime
 from app.models.etf_heat import Heat, Pool
 
 
@@ -33,13 +34,15 @@ def test_history_missing_points_and_retired_funds(client,session):
     assert client.get('/api/v1/etf-momentum/funds/A/history?days=9999').status_code==422
 
 
-def test_cache_incremental_and_disconnected_source(engine,session,tmp_path):
+@pytest.mark.parametrize('version', ['etf_close_momentum_v1', 'etf_close_momentum_v3'])
+def test_cache_incremental_and_disconnected_source(engine,session,tmp_path,version):
     from fastapi.testclient import TestClient
     from sqlalchemy import event
     from app.core.cache import SnapshotCache
     from app.core.config import Settings
     from app.main import create_app
     seed(session)
+    session.get(Pool,1).rule_version=version;session.commit()
     settings=Settings(_env_file=None,cache_enabled=True,cache_auto_refresh=False,log_dir=tmp_path/'log')
     cache=SnapshotCache(settings,engine);cache.refresh('etf-momentum',background=False)
     previous=cache.read_state()['modules']['etf-momentum']['file']

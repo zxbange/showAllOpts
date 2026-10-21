@@ -55,7 +55,8 @@ def test_same_factory_embedded_and_python36_syntax():
     assert ast.dump(factory(SOURCE)) == ast.dump(factory(ROOT/'collectors'/'策略批量采集_数据库版.py'))
 
 
-def test_full_run_repeat_and_partial_latest_preserve_head(mod, monkeypatch, tmp_path):
+@pytest.mark.parametrize('legacy_empty', [False, True])
+def test_full_run_repeat_and_partial_latest_preserve_head(mod, monkeypatch, tmp_path, legacy_empty):
     Base=declarative_base()
     class Target(Base):
         __tablename__='target'
@@ -95,14 +96,21 @@ def test_full_run_repeat_and_partial_latest_preserve_head(mod, monkeypatch, tmp_
     strategy=mod._etf_heat_strategy(apis,mod.DB_CONFIG)
     strategy.Base.metadata.create_all(database)
     with sessionmaker(bind=database)() as s:
-        s.add(strategy.Pool(id=1,as_of_date=dt.date(2026,10,20),rule_version='etf_raw_market_v1',
+        s.add(strategy.Pool(id=1,as_of_date=dt.date(2026,10,20),rule_version='etf_close_momentum_v2' if legacy_empty else 'etf_raw_market_v1',
                             members=[{'code':'518880.XSHG'}],updated_at=dt.datetime(2026,10,19)))
+        if legacy_empty:
+            s.add_all(strategy.Heat(trade_date=d.date(),code='518880.XSHG',name='黄金ETF',close=1,
+                      score=None,details={'status':'missing'},updated_at=dt.datetime(2026,10,19))
+                      for d in pd.bdate_range(end='2026-10-20',periods=3))
         s.commit()
+    # Reproduce pasted Notebook globals from jqdata/numpy wildcard imports.
+    monkeypatch.setattr(mod, 'any', np.any, raising=False)
+    monkeypatch.setattr(mod, 'sum', np.sum, raising=False)
     assert len(strategy.run())==3
     from sqlalchemy import inspect
     assert set(inspect(database).get_table_names())=={'etf_momentum_heat','etf_momentum_pool'}
     with sessionmaker(bind=database)() as s:
-        assert s.query(strategy.Pool).one().rule_version=='etf_close_momentum_v2'
+        assert s.query(strategy.Pool).one().rule_version=='etf_close_momentum_v3'
         assert all(r.score is not None for r in s.query(strategy.Heat))
     assert len(strategy.run())==0
     assert len(price_calls)==2
@@ -117,6 +125,12 @@ def test_full_run_repeat_and_partial_latest_preserve_head(mod, monkeypatch, tmp_
     partial[0]=False
     assert len(strategy.run())==1
     with sessionmaker(bind=database)() as s: assert s.query(strategy.Heat).count()==4
+    with sessionmaker(bind=database)() as s:
+        s.query(strategy.Heat).filter(strategy.Heat.trade_date==dt.date(2026,10,20)).update({'score':None})
+        s.commit()
+    assert len(strategy.run())==0  # v3 normally appends only.
+    assert len(strategy.run(repair_missing=True))==1
+    assert len(strategy.run(repair_missing=True))==0
     source.dispose();database.dispose()
 
 
@@ -146,3 +160,36 @@ def test_collector_invalid_and_flat_prices(ns):
     assert ns.metrics([1]*25+[None])['score'] is None
     assert ns.metrics([1]*26,True)['score'] is None
     assert ns.metrics([1]*25+[.9])['score']<0
+
+
+def test_numpy_global_functions_do_not_change_metrics(mod, monkeypatch):
+    clean=mod._etf_heat_strategy({},mod.DB_CONFIG)
+    values=[1+i*.01 for i in range(26)]
+    expected=clean.metrics(values)
+    monkeypatch.setattr(mod,'any',np.any,raising=False)
+    monkeypatch.setattr(mod,'sum',np.sum,raising=False)
+    assert clean.metrics(values)==expected and expected['score'] is not None
+
+
+def test_null_repair_never_overwrites_valid_or_repeats_writes(ns):
+    engine=create_engine('sqlite://');ns.Base.metadata.create_all(engine)
+    Session=sessionmaker(bind=engine)
+    stamp=dt.datetime(2026,10,20)
+    original=dict(trade_date=stamp.date(),code='A',name='A',score=None,close=2,
+                  details={'status':'missing'},updated_at=stamp)
+    ns.save_rows(Session,[original,dict(original,code='B',score=3)])
+    fixed=dict(original,score=9,annual_return=10,r2=.9,details={'status':'ok'},updated_at=dt.datetime(2026,10,21))
+    assert ns.save_rows(Session,[fixed])==[]
+    assert len(ns.save_rows(Session,[fixed,dict(fixed,code='B')],repair_missing=True))==1
+    with Session() as session:
+        assert session.get(ns.Heat,(stamp.date(),'A')).score==9
+        assert session.get(ns.Heat,(stamp.date(),'B')).score==3
+        assert session.get(ns.Heat,(stamp.date(),'A')).updated_at==fixed['updated_at']
+    writes=[]
+    def observe(c,cur,sql,*a):
+        if sql.lstrip().split()[0].upper() in ('INSERT','UPDATE','DELETE'):writes.append(sql)
+    event.listen(engine,'before_cursor_execute',observe)
+    assert ns.save_rows(Session,[dict(original,code='A')],repair_missing=True)==[]
+    assert ns.save_rows(Session,[fixed,dict(fixed,code='B')],repair_missing=True)==[]
+    assert not writes
+    engine.dispose()
