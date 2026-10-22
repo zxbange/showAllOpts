@@ -165,6 +165,7 @@ test('per-module progress shows running rows and completed bar', async ({ page }
           progress: {
             status: i === 0 ? 'running' : 'complete',
             stage: i === 0 ? '读取持仓表' : '同步完成',
+            percent: i === 0 ? 35 : 100,
             processed: 2000,
             elapsed_seconds: 12,
           },
@@ -176,7 +177,7 @@ test('per-module progress shows running rows and completed bar', async ({ page }
   await page.getByRole('button', { name: '数据同步状态', exact: true }).click()
   const bars = page.getByRole('progressbar')
   await expect(bars).toHaveCount(data.modules.length)
-  await expect(bars.first()).not.toHaveAttribute('value')
+  await expect(bars.first()).toHaveAttribute('value', '35')
   await expect(bars.nth(1)).toHaveAttribute('value', '100')
   await expect(page.getByText(/读取持仓表/)).toContainText('2,000')
   await expect(page.getByRole('button', { name: '同步进行中…', exact: true })).toBeDisabled()

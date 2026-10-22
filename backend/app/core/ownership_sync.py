@@ -107,20 +107,25 @@ def copy_ownership(cache, full=False):
             path = cache.root / filename
             destination = create_engine('sqlite:///' + path.as_posix(), poolclass=NullPool)
             try:
-                report('准备机构持仓本地快照')
+                report('准备机构持仓本地快照', percent=5)
                 if incremental:
                     shutil.copyfile(previous, path)
                 TABLES[0].metadata.create_all(destination, tables=TABLES)
                 CURSOR.create(destination, checkfirst=True)
                 with destination.begin() as target:
+                    report('同步机构持仓', percent=10)
                     if incremental:
                         count = reconcile_changes(source, target, cursor, head)
                     else:
-                        count = sum(transfer(source, target, table) for table in TABLES)
+                        count = 0
+                        for index, table in enumerate(TABLES):
+                            count += transfer(source, target, table)
+                            report('数据表完成 ' + table.name, percent=10 + 80*(index+1)/len(TABLES))
                         logger.info('Cache ownership baseline downloaded=%s revision=%s', count, head['revision'])
+                    report('提交机构持仓数据', percent=90)
                     target.execute(CURSOR.delete())
                     target.execute(CURSOR.insert().values(id=1, generation=head['generation'], revision=head['revision'], rows=count))
-                report('校验机构持仓快照')
+                report('校验机构持仓快照', percent=95)
                 with destination.connect() as connection:
                     if connection.exec_driver_sql('PRAGMA quick_check').scalar() != 'ok':
                         raise SnapshotDataError('机构持仓本地快照校验失败。')

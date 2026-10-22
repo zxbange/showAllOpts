@@ -291,17 +291,20 @@ def test_progress_shared_between_workers_and_interruption(cached, engine, monkey
     other = SnapshotCache(settings, engine)
     original = cache.copy_module
     def copy(module):
-        report('读取测试表', 2000)
+        report('读取测试表', 2000, percent=35)
+        report('重试较早阶段', percent=10)
         state = other.status()
         item = next(m for m in state['modules'] if m['id'] == module)
         assert state['refreshing']
         assert item['progress']['status'] == 'running'
         assert item['progress']['processed'] == 2000
+        assert item['progress']['percent'] == 35
         return original(module)
     monkeypatch.setattr(cache, 'copy_module', copy)
     cache.refresh('industry-momentum', background=False)
     item = next(m for m in other.status()['modules'] if m['id'] == 'industry-momentum')
     assert item['progress']['status'] == 'complete'
+    assert item['progress']['percent'] == 100
     assert reporter.get() is None
     state = cache.read_state()
     state['modules']['industry-momentum']['progress']['status'] = 'running'
@@ -317,3 +320,31 @@ def test_evening_restart_does_not_catch_up(cached, monkeypatch):
     cache.tick(clock)
     cache.tick(clock + timedelta(minutes=5))
     assert calls == []
+
+
+def test_failure_never_reports_one_hundred_percent(cached, monkeypatch):
+    from app.core.sync_progress import report
+    _, cache = cached
+    def fail(module):
+        report('校验', percent=100)
+        raise ValueError('invalid snapshot')
+    monkeypatch.setattr(cache, 'copy_module', fail)
+    cache.refresh('industry-momentum', background=False)
+    progress = cache.status()['modules'][0]['progress']
+    assert progress['status'] == 'failed'
+    assert progress['percent'] == 99
+
+
+def test_nested_stage_ranges_restore_after_exception():
+    from app.core.sync_progress import report, reporter, stage_range
+    seen = []
+    token = reporter.set(lambda stage, rows, percent: seen.append(percent))
+    try:
+        with pytest.raises(ValueError):
+            with stage_range(10, 90):
+                report('half', percent=50)
+                raise ValueError()
+        report('outside', percent=95)
+        assert seen == [50, 95]
+    finally:
+        reporter.reset(token)

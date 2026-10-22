@@ -1,7 +1,7 @@
 """Read-only source reconciliation into an unpublished local SQLite snapshot."""
 import logging
 import time
-from app.core.sync_progress import report
+from app.core.sync_progress import report, stage_range
 
 from sqlalchemy import JSON, Text, and_, bindparam, func, or_, select, tuple_, type_coerce
 
@@ -109,11 +109,13 @@ def sync_history(source, target, table):
     removed = local.keys() - remote.keys()
     logger.info('Cache changes planned table=%s changed=%s deleted=%s total=%s',
                 table.name, len(changed), len(removed), len(remote))
+    report('对比完成 ' + table.name, percent=20)
     for batch in chunks(changed | removed):
         target.execute(table.delete().where(key_filter(table, batch)))
     fetched = 0
     for batch in chunks(changed):
         fetched += transfer(source, target, table, key_filter(table, batch))
+        report('更新本地 ' + table.name, percent=20 + 80 * fetched / max(1, len(changed)))
     logger.info('Cache table sync table=%s mode=incremental downloaded=%s deleted=%s total=%s',
                 table.name, fetched, len(removed), len(remote))
 
@@ -140,14 +142,19 @@ def sync_earnings(source, target, tables):
 
 
 def sync_tables(source, target, tables, module, incremental):
-    if not incremental or module in ('dividend-selection', 'high-growth'):
-        for table in tables:
-            target.execute(table.delete())
-            fetched = transfer(source, target, table)
-            logger.info('Cache table sync table=%s mode=full downloaded=%s', table.name, fetched)
-    elif module == 'earnings-gap':
+    report('同步数据表', percent=10)
+    if incremental and module == 'earnings-gap':
         sync_earnings(source, target, tables)
     else:
-        for table in tables:
-            sync_history(source, target, table)
+        for index, table in enumerate(tables):
+            with stage_range(10 + 80*index/len(tables), 10 + 80*(index+1)/len(tables)):
+                report('同步 ' + table.name, percent=0)
+                if not incremental or module in ('dividend-selection', 'high-growth'):
+                    target.execute(table.delete())
+                    fetched = transfer(source, target, table)
+                    logger.info('Cache table sync table=%s mode=full downloaded=%s', table.name, fetched)
+                else:
+                    sync_history(source, target, table)
+                report('数据表完成 ' + table.name, percent=100)
+    report('提交本地数据', percent=90)
     return sum(target.scalar(select(func.count()).select_from(table)) for table in tables)

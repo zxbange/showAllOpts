@@ -5,7 +5,13 @@ export interface CacheModule {
   updated_at: string | null
   last_attempt_at: string | null
   rows: number | null
-  progress?: { status: string; stage?: string; processed?: number; elapsed_seconds?: number }
+  progress?: {
+    status: string
+    percent?: number
+    stage?: string
+    processed?: number
+    elapsed_seconds?: number
+  }
   error: string | null
 }
 export interface CacheStatus {

@@ -180,7 +180,7 @@ class SnapshotCache:
         previous = self.snapshot_path(module, self.read_state()['modules'].get(module, {}))
         incremental = previous is not None and not full
         try:
-            report('准备本地快照')
+            report('准备本地快照', percent=5)
             if incremental:
                 # Published files are immutable: copy locally before applying changes.
                 shutil.copyfile(previous, path)
@@ -205,7 +205,7 @@ class SnapshotCache:
                     if module == 'industry-momentum':
                         target.execute(text('CREATE INDEX IF NOT EXISTS ix_local_momentum_type_date ON industry_momentum (industry_type, trade_date)'))
                         target.execute(text('CREATE INDEX IF NOT EXISTS ix_local_momentum_history ON industry_momentum (industry_type, industry_code, trade_date)'))
-            report('校验本地快照')
+            report('校验本地快照', percent=95)
             with destination.connect() as connection:
                 if connection.exec_driver_sql('PRAGMA quick_check').scalar() != 'ok':
                     raise CacheUnavailable('Local snapshot validation failed')
@@ -242,7 +242,7 @@ class SnapshotCache:
             state['pending'] = list(modules)
             state['pending_full'] = full
             for module in modules:
-                state['modules'].setdefault(module, {})['progress'] = {'status': 'waiting', 'stage': '等待同步', 'processed': 0}
+                state['modules'].setdefault(module, {})['progress'] = {'status': 'waiting', 'stage': '等待同步', 'processed': 0, 'percent': 0}
             if slot:
                 state['scheduled_slot'] = slot
             self.write_state(state)
@@ -252,15 +252,18 @@ class SnapshotCache:
                 started = time.monotonic()
                 entry = state['modules'].setdefault(module, {})
                 entry['last_attempt_at'] = now().isoformat()
-                entry['progress'] = {'status': 'running', 'stage': '连接数据库', 'processed': 0, 'started_at': now().isoformat()}
+                entry['progress'] = {'status': 'running', 'stage': '连接数据库', 'processed': 0, 'percent': 0, 'started_at': now().isoformat()}
                 self.write_state(state)
                 last_progress_write = [0.0]
                 last_progress_log = [0.0]
-                def progress(stage, rows=0):
+                def progress(stage, rows=0, percent=None):
                     data = entry['progress']
+                    changed = percent is not None and percent > data.get('percent', 0)
+                    if percent is not None:
+                        data['percent'] = max(data.get('percent', 0), min(99, percent))
                     data.update(stage=stage, processed=data['processed'] + rows,
                                 elapsed_seconds=round(time.monotonic() - started, 1))
-                    if time.monotonic() - last_progress_write[0] >= 1 or stage.startswith('网络重试'):
+                    if time.monotonic() - last_progress_write[0] >= 1 or changed or stage.startswith('网络重试'):
                         self.write_state(state)
                         last_progress_write[0] = time.monotonic()
                     if time.monotonic() - last_progress_log[0] >= 30:
@@ -277,7 +280,7 @@ class SnapshotCache:
                     if filename != entry.get('file') or not entry.get('updated_at'):
                         entry['updated_at'] = now().isoformat()
                     entry.update(file=filename, rows=rows, error=None)
-                    entry['progress'].update(status='complete', stage='同步完成', elapsed_seconds=round(time.monotonic()-started, 1))
+                    entry['progress'].update(status='complete', stage='同步完成', percent=100, elapsed_seconds=round(time.monotonic()-started, 1))
                     logger.info('Cache refresh complete module=%s rows=%s seconds=%.2f', module, rows, time.monotonic()-started)
                 except Exception as exc:
                     entry['progress'].update(status='failed', stage='同步失败，保留旧快照')

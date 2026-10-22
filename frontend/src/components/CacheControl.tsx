@@ -130,14 +130,13 @@ export function CacheControl() {
                           aria-label={`${item.name}同步进度`}
                           max={100}
                           value={
-                            item.progress.status === 'complete'
-                              ? 100
-                              : ['running'].includes(item.progress.status)
-                                ? undefined
-                                : 0
+                            item.progress.status === 'complete' ? 100 : (item.progress.percent ?? 0)
                           }
                         />
                         <small>
+                          阶段进度{' '}
+                          {item.progress.status === 'complete' ? 100 : (item.progress.percent ?? 0)}
+                          % ·
                           {item.progress.status === 'interrupted'
                             ? '任务已中断，可手动同步'
                             : item.progress.stage}
@@ -201,7 +200,7 @@ export function CacheControl() {
               )}
             </form>
             <p className="cache-footnote">
-              同步时间不等于数据交易日；模块页面会显示实际数据日期。页面上的刷新按钮重新读取当前快照。
+              百分比按执行阶段推进，不代表剩余时间比例；大表读取时可能停留，行数仍会更新。同步时间不等于数据交易日；模块页面会显示实际数据日期。页面上的刷新按钮重新读取当前快照。
             </p>
           </>
         )}
