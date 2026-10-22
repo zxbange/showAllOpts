@@ -5,6 +5,7 @@ SQLite snapshot, so publication of data and cursor is atomic. Legacy collectors
 without a journal fall back to the general reconciliation path.
 """
 import logging
+from app.core.sync_progress import report
 import shutil
 import uuid
 
@@ -106,6 +107,7 @@ def copy_ownership(cache, full=False):
             path = cache.root / filename
             destination = create_engine('sqlite:///' + path.as_posix(), poolclass=NullPool)
             try:
+                report('准备机构持仓本地快照')
                 if incremental:
                     shutil.copyfile(previous, path)
                 TABLES[0].metadata.create_all(destination, tables=TABLES)
@@ -118,6 +120,7 @@ def copy_ownership(cache, full=False):
                         logger.info('Cache ownership baseline downloaded=%s revision=%s', count, head['revision'])
                     target.execute(CURSOR.delete())
                     target.execute(CURSOR.insert().values(id=1, generation=head['generation'], revision=head['revision'], rows=count))
+                report('校验机构持仓快照')
                 with destination.connect() as connection:
                     if connection.exec_driver_sql('PRAGMA quick_check').scalar() != 'ok':
                         raise SnapshotDataError('机构持仓本地快照校验失败。')

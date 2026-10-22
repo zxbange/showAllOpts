@@ -142,6 +142,8 @@ def test_shutdown_interrupts_backoff_and_resumes_full_rebuild(cached, session, e
     assert not cache.refreshing()
     resumed=SnapshotCache(settings,engine)
     resumed.tick()
+    assert resumed.read_state()['pending'] == ['industry-momentum']
+    resumed.refresh('industry-momentum', background=False)
     assert_matches(resumed,session,'industry-momentum')
 
 

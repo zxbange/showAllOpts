@@ -136,6 +136,8 @@ def test_daily_schedule_and_restart_do_not_duplicate_completed_slot(cached, engi
     morning = datetime(2026,10,18,10,tzinfo=CHINA)
     monkeypatch.setattr('app.core.cache.now', lambda: morning)
     cache.tick(morning)
+    assert cache.read_state()['modules'] == {}
+    cache.refresh(background=False)
     first = cache.read_state()['modules']['industry-momentum']['file']
     SnapshotCache(settings,engine).tick(morning)
     assert cache.read_state()['modules']['industry-momentum']['file'] == first
@@ -252,12 +254,16 @@ def test_interrupted_schedule_resumes_pending_modules(cached, monkeypatch):
     cache.write_state(state)
     cache.tick(clock)
     state=cache.read_state()
+    assert state['pending'] == ['dividend-selection']
+    assert state['modules']['dividend-selection']['file'] == dividend_before
+    cache.refresh('dividend-selection', background=False)
+    state = cache.read_state()
     assert state['pending'] == []
     assert state['modules']['industry-momentum']['file'] == previous
     assert state['modules']['dividend-selection']['file'] != dividend_before
 
 
-def test_missing_module_retries_after_five_minutes_not_every_request(cached, monkeypatch):
+def test_missing_module_waits_for_manual_or_next_schedule(cached, monkeypatch):
     _, cache = cached
     clock=datetime(2026,10,18,18,tzinfo=CHINA)
     monkeypatch.setattr('app.core.cache.now',lambda:clock)
@@ -269,8 +275,45 @@ def test_missing_module_retries_after_five_minutes_not_every_request(cached, mon
         return original(module)
     monkeypatch.setattr(cache,'copy_module',copy)
     cache.tick(clock)
-    assert len(calls)==len(MODULES)
+    assert calls == []
     cache.tick(clock+timedelta(minutes=1))
-    assert len(calls)==len(MODULES)
     cache.tick(clock+timedelta(minutes=5))
-    assert calls[len(MODULES):]==['industry-momentum']
+    assert calls == []
+    cache.tick(clock.replace(hour=20))
+    assert len(calls) == len(MODULES)
+    cache.tick(clock.replace(hour=20, minute=5))
+    assert len(calls) == len(MODULES)
+
+
+def test_progress_shared_between_workers_and_interruption(cached, engine, monkeypatch):
+    from app.core.sync_progress import report, reporter
+    settings, cache = cached
+    other = SnapshotCache(settings, engine)
+    original = cache.copy_module
+    def copy(module):
+        report('读取测试表', 2000)
+        state = other.status()
+        item = next(m for m in state['modules'] if m['id'] == module)
+        assert state['refreshing']
+        assert item['progress']['status'] == 'running'
+        assert item['progress']['processed'] == 2000
+        return original(module)
+    monkeypatch.setattr(cache, 'copy_module', copy)
+    cache.refresh('industry-momentum', background=False)
+    item = next(m for m in other.status()['modules'] if m['id'] == 'industry-momentum')
+    assert item['progress']['status'] == 'complete'
+    assert reporter.get() is None
+    state = cache.read_state()
+    state['modules']['industry-momentum']['progress']['status'] = 'running'
+    cache.write_state(state)
+    assert other.status()['modules'][0]['progress']['status'] == 'interrupted'
+
+
+def test_evening_restart_does_not_catch_up(cached, monkeypatch):
+    _, cache = cached
+    calls = []
+    monkeypatch.setattr(cache, '_refresh_locked', lambda *args: calls.append(args))
+    clock = datetime(2026,10,18,22,tzinfo=CHINA)
+    cache.tick(clock)
+    cache.tick(clock + timedelta(minutes=5))
+    assert calls == []

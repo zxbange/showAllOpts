@@ -105,7 +105,7 @@ export function CacheControl() {
         </div>
         <p className="cache-intro">
           {status?.enabled
-            ? `页面读取本地快照。${status.auto_refresh ? `每天北京时间 ${status.daily_time} 自动同步` : '自动同步已关闭'}，同步失败时保留上次成功数据。`
+            ? `页面读取本地快照，启动时不自动同步。${status.auto_refresh ? `每天北京时间 ${status.daily_time} 自动同步` : '自动同步已关闭'}，同步失败时保留上次成功数据。`
             : status
               ? '当前使用数据库直连，尚未启用本地缓存。'
               : '正在读取同步状态…'}
@@ -123,6 +123,33 @@ export function CacheControl() {
                   <div>
                     <strong>{item.name}</strong>
                     <small>上次成功同步 · {formatTime(item.updated_at)}</small>
+                    {item.progress && item.progress.status !== 'idle' && (
+                      <div>
+                        <progress
+                          className="cache-progress"
+                          aria-label={`${item.name}同步进度`}
+                          max={100}
+                          value={
+                            item.progress.status === 'complete'
+                              ? 100
+                              : ['running'].includes(item.progress.status)
+                                ? undefined
+                                : 0
+                          }
+                        />
+                        <small>
+                          {item.progress.status === 'interrupted'
+                            ? '任务已中断，可手动同步'
+                            : item.progress.stage}
+                          {item.progress.processed
+                            ? ` · 已处理 ${item.progress.processed.toLocaleString()} 行（含对比与重试）`
+                            : ''}
+                          {item.progress.elapsed_seconds
+                            ? ` · ${Math.round(item.progress.elapsed_seconds)} 秒`
+                            : ''}
+                        </small>
+                      </div>
+                    )}
                     {item.error && <p className="cache-row-error">{item.error}</p>}
                   </div>
                   <span

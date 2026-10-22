@@ -9,7 +9,7 @@ import {
 } from 'lucide-react'
 import { Link, NavLink, Outlet, useLocation } from 'react-router-dom'
 import { CacheControl } from './CacheControl'
-import { researchModules } from '../lib/modules'
+import { researchModules, groupForPath } from '../lib/modules'
 
 export function Layout() {
   const location = useLocation()
@@ -25,6 +25,7 @@ export function Layout() {
         (nav.clientWidth - active.clientWidth) / 2
     }
   }, [location.pathname])
+  const group = groupForPath(location.pathname)
   const isHome = location.pathname === '/'
   return (
     <div className="app-shell">
@@ -52,16 +53,26 @@ export function Layout() {
           {researchModules.map((module, index) => {
             const Icon = module.icon
             return (
-              <NavLink
+              <Link
                 key={module.id}
                 to={module.path}
                 aria-label={module.name}
                 title={module.name}
+                className={
+                  location.pathname.startsWith(module.path) || group?.ids[0] === module.id
+                    ? 'active'
+                    : ''
+                }
+                aria-current={
+                  location.pathname.startsWith(module.path) || group?.ids[0] === module.id
+                    ? 'page'
+                    : undefined
+                }
               >
                 <Icon size={18} />
                 <span>{module.name}</span>
                 <span className="nav-key">{String(index + 2).padStart(2, '0')}</span>
-              </NavLink>
+              </Link>
             )
           })}
         </nav>
@@ -87,8 +98,10 @@ export function Layout() {
             <span>
               {isHome
                 ? '总览'
-                : (researchModules.find((module) => location.pathname.startsWith(module.path))
-                    ?.name ?? '研究模块')}
+                : (group?.name ??
+                  researchModules.find((module) => location.pathname.startsWith(module.path))
+                    ?.name ??
+                  '研究模块')}
               {location.pathname.includes('/industries/') ? ' / 趋势详情' : ''}
             </span>
           </div>
@@ -98,6 +111,15 @@ export function Layout() {
           </div>
         </header>
         <main id="main-content" className="main-content">
+          {group && (
+            <nav className="module-switch" aria-label={`${group.name}模块切换`}>
+              {group.ids.map((id, index) => (
+                <NavLink key={id} to={`/${id}`}>
+                  {group.labels[index]}
+                </NavLink>
+              ))}
+            </nav>
+          )}
           <Outlet />
         </main>
         <footer className="page-footer">

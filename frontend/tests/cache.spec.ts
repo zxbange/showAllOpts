@@ -152,3 +152,32 @@ test('completed snapshots reload an already open module', async ({ page }) => {
   updated = '2026-10-18T18:10:00+08:00'
   await expect.poll(() => pageReads, { timeout: 10000 }).toBeGreaterThan(initial)
 })
+
+test('per-module progress shows running rows and completed bar', async ({ page }) => {
+  const data = structuredClone(fixture)
+  await page.route('**/api/v1/cache/status', (route) =>
+    route.fulfill({
+      json: {
+        ...data,
+        refreshing: true,
+        modules: data.modules.map((m, i) => ({
+          ...m,
+          progress: {
+            status: i === 0 ? 'running' : 'complete',
+            stage: i === 0 ? '读取持仓表' : '同步完成',
+            processed: 2000,
+            elapsed_seconds: 12,
+          },
+        })),
+      },
+    }),
+  )
+  await page.goto('/')
+  await page.getByRole('button', { name: '数据同步状态', exact: true }).click()
+  const bars = page.getByRole('progressbar')
+  await expect(bars).toHaveCount(data.modules.length)
+  await expect(bars.first()).not.toHaveAttribute('value')
+  await expect(bars.nth(1)).toHaveAttribute('value', '100')
+  await expect(page.getByText(/读取持仓表/)).toContainText('2,000')
+  await expect(page.getByRole('button', { name: '同步进行中…', exact: true })).toBeDisabled()
+})

@@ -36,7 +36,7 @@ export interface ResearchModule {
     | 'ownership'
 }
 
-export const researchModules: ResearchModule[] = [
+const individualModules: ResearchModule[] = [
   {
     id: 'institution-ownership',
     name: '个股机构持仓',
@@ -168,3 +168,33 @@ export const researchModules: ResearchModule[] = [
     illustration: 'shares',
   },
 ]
+
+export const moduleGroups = [
+  {
+    name: '动量观察',
+    ids: ['industry-momentum', 'etf-momentum'],
+    labels: ['行业动量', 'ETF动量热度'],
+  },
+  {
+    name: '微盘观察',
+    ids: ['microcap-temperature', 'microcap-breadth'],
+    labels: ['微盘温度计', '微盘新高新低'],
+  },
+  { name: '业绩选股', ids: ['high-growth', 'earnings-gap'], labels: ['高增长', '净利润断层'] },
+]
+export function groupForPath(path: string) {
+  return moduleGroups.find((g) => g.ids.includes(path.split('/')[1]))
+}
+export const researchModules: ResearchModule[] = individualModules
+  .filter((m) => !moduleGroups.some((g) => g.ids.slice(1).includes(m.id)))
+  .map((m) => {
+    const group = moduleGroups.find((g) => g.ids[0] === m.id)
+    return group
+      ? {
+          ...m,
+          name: group.name,
+          tags: group.labels,
+          description: `在同一工作区切换${group.labels.join('与')}，对照观察不同维度的数据。`,
+        }
+      : m
+  })

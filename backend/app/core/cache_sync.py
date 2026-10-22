@@ -1,5 +1,6 @@
 """Read-only source reconciliation into an unpublished local SQLite snapshot."""
 import logging
+from app.core.sync_progress import report
 
 from sqlalchemy import and_, func, or_, select, tuple_
 
@@ -34,10 +35,12 @@ def read_batches(connection, columns, keys, condition=None):
             query = query.where(condition)
         if last is not None:
             query = query.where(after_key(keys, last))
+        report('读取 ' + keys[0].table.name)
         with connection.execution_options(stream_results=False).execute(query) as result:
             batch = result.all()
         if not batch:
             return
+        report('处理 ' + keys[0].table.name, len(batch))
         yield batch
         if len(batch) < READ_PAGE_SIZE:
             return

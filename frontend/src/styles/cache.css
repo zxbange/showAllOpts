@@ -189,3 +189,41 @@
     animation: none;
   }
 }
+
+.module-switch {
+  display: flex;
+  gap: 8px;
+  padding: 6px;
+  margin-bottom: 24px;
+  width: fit-content;
+  max-width: 100%;
+  border: 1px solid #eadbd1;
+  border-radius: 16px;
+  background: #fff8f2;
+}
+.module-switch a {
+  padding: 12px 22px;
+  border-radius: 11px;
+  text-decoration: none;
+  color: #806b60;
+  font-weight: 600;
+  transition:
+    background 0.2s,
+    color 0.2s;
+}
+.module-switch a.active {
+  color: white;
+  background: #c44936;
+  box-shadow: 0 4px 12px #c4493626;
+}
+.cache-progress {
+  display: block;
+  width: 100%;
+  height: 8px;
+  margin: 10px 0 5px;
+  accent-color: #c44936;
+}
+.cache-row > div:first-child {
+  flex: 1;
+  min-width: 0;
+}

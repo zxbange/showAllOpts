@@ -18,6 +18,7 @@ from sqlalchemy.pool import NullPool
 
 from app.core.cache_errors import failure_details, retryable_source_error, SnapshotDataError
 from app.core.cache_sync import sync_tables
+from app.core.sync_progress import reporter, report
 from app.core.ownership_sync import copy_ownership
 from app.models.ownership import OwnershipStock, OwnershipReport, OwnershipHolders
 from app.models.etf_heat import Heat, Pool
@@ -76,6 +77,7 @@ class SnapshotCache:
         self.stop_event = threading.Event()
         self.scheduler = None
         self.worker = None
+        self.schedule_floor = None
 
     def read_state(self):
         try:
@@ -133,13 +135,21 @@ class SnapshotCache:
                     'daily_time': self.settings.cache_refresh_time, 'timezone': 'Asia/Shanghai',
                     'auto_refresh': False, 'modules': []}
         state = self.read_state()
+        running = self.refreshing()
         items = []
         for module, (name, _) in MODULES.items():
             entry = state['modules'].get(module, {})
             items.append({'id': module, 'name': name, 'ready': self.snapshot_path(module, entry) is not None,
                           'updated_at': entry.get('updated_at'), 'last_attempt_at': entry.get('last_attempt_at'),
-                          'rows': entry.get('rows'), 'error': entry.get('error')})
-        return {'enabled': True, 'refreshing': self.refreshing(),
+                          'rows': entry.get('rows'), 'error': entry.get('error'),
+                          'progress': dict(entry.get('progress') or {},
+                              status=('interrupted' if not running and (entry.get('progress') or {}).get('status') in ('running', 'waiting')
+                                      else (entry.get('progress') or {}).get('status', 'idle')))})
+        for item in items:
+            progress = item['progress']
+            if running and progress.get('status') == 'running' and progress.get('started_at'):
+                progress['elapsed_seconds'] = max(0, round((now() - datetime.fromisoformat(progress['started_at'])).total_seconds()))
+        return {'enabled': True, 'refreshing': running,
                 'manual_enabled': True,
                 'daily_time': self.settings.cache_refresh_time, 'timezone': 'Asia/Shanghai',
                 'auto_refresh': self.settings.cache_auto_refresh, 'modules': items}
@@ -170,6 +180,7 @@ class SnapshotCache:
         previous = self.snapshot_path(module, self.read_state()['modules'].get(module, {}))
         incremental = previous is not None and not full
         try:
+            report('准备本地快照')
             if incremental:
                 # Published files are immutable: copy locally before applying changes.
                 shutil.copyfile(previous, path)
@@ -194,6 +205,7 @@ class SnapshotCache:
                     if module == 'industry-momentum':
                         target.execute(text('CREATE INDEX IF NOT EXISTS ix_local_momentum_type_date ON industry_momentum (industry_type, trade_date)'))
                         target.execute(text('CREATE INDEX IF NOT EXISTS ix_local_momentum_history ON industry_momentum (industry_type, industry_code, trade_date)'))
+            report('校验本地快照')
             with destination.connect() as connection:
                 if connection.exec_driver_sql('PRAGMA quick_check').scalar() != 'ok':
                     raise CacheUnavailable('Local snapshot validation failed')
@@ -214,6 +226,7 @@ class SnapshotCache:
             except Exception as exc:
                 if not retryable_source_error(exc) or attempt == self.settings.cache_sync_attempts:
                     raise
+                report('网络重试 {}/{}'.format(attempt + 1, self.settings.cache_sync_attempts))
                 delay = min(2 ** attempt, 16)
                 code, _, _ = failure_details(exc)
                 logger.warning('Cache refresh retry module=%s attempt=%s/%s code=%s delay_seconds=%s',
@@ -228,6 +241,8 @@ class SnapshotCache:
             state['last_attempt_at'] = now().isoformat()
             state['pending'] = list(modules)
             state['pending_full'] = full
+            for module in modules:
+                state['modules'].setdefault(module, {})['progress'] = {'status': 'waiting', 'stage': '等待同步', 'processed': 0}
             if slot:
                 state['scheduled_slot'] = slot
             self.write_state(state)
@@ -237,6 +252,22 @@ class SnapshotCache:
                 started = time.monotonic()
                 entry = state['modules'].setdefault(module, {})
                 entry['last_attempt_at'] = now().isoformat()
+                entry['progress'] = {'status': 'running', 'stage': '连接数据库', 'processed': 0, 'started_at': now().isoformat()}
+                self.write_state(state)
+                last_progress_write = [0.0]
+                last_progress_log = [0.0]
+                def progress(stage, rows=0):
+                    data = entry['progress']
+                    data.update(stage=stage, processed=data['processed'] + rows,
+                                elapsed_seconds=round(time.monotonic() - started, 1))
+                    if time.monotonic() - last_progress_write[0] >= 1 or stage.startswith('网络重试'):
+                        self.write_state(state)
+                        last_progress_write[0] = time.monotonic()
+                    if time.monotonic() - last_progress_log[0] >= 30:
+                        logger.info('Cache progress module=%s stage=%s processed=%s seconds=%.1f',
+                                    module, stage, data['processed'], data['elapsed_seconds'])
+                        last_progress_log[0] = time.monotonic()
+                token = reporter.set(progress)
                 logger.info('Cache refresh started module=%s reason=%s', module, reason)
                 try:
                     result = self.copy_with_retry(module, full)
@@ -246,12 +277,16 @@ class SnapshotCache:
                     if filename != entry.get('file') or not entry.get('updated_at'):
                         entry['updated_at'] = now().isoformat()
                     entry.update(file=filename, rows=rows, error=None)
+                    entry['progress'].update(status='complete', stage='同步完成', elapsed_seconds=round(time.monotonic()-started, 1))
                     logger.info('Cache refresh complete module=%s rows=%s seconds=%.2f', module, rows, time.monotonic()-started)
                 except Exception as exc:
+                    entry['progress'].update(status='failed', stage='同步失败，保留旧快照')
                     code, hint, frames = failure_details(exc)
                     entry['error'] = '同步失败，保留上次成功数据。[{}] {}'.format(code, hint)
                     logger.error('Cache refresh failed module=%s error_type=%s code=%s hint=%s frames=%s',
                                  module, type(exc).__name__, code, hint, frames)
+                finally:
+                    reporter.reset(token)
                 state['pending'].remove(module)
                 self.write_state(state)
             self.cleanup(state)
@@ -303,26 +338,19 @@ class SnapshotCache:
     def tick(self, moment=None):
         moment = moment or now()
         slot = latest_slot(moment, self.settings.cache_refresh_time).isoformat()
+        if self.schedule_floor is None:
+            self.schedule_floor = slot
         # Read schedule state after acquiring the shared lock: multiple Uvicorn workers run this loop.
         lock = self.acquire()
         if lock is None:
             return
         try:
             state = self.read_state()
-            pending = [m for m in state.get('pending', []) if m in MODULES]
-            missing = [m for m in MODULES if self.snapshot_path(m, state['modules'].get(m, {})) is None]
-            last_attempt = datetime.fromisoformat(state.get('last_attempt_at', '1970-01-01T00:00:00+08:00'))
-            full = bool(pending and state.get('pending_full'))
-            if pending:
-                selected, reason = pending, 'resume'
-                slot = state.get('scheduled_slot')
-            elif state.get('scheduled_slot') != slot:
-                selected, reason = list(MODULES), 'scheduled/startup'
-            elif missing and moment - last_attempt >= timedelta(minutes=5):
-                selected, reason = missing, 'startup-retry'
-            else:
+            if slot <= self.schedule_floor or state.get('scheduled_slot') == slot:
                 lock.release()
                 return
+            selected, reason = list(MODULES), 'scheduled'
+            full = bool(state.get('pending') and state.get('pending_full'))
         except BaseException:
             lock.release()
             raise

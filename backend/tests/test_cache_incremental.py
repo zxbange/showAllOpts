@@ -168,7 +168,10 @@ def test_pending_full_rebuild_survives_restart(cached, session, engine):
     state = cache.read_state()
     state.update(pending=['industry-momentum'], pending_full=True)
     cache.write_state(state)
-    SnapshotCache(settings, engine).tick()
+    resumed = SnapshotCache(settings, engine)
+    resumed.tick()
+    assert resumed.read_state()['pending_full'] is True
+    resumed.refresh('industry-momentum', background=False)
     assert_matches(cache, session, 'industry-momentum')
 
 
