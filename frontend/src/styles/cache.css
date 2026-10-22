@@ -227,3 +227,7 @@
   flex: 1;
   min-width: 0;
 }
+
+.cache-row-actions { display: flex; flex-direction: column; align-items: flex-end; gap: 8px; flex-shrink: 0; }
+.cache-stop { padding: 5px 12px; border: 1px solid #d8b8ae; border-radius: 8px; background: #fff8f4; color: #a33d2d; cursor: pointer; }
+.cache-stop:disabled { opacity: .45; cursor: default; }

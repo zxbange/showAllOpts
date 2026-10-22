@@ -1,4 +1,5 @@
 export interface CacheModule {
+  cancelling?: boolean
   id: string
   name: string
   ready: boolean

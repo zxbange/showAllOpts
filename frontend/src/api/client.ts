@@ -112,11 +112,11 @@ export const getSocialEntries = (period: string, mode: string, signal?: AbortSig
     signal,
   )
 
-export async function cancelCache(runId: string) {
+export async function cancelCache(runId: string, module?: string) {
   const response = await fetch(`${API_BASE}/cache/cancel`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ run_id: runId }),
+    body: JSON.stringify({ run_id: runId, module }),
   })
   if (!response.ok) {
     const body = await response.json().catch(() => null)

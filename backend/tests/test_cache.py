@@ -392,3 +392,38 @@ def test_cancel_endpoint_rejects_idle_and_invalid_run(cached, engine):
     with TestClient(create_app(settings, engine)) as client:
         assert client.post('/api/v1/cache/cancel', json={'run_id': '0'*32}).status_code == 409
         assert client.post('/api/v1/cache/cancel', json={'run_id': '../bad'}).status_code == 422
+
+
+def test_cancel_one_running_and_one_queued_module_continues_others(cached, engine, monkeypatch):
+    from app.core.sync_progress import report
+    settings, cache = cached
+    other = SnapshotCache(settings, engine)
+    running, queued = list(MODULES)[:2]
+    cache.refresh(running, background=False)
+    previous = cache.read_state()['modules'][running]['file']
+    original = cache.copy_module
+    calls = []
+    def copy(module, full=False):
+        calls.append(module)
+        if module == running:
+            run_id = other.status()['run_id']
+            assert not other.cancel(run_id, 'unknown')
+            assert other.cancel(run_id, queued)
+            assert other.cancel(run_id, running)
+            statuses = {m['id']: m for m in other.status()['modules']}
+            assert statuses[running]['cancelling'] and statuses[queued]['cancelling']
+            assert not other.status()['cancelling']
+            report('safe boundary')
+            pytest.fail('cancel ignored')
+        return original(module, full)
+    monkeypatch.setattr(cache, 'copy_module', copy)
+    cache.refresh(background=False)
+    state = cache.read_state()
+    assert queued not in calls
+    assert len(calls) == len(MODULES) - 1
+    assert state['modules'][running]['file'] == previous
+    for module, entry in state['modules'].items():
+        assert entry['progress']['status'] == ('cancelled' if module in (running, queued) else 'complete')
+        assert not entry.get('error')
+    assert state['pending'] == []
+    assert not cache.stop_event.is_set()

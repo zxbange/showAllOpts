@@ -16,7 +16,7 @@ export function CacheControl() {
   const [message, setMessage] = useState('')
   const [open, setOpen] = useState(false)
   const [module, setModule] = useState('')
-  const [stopping, setStopping] = useState(false)
+  const [stopping, setStopping] = useState<string | null>(null)
   const [submitting, setSubmitting] = useState(false)
   const dialog = useRef<HTMLDialogElement>(null)
   const signature = useRef<string | null>(null)
@@ -74,18 +74,18 @@ export function CacheControl() {
       if (mounted.current) setSubmitting(false)
     }
   }
-  async function cancel() {
+  async function cancel(moduleId?: string) {
     if (!status?.run_id || stopping || status.cancelling) return
-    setStopping(true)
+    setStopping(moduleId ?? '*')
     try {
-      await cancelCache(status.run_id)
-      setMessage('已请求停止本次同步及等待中的模块，保留成功快照和续传断点。')
+      await cancelCache(status.run_id, moduleId)
+      setMessage(moduleId ? '已请求停止该模块，其余模块继续同步。保留成功快照和续传断点。' : '已请求停止本次同步及等待中的模块，保留成功快照和续传断点。')
       await load()
     } catch (reason) {
       setMessage(reason instanceof Error ? reason.message : '无法停止同步。')
       await load()
     } finally {
-      if (mounted.current) setStopping(false)
+      if (mounted.current) setStopping(null)
     }
   }
   return (
@@ -166,11 +166,20 @@ export function CacheControl() {
                     )}
                     {item.error && !['waiting', 'running'].includes(item.progress?.status ?? '') && <p className="cache-row-error">{item.error}</p>}
                   </div>
+                  <div className="cache-row-actions">
                   <span
                     className={`cache-badge ${item.error || !item.ready ? 'cache-badge-warn' : ''}`}
                   >
                     {item.ready ? (item.error ? '保留旧快照' : '已就绪') : '待同步'}
                   </span>
+                  <button type="button" className="cache-stop"
+                    aria-label={`停止${item.name}同步`}
+                    onClick={() => void cancel(item.id)}
+                    disabled={!status.refreshing || !status.run_id || !!stopping || status.cancelling || item.cancelling || !['running', 'waiting'].includes(item.progress?.status ?? '')}>
+                    {item.cancelling || stopping === item.id ? '正在停止…' : '停止'}
+                  </button>
+                  {item.cancelling && <small>等待安全边界停止</small>}
+                  </div>
                 </div>
               ))}
             </div>
@@ -210,8 +219,8 @@ export function CacheControl() {
               </button>
               {status.refreshing && (
                 <button type="button" className="cache-submit" onClick={() => void cancel()}
-                  disabled={stopping || status.cancelling || !status.run_id}>
-                  {stopping || status.cancelling ? '正在停止…' : '停止本次同步'}
+                  disabled={!!stopping || status.cancelling || !status.run_id}>
+                  {stopping === '*' || status.cancelling ? '正在停止…' : '停止本次同步'}
                 </button>
               )}
               {status.cancelling && <p role="status">正在等待当前数据库操作结束；保留成功快照和续传断点。</p>}

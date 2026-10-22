@@ -213,3 +213,26 @@ test('retry clears failure and manual stop waits for database boundary', async (
   await expect(page.getByRole('button', { name: '正在停止…', exact: true })).toBeDisabled()
   await expect(page.getByText('正在等待当前数据库操作结束；保留成功快照和续传断点。')).toBeVisible()
 })
+
+
+test('individual row stop targets only that module', async ({ page }) => {
+  let cancelled: string | null = null
+  const runId = 'b'.repeat(32)
+  await page.route('**/api/v1/cache/status', route => route.fulfill({ json: {
+    ...fixture, refreshing: true, run_id: runId,
+    modules: fixture.modules.map((m, i) => ({ ...m, cancelling: cancelled === m.id,
+      progress: { status: i === 0 ? 'running' : 'waiting', stage: '同步中', percent: 10 },
+    })),
+  } }))
+  await page.route('**/api/v1/cache/cancel', async route => {
+    expect(route.request().postDataJSON()).toEqual({ run_id: runId, module: 'market-crowding' })
+    cancelled = 'market-crowding'
+    await route.fulfill({ status: 202, json: { accepted: true } })
+  })
+  await page.goto('/')
+  await page.getByRole('button', { name: '数据同步状态', exact: true }).click()
+  await page.getByRole('button', { name: '停止抱团拥挤度同步', exact: true }).click()
+  await expect(page.getByRole('button', { name: '停止抱团拥挤度同步', exact: true })).toBeDisabled()
+  await expect(page.getByRole('button', { name: '停止行业动量同步', exact: true })).toBeEnabled()
+  await expect(page.getByText('已请求停止该模块，其余模块继续同步。保留成功快照和续传断点。')).toBeVisible()
+})

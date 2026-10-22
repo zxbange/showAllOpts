@@ -126,13 +126,16 @@ class SnapshotCache:
         lock.release()
         return False
 
-    def cancel(self, run_id):
+    def cancel(self, run_id, module=None):
         state = self.read_state()
         if not self.refreshing() or state.get('run_id') != run_id or not run_id:
             return False
         if len(run_id) != 32 or any(c not in '0123456789abcdef' for c in run_id):
             return False
-        (self.root / ('cancel-' + run_id)).touch()
+        if module is not None:
+            if module not in MODULES or module not in state.get('pending', []):
+                return False
+        (self.root / ('cancel-' + run_id + ('-' + module if module else ''))).touch()
         return True
 
     def snapshot_path(self, module, entry):
@@ -160,6 +163,7 @@ class SnapshotCache:
                                       else (entry.get('progress') or {}).get('status', 'idle')))})
         for item in items:
             progress = item['progress']
+            item['cancelling'] = bool(running and state.get('run_id') and progress.get('status') in ('running', 'waiting') and (self.root / ('cancel-' + state['run_id'] + '-' + item['id'])).exists())
             if running and progress.get('status') == 'running' and progress.get('started_at'):
                 progress['elapsed_seconds'] = max(0, round((now() - datetime.fromisoformat(progress['started_at'])).total_seconds()))
         return {'enabled': True, 'refreshing': running,
@@ -256,7 +260,7 @@ class SnapshotCache:
         run_id = uuid.uuid4().hex
         marker = self.root / ('cancel-' + run_id)
         def check_cancel():
-            if marker.exists():
+            if marker.exists() or module_marker.exists():
                 raise SyncCancelled()
         try:
             state = self.read_state()
@@ -273,8 +277,14 @@ class SnapshotCache:
             for module in modules:
                 if self.stop_event.is_set() or marker.exists():
                     break
-                started = time.monotonic()
+                module_marker = self.root / ('cancel-' + run_id + '-' + module)
                 entry = state['modules'].setdefault(module, {})
+                if module_marker.exists():
+                    entry['progress'].update(status='cancelled', stage='已取消排队')
+                    state['pending'].remove(module)
+                    self.write_state(state)
+                    continue
+                started = time.monotonic()
                 entry['last_attempt_at'] = now().isoformat()
                 entry['progress'] = {'status': 'running', 'stage': '连接数据库', 'processed': 0, 'percent': 0, 'started_at': now().isoformat()}
                 self.write_state(state)
@@ -310,17 +320,23 @@ class SnapshotCache:
                     entry['progress'].update(status='complete', stage='同步完成', percent=100, elapsed_seconds=round(time.monotonic()-started, 1))
                     logger.info('Cache refresh complete module=%s rows=%s seconds=%.2f', module, rows, time.monotonic()-started)
                 except SyncCancelled:
-                    break
+                    if marker.exists():
+                        break
                 except Exception as exc:
                     if marker.exists():
                         break
-                    entry['progress'].update(status='failed', stage='同步失败，保留旧快照')
-                    code, hint, frames = failure_details(exc)
-                    entry['error'] = '同步失败，保留上次成功数据。[{}] {}'.format(code, hint)
-                    logger.error('Cache refresh failed module=%s error_type=%s code=%s hint=%s frames=%s',
-                                 module, type(exc).__name__, code, hint, frames)
+                    if not module_marker.exists():
+                        entry['progress'].update(status='failed', stage='同步失败，保留旧快照')
+                        code, hint, frames = failure_details(exc)
+                        entry['error'] = '同步失败，保留上次成功数据。[{}] {}'.format(code, hint)
+                        logger.error('Cache refresh failed module=%s error_type=%s code=%s hint=%s frames=%s',
+                                     module, type(exc).__name__, code, hint, frames)
                 finally:
                     reporter.reset(token)
+                if module_marker.exists() and entry['progress']['status'] != 'complete':
+                    entry['error'] = None
+                    entry['progress'].update(status='cancelled', stage='已停止，可手动重新同步')
+                    logger.info('Cache module cancelled module=%s run_id=%s', module, run_id)
                 state['pending'].remove(module)
                 self.write_state(state)
             if marker.exists():
@@ -334,8 +350,12 @@ class SnapshotCache:
                 logger.info('Cache refresh cancelled run_id=%s', run_id)
             self.cleanup(state)
         finally:
-            marker.unlink(missing_ok=True)
-            lock.release()
+            try:
+                marker.unlink(missing_ok=True)
+                for module in modules:
+                    (self.root / ('cancel-' + run_id + '-' + module)).unlink(missing_ok=True)
+            finally:
+                lock.release()
 
     def refresh(self, module=None, background=True, reason='manual', full=False):
         if not self.settings.cache_enabled:
