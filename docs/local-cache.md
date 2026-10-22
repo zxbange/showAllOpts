@@ -151,3 +151,17 @@ Linux 在项目根目录执行 `bash deploy.sh` 更新并重启后端，再到�
 Linux 修改 `config/app.config`，Windows 修改 `backend/.env`；如设置 `APP_ENV_FILE`，修改其指定文件。修改后重启后端。旧配置若显式设置 `CACHE_DB_READ_TIMEOUT=120`，需要改为 600，显式配置优先于默认值。提高超时也会延长发现网络故障及等待同步线程退出的时间，不能修复服务端主动断开的问题。
 
 同步进度跨进程共享，每个模块显示等待、运行、完成、失败或中断。运行中展示阶段、累计处理行数（含对比读取与重试，并非唯一新增行数）和耗时；总量未知时显示动态条，成功后显示满格。状态按批次节流写入，不额外执行源库 COUNT 查询。
+
+### 排查 Sending to client 与同步耗时
+
+MySQL 的 `Sending to client` 表示服务端正在向客户端写数据包，单凭该状态不能断定 SQLite 写盘慢。当前同步使用缓冲式主键分页，每页完整接收并关闭结果后才写入本地；不在流式游标尚未读取完毕时写盘。公网吞吐、丢包或接收端 CPU 等都需要结合实际耗时排查。
+
+JSON 结果直接以文本搬运至 SQLite，省去同步阶段 JSON 解析和重新序列化，页面查询时仍按原结构解析。不改变源表、历史数据或增量游标，也不需要重新采集。该优化降低客户端转换开销，不减少公网传输字节量。
+
+在 `log/app.log` 中搜索 `Cache transfer`：`read_seconds` 包含查询执行、网络接收、驱动和结果转换；`prepare_seconds` 为构造写入参数；`write_seconds` 为 SQLite 批量 INSERT 执行时间（不含最终事务提交、文件复制和校验）。不要将读取耗时单独解释为网络耗时。`Cache manifest` 记录主键/更新时间对比读取，`Cache slow read` 记录超过5秒的单页读取。日志只含表名、计数和耗时，不含业务 JSON 或数据库连接信息。
+
+```bash
+grep -E 'Cache transfer|Cache manifest|Cache slow read|Cache read failed' log/app.log | tail -n 50
+```
+
+若读耗时占主导，优先检查实际源查询、公网链路和客户端 CPU；若写耗时占主导，检查本地磁盘负载。无需因线程状态直接扩大超时或开启更多并行同步连接。

@@ -1,8 +1,9 @@
 """Read-only source reconciliation into an unpublished local SQLite snapshot."""
 import logging
+import time
 from app.core.sync_progress import report
 
-from sqlalchemy import and_, func, or_, select, tuple_
+from sqlalchemy import JSON, Text, and_, bindparam, func, or_, select, tuple_, type_coerce
 
 logger = logging.getLogger(__name__)
 OMIT = {'member_codes', 'analysis', 'analysis_basis'}
@@ -26,7 +27,7 @@ def after_key(columns, values):
                  for i, column in enumerate(columns)))
 
 
-def read_batches(connection, columns, keys, condition=None):
+def read_batches(connection, columns, keys, condition=None, *, timing=None):
     """Buffer a bounded page; no unbuffered cursor remains open during local writes."""
     last = None
     while True:
@@ -36,8 +37,19 @@ def read_batches(connection, columns, keys, condition=None):
         if last is not None:
             query = query.where(after_key(keys, last))
         report('读取 ' + keys[0].table.name)
-        with connection.execution_options(stream_results=False).execute(query) as result:
-            batch = result.all()
+        started = time.perf_counter()
+        try:
+            with connection.execution_options(stream_results=False).execute(query) as result:
+                batch = result.all()
+        except Exception:
+            logger.warning('Cache read failed table=%s seconds=%.3f', keys[0].table.name, time.perf_counter()-started)
+            raise
+        elapsed = time.perf_counter() - started
+        if timing is not None:
+            timing['read_seconds'] += elapsed
+            timing['queries'] += 1
+        if elapsed >= 5:
+            logger.info('Cache slow read table=%s rows=%s seconds=%.3f', keys[0].table.name, len(batch), elapsed)
         if not batch:
             return
         report('处理 ' + keys[0].table.name, len(batch))
@@ -48,19 +60,40 @@ def read_batches(connection, columns, keys, condition=None):
 
 
 def read_map(connection, columns, key_size):
-    return {tuple(row[:key_size]): tuple(row[key_size:])
-            for batch in read_batches(connection, columns, columns[:key_size]) for row in batch}
+    timing = {'read_seconds': 0.0, 'queries': 0}
+    result = {tuple(row[:key_size]): tuple(row[key_size:])
+              for batch in read_batches(connection, columns, columns[:key_size], timing=timing) for row in batch}
+    logger.info('Cache manifest table=%s database=%s rows=%s queries=%s read_seconds=%.3f',
+                columns[0].table.name, connection.dialect.name, len(result), timing['queries'], timing['read_seconds'])
+    return result
 
 
 def transfer(source, target, table, condition=None):
-    columns = [c for c in table.columns if c.name not in OMIT]
+    # MySQL/PyMySQL and SQLite return JSON text. Avoid parsing and serializing
+    # entire holdings documents merely to copy them; page reads still use JSON.
+    raw_json = source.dialect.name in ('mysql', 'sqlite') and target.dialect.name == 'sqlite'
+    json_names = {c.name for c in table.columns if isinstance(c.type, JSON) and c.name not in OMIT} if raw_json else set()
+    columns = [type_coerce(c, Text).label(c.name) if c.name in json_names else c
+               for c in table.columns if c.name not in OMIT]
+    statement = table.insert()
+    if json_names:
+        statement = statement.values(**{name: bindparam(name, type_=Text) for name in json_names})
     keys = list(table.primary_key.columns)
     count = 0
-    for batch in read_batches(source, columns, keys, condition):
+    timing = {'read_seconds': 0.0, 'queries': 0}
+    prepare_seconds = write_seconds = 0.0
+    for batch in read_batches(source, columns, keys, condition, timing=timing):
+        started = time.perf_counter()
         values = [dict(row._mapping, **{c.name: '' for c in table.columns if c.name in OMIT})
                   for row in batch]
-        target.execute(table.insert(), values)
+        prepare_seconds += time.perf_counter() - started
+        report('写入本地 ' + table.name)
+        started = time.perf_counter()
+        target.execute(statement, values)
+        write_seconds += time.perf_counter() - started
         count += len(values)
+    logger.info('Cache transfer table=%s rows=%s queries=%s read_seconds=%.3f prepare_seconds=%.3f write_seconds=%.3f raw_json=%s',
+                table.name, count, timing['queries'], timing['read_seconds'], prepare_seconds, write_seconds, bool(json_names))
     return count
 
 
