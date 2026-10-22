@@ -74,12 +74,12 @@ export function CacheControl() {
       if (mounted.current) setSubmitting(false)
     }
   }
-  async function cancel(moduleId?: string) {
+  async function cancel(moduleId: string) {
     if (!status?.run_id || stopping || status.cancelling) return
-    setStopping(moduleId ?? '*')
+    setStopping(moduleId)
     try {
       await cancelCache(status.run_id, moduleId)
-      setMessage(moduleId ? '已请求停止该模块，其余模块继续同步。保留成功快照和续传断点。' : '已请求停止本次同步及等待中的模块，保留成功快照和续传断点。')
+      setMessage('已请求停止该模块，其余模块继续同步。保留成功快照和续传断点。')
       await load()
     } catch (reason) {
       setMessage(reason instanceof Error ? reason.message : '无法停止同步。')
@@ -217,12 +217,6 @@ export function CacheControl() {
                 <RefreshCw size={15} className={busy ? 'cache-spin' : ''} />
                 {busy ? '同步进行中…' : '立即同步'}
               </button>
-              {status.refreshing && (
-                <button type="button" className="cache-submit" onClick={() => void cancel()}
-                  disabled={!!stopping || status.cancelling || !status.run_id}>
-                  {stopping === '*' || status.cancelling ? '正在停止…' : '停止本次同步'}
-                </button>
-              )}
               {status.cancelling && <p role="status">正在等待当前数据库操作结束；保留成功快照和续传断点。</p>}
               {message && (
                 <p role="status" className="cache-message">

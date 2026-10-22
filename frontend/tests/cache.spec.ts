@@ -200,7 +200,7 @@ test('retry clears failure and manual stop waits for database boundary', async (
     await route.fulfill({ status: 202, json: { accepted: true } })
   })
   await page.route('**/api/v1/cache/cancel', async route => {
-    expect(route.request().postDataJSON()).toEqual({ run_id: runId })
+    expect(route.request().postDataJSON()).toEqual({ run_id: runId, module: 'industry-momentum' })
     cancelling = true
     await route.fulfill({ status: 202, json: { accepted: true } })
   })
@@ -209,8 +209,9 @@ test('retry clears failure and manual stop waits for database boundary', async (
   await expect(page.locator('.cache-row-error')).toHaveCount(8)
   await page.getByRole('button', { name: '立即同步', exact: true }).click()
   await expect(page.locator('.cache-row-error')).toHaveCount(0)
-  await page.getByRole('button', { name: '停止本次同步', exact: true }).click()
-  await expect(page.getByRole('button', { name: '正在停止…', exact: true })).toBeDisabled()
+  await expect(page.getByRole('button', { name: '停止本次同步', exact: true })).toHaveCount(0)
+  await page.getByRole('button', { name: '停止行业动量同步', exact: true }).click()
+  await expect(page.getByRole('button', { name: '停止行业动量同步', exact: true })).toBeDisabled()
   await expect(page.getByText('正在等待当前数据库操作结束；保留成功快照和续传断点。')).toBeVisible()
 })
 
