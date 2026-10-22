@@ -15,6 +15,7 @@ from app.core.cache_errors import SnapshotDataError
 from app.core.cache_sync import after_key, read_batches, transfer_plan
 from app.core.ownership_sync import CURSOR, TABLES, reconcile_changes, read_cursor
 from app.core.sync_progress import report
+from app.core.mysql_payload import decode_rows
 
 logger = logging.getLogger(__name__)
 CHECKPOINT = Table('ownership_baseline_checkpoint', MetaData(),
@@ -30,7 +31,7 @@ PARTIAL_NAME = 'ownership-baseline.partial'
 
 def resume_baseline(cache, source, head, previous):
     path = cache.root / PARTIAL_NAME
-    destination = create_engine('sqlite:///' + path.as_posix(), poolclass=NullPool)
+    destination = create_engine('sqlite:///' + path.as_posix(), pool_size=1, max_overflow=0)
     anchor = previous.name if previous else ''
     try:
         TABLES[0].metadata.create_all(destination, tables=TABLES)
@@ -61,14 +62,14 @@ def resume_baseline(cache, source, head, previous):
                 if len(keys) == 2:
                     values.append(checkpoint['last_date'])
                 condition = after_key(keys, values)
-            # At most 500 JSON documents per source page; commit locally per page.
+            # Keep large reports bounded; compact stock/holder rows use fewer round trips.
             with destination.connect() as target:
-                columns, statement, _ = transfer_plan(source, target, table)
-            for batch in read_batches(source, columns, keys, condition, page_size=500):
+                columns, statement, _, compressed = transfer_plan(source, target, table)
+            for batch in read_batches(source, columns, keys, condition, page_size=500 if table.name == 'ownership_report' else 2000):
                 if cache.stop_event.is_set():
                     raise InterruptedError('Ownership baseline paused')
                 last = batch[-1]._mapping
-                values = [dict(row._mapping) for row in batch]
+                values = decode_rows(batch, (), compressed)
                 count = checkpoint['rows'] + len(values)
                 with destination.begin() as target:
                     target.execute(statement, values)

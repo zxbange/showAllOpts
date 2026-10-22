@@ -2,6 +2,7 @@
 import logging
 import time
 from app.core.sync_progress import report, stage_range
+from app.core.mysql_payload import OPTION, compressed_column, decode_rows
 
 from sqlalchemy import JSON, Text, and_, bindparam, func, or_, select, tuple_, type_coerce
 
@@ -74,32 +75,32 @@ def transfer_plan(source, target, table):
     # entire holdings documents merely to copy them; page reads still use JSON.
     raw_json = source.dialect.name in ('mysql', 'sqlite') and target.dialect.name == 'sqlite'
     json_names = {c.name for c in table.columns if isinstance(c.type, JSON) and c.name not in OMIT} if raw_json else set()
-    columns = [type_coerce(c, Text).label(c.name) if c.name in json_names else c
+    compressed = json_names if source.get_execution_options().get(OPTION) else set()
+    columns = [compressed_column(c) if c.name in compressed else type_coerce(c, Text).label(c.name) if c.name in json_names else c
                for c in table.columns if c.name not in OMIT]
     statement = table.insert()
     if json_names:
         statement = statement.values(**{name: bindparam(name, type_=Text) for name in json_names})
-    return columns, statement, bool(json_names)
+    return columns, statement, bool(json_names), compressed
 
 
 def transfer(source, target, table, condition=None):
-    columns, statement, raw_json = transfer_plan(source, target, table)
+    columns, statement, raw_json, compressed = transfer_plan(source, target, table)
     keys = list(table.primary_key.columns)
     count = 0
     timing = {'read_seconds': 0.0, 'queries': 0}
     prepare_seconds = write_seconds = 0.0
     for batch in read_batches(source, columns, keys, condition, timing=timing):
         started = time.perf_counter()
-        values = [dict(row._mapping, **{c.name: '' for c in table.columns if c.name in OMIT})
-                  for row in batch]
+        values = decode_rows(batch, [c.name for c in table.columns if c.name in OMIT], compressed)
         prepare_seconds += time.perf_counter() - started
         report('写入本地 ' + table.name)
         started = time.perf_counter()
         target.execute(statement, values)
         write_seconds += time.perf_counter() - started
         count += len(values)
-    logger.info('Cache transfer table=%s rows=%s queries=%s read_seconds=%.3f prepare_seconds=%.3f write_seconds=%.3f raw_json=%s',
-                table.name, count, timing['queries'], timing['read_seconds'], prepare_seconds, write_seconds, raw_json)
+    logger.info('Cache transfer table=%s rows=%s queries=%s read_seconds=%.3f prepare_seconds=%.3f write_seconds=%.3f raw_json=%s compressed=%s',
+                table.name, count, timing['queries'], timing['read_seconds'], prepare_seconds, write_seconds, raw_json, bool(compressed))
     return count
 
 

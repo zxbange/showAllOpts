@@ -156,7 +156,7 @@ Linux 修改 `config/app.config`，Windows 修改 `backend/.env`；如设置 `AP
 
 MySQL 的 `Sending to client` 表示服务端正在向客户端写数据包，单凭该状态不能断定 SQLite 写盘慢。当前同步使用缓冲式主键分页，每页完整接收并关闭结果后才写入本地；不在流式游标尚未读取完毕时写盘。公网吞吐、丢包或接收端 CPU 等都需要结合实际耗时排查。
 
-JSON 结果直接以文本搬运至 SQLite，省去同步阶段 JSON 解析和重新序列化，页面查询时仍按原结构解析。不改变源表、历史数据或增量游标，也不需要重新采集。该优化降低客户端转换开销，不减少公网传输字节量。
+JSON 结果直接以文本搬运至 SQLite，省去同步阶段 JSON 解析和重新序列化，页面查询时仍按原结构解析。不改变源表、历史数据或增量游标，也不需要重新采集。直接文本搬运降低客户端转换开销；机构持仓另支持默认开启的 JSON 压缩传输，减少公网字节量。
 
 在 `log/app.log` 中搜索 `Cache transfer`：`read_seconds` 包含查询执行、网络接收、驱动和结果转换；`prepare_seconds` 为构造写入参数；`write_seconds` 为 SQLite 批量 INSERT 执行时间（不含最终事务提交、文件复制和校验）。不要将读取耗时单独解释为网络耗时。`Cache manifest` 记录主键/更新时间对比读取，`Cache slow read` 记录超过5秒的单页读取。日志只含表名、计数和耗时，不含业务 JSON 或数据库连接信息。
 
@@ -167,3 +167,5 @@ grep -E 'Cache transfer|Cache manifest|Cache slow read|Cache read failed' log/ap
 若读耗时占主导，优先检查实际源查询、公网链路和客户端 CPU；若写耗时占主导，检查本地磁盘负载。无需因线程状态直接扩大超时或开启更多并行同步连接。
 
 机构持仓首次全量支持断点续传：详见 [首次全量同步断点续传](institution-ownership.md#首次全量同步断点续传)。请保留缓存目录内的 `.partial` 文件；未成功的单页会重新下载，已提交页可以复用，最终补差与校验通过才供页面读取。
+
+机构持仓压缩传输开关 `CACHE_OWNERSHIP_COMPRESSION=true` 默认生效，详情见 [传输与本地写入优化](institution-ownership.md#公网传输与本地写入优化)。开关不影响既有缓存和续传断点。

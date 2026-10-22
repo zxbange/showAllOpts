@@ -200,3 +200,28 @@ def test_failed_catchup_keeps_baseline_for_retry(journal, monkeypatch):
     assert not entry(cache)['error'] and cursor(cache)['revision'] == 3
     with cache.session(MODULE) as local:
         assert local.get(OwnershipStock, '600001.XSHG').name == '补差更正'
+
+def test_baseline_reuses_write_connection_and_sizes_compact_pages(journal, monkeypatch):
+    from sqlalchemy import event
+    from app.core import ownership_baseline as baseline
+    _, _, cache = journal
+    create = baseline.create_engine
+    reads = baseline.read_batches
+    opened = []
+    sizes = {}
+    def engine(*args, **kwargs):
+        result = create(*args, **kwargs)
+        if not opened and str(args[0]).endswith(PARTIAL_NAME):
+            count = []
+            event.listen(result, 'connect', lambda *args: count.append(1))
+            opened.append(count)
+        return result
+    def batches(source, columns, keys, *args, **kwargs):
+        sizes[keys[0].table.name] = kwargs['page_size']
+        yield from reads(source, columns, keys, *args, **kwargs)
+    monkeypatch.setattr(baseline, 'create_engine', engine)
+    monkeypatch.setattr(baseline, 'read_batches', batches)
+    cache.refresh(MODULE, background=False)
+    assert not entry(cache)['error']
+    assert len(opened[0]) == 1
+    assert sizes == {'ownership_stock':2000, 'ownership_report':500, 'ownership_holders':2000}

@@ -6,6 +6,7 @@ without a journal fall back to the general reconciliation path.
 """
 import logging
 from app.core.sync_progress import report
+from app.core.mysql_payload import configure_compression
 import shutil
 import uuid
 
@@ -103,6 +104,7 @@ def copy_ownership(cache, full=False):
             if incremental and cursor['revision'] == head['revision']:
                 logger.info('Cache ownership unchanged revision=%s; keeping existing snapshot', head['revision'])
                 return previous.name, cursor['rows']
+            configure_compression(source, cache.settings.cache_ownership_compression)
             if not incremental:
                 from app.core.ownership_baseline import resume_baseline
                 return resume_baseline(cache, source, dict(head), previous)

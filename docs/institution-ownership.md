@@ -75,7 +75,7 @@ Windows 将解释器路径替换为 `backend\.venv\Scripts\python.exe`。不要�
 
 ## 首次全量同步断点续传
 
-机构持仓首次建缓存、升级基线及强制完整同步，在源库有 `ownership_sync_head` 和 `ownership_change` 时支持续传。每页最多500条，数据和最后成功的主键一起提交至 `log/cache/<指纹>/ownership-baseline.partial`；文件内 `ownership_baseline_checkpoint` 记录源版本、表序号、主键和已保存行数。它只属于未发布缓存，不增加 MySQL 表，正式快照仍为三张业务表加同步游标。
+机构持仓首次建缓存、升级基线及强制完整同步，在源库有 `ownership_sync_head` 和 `ownership_change` 时支持续传。报告每页最多500条，股票基本信息和股东人数每页最多2000条；数据和最后成功的主键一起提交至 `log/cache/<指纹>/ownership-baseline.partial`；文件内 `ownership_baseline_checkpoint` 记录源版本、表序号、主键和已保存行数。它只属于未发布缓存，不增加 MySQL 表，正式快照仍为三张业务表加同步游标。
 
 网络重试、手动重新同步或服务重启后的下一次同步，会跳过已成功落盘的页。未完整收到或未提交的那一页重新下载。阶段进度可显示已保存的断点行数；日志搜索 `Cache ownership baseline resume` 查看 `saved_rows`。服务启动仍不自动同步，需手动触发或等下一次定时任务。
 
@@ -84,3 +84,15 @@ Windows 将解释器路径替换为 `backend\.venv\Scripts\python.exe`。不要�
 未完成文件不供页面读取、不按24小时旧快照规则清理。最终发布需复制出正式文件，因此完成时需要容纳续传文件和正式文件的磁盘空间；成功发布后自动删除对应续传文件。发布或复制失败仍保留断点。已经成功发布的旧缓存不受中断影响。
 
 没有变更记录的旧库继续使用原完整事务同步，不提供跨连接续传，以免遗漏源数据变更；先运行新版采集脚本可启用。升级前旧版本失败时已删除的数据无法恢复，升级后新下载并提交的页才可续传。其他模块及机构持仓普通增量同步沿用原有失败重试机制。
+
+## 公网传输与本地写入优化
+
+`CACHE_OWNERSHIP_COMPRESSION=true` 默认开启：MySQL 查询结果中的 JSON 使用 `COMPRESS(CAST(... AS CHAR CHARACTER SET utf8mb4))` 压缩，项目接收后检查解压长度并还原为原 JSON 文本写入 SQLite。不修改源表内容，不改变查询条件、主键分页、增量水位或断点格式，也不需要重新采集。正式缓存仍是普通 JSON，可以正常读取。
+
+仅在实际下载机构持仓数据时探测压缩支持；源版本未变化时不探测或下载。服务器没有压缩支持时回退为文本搬运；网络断开走正常重试，损坏的数据不会发布。压缩减少网络流量，但会消耗少量数据库 CPU；若数据库 CPU 紧张，可在所用配置文件中设置 `CACHE_OWNERSHIP_COMPRESSION=false` 并重启后端。Linux 使用 `config/app.config`，Windows 默认使用 `backend/.env`。
+
+全量续传复用一个 SQLite 写连接，避免每页重新打开文件；仍按页提交，保持数据与断点原子性，不关闭事务安全设置。小记录页从500条扩大到2000条，减少约四分之三的数据页请求（不足整页、结束探测和补差另计），大型持仓报告保留500条以控制单次传输量和内存。
+
+本机对当前数据库的只读500条报告样本测得 JSON 约1,041,177字节，压缩后451,198字节，减少56.7%；单次读取约3.05秒与2.75秒。该采样不是 Linux 服务器的端到端同步基准，不能推算固定提速比例。分页 EXPLAIN 使用 PRIMARY 范围扫描；不要仅凭同步慢重复创建主键组合索引。实际数据页大小也不等于网络传输字节数。
+
+参考：[MySQL COMPRESS 官方格式说明](https://dev.mysql.com/doc/refman/8.0/en/encryption-functions.html#function_compress)。

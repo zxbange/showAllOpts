@@ -72,6 +72,7 @@ class Settings(BaseSettings):
     cache_refresh_time: str = Field(default='20:00', pattern=r'^(?:[01]\d|2[0-3]):[0-5]\d$')
 
     cache_db_read_timeout: int = Field(default=600, ge=5, le=3600)
+    cache_ownership_compression: bool = True
     cache_sync_attempts: int = Field(default=3, ge=1, le=5)
 
     @property

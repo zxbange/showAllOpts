@@ -21,3 +21,6 @@ CACHE_REFRESH_TIME=20:00
 CACHE_DB_READ_TIMEOUT=600
 # Total attempts per module for transient MySQL connection failures (1 disables retry).
 CACHE_SYNC_ATTEMPTS=3
+
+# Compress ownership JSON in MySQL query results; stored data remains unchanged.
+CACHE_OWNERSHIP_COMPRESSION=true
