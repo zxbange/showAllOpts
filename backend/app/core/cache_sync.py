@@ -27,11 +27,12 @@ def after_key(columns, values):
                  for i, column in enumerate(columns)))
 
 
-def read_batches(connection, columns, keys, condition=None, *, timing=None):
+def read_batches(connection, columns, keys, condition=None, *, timing=None, page_size=None):
     """Buffer a bounded page; no unbuffered cursor remains open during local writes."""
     last = None
+    limit = min(page_size, READ_PAGE_SIZE) if page_size else READ_PAGE_SIZE
     while True:
-        query = select(*columns).order_by(*keys).limit(READ_PAGE_SIZE)
+        query = select(*columns).order_by(*keys).limit(limit)
         if condition is not None:
             query = query.where(condition)
         if last is not None:
@@ -54,7 +55,7 @@ def read_batches(connection, columns, keys, condition=None, *, timing=None):
             return
         report('处理 ' + keys[0].table.name, len(batch))
         yield batch
-        if len(batch) < READ_PAGE_SIZE:
+        if len(batch) < limit:
             return
         last = tuple(batch[-1]._mapping[key] for key in keys)
 
@@ -68,7 +69,7 @@ def read_map(connection, columns, key_size):
     return result
 
 
-def transfer(source, target, table, condition=None):
+def transfer_plan(source, target, table):
     # MySQL/PyMySQL and SQLite return JSON text. Avoid parsing and serializing
     # entire holdings documents merely to copy them; page reads still use JSON.
     raw_json = source.dialect.name in ('mysql', 'sqlite') and target.dialect.name == 'sqlite'
@@ -78,6 +79,11 @@ def transfer(source, target, table, condition=None):
     statement = table.insert()
     if json_names:
         statement = statement.values(**{name: bindparam(name, type_=Text) for name in json_names})
+    return columns, statement, bool(json_names)
+
+
+def transfer(source, target, table, condition=None):
+    columns, statement, raw_json = transfer_plan(source, target, table)
     keys = list(table.primary_key.columns)
     count = 0
     timing = {'read_seconds': 0.0, 'queries': 0}
@@ -93,7 +99,7 @@ def transfer(source, target, table, condition=None):
         write_seconds += time.perf_counter() - started
         count += len(values)
     logger.info('Cache transfer table=%s rows=%s queries=%s read_seconds=%.3f prepare_seconds=%.3f write_seconds=%.3f raw_json=%s',
-                table.name, count, timing['queries'], timing['read_seconds'], prepare_seconds, write_seconds, bool(json_names))
+                table.name, count, timing['queries'], timing['read_seconds'], prepare_seconds, write_seconds, raw_json)
     return count
 
 

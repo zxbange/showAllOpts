@@ -224,6 +224,8 @@ class SnapshotCache:
             try:
                 return self.copy_module(module, full=True) if full else self.copy_module(module)
             except Exception as exc:
+                if self.stop_event.is_set():
+                    return None
                 if not retryable_source_error(exc) or attempt == self.settings.cache_sync_attempts:
                     raise
                 report('网络重试 {}/{}'.format(attempt + 1, self.settings.cache_sync_attempts))
@@ -330,6 +332,8 @@ class SnapshotCache:
             logger.error('Cache refresh interrupted error_type=%s', type(exc).__name__)
 
     def cleanup(self, state):
+        from app.core.ownership_baseline import cleanup_completed_baseline
+        cleanup_completed_baseline(self, state)
         keep = {entry.get('file') for entry in state['modules'].values()}
         for path in self.root.glob('*.sqlite'):
             try:

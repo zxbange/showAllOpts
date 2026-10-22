@@ -103,6 +103,9 @@ def copy_ownership(cache, full=False):
             if incremental and cursor['revision'] == head['revision']:
                 logger.info('Cache ownership unchanged revision=%s; keeping existing snapshot', head['revision'])
                 return previous.name, cursor['rows']
+            if not incremental:
+                from app.core.ownership_baseline import resume_baseline
+                return resume_baseline(cache, source, dict(head), previous)
             filename = 'institution-ownership-' + uuid.uuid4().hex + '.sqlite'
             path = cache.root / filename
             destination = create_engine('sqlite:///' + path.as_posix(), poolclass=NullPool)
@@ -114,14 +117,7 @@ def copy_ownership(cache, full=False):
                 CURSOR.create(destination, checkfirst=True)
                 with destination.begin() as target:
                     report('同步机构持仓', percent=10)
-                    if incremental:
-                        count = reconcile_changes(source, target, cursor, head)
-                    else:
-                        count = 0
-                        for index, table in enumerate(TABLES):
-                            count += transfer(source, target, table)
-                            report('数据表完成 ' + table.name, percent=10 + 80*(index+1)/len(TABLES))
-                        logger.info('Cache ownership baseline downloaded=%s revision=%s', count, head['revision'])
+                    count = reconcile_changes(source, target, cursor, head)
                     report('提交机构持仓数据', percent=90)
                     target.execute(CURSOR.delete())
                     target.execute(CURSOR.insert().values(id=1, generation=head['generation'], revision=head['revision'], rows=count))
