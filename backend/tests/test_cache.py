@@ -427,3 +427,21 @@ def test_cancel_one_running_and_one_queued_module_continues_others(cached, engin
         assert not entry.get('error')
     assert state['pending'] == []
     assert not cache.stop_event.is_set()
+
+
+def test_progress_stage_is_persisted_before_blocking_operation(cached, engine, monkeypatch):
+    from app.core.sync_progress import report
+    settings, cache = cached
+    other = SnapshotCache(settings, engine)
+    original = cache.copy_module
+    monkeypatch.setattr('app.core.cache.time.monotonic', lambda: 100.0)
+    def copy(module):
+        report('resume checkpoint', percent=10)
+        report('read next page')
+        progress = other.status()['modules'][0]['progress']
+        assert progress['stage'] == 'read next page'
+        assert progress['percent'] == 10
+        return original(module)
+    monkeypatch.setattr(cache, 'copy_module', copy)
+    cache.refresh('industry-momentum', background=False)
+    assert not cache.read_state()['modules']['industry-momentum']['error']

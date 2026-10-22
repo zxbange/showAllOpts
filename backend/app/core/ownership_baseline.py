@@ -69,8 +69,10 @@ def resume_baseline(cache, source, head, previous):
                 if cache.stop_event.is_set():
                     raise InterruptedError('Ownership baseline paused')
                 last = batch[-1]._mapping
+                report('解压机构持仓 ' + table.name)
                 values = decode_rows(batch, (), compressed)
                 count = checkpoint['rows'] + len(values)
+                report('保存机构持仓断点 ' + table.name)
                 with destination.begin() as target:
                     target.execute(statement, values)
                     target.execute(CHECKPOINT.update().where(CHECKPOINT.c.id == 1).values(

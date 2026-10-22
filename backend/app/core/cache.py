@@ -293,12 +293,13 @@ class SnapshotCache:
                 def progress(stage, rows=0, percent=None):
                     check_cancel()
                     data = entry['progress']
+                    stage_changed = stage != data.get('stage')
                     changed = percent is not None and percent > data.get('percent', 0)
                     if percent is not None:
                         data['percent'] = max(data.get('percent', 0), min(99, percent))
                     data.update(stage=stage, processed=data['processed'] + rows,
                                 elapsed_seconds=round(time.monotonic() - started, 1))
-                    if time.monotonic() - last_progress_write[0] >= 1 or changed or stage.startswith('网络重试'):
+                    if time.monotonic() - last_progress_write[0] >= 1 or changed or stage_changed:
                         self.write_state(state)
                         last_progress_write[0] = time.monotonic()
                     if time.monotonic() - last_progress_log[0] >= 30:
