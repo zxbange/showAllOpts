@@ -28,7 +28,7 @@ def after_key(columns, values):
                  for i, column in enumerate(columns)))
 
 
-def read_batches(connection, columns, keys, condition=None, *, timing=None, page_size=None):
+def read_batches(connection, columns, keys, condition=None, *, timing=None, page_size=None, resume_key=None):
     """Buffer a bounded page; no unbuffered cursor remains open during local writes."""
     last = None
     limit = min(page_size, READ_PAGE_SIZE) if page_size else READ_PAGE_SIZE
@@ -38,15 +38,27 @@ def read_batches(connection, columns, keys, condition=None, *, timing=None, page
             query = query.where(condition)
         if last is not None:
             query = query.where(after_key(keys, last))
-        report('读取 ' + keys[0].table.name)
+        table_name = keys[0].table.name
+        diagnostic = table_name == 'ownership_report'
+        seek = last if last is not None else resume_key
+        if diagnostic:
+            logger.info('Cache ownership page start table=%s after=%s limit=%s', table_name, seek, limit)
+        report('读取 ' + table_name)
         started = time.perf_counter()
         try:
             with connection.execution_options(stream_results=False).execute(query) as result:
                 batch = result.all()
         except Exception:
-            logger.warning('Cache read failed table=%s seconds=%.3f', keys[0].table.name, time.perf_counter()-started)
+            logger.warning('Cache read failed table=%s after=%s limit=%s seconds=%.3f', table_name, seek, limit, time.perf_counter()-started)
             raise
         elapsed = time.perf_counter() - started
+        if diagnostic:
+            # Payload bytes as returned by the driver, excluding protocol overhead.
+            payloads = (row._mapping.get('payload') for row in batch)
+            payload_bytes = sum(len(value.encode('utf-8')) if isinstance(value, str) else len(value) if isinstance(value, (bytes, bytearray, memoryview)) else 0 for value in payloads)
+            end = tuple(batch[-1]._mapping[key] for key in keys) if batch else None
+            logger.info('Cache ownership page read table=%s after=%s last=%s rows=%s payload_bytes=%s compressed=%s seconds=%.3f',
+                        table_name, seek, end, len(batch), payload_bytes, bool(connection.get_execution_options().get(OPTION)), elapsed)
         if timing is not None:
             timing['read_seconds'] += elapsed
             timing['queries'] += 1

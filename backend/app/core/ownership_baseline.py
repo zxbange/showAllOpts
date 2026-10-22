@@ -6,6 +6,7 @@ the transactional journal (the same requirement as incremental synchronization).
 """
 import logging
 import shutil
+import time
 import uuid
 
 from sqlalchemy import BigInteger, Column, Date, Integer, MetaData, String, Table, create_engine, select
@@ -57,15 +58,17 @@ def resume_baseline(cache, source, head, previous):
             table = TABLES[index]
             keys = list(table.primary_key.columns)
             condition = None
+            resume_key = None
             if checkpoint['last_code'] is not None:
                 values = [checkpoint['last_code']]
                 if len(keys) == 2:
                     values.append(checkpoint['last_date'])
                 condition = after_key(keys, values)
+                resume_key = tuple(values)
             # Keep large reports bounded; compact stock/holder rows use fewer round trips.
             with destination.connect() as target:
                 columns, statement, _, compressed = transfer_plan(source, target, table)
-            for batch in read_batches(source, columns, keys, condition, page_size=500 if table.name == 'ownership_report' else 2000):
+            for batch in read_batches(source, columns, keys, condition, page_size=100 if table.name == 'ownership_report' else 2000, resume_key=resume_key):
                 if cache.stop_event.is_set():
                     raise InterruptedError('Ownership baseline paused')
                 last = batch[-1]._mapping
@@ -73,10 +76,14 @@ def resume_baseline(cache, source, head, previous):
                 values = decode_rows(batch, (), compressed)
                 count = checkpoint['rows'] + len(values)
                 report('保存机构持仓断点 ' + table.name)
+                write_started = time.perf_counter()
                 with destination.begin() as target:
                     target.execute(statement, values)
                     target.execute(CHECKPOINT.update().where(CHECKPOINT.c.id == 1).values(
                         last_code=last[keys[0]], last_date=last[keys[1]] if len(keys) == 2 else None, rows=count))
+                if table.name == 'ownership_report':
+                    logger.info('Cache ownership page committed table=%s last=%s rows=%s saved_rows=%s write_seconds=%.3f',
+                                table.name, tuple(last[key] for key in keys), len(values), count, time.perf_counter()-write_started)
                 checkpoint['rows'] = count
                 report('已保存断点 ' + table.name + '（{} 行）'.format(count))
             # Exhaustion is durable too, including empty tables.

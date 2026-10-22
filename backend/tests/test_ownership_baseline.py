@@ -224,7 +224,7 @@ def test_baseline_reuses_write_connection_and_sizes_compact_pages(journal, monke
     cache.refresh(MODULE, background=False)
     assert not entry(cache)['error']
     assert len(opened[0]) == 1
-    assert sizes == {'ownership_stock':2000, 'ownership_report':500, 'ownership_holders':2000}
+    assert sizes == {'ownership_stock':2000, 'ownership_report':100, 'ownership_holders':2000}
 
 
 def test_manual_cancel_preserves_committed_page_and_resumes(journal, engine, monkeypatch):

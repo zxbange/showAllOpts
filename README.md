@@ -669,3 +669,12 @@ docker compose up --build -d
 停止不会关闭每日定时同步。重新触发任务时会清除所选模块上一次的红色失败提示；只有本次再次失败才显示新的失败信息。Linux 多进程部署也支持停止，请更新后端并重新构建前端后使用。
 
 同步中的模块右侧显示“停止”按钮：运行中的模块在安全边界停止，等待中的模块取消本次排队，其他模块继续执行。未运行或已结束（完成、失败、已停止）的模块不显示停止按钮。页面仅保留逐模块停止操作。
+
+
+机构持仓首次全量及断点续传：报告表 `ownership_report` 每批读取 100 行，每批提交数据和断点；股票与股东人数表仍每批 2,000 行。调整批大小不会清除旧断点。`log/app.log` 中的 `Cache ownership page start/read/committed` 分别记录读取开始、读取完成、断点提交，包含游标、行数、读取耗时和写入耗时。`payload_bytes` 是驱动返回的 payload 字节数（启用压缩时为压缩后大小），不是完整网络流量；不记录持仓正文或数据库密码。
+
+排查反复停在同一断点时，可运行：
+
+```bash
+grep -E 'Cache ownership page|Cache read failed|Cache refresh retry' log/app.log | tail -n 40
+```
