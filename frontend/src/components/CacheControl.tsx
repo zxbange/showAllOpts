@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Database, RefreshCw, X } from 'lucide-react'
-import { getCacheStatus, refreshCache } from '../api/client'
+import { cancelCache, getCacheStatus, refreshCache } from '../api/client'
 import type { CacheStatus } from '../types/cache'
 import '../styles/cache.css'
 
@@ -16,6 +16,7 @@ export function CacheControl() {
   const [message, setMessage] = useState('')
   const [open, setOpen] = useState(false)
   const [module, setModule] = useState('')
+  const [stopping, setStopping] = useState(false)
   const [submitting, setSubmitting] = useState(false)
   const dialog = useRef<HTMLDialogElement>(null)
   const signature = useRef<string | null>(null)
@@ -71,6 +72,20 @@ export function CacheControl() {
       setMessage(reason instanceof Error ? reason.message : '无法启动同步。')
     } finally {
       if (mounted.current) setSubmitting(false)
+    }
+  }
+  async function cancel() {
+    if (!status?.run_id || stopping || status.cancelling) return
+    setStopping(true)
+    try {
+      await cancelCache(status.run_id)
+      setMessage('已请求停止本次同步及等待中的模块，保留成功快照和续传断点。')
+      await load()
+    } catch (reason) {
+      setMessage(reason instanceof Error ? reason.message : '无法停止同步。')
+      await load()
+    } finally {
+      if (mounted.current) setStopping(false)
     }
   }
   return (
@@ -149,7 +164,7 @@ export function CacheControl() {
                         </small>
                       </div>
                     )}
-                    {item.error && <p className="cache-row-error">{item.error}</p>}
+                    {item.error && !['waiting', 'running'].includes(item.progress?.status ?? '') && <p className="cache-row-error">{item.error}</p>}
                   </div>
                   <span
                     className={`cache-badge ${item.error || !item.ready ? 'cache-badge-warn' : ''}`}
@@ -193,6 +208,13 @@ export function CacheControl() {
                 <RefreshCw size={15} className={busy ? 'cache-spin' : ''} />
                 {busy ? '同步进行中…' : '立即同步'}
               </button>
+              {status.refreshing && (
+                <button type="button" className="cache-submit" onClick={() => void cancel()}
+                  disabled={stopping || status.cancelling || !status.run_id}>
+                  {stopping || status.cancelling ? '正在停止…' : '停止本次同步'}
+                </button>
+              )}
+              {status.cancelling && <p role="status">正在等待当前数据库操作结束；保留成功快照和续传断点。</p>}
               {message && (
                 <p role="status" className="cache-message">
                   {message}

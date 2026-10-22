@@ -16,6 +16,8 @@ export interface CacheModule {
 }
 export interface CacheStatus {
   enabled: boolean
+  run_id?: string | null
+  cancelling?: boolean
   refreshing: boolean
   manual_enabled: boolean
   auto_refresh: boolean

@@ -225,3 +225,26 @@ def test_baseline_reuses_write_connection_and_sizes_compact_pages(journal, monke
     assert not entry(cache)['error']
     assert len(opened[0]) == 1
     assert sizes == {'ownership_stock':2000, 'ownership_report':500, 'ownership_holders':2000}
+
+
+def test_manual_cancel_preserves_committed_page_and_resumes(journal, engine, monkeypatch):
+    from app.core import ownership_baseline as baseline
+    from app.core.sync_progress import report
+    _, _, cache = journal
+    original = baseline.read_batches
+    other = SnapshotCache(cache.settings, engine)
+    def cancelled(*args, **kwargs):
+        for batch in original(*args, **kwargs):
+            yield batch
+            assert other.cancel(other.status()['run_id'])
+            report('next page')
+    monkeypatch.setattr(baseline, 'read_batches', cancelled)
+    cache.refresh(MODULE, background=False)
+    assert checkpoint(cache)['rows'] > 0
+    assert entry(cache)['progress']['status'] == 'cancelled'
+    assert not entry(cache).get('error')
+    assert not cache.status()['modules'][-1]['ready']
+    monkeypatch.setattr(baseline, 'read_batches', original)
+    other.refresh(MODULE, background=False)
+    assert entry(other)['progress']['status'] == 'complete'
+    assert entry(other)['rows'] == 3

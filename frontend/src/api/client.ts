@@ -111,3 +111,15 @@ export const getSocialEntries = (period: string, mode: string, signal?: AbortSig
       new URLSearchParams({ ...(period ? { period } : {}), mode }),
     signal,
   )
+
+export async function cancelCache(runId: string) {
+  const response = await fetch(`${API_BASE}/cache/cancel`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ run_id: runId }),
+  })
+  if (!response.ok) {
+    const body = await response.json().catch(() => null)
+    throw new Error(typeof body?.detail === 'string' ? body.detail : '无法停止同步，请稍后重试。')
+  }
+}

@@ -348,3 +348,47 @@ def test_nested_stage_ranges_restore_after_exception():
         assert seen == [50, 95]
     finally:
         reporter.reset(token)
+
+
+def test_cancel_cross_worker_keeps_snapshot_and_clears_retry_errors(cached, engine, monkeypatch):
+    from app.core.sync_progress import report
+    settings, cache = cached
+    module = 'industry-momentum'
+    cache.refresh(module, background=False)
+    original = cache.read_state()['modules'][module]['file']
+    state = cache.read_state()
+    state['modules'][module]['error'] = 'old failure'
+    cache.write_state(state)
+    other = SnapshotCache(settings, engine)
+    real_copy = cache.copy_module
+    calls = []
+    def cancel_copy(selected, full=False):
+        calls.append(selected)
+        status = other.status()
+        assert not next(m for m in status['modules'] if m['id'] == module)['error']
+        assert not other.cancel('0' * 32)
+        assert other.cancel(status['run_id'])
+        assert other.status()['cancelling']
+        report('page boundary')
+        raise AssertionError('Cancellation was ignored')
+    monkeypatch.setattr(cache, 'copy_module', cancel_copy)
+    cache.refresh(background=False)
+    state = cache.read_state()
+    assert calls == [module]
+    assert state['pending'] == []
+    assert state['modules'][module]['file'] == original
+    assert all(m['progress']['status'] == 'cancelled' for m in state['modules'].values())
+    assert all(not m.get('error') for m in state['modules'].values())
+    assert not cache.stop_event.is_set()
+    assert not other.refreshing()
+    assert not other.cancel(state['run_id'])
+    monkeypatch.setattr(cache, 'copy_module', real_copy)
+    cache.refresh(module, background=False)
+    assert cache.read_state()['modules'][module]['progress']['status'] == 'complete'
+
+
+def test_cancel_endpoint_rejects_idle_and_invalid_run(cached, engine):
+    settings, _ = cached
+    with TestClient(create_app(settings, engine)) as client:
+        assert client.post('/api/v1/cache/cancel', json={'run_id': '0'*32}).status_code == 409
+        assert client.post('/api/v1/cache/cancel', json={'run_id': '../bad'}).status_code == 422

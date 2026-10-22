@@ -26,3 +26,14 @@ def refresh(body: RefreshRequest, request: Request):
     if not cache.refresh(body.module):
         raise HTTPException(status_code=409, detail='已有同步任务正在执行，请等待完成。')
     return {'accepted': True}
+
+
+class CancelRequest(BaseModel):
+    run_id: str = Field(pattern=r'^[0-9a-f]{32}$')
+
+
+@router.post('/cancel', status_code=202)
+def cancel(body: CancelRequest, request: Request):
+    if not request.app.state.cache.cancel(body.run_id):
+        raise HTTPException(status_code=409, detail='该同步任务已结束，请刷新状态。')
+    return {'accepted': True}

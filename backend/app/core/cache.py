@@ -59,6 +59,10 @@ def latest_slot(moment, daily_time):
     return slot
 
 
+class SyncCancelled(Exception):
+    """Manual cancellation, not a source failure."""
+
+
 class CacheUnavailable(RuntimeError):
     pass
 
@@ -122,6 +126,15 @@ class SnapshotCache:
         lock.release()
         return False
 
+    def cancel(self, run_id):
+        state = self.read_state()
+        if not self.refreshing() or state.get('run_id') != run_id or not run_id:
+            return False
+        if len(run_id) != 32 or any(c not in '0123456789abcdef' for c in run_id):
+            return False
+        (self.root / ('cancel-' + run_id)).touch()
+        return True
+
     def snapshot_path(self, module, entry):
         name = entry.get('file', '')
         if not name or Path(name).name != name or not name.startswith(module + '-') or not name.endswith('.sqlite'):
@@ -150,6 +163,8 @@ class SnapshotCache:
             if running and progress.get('status') == 'running' and progress.get('started_at'):
                 progress['elapsed_seconds'] = max(0, round((now() - datetime.fromisoformat(progress['started_at'])).total_seconds()))
         return {'enabled': True, 'refreshing': running,
+                'run_id': state.get('run_id') if running else None,
+                'cancelling': bool(running and state.get('run_id') and (self.root / ('cancel-' + state['run_id'])).exists()),
                 'manual_enabled': True,
                 'daily_time': self.settings.cache_refresh_time, 'timezone': 'Asia/Shanghai',
                 'auto_refresh': self.settings.cache_auto_refresh, 'modules': items}
@@ -238,18 +253,25 @@ class SnapshotCache:
                     return None
 
     def _refresh_locked(self, lock, modules, reason, slot=None, full=False):
+        run_id = uuid.uuid4().hex
+        marker = self.root / ('cancel-' + run_id)
+        def check_cancel():
+            if marker.exists():
+                raise SyncCancelled()
         try:
             state = self.read_state()
+            state['run_id'] = run_id
             state['last_attempt_at'] = now().isoformat()
             state['pending'] = list(modules)
             state['pending_full'] = full
             for module in modules:
-                state['modules'].setdefault(module, {})['progress'] = {'status': 'waiting', 'stage': '等待同步', 'processed': 0, 'percent': 0}
+                state['modules'].setdefault(module, {})['error'] = None
+                state['modules'][module]['progress'] = {'status': 'waiting', 'stage': '等待同步', 'processed': 0, 'percent': 0}
             if slot:
                 state['scheduled_slot'] = slot
             self.write_state(state)
             for module in modules:
-                if self.stop_event.is_set():
+                if self.stop_event.is_set() or marker.exists():
                     break
                 started = time.monotonic()
                 entry = state['modules'].setdefault(module, {})
@@ -259,6 +281,7 @@ class SnapshotCache:
                 last_progress_write = [0.0]
                 last_progress_log = [0.0]
                 def progress(stage, rows=0, percent=None):
+                    check_cancel()
                     data = entry['progress']
                     changed = percent is not None and percent > data.get('percent', 0)
                     if percent is not None:
@@ -275,16 +298,22 @@ class SnapshotCache:
                 token = reporter.set(progress)
                 logger.info('Cache refresh started module=%s reason=%s', module, reason)
                 try:
+                    check_cancel()
                     result = self.copy_with_retry(module, full)
                     if result is None:
                         break  # Leave this module pending so a restart can resume it.
+                    check_cancel()
                     filename, rows = result
                     if filename != entry.get('file') or not entry.get('updated_at'):
                         entry['updated_at'] = now().isoformat()
                     entry.update(file=filename, rows=rows, error=None)
                     entry['progress'].update(status='complete', stage='同步完成', percent=100, elapsed_seconds=round(time.monotonic()-started, 1))
                     logger.info('Cache refresh complete module=%s rows=%s seconds=%.2f', module, rows, time.monotonic()-started)
+                except SyncCancelled:
+                    break
                 except Exception as exc:
+                    if marker.exists():
+                        break
                     entry['progress'].update(status='failed', stage='同步失败，保留旧快照')
                     code, hint, frames = failure_details(exc)
                     entry['error'] = '同步失败，保留上次成功数据。[{}] {}'.format(code, hint)
@@ -294,8 +323,18 @@ class SnapshotCache:
                     reporter.reset(token)
                 state['pending'].remove(module)
                 self.write_state(state)
+            if marker.exists():
+                for pending_module in state['pending']:
+                    pending_entry = state['modules'][pending_module]
+                    pending_entry['error'] = None
+                    pending_entry['progress'].update(status='cancelled', stage='已停止，可手动重新同步')
+                state['pending'] = []
+                state['pending_full'] = False
+                self.write_state(state)
+                logger.info('Cache refresh cancelled run_id=%s', run_id)
             self.cleanup(state)
         finally:
+            marker.unlink(missing_ok=True)
             lock.release()
 
     def refresh(self, module=None, background=True, reason='manual', full=False):

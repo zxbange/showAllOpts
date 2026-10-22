@@ -182,3 +182,34 @@ test('per-module progress shows running rows and completed bar', async ({ page }
   await expect(page.getByText(/读取持仓表/)).toContainText('2,000')
   await expect(page.getByRole('button', { name: '同步进行中…', exact: true })).toBeDisabled()
 })
+
+
+test('retry clears failure and manual stop waits for database boundary', async ({ page }) => {
+  let running = false
+  let cancelling = false
+  const runId = 'a'.repeat(32)
+  await page.route('**/api/v1/cache/status', route => route.fulfill({ json: {
+    ...fixture, refreshing: running, run_id: running ? runId : null, cancelling,
+    modules: fixture.modules.map(m => ({ ...m,
+      error: running ? null : '同步失败，保留上次成功数据。',
+      progress: { status: running ? 'running' : 'failed', stage: '读取数据', percent: 20 },
+    })),
+  } }))
+  await page.route('**/api/v1/cache/refresh', async route => {
+    running = true
+    await route.fulfill({ status: 202, json: { accepted: true } })
+  })
+  await page.route('**/api/v1/cache/cancel', async route => {
+    expect(route.request().postDataJSON()).toEqual({ run_id: runId })
+    cancelling = true
+    await route.fulfill({ status: 202, json: { accepted: true } })
+  })
+  await page.goto('/')
+  await page.getByRole('button', { name: '数据同步状态', exact: true }).click()
+  await expect(page.locator('.cache-row-error')).toHaveCount(8)
+  await page.getByRole('button', { name: '立即同步', exact: true }).click()
+  await expect(page.locator('.cache-row-error')).toHaveCount(0)
+  await page.getByRole('button', { name: '停止本次同步', exact: true }).click()
+  await expect(page.getByRole('button', { name: '正在停止…', exact: true })).toBeDisabled()
+  await expect(page.getByText('正在等待当前数据库操作结束；保留成功快照和续传断点。')).toBeVisible()
+})
