@@ -172,12 +172,14 @@ export function CacheControl() {
                   >
                     {item.ready ? (item.error ? '保留旧快照' : '已就绪') : '待同步'}
                   </span>
+                  {status.refreshing && ['running', 'waiting'].includes(item.progress?.status ?? '') && (
                   <button type="button" className="cache-stop"
                     aria-label={`停止${item.name}同步`}
                     onClick={() => void cancel(item.id)}
                     disabled={!status.refreshing || !status.run_id || !!stopping || status.cancelling || item.cancelling || !['running', 'waiting'].includes(item.progress?.status ?? '')}>
                     {item.cancelling || stopping === item.id ? '正在停止…' : '停止'}
                   </button>
+                  )}
                   {item.cancelling && <small>等待安全边界停止</small>}
                   </div>
                 </div>
