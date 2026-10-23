@@ -38,6 +38,10 @@ export interface SocialMember {
   market_value: number | null
 }
 export interface SocialEntry extends OwnershipStock {
+  previous_shares?: number | null
+  current_shares?: number | null
+  change_shares?: number | null
+  change_pct?: number | null
   new_combinations: SocialMember[]
   new_shares: number | null
   new_market_value: number | null

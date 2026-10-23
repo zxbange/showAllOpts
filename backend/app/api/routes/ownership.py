@@ -20,5 +20,5 @@ def detail(session: Annotated[Session, Depends(get_session)],
 
 @router.get('/social-entries', response_model=SocialEntries)
 def social(session: Annotated[Session, Depends(get_session)], period: date | None = None,
-           mode: Literal['first', 'combination'] = 'first', q: str = Query('', max_length=80)):
+           mode: Literal['first', 'combination', 'increase'] = 'first', q: str = Query('', max_length=80)):
     return OwnershipService(OwnershipRepository(session)).social(period, mode, q.strip())

@@ -1,4 +1,4 @@
-﻿import { expect, test } from '@playwright/test'
+import { expect, test } from '@playwright/test'
 const stock = { code: '600001.XSHG', name: '示例科技', industry: '半导体' }
 const fixture = {
   stock,
@@ -90,4 +90,18 @@ test('ownership error permits retry', async ({ page }) => {
   await page.getByLabel('搜索股票').fill('600001')
   await expect(page.getByText('本地数据尚未准备好')).toBeVisible()
   await expect(page.getByRole('button', { name: '重新加载' })).toBeVisible()
+})
+
+
+test('social increase shows aggregate quarter comparison', async ({ page }) => {
+  await page.route('**/api/v1/institution-ownership/social-entries?*', r => r.fulfill({ json: {
+    period: '2026-09-30', periods: ['2026-09-30'], comparable_count: 1, unknown_count: 0, collected_count: 1,
+    items: [{ ...stock, new_combinations: [], previous_shares: 1000000, current_shares: 1500000, change_shares: 500000, change_pct: 50, pub_date: '2026-10-20' }],
+  } }))
+  await page.goto('/institution-ownership')
+  await page.getByRole('button', { name: '社保新进', exact: true }).click()
+  await page.getByLabel('社保筛选口径').selectOption('increase')
+  await expect(page.getByRole('columnheader', { name: '上季度合计（万股）' })).toBeVisible()
+  await expect(page.getByRole('cell', { name: '150', exact: true })).toBeVisible()
+  await expect(page.getByRole('cell', { name: '50%', exact: true })).toBeVisible()
 })

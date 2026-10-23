@@ -42,3 +42,39 @@ def test_json_incremental_cache_updates_and_preserves_null(cached,session):
     session.delete(report);session.commit()
     cache.refresh('institution-ownership',background=False)
     assert_matches(cache,session,'institution-ownership')
+
+
+def test_social_increase_uses_total_not_new_combinations(client, session):
+    stamp = datetime(2026, 10, 21)
+    def payload(shares):
+        return {'float_complete': True, 'float_members': [
+            {'class_id': 307004, 'name': str(i), 'shares': value} for i, value in enumerate(shares)]}
+    cases = [([100, 200], [150, 200]), ([100, 200], [100, 150]),
+             ([100], [100]), ([], [80]), ([None], [100]), (None, [100])]
+    for i, (before, after) in enumerate(cases):
+        code = '60000{}.XSHG'.format(i)
+        session.add(OwnershipStock(code=code, name='公司{}'.format(i), updated_at=stamp))
+        if before is not None:
+            session.add(OwnershipReport(code=code, report_date=date(2026, 6, 30), payload=payload(before), updated_at=stamp))
+        session.add(OwnershipReport(code=code, report_date=date(2026, 9, 30), payload=payload(after), updated_at=stamp))
+    session.commit()
+    response = client.get('/api/v1/institution-ownership/social-entries?period=2026-09-30&mode=increase')
+    assert response.status_code == 200
+    data = response.json()
+    assert data['comparable_count'] == 4 and data['unknown_count'] == 2
+    assert [r['code'] for r in data['items']] == ['600003.XSHG', '600000.XSHG']
+    first, second = data['items']
+    assert first['previous_shares'] == 0 and first['change_pct'] is None
+    assert second['previous_shares'] == 300 and second['current_shares'] == 350
+    assert second['change_shares'] == 50
+    assert abs(second['change_pct'] - 100/6) < 1e-8
+
+
+def test_social_increase_rejects_incomplete_and_invalid_quantities():
+    from app.services.ownership import social_increase
+    valid = {'float_complete': True, 'float_members': [{'class_id': 307004, 'shares': 100}]}
+    for value in (None, -1, 'NaN', 'Infinity'):
+        bad = {'float_complete': True, 'float_members': [{'class_id': 307004, 'shares': value}]}
+        assert social_increase(valid, bad)['status'] == 'unknown'
+    assert social_increase(valid, {'float_complete': False, 'float_members': []})['status'] == 'unknown'
+    assert social_increase(valid, {'float_complete': True})['status'] == 'unknown'

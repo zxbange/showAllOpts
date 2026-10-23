@@ -678,3 +678,5 @@ docker compose up --build -d
 ```bash
 grep -E 'Cache ownership page|Cache read failed|Cache refresh retry' log/app.log | tail -n 40
 ```
+
+社保筛选支持“社保组合加仓”：使用已缓存的相邻两季度完整前十大流通股东明细，汇总社保组合股数后比较，增加即入选，按增加股数排序。上季为零时显示“上季为零”，不计算增幅。缺少上季或数量不完整不参与判断；无需重新采集或迁移数据库，但本地需有两期数据。
