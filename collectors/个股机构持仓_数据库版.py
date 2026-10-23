@@ -18,7 +18,7 @@ from urllib.parse import quote, quote_plus
 
 import jqdata as jq
 import pandas as pd
-from sqlalchemy import BigInteger, Column, Date, DateTime, Integer, JSON, String, or_, create_engine, event, tuple_
+from sqlalchemy import BigInteger, Column, Date, DateTime, Integer, JSON, String, or_, create_engine, event, tuple_, func
 from sqlalchemy.engine.url import URL
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
@@ -109,6 +109,7 @@ class _ConsoleProgress:
 def _progress_scope(name, index, total):
     progress = None
     ending = '完成'
+    _PROGRESS_LOCAL.output = sys.stdout
     try:
         if PROGRESS_ENABLED:
             progress = _ConsoleProgress(name, index, total, sys.stdout, PROGRESS_INTERVAL_SECONDS)
@@ -120,8 +121,23 @@ def _progress_scope(name, index, total):
         raise
     finally:
         _PROGRESS_LOCAL.current = None
+        _PROGRESS_LOCAL.output = None
         if progress is not None:
             progress.close(ending)
+
+
+def _progress_message(message):
+    """Keep brief collection-scope messages visible through the batch quiet stream."""
+    progress = getattr(_PROGRESS_LOCAL, 'current', None)
+    stream = getattr(_PROGRESS_LOCAL, 'output', None) or sys.stdout
+    if progress is not None:
+        with progress.lock:
+            stream.write('\r' + ' ' * progress.width + '\r' + message + '\n')
+            stream.flush()
+            progress.width = 0
+            progress.render(force=True)
+    else:
+        print(message, file=stream, flush=True)
 
 
 def _progress_note(message):
@@ -419,6 +435,29 @@ def _ownership_strategy(_apis, _config):
             del rows, ids
             # Query until empty even when upstream caps below requested page size.
 
+    def grouped_pages(table, columns, *conditions, label='报告索引'):
+        """Group at source; paginate by unique minimum ID without splitting a group."""
+        cursor, count = 0, 0
+        size = builtins.min(settings['page_size'], 2000)
+        group_id = func.min(table.id)
+        while True:
+            _progress_note('{}：已读取 {} 条去重索引'.format(label, count))
+            q = (query(group_id.label('id'), *columns).filter(*conditions)
+                 .group_by(*columns).having(group_id > cursor).order_by(group_id).limit(size))
+            frame = finance.run_query(q)
+            if frame is None:
+                raise ValueError('去重索引接口未返回结果：' + label)
+            if frame.empty:
+                break
+            rows = frame.to_dict('records')
+            ids = [int(r['id']) for r in rows]
+            if ids != sorted(set(ids)) or ids[0] <= cursor:
+                raise ValueError('去重索引分页未按组 ID 递增：' + label)
+            cursor = ids[-1]
+            count += len(rows)
+            yield from rows
+            # Continue to empty, even when the provider caps below requested size.
+
     def batches(items):
         for offset in range(0, len(items), settings['stock_batch_size']):
             yield items[offset:offset+settings['stock_batch_size']]
@@ -439,18 +478,19 @@ def _ownership_strategy(_apis, _config):
         canonical_funds, observed_funds = set(), set()
         for batch in batches(sorted(set(codes))):
             symbols = sorted(set(batch) | {c.split('.')[0] for c in batch})
-            for row in pages(t, t.period_end == period, t.pub_date <= as_of,
-                             t.symbol.in_(symbols), columns=[t.id, t.code]):
+            for row in grouped_pages(t, [t.code], t.period_end == period, t.pub_date <= as_of,
+                                     t.symbol.in_(symbols), label='关联基金'):
                 fund = text_value(row['code']).split('.')[0]
                 observed_funds.add(fund)
                 canonical_funds.add(fund_map.get(fund, fund))
         related = sorted(observed_funds | canonical_funds |
                          {f for f, c in fund_map.items() if c in canonical_funds})
+        _progress_message('{}：发现 {} 个相关基金代码（含关联份额），仅查询去重报告版本。'.format(period, len(related)))
         selected = {}
-        columns = [t.id, t.code, t.pub_date, t.report_type_id, t.report_type]
+        columns = [t.code, t.pub_date, t.report_type_id, t.report_type]
         for batch in _progress_items(list(batches(related)), '相关基金报告版本', lambda b: b[0]):
-            for row in pages(t, t.period_end == period, t.pub_date <= as_of,
-                             t.code.in_(batch), columns=columns):
+            for row in grouped_pages(t, columns, t.period_end == period, t.pub_date <= as_of,
+                                     t.code.in_(batch), label='相关基金报告版本'):
                 canonical, priority, document = fund_document(row, fund_map)
                 if canonical not in selected or priority > selected[canonical][0]:
                     selected[canonical] = (priority, document)
@@ -493,8 +533,8 @@ def _ownership_strategy(_apis, _config):
             table = finance.FUND_PORTFOLIO_STOCK
             funds = sorted(set(changed_funds) | {f for f, c in fund_map.items() if c in changed_funds})
             for batch in batches(funds):
-                for row in pages(table, table.code.in_(batch), table.period_end.in_(periods),
-                                 table.pub_date <= as_of, columns=[table.id, table.symbol]):
+                for row in grouped_pages(table, [table.symbol], table.code.in_(batch), table.period_end.in_(periods),
+                                         table.pub_date <= as_of, label='新旧报告关联股票'):
                     code = code_map.get(text_value(row['symbol']).split('.')[0])
                     if code:
                         affected.add(code)
@@ -712,6 +752,7 @@ def _ownership_strategy(_apis, _config):
                    for m,d in ((3,31),(6,30),(9,30),(12,31))
                    if start <= datetime.date(y,m,d) <= as_of]
         periods.insert(0, previous_quarter(periods[0]))
+        _progress_message('个股机构持仓 [报告索引去重版 v4]：开始检查新增披露。')
         signature = disclosure_signature(as_of)
         previous_probe, previous_day = None, None
         with database_scope(Base, _config) as Session:
@@ -722,7 +763,7 @@ def _ownership_strategy(_apis, _config):
                 if probe is not None and probe.as_of > as_of:
                     raise ValueError('已有较新采集结果，拒绝历史运行回退')
                 if not full_refresh and probe is not None and probe.payload == signature:
-                    print('个股机构持仓：未检测到新增披露，跳过持仓复查、户数采集和社保比较。')
+                    _progress_message('个股机构持仓：未检测到新增披露，跳过持仓复查、户数采集和社保比较。')
                     return pd.DataFrame(columns=['kind', 'code', 'date'])
 
         securities = _apis['get_all_securities'](types=['stock'],date=as_of)
@@ -748,9 +789,9 @@ def _ownership_strategy(_apis, _config):
                                            fund_map, known, periods[-settings['refresh_quarters']:])
             codes = [c for c in codes if c in set(review_codes)]
             periods = periods[-settings['refresh_quarters']:] if review_codes else []
-            print('个股机构持仓：新增披露影响 {} 只股票，仅复查这些股票最近 {} 个季度。'.format(len(review_codes), settings['refresh_quarters']))
+            _progress_message('个股机构持仓：新增披露影响 {} 只股票，仅复查这些股票最近 {} 个季度。'.format(len(review_codes), settings['refresh_quarters']))
         else:
-            print('个股机构持仓：首次建立基线或手动完整刷新，按原有断点采集。')
+            _progress_message('个股机构持仓：首次建立基线或手动完整刷新，按原有断点采集。')
         # Compact keys only: no raw rows or JSON payloads are accumulated for the preview.
         changed = set()
         with database_scope(Base,_config) as Session:
@@ -780,7 +821,7 @@ def _ownership_strategy(_apis, _config):
                     # Only scalar codes; JSON payloads are loaded by bounded stock batch below.
                     old_codes = [] if targeted else [r[0] for r in session.query(OwnershipReport.code).filter_by(report_date=period).all()]
                 scope_codes = review_codes if targeted else sorted(set(codes)|set(old_codes))
-                _progress_note('{}：复查 {} 只股票，核对相关基金报告'.format(period, len(scope_codes)))
+                _progress_message('{}：复查 {} 只股票，按去重索引核对相关基金报告。'.format(period, len(scope_codes)))
                 selected = select_documents(period,as_of,fund_map,scope_codes)
                 with session_scope(Session) as session:
                     for batch in _progress_items(list(batches(scope_codes)), '持仓分批',lambda b:b[0]):
@@ -836,7 +877,7 @@ def run(**options):
 if __name__ == '__main__':
     try:
         result = run()
-        print('个股机构持仓：新增或更新 {} 条。'.format(len(result)))
+        _progress_message('个股机构持仓：新增或更新 {} 条。'.format(len(result)))
         print(result.tail(10).to_string(index=False))
     except Exception as exc:
         raise RuntimeError(_safe_error(exc, DB_CONFIG)) from None

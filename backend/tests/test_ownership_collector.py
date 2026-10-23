@@ -231,3 +231,44 @@ def test_invalid_stock_batch_size(mod,value):
     ns=mod._ownership_strategy({'finance':None,'query':None},mod.DB_CONFIG)
     with pytest.raises(ValueError,match='stock_batch_size'):
         ns.run()
+
+
+def test_grouped_index_returns_one_row_per_document_across_capped_pages(mod):
+    base = declarative_base()
+    class Holdings(base):
+        __tablename__ = 'holdings'
+        id = Column(Integer, primary_key=True)
+        code = Column(String)
+        pub_date = Column(Date)
+        report_type_id = Column(Integer)
+        report_type = Column(String)
+        symbol = Column(String)
+    engine = create_engine('sqlite://')
+    base.metadata.create_all(engine)
+    Session = sessionmaker(bind=engine)
+    session = Session()
+    rows = []
+    for i in range(12000):
+        rows.append(dict(id=i+1, code='F'+str(i%6), pub_date=dt.date(2026,10,21),
+                         report_type_id=1, report_type=None, symbol=str(i)))
+    session.execute(Holdings.__table__.insert(), rows)
+    session.commit()
+    returned, sqls = [], []
+    def run_query(q):
+        # Simulate a source cap smaller than the requested page size.
+        q = q.limit(2)
+        sqls.append(str(q.statement))
+        with engine.connect() as connection:
+            result = connection.execute(q.statement)
+            values = result.fetchall()
+            returned.append(len(values))
+            return pd.DataFrame(values, columns=result.keys())
+    ns = mod._ownership_strategy({'finance': SimpleNamespace(run_query=run_query), 'query': session.query}, mod.DB_CONFIG)
+    result = list(ns.grouped_pages(Holdings, [Holdings.code, Holdings.pub_date,
+                        Holdings.report_type_id, Holdings.report_type], Holdings.code != 'F5'))
+    assert len(result) == 5 and sum(returned) == 5  # 10,000 scoped detail rows -> five versions.
+    assert [r['id'] for r in result] == [1,2,3,4,5]
+    assert returned == [2,2,1,0]
+    assert all('GROUP BY' in sql and 'HAVING min(' in sql and 'WHERE holdings.code' in sql for sql in sqls)
+    session.close()
+    engine.dispose()

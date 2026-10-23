@@ -663,3 +663,20 @@ def test_history_entrypoints_default_to_insert_only():
                 defaults = dict(zip([a.arg for a in node.args.args][-len(node.args.defaults):], node.args.defaults))
                 if 'skip_existing' in defaults:
                     assert ast.literal_eval(defaults['skip_existing']) is True, path.name
+
+
+@pytest.mark.parametrize('enabled', [True, False])
+def test_ownership_scope_messages_bypass_quiet_stream(batch, monkeypatch, capsys, enabled):
+    monkeypatch.setattr(batch, 'PROGRESS_ENABLED', enabled)
+    def run(**kwargs):
+        batch._progress_message('新增披露影响 2 只股票，仅复查这些股票最近 4 个季度。')
+        print('ordinary output remains hidden')
+        for day in batch._progress_items(['2026-09-30'], '报告期'):
+            batch._progress_note('读取去重报告版本')
+        return []
+    monkeypatch.setattr(batch, '_load_strategy', lambda *_: run)
+    batch.run_all(['个股机构持仓'], db_config=CONFIG, preview_rows=0)
+    output = capsys.readouterr().out
+    assert '新增披露影响 2 只股票' in output
+    assert 'ordinary output remains hidden' not in output
+    assert batch._PROGRESS_LOCAL.output is None
