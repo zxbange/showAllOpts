@@ -138,8 +138,13 @@ def test_full_collection_repeat_correction_future_filter_and_social(mod,monkeypa
     assert n.run().empty
     with sessionmaker(bind=target)() as session:
         assert session.query(n.SyncHead).one().revision==revision_before
+    monkeypatch.setattr(mod,'china_now',lambda:dt.datetime(2026,10,22,15))
+    assert len(n.run()) == 1  # Previously future-dated disclosure now becomes visible.
+    monkeypatch.setattr(mod,'china_now',lambda:dt.datetime(2026,10,23,15))
+    assert n.run().empty  # Another day without disclosures still skips.
     source_session.query(Floats).filter_by(id=11).update({'share_number':150});source_session.commit()
-    assert len(n.run())==1
+    assert n.run().empty  # In-place corrections alone do not trigger automatic review.
+    assert len(n.run(full_refresh=True))==1
     with sessionmaker(bind=target)() as session:
         report=session.query(n.OwnershipReport).filter_by(report_date=dt.date(2026,9,30)).one()
         assert report.payload['social_entry']['new_shares']==150
@@ -148,12 +153,12 @@ def test_full_collection_repeat_correction_future_filter_and_social(mod,monkeypa
         source_session.query(Floats).filter_by(id=11).update({'share_number':999});source_session.commit()
         fail_late[0] = True
         with pytest.raises(RuntimeError,match='late batch failure'):
-            n.run()
+            n.run(full_refresh=True)
         with sessionmaker(bind=target)() as session:
             report=session.query(n.OwnershipReport).filter_by(report_date=dt.date(2026,9,30)).one()
             assert report.payload['social_entry']['new_shares']==150  # flushed first batch was rolled back
         fail_late[0] = False
-        assert len(n.run())==1
+        assert len(n.run(full_refresh=True))==1
         assert n.run().empty
     source_session.close();source.dispose();target.dispose()
 

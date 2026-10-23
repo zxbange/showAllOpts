@@ -3258,6 +3258,34 @@ def _ownership_strategy(_apis, _config):
         key = Column(String(32), primary_key=True)
         as_of = Column(Date, nullable=False)
 
+    class DisclosureProbe(Base):
+        __tablename__ = 'ownership_disclosure_probe'
+        key = Column(String(16), primary_key=True)
+        payload = Column(JSON, nullable=False)
+        as_of = Column(Date, nullable=False)
+
+    def disclosure_signature(as_of):
+        # Six one-row queries, no holdings payload or all-stock history scan.
+        result = {'history_years': settings['history_years'], 'refresh_quarters': settings['refresh_quarters']}
+        for name, table, period in (
+                ('fund', finance.FUND_PORTFOLIO_STOCK, finance.FUND_PORTFOLIO_STOCK.period_end),
+                ('float', finance.STK_SHAREHOLDER_FLOATING_TOP10, finance.STK_SHAREHOLDER_FLOATING_TOP10.end_date),
+                ('holders', finance.STK_HOLDER_NUM, finance.STK_HOLDER_NUM.end_date)):
+            filters = [period <= as_of, or_(table.pub_date == None, table.pub_date <= as_of)]
+            markers = []
+            for order in ((table.id.desc(),), (table.pub_date.desc(), table.id.desc())):
+                df = finance.run_query(query(table.id, table.pub_date).filter(*filters).order_by(*order).limit(1))
+                if df is None:
+                    raise ValueError('新增披露检查失败：' + name)
+                if df.empty:
+                    markers.append(None)
+                else:
+                    row = df.iloc[0]
+                    pub = day(row['pub_date'])
+                    markers.append([int(row['id']), pub.isoformat() if pub else None])
+            result[name] = markers
+        return result
+
     class SyncHead(Base):
         __tablename__ = 'ownership_sync_head'
         id = Column(String(16), primary_key=True)
@@ -3596,6 +3624,16 @@ def _ownership_strategy(_apis, _config):
                    for m,d in ((3,31),(6,30),(9,30),(12,31))
                    if start <= datetime.date(y,m,d) <= as_of]
         periods.insert(0, previous_quarter(periods[0]))
+        signature = disclosure_signature(as_of)
+        with database_scope(Base, _config) as Session:
+            with session_scope(Session) as session:
+                probe = session.query(DisclosureProbe).filter_by(key='main').first()
+                if probe is not None and probe.as_of > as_of:
+                    raise ValueError('已有较新采集结果，拒绝历史运行回退')
+                if not full_refresh and probe is not None and probe.payload == signature:
+                    print('个股机构持仓：未检测到新增披露，跳过持仓复查、户数采集和社保比较。')
+                    return pd.DataFrame(columns=['kind', 'code', 'date'])
+        print('个股机构持仓：首次运行、完整刷新或检测到新增披露，检查最近 {} 个季度。'.format(settings['refresh_quarters']))
         securities = _apis['get_all_securities'](types=['stock'],date=as_of)
         if securities is None or securities.empty:
             raise ValueError('股票清单为空，停止写入')
@@ -3669,6 +3707,14 @@ def _ownership_strategy(_apis, _config):
                     session.add(Checkpoint(key='holders',as_of=as_of))
                 else:
                     head.as_of = as_of
+                session.commit()
+            # Advance only after every phase succeeds; failed runs must retry.
+            with session_scope(Session) as session:
+                probe = session.query(DisclosureProbe).filter_by(key='main').first()
+                if probe is None:
+                    session.add(DisclosureProbe(key='main', payload=signature, as_of=as_of))
+                else:
+                    probe.payload, probe.as_of = signature, as_of
                 session.commit()
         return pd.DataFrame(sorted(changed),columns=['kind','code','date'])
     return SimpleNamespace(**locals())
