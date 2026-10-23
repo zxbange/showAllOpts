@@ -41,7 +41,6 @@ export function ShortTermPage() {
       <div><h2>{selected.name}<ArrowUpRight size={18} /></h2><p>{selected.note} · 统一剔除ST · 总市值≥30亿元</p></div>
 
     </section>
-    <p className="short-caption">保留最近 3 个交易日的选股快照 · 每只股票展示近 30 个交易日日K线 · 前复权 · MA5 / 10 / 20 / 30 / 60</p>
     {loading ? <LoadingState /> : error ? <ErrorState message={error} retry={() => { setDay(''); setOffset(0); reload() }} /> : !data?.trade_date ?
       <EmptyState title="尚未采集短线选股" description="在聚宽运行短线选股采集脚本，再通过数据同步加载本模块。" /> :
       <><p className="short-summary">{data.trade_date} · 扫描 {fmt(data.meta.universe_count, 0)} 只 · {selected.name}入选 {data.total} 只</p>
