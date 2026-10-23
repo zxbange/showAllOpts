@@ -38,7 +38,7 @@ export function EarningsPage() {
             净利润断层<span className="heading-tag">业绩 × 价格</span>
             <span className="earnings-title-quarter">{data ? quarter(data.target_period) : '最新已结束季度'}</span>
           </h1>
-          <p>把业绩增长、价格信号与公告证据，放在一起观察。</p>
+          <p>归母净利润同比 ≥ 20% · 公告对应交易日高开 &gt; 3% · 收盘 ≥ 开盘</p>
         </div>
         <div className="heading-actions">
           <span className="date-badge">
@@ -54,12 +54,6 @@ export function EarningsPage() {
             <RefreshCw size={16} className={loading ? 'spin' : ''} />
           </button>
         </div>
-      </div>
-      <div className="earnings-intro">
-        <div>
-          <p>归母净利润同比 ≥ 20% · 公告对应交易日高开 &gt; 3% · 收盘 ≥ 开盘</p>
-        </div>
-        <FileSearch size={26} strokeWidth={1} />
       </div>
       <div className="earnings-filters">
         <label>
