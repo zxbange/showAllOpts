@@ -431,15 +431,29 @@ def _ownership_strategy(_apis, _config):
         document = (fund, day(row['pub_date']), int(row['report_type_id']))
         return canonical, priority, document
 
-    def select_documents(period, as_of, fund_map):
-        # First pass retains only the winning document identity, not its holdings.
+    def select_documents(period, as_of, fund_map, codes):
+        # Discover only funds that have held the requested stocks in this quarter.
+        # Then inspect all share classes of those funds, including documents where
+        # the requested stock disappeared. Never scan the whole market's documents.
         t = finance.FUND_PORTFOLIO_STOCK
+        canonical_funds, observed_funds = set(), set()
+        for batch in batches(sorted(set(codes))):
+            symbols = sorted(set(batch) | {c.split('.')[0] for c in batch})
+            for row in pages(t, t.period_end == period, t.pub_date <= as_of,
+                             t.symbol.in_(symbols), columns=[t.id, t.code]):
+                fund = text_value(row['code']).split('.')[0]
+                observed_funds.add(fund)
+                canonical_funds.add(fund_map.get(fund, fund))
+        related = sorted(observed_funds | canonical_funds |
+                         {f for f, c in fund_map.items() if c in canonical_funds})
         selected = {}
         columns = [t.id, t.code, t.pub_date, t.report_type_id, t.report_type]
-        for row in pages(t, t.period_end == period, t.pub_date <= as_of, columns=columns):
-            canonical, priority, document = fund_document(row, fund_map)
-            if canonical not in selected or priority > selected[canonical][0]:
-                selected[canonical] = (priority, document)
+        for batch in _progress_items(list(batches(related)), '相关基金报告版本', lambda b: b[0]):
+            for row in pages(t, t.period_end == period, t.pub_date <= as_of,
+                             t.code.in_(batch), columns=columns):
+                canonical, priority, document = fund_document(row, fund_map)
+                if canonical not in selected or priority > selected[canonical][0]:
+                    selected[canonical] = (priority, document)
         return selected
 
     def affected_stocks(previous, previous_day, current, as_of, fund_map, known_codes, periods):
@@ -487,8 +501,8 @@ def _ownership_strategy(_apis, _config):
         return sorted(affected)
 
     def batch_funds(codes, period, as_of, fund_map, selected):
-        # Select documents globally before stock filtering, otherwise an absent holding
-        # in a newer/A-class portfolio could resurrect an older/C-class position.
+        # Compare all documents of related funds, including other share classes;
+        # otherwise stock filtering could resurrect an older position.
         t = finance.FUND_PORTFOLIO_STOCK
         code_map = {c.split('.')[0]:c for c in codes}
         candidates = {}
@@ -765,9 +779,11 @@ def _ownership_strategy(_apis, _config):
                         continue
                     # Only scalar codes; JSON payloads are loaded by bounded stock batch below.
                     old_codes = [] if targeted else [r[0] for r in session.query(OwnershipReport.code).filter_by(report_date=period).all()]
-                selected = select_documents(period,as_of,fund_map)
+                scope_codes = review_codes if targeted else sorted(set(codes)|set(old_codes))
+                _progress_note('{}：复查 {} 只股票，核对相关基金报告'.format(period, len(scope_codes)))
+                selected = select_documents(period,as_of,fund_map,scope_codes)
                 with session_scope(Session) as session:
-                    for batch in _progress_items(list(batches(review_codes if targeted else sorted(set(codes)|set(old_codes)))), '持仓分批',lambda b:b[0]):
+                    for batch in _progress_items(list(batches(scope_codes)), '持仓分批',lambda b:b[0]):
                         save_report_batch(session,batch,period,as_of,fund_map,selected,changed)
                     head = session.query(Checkpoint).get('report:'+str(period))
                     if head is None:

@@ -102,6 +102,9 @@ def test_full_collection_repeat_correction_future_filter_and_social(mod,monkeypa
                 share_number=100,share_ratio=1))
     source_session.add_all([Holder(id=1,code=code,end_date=dt.date(2026,6,30),pub_date=dt.date(2026,7,20),share_holders=110,a_share_holders=100),
         Holder(id=2,code=code,end_date=dt.date(2026,9,30),pub_date=dt.date(2026,10,22),share_holders=80,a_share_holders=70)])
+    source_session.add(Main(id=3,main_code='UNRELATED',statistics_main_code='UNRELATED'))
+    source_session.add(Fund(id=100,code='UNRELATED',symbol='999999',period_end=dt.date(2026,9,30),
+                            pub_date=dt.date(2026,10,20),report_type_id=403003,report_type='第三季度',shares=1,market_cap=1))
     source_session.commit()
     fail_late = [False]
     source_calls = []
@@ -145,6 +148,15 @@ def test_full_collection_repeat_correction_future_filter_and_social(mod,monkeypa
     assert len(n.run()) == 1  # Previously future-dated disclosure now becomes visible.
     stock_queries = [q['symbol_1'] for q in source_calls if 'symbol_1' in q]
     assert stock_queries and all(other not in values and '600002' not in values for values in stock_queries)
+    # Quarterly document metadata must be stock-scoped or related-fund-scoped.
+    # The unrelated source fund must never be included in document selection.
+    quarterly_pages = [q for q in source_calls if q.get('period_end_1') in
+                       [dt.date(2025,12,31),dt.date(2026,3,31),dt.date(2026,6,30),dt.date(2026,9,30)]
+                       and 'id_1' in q]
+    assert quarterly_pages
+    assert all('symbol_1' in q or 'code_1' in q for q in quarterly_pages)
+    assert all('UNRELATED' not in q.get('code_1', []) for q in quarterly_pages)
+
     monkeypatch.setattr(mod,'china_now',lambda:dt.datetime(2026,10,23,15))
     assert n.run().empty  # Another day without disclosures still skips.
     source_session.query(Floats).filter_by(id=11).update({'share_number':150});source_session.commit()
@@ -166,7 +178,7 @@ def test_full_collection_repeat_correction_future_filter_and_social(mod,monkeypa
         assert len(n.run(full_refresh=True))==1
         assert n.run().empty
     # A new A-class report drops the old stock and adds another: both need review.
-    source_session.add(Fund(id=4,code='A',symbol='600002',period_end=dt.date(2026,9,30),
+    source_session.add(Fund(id=101,code='A',symbol='600002',period_end=dt.date(2026,9,30),
                            pub_date=dt.date(2026,10,23),report_type_id=403003,report_type='第三季度',shares=75,market_cap=150))
     source_session.commit()
     assert len(n.run()) >= 2

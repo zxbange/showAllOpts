@@ -99,4 +99,4 @@ Windows 将解释器路径替换为 `backend\.venv\Scripts\python.exe`。不要�
 
 参考：[MySQL COMPRESS 官方格式说明](https://dev.mysql.com/doc/refman/8.0/en/encryption-functions.html#function_compress)。
 
-定向复查沿用已成功建立的 `ownership_disclosure_probe`，无需再次全量建立基线。若上次采集未完整成功、尚无检查记录，仍按原断点执行首次复查。控制台打印“新增披露影响 N 只股票”，可核对本次范围。持仓查询按股票限制，基金报告版本选择仍会读取报告标识以保持 A/C 份额去重正确。
+定向复查沿用已成功建立的 `ownership_disclosure_probe`，无需再次全量建立基线。若上次采集未完整成功、尚无检查记录，仍按原断点执行首次复查。控制台打印“新增披露影响 N 只股票”，可核对本次范围。每个季度先按受影响股票查询关联基金，再仅查询这些基金及关联份额的报告版本，禁止不带股票或基金范围的全市场季度扫描。关联份额仍一起核对，以保持 A/C 去重及退出持仓识别正确。控制台显示本季度复查股票数和相关基金版本查询进度。
