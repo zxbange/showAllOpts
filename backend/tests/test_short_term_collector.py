@@ -87,7 +87,7 @@ def test_retention_uses_three_calendar_trading_days_and_skips_existing(mod, monk
     Session = sessionmaker(bind=engine)
     old = dt.date(2026, 10, 20)
     for day in [old] + days:
-        ns.save_day(Session, day, {}, [{'trade_date': day, 'code': '600001.XSHG'}])
+        ns.save_day(Session, day, {'rule_version': ns.RULE_VERSION}, [{'trade_date': day, 'code': '600001.XSHG'}])
     @contextmanager
     def database_scope(*args):
         yield Session
@@ -108,7 +108,8 @@ def test_missing_price_dates_fail_instead_of_partial_success(ns):
         ns.clean_history(df.iloc[:-1], '600001.XSHG', days, days[0])
 
 
-def test_collect_scans_and_enriches_selected_stock(mod):
+@pytest.mark.parametrize('market_cap,is_st,included', [(50, False, True), (30, False, True), (29.99, False, False), (50, True, False)])
+def test_collect_scans_and_enriches_selected_stock(mod, market_cap, is_st, included):
     from types import SimpleNamespace
     frame = history().rename(columns={'date': 'time'})
     frame['code'] = '600001.XSHG'
@@ -119,12 +120,15 @@ def test_collect_scans_and_enriches_selected_stock(mod):
     apis = dict(get_trade_days=lambda **kw: days,
         get_all_securities=lambda **kw: pd.DataFrame([{'display_name': '测试股份', 'start_date': days[0]}], index=['600001.XSHG']),
         get_price=lambda *a, **kw: frame,
-        get_extras=lambda *a, **kw: pd.DataFrame({'600001.XSHG': [False]}),
+        get_extras=lambda *a, **kw: pd.DataFrame({'600001.XSHG': [is_st]}, index=[days[-1]]),
         get_industry=lambda *a, **kw: {'600001.XSHG': {'sw_l2': {'industry_name': '测试行业'}}},
-        get_fundamentals=lambda *a, **kw: pd.DataFrame([{'code':'600001.XSHG','market_cap':50,'pe_ratio':12,'pb_ratio':2}]),
+        get_fundamentals=lambda *a, **kw: pd.DataFrame([{'code':'600001.XSHG','market_cap':market_cap,'pe_ratio':12,'pb_ratio':2}]),
         query=lambda *a: SimpleNamespace(filter=lambda *a: None), valuation=fields)
     ns = mod._short_term_strategy(apis, mod.DB_CONFIG)
     meta, stocks = ns.collect(days[-1])
+    if not included:
+        assert stocks == [] and meta['evaluated_count'] == 0
+        return
     assert meta['counts']['xuli'] == 1 and len(stocks) == 1
     assert stocks[0]['industry'] == '测试行业' and stocks[0]['pe'] == 12
     assert len(stocks[0]['bars']) == 30 and stocks[0]['bars'][0]['ma']['60'] is not None
@@ -140,3 +144,40 @@ def test_bukou_short_rsv_dips_then_recovers_with_long_rsv_strong(ns):
     assert 'bukou' in ns.evaluate(frame, '600001.XSHG', is_st=True)
     frame.loc[88, 'close'] = 105
     assert 'bukou' not in ns.evaluate(frame, '600001.XSHG', is_st=True)
+
+
+def test_st_missing_batch_falls_back_and_never_uses_old_day(mod):
+    day = dt.date(2026, 10, 22)
+    calls = []
+    def extra(info, codes, **kw):
+        calls.append((codes, kw))
+        if kw['df']:
+            return pd.DataFrame({'a': [False], 'b': [False]}, index=[day-dt.timedelta(days=1)])
+        return {codes[0]: [codes[0] == 'a']}
+    ns = mod._short_term_strategy({'get_extras': extra}, mod.DB_CONFIG)
+    assert ns.read_st_flags(['a', 'b'], day) == {'a': True, 'b': False}
+    assert len(calls) == 3
+    ns = mod._short_term_strategy({'get_extras': lambda *a, **kw: pd.DataFrame() if kw['df'] else {}}, mod.DB_CONFIG)
+    with pytest.raises(ValueError, match='2026-10-22.*a'):
+        ns.read_st_flags(['a'], day)
+    assert ns.read_st_flags([], day) == {}
+
+
+def test_rule_upgrade_replaces_snapshot_atomically(ns):
+    engine = create_engine('sqlite://')
+    ns.Base.metadata.create_all(engine)
+    Session = sessionmaker(bind=engine)
+    day = dt.date(2026, 10, 22)
+    record = {'code': 'a', 'trade_date': day}
+    ns.save_day(Session, day, {'rule_version': 'old'}, [record])
+    with pytest.raises(Exception):
+        ns.save_day(Session, day, {'rule_version': ns.RULE_VERSION}, [record, record])
+    with Session() as session:
+        assert session.query(ns.ShortTermRun).one().payload['rule_version'] == 'old'
+        assert session.query(ns.ShortTermStock).count() == 1
+    assert ns.save_day(Session, day, {'rule_version': ns.RULE_VERSION}, [])
+    with Session() as session:
+        assert session.query(ns.ShortTermStock).count() == 0
+        assert session.query(ns.ShortTermRun).one().payload['rule_version'] == ns.RULE_VERSION
+    assert not ns.save_day(Session, day, {'rule_version': ns.RULE_VERSION}, [])
+    engine.dispose()

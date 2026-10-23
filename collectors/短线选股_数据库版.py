@@ -265,7 +265,7 @@ def _short_term_strategy(_apis, _config):
         _apis.get(k) for k in ('get_all_securities', 'get_trade_days', 'get_price', 'get_extras', 'get_industry', 'get_fundamentals', 'query', 'valuation')]
     METHODS = {'bukou': '补票龙', 'redhover': '红悬停龙', 'xuli': '蓄力龙'}
     MA_PERIODS = (5, 10, 20, 30, 60)
-    RULE_VERSION = 'stock_three_patterns_v1'
+    RULE_VERSION = 'stock_three_patterns_v2_nonst_cap30'
     Base = declarative_base()
 
     class ShortTermRun(Base):
@@ -542,6 +542,35 @@ def _short_term_strategy(_apis, _config):
         frame['pct_chg'] = (frame['close'] / frame['pre_close'] - 1) * 100
         return frame
 
+    def read_st_flags(codes, day):
+        if not codes:
+            return {}
+        # Read a date range, but only accept the target day's actual status.
+        raw = get_extras('is_st', codes, start_date=day - datetime.timedelta(days=7), end_date=day, df=True)
+        flags = {}
+        if raw is not None and not raw.empty:
+            rows = raw.loc[[as_date(d) == day for d in raw.index]]
+            if len(rows) == 1:
+                for code in codes:
+                    if code in rows.columns:
+                        value = rows[code].iloc[0]
+                        if not pd.isnull(value) and isinstance(value, (bool, np.bool_, int, float, np.integer, np.floating)) and value in (0, 1):
+                            flags[code] = bool(value)
+        for code in codes:
+            if code in flags:
+                continue
+            # Single-stock/single-day dict response avoids batch DataFrame omissions.
+            extra = get_extras('is_st', [code], start_date=day, end_date=day, df=False)
+            values = extra.get(code, []) if isinstance(extra, dict) else []
+            if len(values) == 1:
+                value = values[0]
+                if not pd.isnull(value) and isinstance(value, (bool, np.bool_, int, float, np.integer, np.floating)) and value in (0, 1):
+                    flags[code] = bool(value)
+        missing = [code for code in codes if code not in flags]
+        if missing:
+            raise ValueError('短线股票池ST状态缺失：日期 {}，股票 {}；批量查询及逐只补查后仍无有效数据，该日未写入，请稍后重试。'.format(day, ', '.join(missing)))
+        return flags
+
     def collect(day):
         days = [as_date(d) for d in get_trade_days(end_date=day, count=90)]
         if not days or days[-1] != day:
@@ -552,33 +581,42 @@ def _short_term_strategy(_apis, _config):
             raise ValueError('A股股票池为空，拒绝写入。')
         size = settings['batch_size']
         selected, evaluated, young = [], 0, 0
+        caps = {}
         batches = [codes[i:i+size] for i in range(0, len(codes), size)]
         for batch in _progress_items(batches, '{} 扫描股票'.format(day), lambda b: b[0]):
+            df = get_fundamentals(query(valuation.code, valuation.market_cap, valuation.pe_ratio, valuation.pb_ratio).filter(valuation.code.in_(batch)), date=day)
+            if df is not None:
+                caps.update({r['code']: r for _, r in df.iterrows()})
+            missing = [c for c in batch if finite(caps.get(c, {}).get('market_cap')) is None]
+            if missing:
+                raise ValueError('总市值缺失：日期 {}，股票 {}；该日未写入。'.format(day, ', '.join(missing)))
+            batch = [c for c in batch if finite(caps[c]['market_cap']) >= 30]
+            flags = read_st_flags(batch, day)
+            batch = [c for c in batch if not flags[c]]
+            if not batch:
+                continue
             raw = get_price(batch, start_date=days[0], end_date=day, frequency='daily',
                             fields=['open', 'high', 'low', 'close', 'volume'], fq='pre', skip_paused=False, panel=False)
-            st = get_extras('is_st', batch, start_date=day, end_date=day, df=True)
-            if st is None or st.empty or any(c not in st.columns or pd.isnull(st[c].iloc[-1]) for c in batch):
-                raise ValueError('ST状态缺失，拒绝写入不完整筛选。')
+            batch_selected = []
             for code in batch:
                 listing = as_date(securities.loc[code, 'start_date'])
                 frame = clean_history(raw, code, days, listing)
                 if len(frame) < 30:
                     young += 1  # 新股展示实际可用K线，不额外改变原战法的上市天数门槛。
                 evaluated += 1
-                methods = evaluate(frame, code, bool(st[code].iloc[-1]))
+                methods = evaluate(frame, code)
                 if not methods:
                     continue
                 last = frame.iloc[-1]
-                selected.append({'code': code, 'trade_date': day, 'name': str(securities.loc[code, 'display_name']),
+                batch_selected.append({'code': code, 'trade_date': day, 'name': str(securities.loc[code, 'display_name']),
                     'methods': methods, 'close': finite(last['close']), 'pct_change': finite(last['pct_chg']),
                     'volume': finite(last['volume']), 'bars': chart_bars(frame)})
+            selected.extend(batch_selected)
         picked = [r['code'] for r in selected]
-        industries, caps = {}, {}
+        industries = {}
         for batch in _progress_items([picked[i:i+size] for i in range(0, len(picked), size)], '补充行业与估值', lambda b: b[0]):
             industries.update(get_industry(batch, date=day) or {})
-            df = get_fundamentals(query(valuation.code, valuation.market_cap, valuation.pe_ratio, valuation.pb_ratio).filter(valuation.code.in_(batch)), date=day)
-            if df is not None:
-                caps.update({r['code']: r for _, r in df.iterrows()})
+
         for r in selected:
             industry = industries.get(r['code'], {}).get('sw_l2', {})
             cap = caps.get(r['code'], {})
@@ -586,14 +624,20 @@ def _short_term_strategy(_apis, _config):
                      pe=finite(cap.get('pe_ratio')), pb=finite(cap.get('pb_ratio')))
         meta = {'rule_version': RULE_VERSION, 'universe_count': len(codes), 'evaluated_count': evaluated,
                 'short_history_count': young, 'counts': {m: sum(m in r['methods'] for r in selected) for m in METHODS},
-                'ma_periods': list(MA_PERIODS), 'chart_days': 30, 'adjustment': 'pre', 'retention_trade_days': 3}
+                'ma_periods': list(MA_PERIODS), 'chart_days': 30, 'adjustment': 'pre', 'retention_trade_days': 3, 'exclude_st': True, 'min_market_cap': 30}
         return meta, selected
 
     def save_day(Session, day, meta, records):
         stamp = datetime.datetime.utcnow() + datetime.timedelta(hours=8)
         with session_scope(Session) as session:
-            if session.query(ShortTermRun).filter_by(trade_date=day).first() is not None:
+            previous = session.query(ShortTermRun).filter_by(trade_date=day).first()
+            if previous is not None and previous.payload.get('rule_version') == meta.get('rule_version'):
                 return False
+            # Replace older rules atomically; a failed collection never removes the old snapshot.
+            if previous is not None:
+                session.query(ShortTermStock).filter_by(trade_date=day).delete(synchronize_session=False)
+                session.delete(previous)
+                session.flush()
             for r in records:
                 payload = {k: v for k, v in r.items() if k != 'trade_date'}
                 # Validate JSON before entering the database driver (no NaN/Infinity).
@@ -621,7 +665,8 @@ def _short_term_strategy(_apis, _config):
                 for model in (ShortTermStock, ShortTermRun):
                     session.query(model).filter(model.trade_date < keep_days[0]).delete(synchronize_session=False)
                 session.commit()
-                existing = set(d for d, in session.query(ShortTermRun.trade_date).all())
+                existing = set(r.trade_date for r in session.query(ShortTermRun).all()
+                               if r.payload.get('rule_version') == RULE_VERSION)
             pending = [d for d in keep_days if d <= end and d not in existing]
             for day in _progress_items(pending, '短线选股交易日', str):
                 meta, records = collect(day)

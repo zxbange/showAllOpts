@@ -9,7 +9,7 @@ import '../styles/short-term.css'
 
 const methods = [
   { id: 'bukou' as ShortMethod, name: '补票龙', subtitle: '趋势中的回踩再起', icon: Waves, note: 'BBI向上 · 长RSV强势 · 短RSV回落再上行 · DIF为正' },
-  { id: 'redhover' as ShortMethod, name: '红悬停龙', subtitle: '涨停后的高位承接', icon: Flame, note: '前两日涨停 · 随后两日低点守住阈值 · 最新日未涨停 · 剔除ST' },
+  { id: 'redhover' as ShortMethod, name: '红悬停龙', subtitle: '涨停后的高位承接', icon: Flame, note: '前两日涨停 · 随后两日低点守住阈值 · 最新日未涨停' },
   { id: 'xuli' as ShortMethod, name: '蓄力龙', subtitle: '缩量整理后的突破', icon: Zap, note: '阳—阴—阳 · 缩量回撤后放量 · MA10 > MA20 > MA30 > MA60' },
 ]
 const fmt = (n: number | null | undefined, digits = 2) => n == null ? '—' : n.toLocaleString('zh-CN', { maximumFractionDigits: digits })
@@ -33,7 +33,7 @@ export function ShortTermPage() {
       </button>)}
     </div>
     <section className="short-toolbar">
-      <div><h2>{selected.name}<ArrowUpRight size={18} /></h2><p>{selected.note}</p></div>
+      <div><h2>{selected.name}<ArrowUpRight size={18} /></h2><p>{selected.note} · 统一剔除ST · 总市值≥30亿元</p></div>
       <div className="short-controls"><label>选股日期 <select aria-label="短线选股日期" value={day || data?.trade_date || ''}
         onChange={e => { setDay(e.target.value); setOffset(0) }}>
         {!data?.dates.length && <option value={day}>{day || '暂无快照'}</option>}
