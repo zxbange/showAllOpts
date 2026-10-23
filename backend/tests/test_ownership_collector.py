@@ -104,8 +104,10 @@ def test_full_collection_repeat_correction_future_filter_and_social(mod,monkeypa
         Holder(id=2,code=code,end_date=dt.date(2026,9,30),pub_date=dt.date(2026,10,22),share_holders=80,a_share_holders=70)])
     source_session.commit()
     fail_late = [False]
+    source_calls = []
     def run_query(q):
         params = q.statement.compile().params
+        source_calls.append(params)
         if fail_late[0] and params.get('period_end_1') == dt.date(2026,9,30) and params.get('symbol_1') == ['600002',other]:
             raise RuntimeError('synthetic late batch failure')
         with source.connect() as c:
@@ -139,7 +141,10 @@ def test_full_collection_repeat_correction_future_filter_and_social(mod,monkeypa
     with sessionmaker(bind=target)() as session:
         assert session.query(n.SyncHead).one().revision==revision_before
     monkeypatch.setattr(mod,'china_now',lambda:dt.datetime(2026,10,22,15))
+    source_calls.clear()
     assert len(n.run()) == 1  # Previously future-dated disclosure now becomes visible.
+    stock_queries = [q['symbol_1'] for q in source_calls if 'symbol_1' in q]
+    assert stock_queries and all(other not in values and '600002' not in values for values in stock_queries)
     monkeypatch.setattr(mod,'china_now',lambda:dt.datetime(2026,10,23,15))
     assert n.run().empty  # Another day without disclosures still skips.
     source_session.query(Floats).filter_by(id=11).update({'share_number':150});source_session.commit()
@@ -160,6 +165,17 @@ def test_full_collection_repeat_correction_future_filter_and_social(mod,monkeypa
         fail_late[0] = False
         assert len(n.run(full_refresh=True))==1
         assert n.run().empty
+    # A new A-class report drops the old stock and adds another: both need review.
+    source_session.add(Fund(id=4,code='A',symbol='600002',period_end=dt.date(2026,9,30),
+                           pub_date=dt.date(2026,10,23),report_type_id=403003,report_type='第三季度',shares=75,market_cap=150))
+    source_session.commit()
+    assert len(n.run()) >= 2
+    with sessionmaker(bind=target)() as session:
+        old = session.query(n.OwnershipReport).filter_by(code=code,report_date=dt.date(2026,9,30)).one()
+        new = session.query(n.OwnershipReport).filter_by(code=other,report_date=dt.date(2026,9,30)).one()
+        assert old.payload['categories']['public_fund'] is None
+        assert new.payload['categories']['public_fund']['shares'] == 75
+    assert n.run().empty
     source_session.close();source.dispose();target.dispose()
 
 
