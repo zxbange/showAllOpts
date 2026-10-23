@@ -235,5 +235,5 @@ test('individual row stop targets only that module', async ({ page }) => {
   await page.getByRole('button', { name: '停止抱团拥挤度同步', exact: true }).click()
   await expect(page.getByRole('button', { name: '停止抱团拥挤度同步', exact: true })).toBeDisabled()
   await expect(page.getByRole('button', { name: '停止行业动量同步', exact: true })).toBeEnabled()
-  await expect(page.getByText('已请求停止该模块，其余模块继续同步。保留成功快照和续传断点。')).toBeVisible()
+  await expect(page.getByText('已请求停止该模块，保留成功数据和断点；其余模块继续。')).toBeVisible()
 })

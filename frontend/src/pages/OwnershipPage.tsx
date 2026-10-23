@@ -5,7 +5,23 @@ import { getOwnership, searchOwnership, getSocialEntries } from '../api/client'
 import { useResource } from '../hooks/useResource'
 import { LoadingState, ErrorState, EmptyState } from '../components/States'
 import { OwnershipChart } from '../components/OwnershipChart'
+import type { SocialMode } from '../types/ownership'
 import '../styles/ownership.css'
+
+const socialModes: Record<SocialMode, { label: string; description: string }> = {
+  first: {
+    label: '股票首次出现社保持仓',
+    description: '上季无社保组合，本季有新进社保组合。比较相邻两季完整的十大流通股东名单，按新进组合估算市值降序；“首次”不代表历史首次买入。',
+  },
+  combination: {
+    label: '新增社保组合',
+    description: '本季出现上季名单中没有的社保组合，允许原有社保继续持有。比较相邻两季完整的十大流通股东名单，按新进组合估算市值降序；名单新进不代表首次买入。',
+  },
+  increase: {
+    label: '社保组合加仓',
+    description: '本季十大流通股东中全部社保组合的持股总数高于上季即入选（含上季为零）。两季名单与持股数须完整，按增加股数降序；送转股和名单变动也可能导致增加。',
+  },
+}
 
 const categories = [
   ['public_fund', '公募基金'],
@@ -83,7 +99,7 @@ function StockView({ code }: { code: string }) {
           <p>暂无股东户数记录。</p>
         )}
         <p className="ownership-note">
-          A 股户数缺失不以总户数代替；与上一条实际统计记录比较，不按固定季度填充。
+          A 股户数与上一条记录比较，缺失不以总户数代替。
         </p>
       </section>
       <div className="ownership-grid">
@@ -106,7 +122,7 @@ function StockView({ code }: { code: string }) {
                   title={label + '持仓趋势'}
                 />
               ) : (
-                <p className="ownership-missing">尚无该类机构披露记录，不代表实际持仓为零。</p>
+                <p className="ownership-missing">暂无披露记录，不代表持仓为零。</p>
               )}
             </section>
           )
@@ -119,7 +135,7 @@ function StockView({ code }: { code: string }) {
 
 function SocialView({ onSelect }: { onSelect: (code: string) => void }) {
   const [period, setPeriod] = useState('')
-  const [mode, setMode] = useState('first')
+  const [mode, setMode] = useState<SocialMode>('first')
   const [query, setQuery] = useState('')
   const loader = useCallback(
     (signal: AbortSignal) => getSocialEntries(period, mode, signal),
@@ -151,10 +167,10 @@ function SocialView({ onSelect }: { onSelect: (code: string) => void }) {
           </label>
           <label>
             筛选口径{' '}
-            <select aria-label="社保筛选口径" value={mode} onChange={(e) => setMode(e.target.value)}>
-              <option value="first">股票首次出现社保持仓</option>
-              <option value="combination">新增社保组合</option>
-              <option value="increase">社保组合加仓</option>
+            <select aria-label="社保筛选口径" value={mode} onChange={(e) => setMode(e.target.value as SocialMode)}>
+              {Object.entries(socialModes).map(([value, option]) => (
+                <option key={value} value={value}>{option.label}</option>
+              ))}
             </select>
           </label>
           <input
@@ -167,11 +183,7 @@ function SocialView({ onSelect }: { onSelect: (code: string) => void }) {
             刷新
           </button>
         </div>
-        <p className="ownership-note">
-          {mode === 'increase'
-            ? '比较相邻两季度前十大流通股东中全部社保组合的持股总数，合计增加即入选（含上季为零）。两期名单及持股数必须完整；按增加股数排序。不等同于实际净买入，可能受送转股及名单进出影响。'
-            : '“新进”指相对上一季度新进入十大流通股东名单，不代表首次买入。两期名单必须完整；按新进组合合计估算市值排序。'}
-        </p>
+        <p className="ownership-note ownership-rule">{socialModes[mode].description}</p>
         {loading ? (
           <LoadingState />
         ) : error ? (
@@ -215,14 +227,14 @@ function SocialView({ onSelect }: { onSelect: (code: string) => void }) {
                           <td>{r.current_ratio == null ? '—' : `${num(r.current_ratio, 3)}%`}</td>
                         </> : <>
                         <td>
-                          {r.new_combinations.map((m, i) => (
+                          {r.new_combinations?.map((m, i) => (
                             <div key={m.id || i}>{m.name}</div>
                           ))}
                         </td>
                         <td>{num(r.new_shares == null ? null : r.new_shares / 1e4, 2)}</td>
                         <td>
-                          {r.new_combinations.map((m, i) => (
-                            <div key={m.id || i}>{num(m.ratio, 3)}%</div>
+                          {r.new_combinations?.map((m, i) => (
+                            <div key={m.id || i}>{m.ratio == null ? '—' : `${num(m.ratio, 3)}%`}</div>
                           ))}
                         </td>
                         <td>
@@ -237,7 +249,7 @@ function SocialView({ onSelect }: { onSelect: (code: string) => void }) {
               </div>
             ) : (
               <p className="ownership-missing">
-                当前条件下暂无符合筛选口径的记录。未披露或名单不完整的股票不参与判定。
+                暂无匹配记录；未披露或名单不完整不参与判定。
               </p>
             )}
           </>
@@ -268,7 +280,7 @@ export function OwnershipPage() {
           <h1>
             个股机构持仓 <span className="heading-tag">筹码观察</span>
           </h1>
-          <p>从机构披露、股东户数到社保新进，观察持股结构的变化。</p>
+          <p>查询机构持仓、股东户数与季度社保变动。</p>
         </div>
         <Users size={32} />
       </div>
@@ -291,8 +303,7 @@ export function OwnershipPage() {
       ) : (
         <>
           <p className="ownership-note">
-            仅统计公开披露；公募季报与半年报 / 年报披露范围不同。非公募市值为期末未复权价格估算，产品 /
-            账户数量不等于管理机构家数。
+            公募季报与半年报、年报披露范围不同；非公募市值按期末不复权价格估算，账户数不等于机构家数。
           </p>
           <section className="ownership-panel">
             <label className="ownership-search">
@@ -323,15 +334,15 @@ export function OwnershipPage() {
               </div>
             ))}
             {query.trim() && query.trim() === term && !loading && !error && !data?.stocks.length && (
-              <p>暂无匹配股票。请先运行个股机构持仓采集脚本，再在“数据同步”中同步本模块。</p>
+              <p>暂无匹配股票；尚未采集的股票需先入库并同步。</p>
             )}
           </section>
           {code ? (
             <StockView key={code} code={code} />
           ) : (
             <EmptyState
-              title="选择一只股票，查看持仓全景"
-              description="支持代码和名称搜索；也可从社保新进列表进入个股。"
+              title="选择股票查看持仓"
+              description="输入代码或名称，或从社保列表进入。"
             />
           )}
         </>

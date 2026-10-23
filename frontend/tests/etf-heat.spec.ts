@@ -115,7 +115,7 @@ test('ETF heat retry and empty states', async ({ page }) => {
   await expect(page.getByRole('alert')).toContainText('同步尚未完成')
   failed = false
   await page.getByRole('button', { name: '重新加载' }).click()
-  await expect(page.getByRole('heading', { name: 'ETF热度尚未到达' })).toBeVisible()
+  await expect(page.getByRole('heading', { name: '暂无ETF热度数据' })).toBeVisible()
 })
 
 
@@ -126,6 +126,6 @@ test('empty scores explain missing data instead of appearing as zero', async ({ 
     items: items.map((i) => ({ ...i, score: null, rank: null, details: { status: 'missing', reason: '有效价格不足26期或当日停牌' } })),
   } }))
   await page.goto('/etf-momentum')
-  await expect(page.getByRole('status')).toContainText('当前快照的热度均为空，并非零分')
+  await expect(page.getByRole('status')).toContainText('热度缺失，并非零分')
   await expect(page.getByText('有效价格不足26期或当日停牌').first()).toBeVisible()
 })

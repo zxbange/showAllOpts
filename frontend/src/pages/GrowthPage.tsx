@@ -178,7 +178,7 @@ export function GrowthPage() {
           <h1>
             高增长 <span className="heading-tag">四类报告 · 双指标</span>
           </h1>
-          <p>年报、Q1、半年报、前三季分别检查。每类最新三期的归母净利润与基本 EPS 均连续两次同比增长 ≥ 20%，且最新一期均为正。按年报最近一次净利润增速降序排列。</p>
+          <p>年报、Q1、半年报、前三季各取最新三期：归母净利润和基本 EPS 连续两次同比增长均 ≥ 20%，最新一期均为正。按年报最新净利润增速降序。</p>
         </div>
         <div className="heading-actions">
           <span className="date-badge">
@@ -202,7 +202,7 @@ export function GrowthPage() {
       ) : !data?.snapshot ? (
         <EmptyState
           title="暂无高增长选股结果"
-          description="请先在聚宽运行高增长采集脚本，入库后在「数据同步」中同步高增长模块。"
+          description="请先在聚宽采集入库，再通过“数据同步”更新本模块。"
         />
       ) : (
         <>
@@ -260,7 +260,7 @@ export function GrowthPage() {
           {!data.items.length ? (
             <EmptyState
               title="本次暂无符合条件的股票"
-              description="采集已完成，当前没有股票同时满足四类报告的全部条件。"
+              description="本次无股票满足四类报告的全部条件。"
             />
           ) : !items.length ? (
             <EmptyState
@@ -303,8 +303,8 @@ export function GrowthPage() {
             <div>
               <h3>财报口径与计算规则</h3>
               <p>
-                同比增长率 =（本期 − 上期）/
-                |上期|。基期为零、指标缺失、同类报告年份不连续均不通过；历史亏损允许参与比较，但最新一期两项指标必须为正。各公司以截至采集日已披露的最新三期为准，报告年份可能不同。所有符合条件的股票都会展示。
+                同比 =（本期 − 上期）/ |上期|。基期为零、指标缺失或同类报告年份不连续均不入选。
+                允许历史亏损，最新一期两项均须为正。各公司取已披露的最新三期，报告年份可能不同。
               </p>
               <span>
                 图表金额为归母净利润，EPS 为基本每股收益；未披露数据不补零。更新时间{' '}

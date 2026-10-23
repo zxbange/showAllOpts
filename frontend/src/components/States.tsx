@@ -6,7 +6,7 @@ export function ErrorState({ message, retry }: { message: string; retry: () => v
       <span className="state-icon">
         <Unplug size={27} />
       </span>
-      <h2>数据暂时没有抵达</h2>
+      <h2>数据加载失败</h2>
       <p>{message}</p>
       <button className="button button-primary" onClick={retry}>
         <RefreshCw size={16} />
@@ -16,8 +16,8 @@ export function ErrorState({ message, retry }: { message: string; retry: () => v
   )
 }
 export function EmptyState({
-  title = '还没有行业动量数据',
-  description = '数据入库后，这里将呈现完整的行业热力分布。',
+  title = '暂无行业动量数据',
+  description = '请先在聚宽采集入库，再通过“数据同步”更新本模块。',
   search = false,
 }: {
   title?: string

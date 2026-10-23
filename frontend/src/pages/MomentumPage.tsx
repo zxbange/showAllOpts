@@ -43,7 +43,7 @@ export function MomentumPage() {
           <h1>
             行业动量<span className="heading-tag">申万二级</span>
           </h1>
-          <p>感知行业温度，捕捉强势板块的集体动向。</p>
+          <p>按申万二级行业比较强势股集中度。</p>
         </div>
         <div className="heading-actions">
           <span className="date-badge">
@@ -114,7 +114,7 @@ export function MomentumPage() {
                     {visible.length} / {industries.length}
                   </span>
                 </div>
-                <p>从左上到右下，热力值依次递减。点击行业，深入查看趋势。</p>
+                <p>按热力值降序，点击行业查看历史。</p>
               </div>
               <label className="search-box">
                 <Search size={16} />
@@ -201,7 +201,7 @@ export function MomentumPage() {
           </section>
           <p className="data-note">
             <Info size={13} />
-            图表展示数据库已入库结果；当天记录不代表日线已最终更新。分值衡量强势股聚集程度，不等同于行业收益率。
+            热力值衡量强势股集中度，不代表行业收益率。
           </p>
         </>
       )}

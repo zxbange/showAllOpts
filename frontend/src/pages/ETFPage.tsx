@@ -28,7 +28,7 @@ export function ETFPage() {
           <h1>
             ETF份额仪表盘<span className="heading-tag">申赎观察</span>
           </h1>
-          <p>沿着份额的增减，观察指数基金的规模变化。</p>
+          <p>跟踪沪深300、中证500 ETF 的总份额及每日增减。</p>
         </div>
         <div className="heading-actions">
           <span className="date-badge">
@@ -74,7 +74,7 @@ export function ETFPage() {
       ) : data && !data.end_date ? (
         <EmptyState
           title="暂无ETF份额数据"
-          description="请先在聚宽运行 ETF份额_数据库版.py，将份额数据写入同一数据库，再在「数据同步」中更新本地快照。"
+          description="请先在聚宽采集入库，再通过“数据同步”更新本模块。"
         />
       ) : (
         data && (
@@ -205,15 +205,13 @@ export function ETFPage() {
             <aside className="etf-method-note">
               <Info size={19} />
               <div>
-                <strong>读懂份额，而非价格</strong>
+                <strong>份额口径</strong>
                 <p>
-                  卡片日变动对比前一交易日；缺少前一日记录显示“—”。曲线变化率以区间内有数据基金的共同首个正份额日为基准。不同
-                  ETF 的数据可能不同步，以卡片日期为准；“待更新”表示落后于本组最新日期。
+                  日变动对比前一交易日，缺失显示“—”；曲线变化率以区间内基金共同首个正份额日为基准。
+                  “待更新”表示落后于本组最新日期，以各卡片日期为准。
                 </p>
                 <p>
-                  跟踪清单并非该指数的全部
-                  ETF。份额变化不等于价格涨跌或资金净流入；基金份额拆分等事件也可能造成跳变。首次采集最近
-                  300 个交易日，历史数据持续积累。
+                  清单不覆盖该指数全部 ETF。份额变化不等于价格涨跌或资金净流入，拆分也可能造成跳变。
                 </p>
               </div>
             </aside>

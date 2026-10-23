@@ -96,7 +96,7 @@ test('ownership error permits retry', async ({ page }) => {
 test('social increase shows aggregate quarter comparison', async ({ page }) => {
   await page.route('**/api/v1/institution-ownership/social-entries?*', r => r.fulfill({ json: {
     period: '2026-09-30', periods: ['2026-09-30'], comparable_count: 1, unknown_count: 0, collected_count: 1,
-    items: [{ ...stock, new_combinations: [], previous_shares: 1000000, current_shares: 1500000, change_shares: 500000, change_pct: 50, current_ratio: 1.9, pub_date: '2026-10-20' }],
+    items: [{ ...stock, previous_shares: 1000000, current_shares: 1500000, change_shares: 500000, change_pct: 50, current_ratio: 1.9, pub_date: '2026-10-20' }],
   } }))
   await page.goto('/institution-ownership')
   await page.getByRole('button', { name: '社保新进', exact: true }).click()
@@ -106,4 +106,62 @@ test('social increase shows aggregate quarter comparison', async ({ page }) => {
   await expect(page.getByRole('cell', { name: '50%', exact: true })).toBeVisible()
   await expect(page.getByRole('columnheader', { name: '本季度占流通股比例' })).toBeVisible()
   await expect(page.getByRole('cell', { name: '1.9%', exact: true })).toBeVisible()
+})
+
+
+test('social modes use their own response and explanation when switching', async ({ page }, info) => {
+  const errors: string[] = []
+  page.on('pageerror', error => errors.push(error.message))
+  let blockCombination = false
+  let releaseCombination!: () => void
+  const combinationGate = new Promise<void>(resolve => { releaseCombination = resolve })
+  let markCombinationRequested!: () => void
+  const combinationRequested = new Promise<void>(resolve => { markCombinationRequested = resolve })
+  await page.route('**/api/v1/institution-ownership/social-entries?*', async route => {
+    const mode = new URL(route.request().url()).searchParams.get('mode')
+    if (mode === 'combination' && blockCombination) {
+      markCombinationRequested()
+      await combinationGate
+    }
+    const row = mode === 'increase'
+      ? { ...stock, name: '加仓样本', previous_shares: 1000000, current_shares: 1500000,
+          change_shares: 500000, change_pct: 50, current_ratio: 1.9 }
+      : { ...stock, name: mode === 'first' ? '首次样本' : '新增样本',
+          new_combinations: [{ id: 'new', name: '全国社保基金一零一组合', ratio: 0.5 }],
+          new_shares: 1000000, new_market_value: 20000000 }
+    await route.fulfill({ json: { period: '2026-09-30', periods: ['2026-09-30'],
+      collected_count: 125, comparable_count: 100, unknown_count: 25, items: [row] } })
+  })
+  await page.goto('/institution-ownership?tab=social')
+  await expect(page.getByRole('button', { name: '首次样本', exact: true })).toBeVisible()
+  const mode = page.getByLabel('社保筛选口径')
+  await mode.selectOption('increase')
+  await expect(page.getByRole('button', { name: '加仓样本', exact: true })).toBeVisible()
+  await mode.selectOption('combination')
+  await expect(page.getByRole('button', { name: '新增样本', exact: true })).toBeVisible({ timeout: 5000 })
+  await expect(page.locator('.ownership-rule')).toContainText('本季出现上季名单中没有的社保组合')
+  await expect(page.locator('.ownership-summary')).toContainText('当前匹配 1 只')
+  await expect(page.getByText('仅统计公开披露', { exact: false })).toHaveCount(0)
+  await page.getByLabel('筛选社保股票').fill('无匹配')
+  await expect(page.locator('.ownership-summary')).toContainText('当前匹配 0 只')
+  await page.getByLabel('筛选社保股票').clear()
+  await mode.selectOption('first')
+  await expect(page.getByRole('button', { name: '首次样本', exact: true })).toBeVisible()
+  await expect(page.locator('.ownership-rule')).toContainText('上季无社保组合，本季有新进社保组合')
+  await mode.selectOption('increase')
+  await expect(page.getByRole('button', { name: '加仓样本', exact: true })).toBeVisible()
+  await expect(page.locator('.ownership-rule')).toContainText('全部社保组合的持股总数')
+  // A slow obsolete request must neither show stale rows nor replace the newest mode.
+  blockCombination = true
+  await mode.selectOption('combination')
+  await combinationRequested
+  await expect(page.getByLabel('正在加载数据')).toBeVisible()
+  await expect(page.getByRole('button', { name: '加仓样本', exact: true })).toHaveCount(0)
+  await mode.selectOption('first')
+  await expect(page.getByRole('button', { name: '首次样本', exact: true })).toBeVisible()
+  releaseCombination()
+  await page.getByRole('button', { name: '刷新', exact: true }).click()
+  await expect(page.getByRole('button', { name: '首次样本', exact: true })).toBeVisible()
+  expect(errors).toEqual([])
+  await page.screenshot({ path: `../.runtime/social-modes-${info.project.name}.png`, fullPage: true })
 })

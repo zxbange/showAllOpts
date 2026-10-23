@@ -1,6 +1,5 @@
 import { useLayoutEffect, useRef } from 'react'
 import {
-  Activity,
   ArrowUpRight,
   ChartNoAxesCombined,
   ChevronRight,
@@ -77,12 +76,6 @@ export function Layout() {
           })}
         </nav>
         <div className="sidebar-bottom">
-          <div className="sidebar-note">
-            <Activity size={18} />
-            <span>
-              让数据形成洞察<small>每一个变化，都值得看见。</small>
-            </span>
-          </div>
           <div className="sidebar-footer">
             <span className="status-dot" />
             研究工作台 <span>v1.0</span>

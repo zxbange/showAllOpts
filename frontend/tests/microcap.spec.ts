@@ -64,7 +64,7 @@ test('microcap module, metric selection, index overlay, range and financial char
     })
   })
   await page.goto('/')
-  await page.getByRole('link', { name: '进入微盘温度计', exact: true }).click()
+  await page.getByRole('link', { name: '进入微盘观察', exact: true }).click()
   await expect(page.getByRole('heading', { level: 1 })).toContainText('微盘温度计')
   await expect(page.locator('.stats-grid')).toContainText('60.0')
   await expect(page.locator('.trend-chart canvas')).toHaveCount(3)
@@ -81,7 +81,7 @@ test('microcap module, metric selection, index overlay, range and financial char
   await expect(page.locator('.trend-panel').first()).toContainText('2026.09.17')
   await expect(page.locator('.microcap-secondary')).toContainText('PE -5.00 倍')
   await expect(page.locator('.microcap-secondary')).toContainText('950 / 1000')
-  await expect(page.locator('.breadcrumb')).toContainText('微盘温度计')
+  await expect(page.locator('.breadcrumb')).toContainText('微盘观察')
   expect([...new Set(ranges)]).toEqual(['365', '0', '30'])
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(
     true,

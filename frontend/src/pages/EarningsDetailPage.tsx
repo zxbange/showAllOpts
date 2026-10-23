@@ -21,7 +21,7 @@ export function EarningsDetailPage() {
     <div className="page-enter earnings-page">
       <Link className="earnings-back" to={`/earnings-gap?period=${encodeURIComponent(period)}`}>
         <ArrowLeft size={16} />
-        返回观察名单
+        返回入选列表
       </Link>
       {loading ? (
         <LoadingState />
@@ -78,7 +78,7 @@ export function EarningsDetailPage() {
             </section>
             <div className="earnings-evidence-heading">
               <span className="section-eyebrow">FOLLOW THE EVIDENCE</span>
-              <h2>同一报告期，三类公告分别核查</h2>
+              <h2>同报告期公告</h2>
             </div>
             <div className="earnings-disclosures">
               {Object.entries(sourceNames).map(([kind, name]) => {
@@ -142,7 +142,7 @@ export function EarningsDetailPage() {
                           )}
                           <details className="earnings-raw">
                             <summary>查看数据源原始字段</summary>
-                            <p>保留源数据原值；未标准化字段的单位请以聚宽表说明为准。</p>
+                            <p>原始字段单位见聚宽表说明。</p>
                             <pre>{JSON.stringify(e.raw, null, 2)}</pre>
                           </details>
                         </article>

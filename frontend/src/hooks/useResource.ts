@@ -5,6 +5,7 @@ export function useResource<T>(loader: (signal: AbortSignal) => Promise<T>) {
   const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
   const [revision, setRevision] = useState(0)
+  const [request, setRequest] = useState({ loader, revision })
   const reload = useCallback(() => setRevision((value) => value + 1), [])
   useEffect(() => {
     window.addEventListener('data-cache-updated', reload)
@@ -12,6 +13,7 @@ export function useResource<T>(loader: (signal: AbortSignal) => Promise<T>) {
   }, [reload])
   useEffect(() => {
     const controller = new AbortController()
+    setRequest({ loader, revision })
     setLoading(true)
     setError(null)
     setData(null)
@@ -33,5 +35,12 @@ export function useResource<T>(loader: (signal: AbortSignal) => Promise<T>) {
       })
     return () => controller.abort()
   }, [loader, revision])
-  return { data, error, loading, reload }
+  // Effects run after render: never expose the previous query's data under new filters.
+  const current = request.loader === loader && request.revision === revision
+  return {
+    data: current ? data : null,
+    error: current ? error : null,
+    loading: !current || loading,
+    reload,
+  }
 }

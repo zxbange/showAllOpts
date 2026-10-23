@@ -1,7 +1,6 @@
 import { useCallback, useState } from 'react'
 import {
   ArrowLeft,
-  ArrowUpRight,
   CalendarDays,
   ChartNoAxesCombined,
   CircleDot,
@@ -42,7 +41,7 @@ export function IndustryPage() {
             {name}
             <span className="heading-tag">动量趋势</span>
           </h1>
-          <p>沿着时间，观察强势股票如何在行业中聚集与消散。</p>
+          <p>查看行业动量、排名及强势股数量的历史变化。</p>
         </div>
         <div className="heading-actions">
           <span className="date-badge">
@@ -165,12 +164,12 @@ export function IndustryPage() {
               <Info size={19} />
             </span>
             <div>
-              <h3>读懂这条曲线</h3>
+              <h3>计算口径</h3>
               <p>
                 动量 = 20 个交易日涨幅超过 20% 的股票数² ÷
-                行业成分股总数。分数越高，通常意味着行业内强势股票越集中；行业规模也会影响分数。
+                行业成分股总数，衡量强势股集中度，受行业规模影响。
               </p>
-              <span>缺失记录保留断点，不补零；整日全市场缺失需在采集端核查。</span>
+              <span>缺失记录留空，不补零。</span>
             </div>
           </div>
           <div className="observation-card">
@@ -180,9 +179,6 @@ export function IndustryPage() {
               <small>个数据点</small>
             </strong>
             <p>最近 {days} 个自然日 · 截至最新快照日期</p>
-            <span>
-              <ArrowUpRight size={14} /> 真实记录，连续观察
-            </span>
           </div>
         </section>
       )}

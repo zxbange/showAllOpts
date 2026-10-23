@@ -193,19 +193,19 @@ export function EarningsPage() {
             {!data.run ? (
               <EmptyState
                 title="本季度尚未采集"
-                description="请在聚宽运行 净利润断层_数据库版.py，写入同一数据库后，在「数据同步」中更新本地快照。不以旧季度数据代替本季度。"
+                description="请先在聚宽采集入库，再通过“数据同步”更新本模块。仅展示所选季度。"
               />
             ) : !data.items.length ? (
               <EmptyState
                 search
                 title={data.run.matched_count ? '没有匹配的股票' : '本季度暂未出现符合条件的股票'}
-                description="可调整筛选条件，或待新公告披露后重新运行聚宽采集程序。"
+                description="可调整条件；新增公告需采集并同步后显示。"
               />
             ) : (
               <section className="panel earnings-results">
                 <div className="panel-heading">
                   <div>
-                    <h2>本期观察名单</h2>
+                    <h2>本期入选股票</h2>
                     <p>利润增幅取触发信号的公告；预告显示增幅下限，估值为截止日快照。</p>
                   </div>
                   <span className="heading-tag">{data.total} 只</span>

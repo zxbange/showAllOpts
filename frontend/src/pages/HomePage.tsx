@@ -231,7 +231,7 @@ export function HomePage() {
       >
         <div className="directory-heading">
           <div>
-            <span className="section-eyebrow">EXPLORE YOUR WORKSPACE</span>
+            <span className="section-eyebrow">RESEARCH MODULES</span>
             <h1 id="directory-title">
               全部研究模块
               <span>{researchModules.length.toString().padStart(2, '0')}</span>
@@ -294,7 +294,6 @@ export function HomePage() {
                 <ModuleIllustration kind={module.illustration} />
                 <span className="research-english">{module.english}</span>
                 <h3>{module.name}</h3>
-                <strong className="research-question">{module.question}</strong>
                 <p>{module.description}</p>
                 <div className="research-tags">
                   {module.tags.map((tag) => (
@@ -313,7 +312,7 @@ export function HomePage() {
           <div className="directory-empty">
             <Search size={28} />
             <h3>没有找到匹配的模块</h3>
-            <p>试试“行业”“成交”或“微盘”，也可以重置筛选。</p>
+            <p>更换关键词或重置筛选。</p>
             <button
               className="button button-quiet"
               onClick={() => {

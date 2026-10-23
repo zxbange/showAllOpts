@@ -194,19 +194,6 @@ svg {
 .sidebar-bottom {
   margin-top: auto;
 }
-.sidebar-note {
-  display: flex;
-  gap: 10px;
-  color: var(--muted);
-  font-size: 12px;
-  padding: 20px 8px 25px;
-}
-.sidebar-note small {
-  display: block;
-  font-size: 10px;
-  color: var(--muted);
-  margin-top: 7px;
-}
 .sidebar-footer {
   border-top: 1px solid var(--border);
   padding: 22px 8px 0;
@@ -1155,7 +1142,6 @@ svg {
   .brand > span:last-child,
   .nav-label,
   .main-nav a > span,
-  .sidebar-note,
   .sidebar-footer {
     display: none;
   }

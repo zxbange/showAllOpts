@@ -9,7 +9,7 @@ import '../styles/short-term.css'
 
 const methods = [
   { id: 'bukou' as ShortMethod, name: '补票龙', subtitle: '趋势中的回踩再起', icon: Waves, note: 'BBI向上 · 长RSV强势 · 短RSV回落再上行 · DIF为正' },
-  { id: 'redhover' as ShortMethod, name: '红悬停龙', subtitle: '涨停后的高位承接', icon: Flame, note: '前两日涨停 · 随后两日低点守住阈值 · 最新日未涨停' },
+  { id: 'redhover' as ShortMethod, name: '红悬停龙', subtitle: '涨停后的高位承接', icon: Flame, note: '两日前涨停 · 后两日低点不低于该涨停价 · 当日未涨停' },
   { id: 'xuli' as ShortMethod, name: '蓄力龙', subtitle: '缩量整理后的突破', icon: Zap, note: '阳—阴—阳 · 缩量回撤后放量 · MA10 > MA20 > MA30 > MA60' },
 ]
 const fmt = (n: number | null | undefined, digits = 2) => n == null ? '—' : n.toLocaleString('zh-CN', { maximumFractionDigits: digits })
@@ -27,7 +27,7 @@ export function ShortTermPage() {
         {!data?.dates.length && <option value={day}>{day || '暂无快照'}</option>}
         {data?.dates.map(d => <option key={d}>{d}</option>)}
       </select></label><button className="button button-quiet" onClick={reload} disabled={loading} aria-label="刷新短线选股"><RefreshCw size={16} /></button></div></div>
-        <p>把信号放回走势里，观察价格、均线与量能的配合。</p></div><CandlestickChart size={32} />
+        <p>按三种形态筛选股票，查看入选时的K线与均线。</p></div><CandlestickChart size={32} />
     </div>
 
     <div className="short-methods" role="tablist" aria-label="短线选股战法">
@@ -42,9 +42,9 @@ export function ShortTermPage() {
 
     </section>
     {loading ? <LoadingState /> : error ? <ErrorState message={error} retry={() => { setDay(''); setOffset(0); reload() }} /> : !data?.trade_date ?
-      <EmptyState title="尚未采集短线选股" description="在聚宽运行短线选股采集脚本，再通过数据同步加载本模块。" /> :
+      <EmptyState title="尚未采集短线选股" description="请先在聚宽采集入库，再通过“数据同步”更新本模块。" /> :
       <><p className="short-summary">{data.trade_date} · 扫描 {fmt(data.meta.universe_count, 0)} 只 · {selected.name}入选 {data.total} 只</p>
-      {!data.items.length ? <EmptyState title="本日暂无符合条件的股票" description="该日筛选已完成，可以切换其他战法或日期查看。" /> :
+      {!data.items.length ? <EmptyState title="本日暂无符合条件的股票" description="可切换战法或日期。" /> :
         <div className="short-stock-grid">{data.items.map(stock => <article key={stock.code} className="short-stock-card">
           <header><div><h3>{stock.name}<small>{stock.code}</small></h3><span>{stock.industry || '暂无行业'}</span></div>
             <div className={`short-price ${(stock.pct_change ?? 0) >= 0 ? 'up' : 'down'}`}><strong>{fmt(stock.close)}</strong><small>{(stock.pct_change ?? 0) > 0 ? '+' : ''}{fmt(stock.pct_change)}%</small></div></header>

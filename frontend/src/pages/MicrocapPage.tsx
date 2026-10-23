@@ -34,7 +34,7 @@ export function MicrocapPage() {
           <h1>
             微盘温度计<span className="heading-tag">估值 · 交易 · 温度</span>
           </h1>
-          <p>从微盘股的估值与交易集中度，观察温度变化和等权指数走势。</p>
+          <p>市值最小 1000 只股票的估值与交易拥挤度，每 5 个交易日采样。</p>
         </div>
         <div className="heading-actions">
           <span className="date-badge">
@@ -58,7 +58,7 @@ export function MicrocapPage() {
       ) : !latest ? (
         <EmptyState
           title="暂无微盘温度数据"
-          description="请先在聚宽运行微盘温度计_数据库版.py，写入同一数据库后，在「数据同步」中更新本地快照。"
+          description="请先在聚宽采集入库，再通过“数据同步”更新本模块。"
         />
       ) : (
         data && (
@@ -94,7 +94,7 @@ export function MicrocapPage() {
               <div className="temperature-heading">
                 <div>
                   <span className="section-eyebrow">TEMPERATURE COMPOSITION</span>
-                  <h2>温度来自哪里</h2>
+                  <h2>温度构成</h2>
                 </div>
                 <span>每 {latest.sample_step} 个交易日采样</span>
               </div>
@@ -253,17 +253,15 @@ export function MicrocapPage() {
           <Info size={19} />
         </span>
         <div>
-          <h3>读懂这支温度计</h3>
+          <h3>指标口径</h3>
           <p>
             剔除北交所、ST 和上市不足 250 个自然日的股票，在数据完整的股票中选择市值最小的 1000
             只。综合温度 = 相对估值历史分位 × 50% + 换手率拥挤度历史分位 × 25% +
             成交额拥挤度历史分位 × 25%，页面按 0–100 展示。
           </p>
           <span>
-            分位以 2021
-            年以来截至当期的采样值计算，相同值取平均排名；切换图表范围不会重算分位。对照组为经过相同筛选与数据清洗后的股票，并非全部
-            A
-            股。历史样本较少时分位参考有限。指数按上期成分股等权收益续算；利润增速缺失保留断点，不补零。当天数据可能尚未收盘，建议收盘后采集。
+            分位基于 2021 年以来截至当期的采样值，相同值取平均排名，不随图表范围重算。
+            对照组采用相同筛选；指数按上期成分股等权收益续算。缺失值不补零。
           </span>
         </div>
       </section>

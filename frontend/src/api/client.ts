@@ -1,3 +1,4 @@
+import type { SocialMode } from '../types/ownership'
 import type { GrowthOverview } from '../types/growth'
 import type { DividendOverview } from '../types/dividend'
 import type { BreadthHistory } from '../types/breadth'
@@ -105,7 +106,7 @@ export const getOwnership = (code: string, signal?: AbortSignal) =>
     '/institution-ownership/stocks/' + encodeURIComponent(code),
     signal,
   )
-export const getSocialEntries = (period: string, mode: string, signal?: AbortSignal) =>
+export const getSocialEntries = (period: string, mode: SocialMode, signal?: AbortSignal) =>
   request<import('../types/ownership').SocialEntries>(
     '/institution-ownership/social-entries?' +
       new URLSearchParams({ ...(period ? { period } : {}), mode }),

@@ -37,15 +37,17 @@ export interface SocialMember {
   ratio: number | null
   market_value: number | null
 }
+export type SocialMode = 'first' | 'combination' | 'increase'
+
 export interface SocialEntry extends OwnershipStock {
   previous_shares?: number | null
   current_shares?: number | null
   current_ratio?: number | null
   change_shares?: number | null
   change_pct?: number | null
-  new_combinations: SocialMember[]
-  new_shares: number | null
-  new_market_value: number | null
+  new_combinations?: SocialMember[]
+  new_shares?: number | null
+  new_market_value?: number | null
   report_date: string
   pub_date: string | null
 }

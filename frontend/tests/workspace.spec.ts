@@ -74,7 +74,7 @@ test('home → heatmap → industry curve, search, range and return', async ({ p
   page.on('pageerror', (error) => errors.push(error.message))
   await page.goto('/')
   await expect(page.getByRole('heading', { name: /全部研究模块/ })).toBeVisible()
-  await page.getByRole('link', { name: '进入行业动量' }).click()
+  await page.getByRole('link', { name: '进入动量观察', exact: true }).click()
   await expect(page.locator('.heat-cell')).toHaveCount(127)
   await expect(page.locator('.heat-cell').first()).toContainText('32.00')
   await expect(page.locator('.heat-cell').last()).toContainText('0.00')
@@ -126,7 +126,7 @@ test('database errors and empty snapshots have distinct states', async ({ page }
     route.fulfill({ json: { ...snapshot, trade_date: null, industries: [] } }),
   )
   await page.getByRole('button', { name: '重新加载' }).click()
-  await expect(page.getByRole('heading', { name: '还没有行业动量数据' })).toBeVisible()
+  await expect(page.getByRole('heading', { name: '暂无行业动量数据' })).toBeVisible()
 })
 
 test('unknown industry provides a recoverable error', async ({ page }) => {

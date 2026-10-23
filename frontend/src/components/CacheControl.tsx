@@ -66,7 +66,7 @@ export function CacheControl() {
     setMessage('')
     try {
       await refreshCache(module || null)
-      setMessage('同步任务已启动，完成后页面会自动读取新快照。')
+      setMessage('同步已启动，完成后自动更新页面。')
       await load()
     } catch (reason) {
       setMessage(reason instanceof Error ? reason.message : '无法启动同步。')
@@ -79,7 +79,7 @@ export function CacheControl() {
     setStopping(moduleId)
     try {
       await cancelCache(status.run_id, moduleId)
-      setMessage('已请求停止该模块，其余模块继续同步。保留成功快照和续传断点。')
+      setMessage('已请求停止该模块，保留成功数据和断点；其余模块继续。')
       await load()
     } catch (reason) {
       setMessage(reason instanceof Error ? reason.message : '无法停止同步。')
@@ -180,7 +180,7 @@ export function CacheControl() {
                     {item.cancelling || stopping === item.id ? '正在停止…' : '停止'}
                   </button>
                   )}
-                  {item.cancelling && <small>等待安全边界停止</small>}
+                  {item.cancelling && <small>等待当前操作结束</small>}
                   </div>
                 </div>
               ))}
@@ -196,7 +196,7 @@ export function CacheControl() {
                 <Database size={17} />
                 <strong>从数据库同步</strong>
               </div>
-              <p>选择全部模块或指定模块，点击即可同步最新数据。</p>
+              <p>可同步全部模块或指定模块。</p>
               <div className="cache-fields">
                 <label>
                   同步范围
@@ -227,7 +227,7 @@ export function CacheControl() {
               )}
             </form>
             <p className="cache-footnote">
-              百分比按执行阶段推进，不代表剩余时间比例；大表读取时可能停留，行数仍会更新。同步时间不等于数据交易日；模块页面会显示实际数据日期。页面上的刷新按钮重新读取当前快照。
+              百分比表示阶段进度，并非剩余时间；大表读取时可暂时停留。数据日期以模块页面为准。“刷新”只读取本地数据，“同步”才从数据库更新。
             </p>
           </>
         )}

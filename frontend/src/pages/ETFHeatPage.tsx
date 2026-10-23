@@ -42,7 +42,7 @@ export function ETFHeatPage() {
           <h1>
             ETF动量热度<span className="heading-tag">收盘观察</span>
           </h1>
-          <p>穿过不同市场与资产，观察趋势的强弱和持续性。</p>
+          <p>按年化趋势收益率 × R² 排序，比较 ETF / LOF 动量。</p>
         </div>
         <div className="heading-actions">
           <span className="date-badge">
@@ -65,8 +65,8 @@ export function ETFHeatPage() {
         <ErrorState message={error} retry={reload} />
       ) : !data?.trade_date || !items.length ? (
         <EmptyState
-          title="ETF热度尚未到达"
-          description="在聚宽运行 ETF 动量热度采集，再通过数据同步更新此模块。"
+          title="暂无ETF热度数据"
+          description="请先在聚宽采集入库，再通过“数据同步”更新本模块。"
         />
       ) : (
         <>
@@ -102,14 +102,14 @@ export function ETFHeatPage() {
           </div>
           {valid.length === 0 && (
             <div className="etf-method-note" role="status">
-              当前快照的热度均为空，并非零分。请在聚宽运行最新版 ETF 动量热度采集脚本补算，完成后在“数据同步”中同步 ETF 动量热度模块。
+              热度缺失，并非零分。请运行最新版采集脚本补算，再同步本模块。
             </div>
           )}
           <section className="panel heatmap-section">
             <div className="panel-heading">
               <div>
                 <h2>ETF 热力全景</h2>
-                <p>从左上到右下按原始得分递减，点击基金查看走势。</p>
+                <p>按热度降序，点击基金查看历史。</p>
               </div>
               <label className="search-box">
                 <Search size={16} />
@@ -187,8 +187,7 @@ export function ETFHeatPage() {
             </div>
           </section>
           <div className="etf-method-note">
-            历史回补使用当前候选池，不代表历史每天实际入选名单。聚宽采集行情并计算热度后入库，项目同步结果展示。LOF
-            采用已披露的份额类别净资产，规模可能有披露延迟。
+            历史回补使用当前候选池，不代表当时入选名单。LOF 规模取已披露的份额类别净资产，可能滞后。
           </div>
         </>
       )}
@@ -223,7 +222,7 @@ export function ETFHeatDetailPage() {
         <div>
           <span className="section-eyebrow">ETF TREND / {code}</span>
           <h1>{data?.name ?? 'ETF动量走势'}</h1>
-          <p>沿着同一只基金的时间线，观察趋势与热度变化。</p>
+          <p>查看基金热度与收盘价的历史变化。</p>
         </div>
         <button
           className="button button-quiet icon-button"
@@ -259,7 +258,7 @@ export function ETFHeatDetailPage() {
               icon={<CheckCircle2 size={18} />}
               label="趋势拟合 R²"
               value={number(last?.r2)}
-              note="沿用原策略的加权公式"
+              note="加权回归拟合度"
             />
             <StatCard
               icon={<Layers size={18} />}
@@ -299,7 +298,7 @@ export function ETFHeatDetailPage() {
             <div className="panel-heading">
               <div>
                 <h2>收盘价（不复权）</h2>
-                <p>展示实际收盘价格；热度使用后复权收盘价计算，避免分红、拆分造成的价格跳变。</p>
+                <p>价格图为不复权收盘价；热度使用后复权价格计算。</p>
               </div>
             </div>
             <TrendChart

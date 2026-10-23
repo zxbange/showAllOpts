@@ -43,7 +43,7 @@ export function DividendPage() {
           <h1>
             高股息选股 <span className="heading-tag">双策略 · TOP 25</span>
           </h1>
-          <p>把分红回报、估值与盈利质量，放在同一张清单中观察。</p>
+          <p>纯高股息与高股息低估值，两种口径各取前 25 只。</p>
         </div>
         <div className="heading-actions">
           <span className="date-badge">
@@ -67,7 +67,7 @@ export function DividendPage() {
       ) : !data?.snapshot ? (
         <EmptyState
           title="暂无高股息选股结果"
-          description="请先在聚宽运行高股息选股_数据库版.py，或新版批量采集脚本，完成入库后，在「数据同步」中更新本地快照。"
+          description="请先在聚宽采集入库，再通过“数据同步”更新本模块。"
         />
       ) : (
         <>
@@ -173,7 +173,7 @@ export function DividendPage() {
             {!group?.items.length ? (
               <EmptyState
                 title="本组暂无符合条件的股票"
-                description="采集已完成；当前没有满足全部条件的股票，不使用其他股票补足。"
+                description="本次无股票满足全部条件。"
               />
             ) : !items.length ? (
               <EmptyState
@@ -279,9 +279,8 @@ export function DividendPage() {
                 25；不附加第一组的成长条件。分红比例均以所选交易日总市值为分母，三年累计比例未年化。
               </p>
               <span>
-                两个方法均允许科创板、停牌及涨跌停股票入选；仍剔除 4、8 开头及 ST / 名称含
-                ST、*、退的股票。停牌时收盘价使用数据源填充值。仅做选股展示，不下单。每次采集重算最近完整交易日，两组结果一次事务替换；失败保留旧结果。财务指标使用各股票截至当日已披露数据，报告期可能不同；缺失指标显示
-                —。
+                两组均剔除 4、8 开头、ST 及名称含 ST、*、退的股票，保留科创板、停牌和涨跌停股票。
+                财务数据取当日已披露值，报告期可能不同；停牌价使用填充值，缺失指标显示“—”。
               </span>
             </div>
           </section>
