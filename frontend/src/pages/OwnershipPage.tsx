@@ -128,118 +128,122 @@ function SocialView({ onSelect }: { onSelect: (code: string) => void }) {
   const { data, error, loading, reload } = useResource(loader)
   const items = data?.items.filter((r) => r.code.includes(query) || r.name.includes(query)) || []
   return (
-    <section className="ownership-panel">
-      <div className="ownership-controls">
-        <label>
-          报告期{' '}
-          <select
-            aria-label="社保报告期"
-            value={period || data?.period || ''}
-            onChange={(e) => setPeriod(e.target.value)}
-          >
-            {data?.periods.map((p) => (
-              <option key={p}>{p}</option>
-            ))}
-          </select>
-        </label>
-        <label>
-          筛选口径{' '}
-          <select aria-label="社保筛选口径" value={mode} onChange={(e) => setMode(e.target.value)}>
-            <option value="first">股票首次出现社保持仓</option>
-            <option value="combination">新增社保组合</option>
-            <option value="increase">社保组合加仓</option>
-          </select>
-        </label>
-        <input
-          aria-label="筛选社保股票"
-          placeholder="代码或股票名称"
-          value={query}
-          onChange={(e) => setQuery(e.target.value)}
-        />
-        <button className="button button-quiet" onClick={reload} disabled={loading}>
-          刷新
-        </button>
-      </div>
-      <p className="ownership-note">
-        {mode === 'increase'
-          ? '比较相邻两季度前十大流通股东中全部社保组合的持股总数，合计增加即入选（含上季为零）。两期名单及持股数必须完整；按增加股数排序。不等同于实际净买入，可能受送转股及名单进出影响。'
-          : '“新进”指相对上一季度新进入十大流通股东名单，不代表首次买入。两期名单必须完整；按新进组合合计估算市值排序。'}
-      </p>
-      {loading ? (
-        <LoadingState />
-      ) : error ? (
-        <ErrorState message={error} retry={reload} />
-      ) : (
-        <>
-          <p>
-            已采集 {data?.collected_count || 0} 只 · 可比较 {data?.comparable_count || 0} 只 ·
-            无法判定 {data?.unknown_count || 0} 只 · 当前匹配 {items.length} 只
-          </p>
-          {items.length ? (
-            <div className="ownership-table-wrap">
-              <table className="ownership-table">
-                <thead>
-                  <tr>
-                    <th>股票 / 行业</th>
-                    {mode === 'increase' ? <>
-                      <th>上季度合计（万股）</th><th>本季度合计（万股）</th>
-                      <th>增加股数（万股）</th><th>增幅</th><th>本季度占流通股比例</th>
-                    </> : <>
-                    <th>新进社保组合</th>
-                    <th>持股数量（万股）</th>
-                    <th>占流通股比例</th>
-                    <th>估算市值（亿元）</th>
-                    </>}
-                    <th>披露日期</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {items.map((r) => (
-                    <tr key={r.code}>
-                      <td>
-                        <button className="ownership-stock-link" onClick={() => onSelect(r.code)}>
-                          {r.name}
-                        </button>
-                        <small>
-                          {r.code} · {r.industry || '暂无行业'}
-                        </small>
-                      </td>
-                      {mode === 'increase' ? <>
-                        <td>{num(r.previous_shares == null ? null : r.previous_shares / 1e4, 2)}</td>
-                        <td>{num(r.current_shares == null ? null : r.current_shares / 1e4, 2)}</td>
-                        <td>{num(r.change_shares == null ? null : r.change_shares / 1e4, 2)}</td>
-                        <td>{r.change_pct == null ? '上季为零' : `${num(r.change_pct, 2)}%`}</td>
-                        <td>{r.current_ratio == null ? '—' : `${num(r.current_ratio, 3)}%`}</td>
-                      </> : <>
-                      <td>
-                        {r.new_combinations.map((m, i) => (
-                          <div key={m.id || i}>{m.name}</div>
-                        ))}
-                      </td>
-                      <td>{num(r.new_shares == null ? null : r.new_shares / 1e4, 2)}</td>
-                      <td>
-                        {r.new_combinations.map((m, i) => (
-                          <div key={m.id || i}>{num(m.ratio, 3)}%</div>
-                        ))}
-                      </td>
-                      <td>
-                        {num(r.new_market_value == null ? null : r.new_market_value / 1e8, 3)}
-                      </td>
-                      </>}
-                      <td>{r.pub_date || '未知'}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          ) : (
-            <p className="ownership-missing">
-              当前条件下暂无符合筛选口径的记录。未披露或名单不完整的股票不参与判定。
-            </p>
-          )}
-        </>
+    <>
+      {!loading && !error && (
+        <p className="ownership-summary" aria-live="polite">
+          已采集 {data?.collected_count || 0} 只 · 可比较 {data?.comparable_count || 0} 只 ·
+          无法判定 {data?.unknown_count || 0} 只 · 当前匹配 {items.length} 只
+        </p>
       )}
-    </section>
+      <section className="ownership-panel">
+        <div className="ownership-controls">
+          <label>
+            报告期{' '}
+            <select
+              aria-label="社保报告期"
+              value={period || data?.period || ''}
+              onChange={(e) => setPeriod(e.target.value)}
+            >
+              {data?.periods.map((p) => (
+                <option key={p}>{p}</option>
+              ))}
+            </select>
+          </label>
+          <label>
+            筛选口径{' '}
+            <select aria-label="社保筛选口径" value={mode} onChange={(e) => setMode(e.target.value)}>
+              <option value="first">股票首次出现社保持仓</option>
+              <option value="combination">新增社保组合</option>
+              <option value="increase">社保组合加仓</option>
+            </select>
+          </label>
+          <input
+            aria-label="筛选社保股票"
+            placeholder="代码或股票名称"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+          />
+          <button className="button button-quiet" onClick={reload} disabled={loading}>
+            刷新
+          </button>
+        </div>
+        <p className="ownership-note">
+          {mode === 'increase'
+            ? '比较相邻两季度前十大流通股东中全部社保组合的持股总数，合计增加即入选（含上季为零）。两期名单及持股数必须完整；按增加股数排序。不等同于实际净买入，可能受送转股及名单进出影响。'
+            : '“新进”指相对上一季度新进入十大流通股东名单，不代表首次买入。两期名单必须完整；按新进组合合计估算市值排序。'}
+        </p>
+        {loading ? (
+          <LoadingState />
+        ) : error ? (
+          <ErrorState message={error} retry={reload} />
+        ) : (
+          <>
+            {items.length ? (
+              <div className="ownership-table-wrap">
+                <table className="ownership-table">
+                  <thead>
+                    <tr>
+                      <th>股票 / 行业</th>
+                      {mode === 'increase' ? <>
+                        <th>上季度合计（万股）</th><th>本季度合计（万股）</th>
+                        <th>增加股数（万股）</th><th>增幅</th><th>本季度占流通股比例</th>
+                      </> : <>
+                      <th>新进社保组合</th>
+                      <th>持股数量（万股）</th>
+                      <th>占流通股比例</th>
+                      <th>估算市值（亿元）</th>
+                      </>}
+                      <th>披露日期</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {items.map((r) => (
+                      <tr key={r.code}>
+                        <td>
+                          <button className="ownership-stock-link" onClick={() => onSelect(r.code)}>
+                            {r.name}
+                          </button>
+                          <small>
+                            {r.code} · {r.industry || '暂无行业'}
+                          </small>
+                        </td>
+                        {mode === 'increase' ? <>
+                          <td>{num(r.previous_shares == null ? null : r.previous_shares / 1e4, 2)}</td>
+                          <td>{num(r.current_shares == null ? null : r.current_shares / 1e4, 2)}</td>
+                          <td>{num(r.change_shares == null ? null : r.change_shares / 1e4, 2)}</td>
+                          <td>{r.change_pct == null ? '上季为零' : `${num(r.change_pct, 2)}%`}</td>
+                          <td>{r.current_ratio == null ? '—' : `${num(r.current_ratio, 3)}%`}</td>
+                        </> : <>
+                        <td>
+                          {r.new_combinations.map((m, i) => (
+                            <div key={m.id || i}>{m.name}</div>
+                          ))}
+                        </td>
+                        <td>{num(r.new_shares == null ? null : r.new_shares / 1e4, 2)}</td>
+                        <td>
+                          {r.new_combinations.map((m, i) => (
+                            <div key={m.id || i}>{num(m.ratio, 3)}%</div>
+                          ))}
+                        </td>
+                        <td>
+                          {num(r.new_market_value == null ? null : r.new_market_value / 1e8, 3)}
+                        </td>
+                        </>}
+                        <td>{r.pub_date || '未知'}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            ) : (
+              <p className="ownership-missing">
+                当前条件下暂无符合筛选口径的记录。未披露或名单不完整的股票不参与判定。
+              </p>
+            )}
+          </>
+        )}
+      </section>
+    </>
   )
 }
 
@@ -282,14 +286,14 @@ export function OwnershipPage() {
           社保新进
         </button>
       </div>
-      <p className="ownership-note">
-        仅统计公开披露；公募季报与半年报 / 年报披露范围不同。非公募市值为期末未复权价格估算，产品 /
-        账户数量不等于管理机构家数。
-      </p>
       {tab === 'social' ? (
         <SocialView onSelect={select} />
       ) : (
         <>
+          <p className="ownership-note">
+            仅统计公开披露；公募季报与半年报 / 年报披露范围不同。非公募市值为期末未复权价格估算，产品 /
+            账户数量不等于管理机构家数。
+          </p>
           <section className="ownership-panel">
             <label className="ownership-search">
               <Search size={20} />
