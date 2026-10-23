@@ -120,7 +120,7 @@ export function CrowdingChart({
               symbolSize: 48,
               label: {
                 formatter: (p: { value: number }) => Number(p.value).toFixed(1) + '%',
-                fontSize: 10,
+                fontSize: 12,
               },
               data: points.length
                 ? [

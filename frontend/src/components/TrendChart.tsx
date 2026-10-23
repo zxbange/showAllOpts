@@ -77,7 +77,7 @@ export function TrendChart({
           axisTick: { show: false },
           axisLabel: {
             color: chartColors.muted,
-            fontSize: 11,
+            fontSize: 12,
             hideOverlap: true,
             formatter: (value: string) => value.slice(5).replace('-', '/'),
           },
@@ -86,7 +86,7 @@ export function TrendChart({
           type: 'value',
           min: allowNegative ? undefined : 0,
           splitNumber: 4,
-          axisLabel: { color: chartColors.muted, fontSize: 11 },
+          axisLabel: { color: chartColors.muted, fontSize: 12 },
           splitLine: { lineStyle: { color: chartColors.grid, type: 'dashed' } },
         },
         dataZoom: [

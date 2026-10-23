@@ -25,7 +25,7 @@
   box-shadow: 0 8px 24px #a56d4112;
 }
 .dividend-method.selected {
-  background: linear-gradient(120deg, #bc4535, #d76a48);
+  background: linear-gradient(120deg, #b94330, #b94b34);
   color: #fff;
   border-color: transparent;
   box-shadow: 0 10px 26px #bd463526;
@@ -37,16 +37,16 @@
   flex: 1;
 }
 .dividend-method small {
-  font-size: 10px;
+  font-size: 12px;
   letter-spacing: 1.5px;
-  opacity: 0.8;
+  opacity: 1;
 }
 .dividend-method strong {
   font-size: 22px;
 }
 .dividend-method em {
   font-style: normal;
-  font-size: 12px;
+  font-size: 13px;
 }
 .dividend-method > b {
   font-size: 32px;
@@ -89,7 +89,7 @@
   color: var(--text);
   width: 100%;
   font: inherit;
-  font-size: 13px;
+  font-size: 14px;
 }
 .dividend-search:focus-within {
   outline: 2px solid var(--accent);
@@ -112,13 +112,13 @@
   width: 100%;
   border-collapse: collapse;
   white-space: nowrap;
-  font-size: 13px;
+  font-size: 14px;
 }
 .dividend-table th {
   text-align: left;
   color: var(--muted);
   font-weight: 500;
-  font-size: 11px;
+  font-size: 13px;
   padding: 16px 18px;
   background: #f7f2ec;
 }
@@ -142,7 +142,7 @@
 .dividend-stock small {
   display: flex;
   gap: 8px;
-  font-size: 10px;
+  font-size: 12px;
   color: var(--muted);
 }
 .dividend-stock small em {
@@ -151,7 +151,7 @@
   background: #e9f5f0;
   border-radius: 4px;
   padding: 1px 4px;
-  font-size: 9px;
+  font-size: 12px;
 }
 .dividend-rank {
   color: var(--muted);

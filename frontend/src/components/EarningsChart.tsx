@@ -9,6 +9,7 @@ import {
   AriaComponent,
 } from 'echarts/components'
 import { CanvasRenderer } from 'echarts/renderers'
+import { chartColors } from '../lib/chartTheme'
 import type { EarningsDetail } from '../types/earnings'
 
 use([
@@ -27,17 +28,20 @@ export function EarningsChart({ data }: { data: EarningsDetail }) {
     if (!element.current) return
     const chart = init(element.current)
     chart.setOption({
+      textStyle: { color: chartColors.text, fontSize: 13 },
       animation: !window.matchMedia('(prefers-reduced-motion: reduce)').matches,
       aria: { enabled: true, description: '信号附近日线走势' },
       grid: { left: 65, right: 24, top: 40, bottom: 65 },
-      tooltip: { trigger: 'axis', renderMode: 'richText' },
+      tooltip: { trigger: 'axis', renderMode: 'richText', confine: true },
       xAxis: {
         type: 'category',
         data: data.prices.map((p) => p.date),
-        axisLabel: { color: '#77675f' },
+        axisLabel: { color: chartColors.muted },
       },
       yAxis: {
         scale: true,
+        axisLabel: { color: chartColors.muted },
+        nameTextStyle: { color: chartColors.muted },
         name: '前复权价格（元）',
         splitLine: { lineStyle: { color: '#f0e9e2' } },
       },

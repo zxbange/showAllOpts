@@ -13,8 +13,9 @@ export function Heatmap({
   maximum: number
   date: string
 }) {
-  const columns = Math.ceil(Math.sqrt(industries.length))
-  const mobileColumns = Math.min(4, columns)
+  const columns = Math.max(1, Math.min(8, Math.ceil(Math.sqrt(industries.length))))
+  const tabletColumns = Math.min(6, columns)
+  const mobileColumns = Math.min(3, columns)
   const rowStart = (index: number, width: number) => {
     const remainder = industries.length % width
     return remainder && index > 0 && index === industries.length - remainder
@@ -24,7 +25,13 @@ export function Heatmap({
   return (
     <div
       className={`heatmap-grid ${industries.length < 16 ? 'heatmap-compact' : ''}`}
-      style={{ '--columns': columns, '--mobile-columns': mobileColumns } as CSSProperties}
+      style={
+        {
+          '--columns': columns,
+          '--tablet-columns': tabletColumns,
+          '--mobile-columns': mobileColumns,
+        } as CSSProperties
+      }
       aria-label="行业动量热力图，按热力值从高到低逐行排列"
     >
       {industries.map((industry, index) => {
@@ -42,6 +49,7 @@ export function Heatmap({
                 '--cell-fg': color.color,
                 '--delay': `${Math.min(index * 5, 420)}ms`,
                 '--desktop-start': rowStart(index, columns),
+                '--tablet-start': rowStart(index, tabletColumns),
                 '--mobile-start': rowStart(index, mobileColumns),
               } as CSSProperties
             }

@@ -11,13 +11,15 @@
   --surface: #f7f1eb;
   --border: #e9dfd5;
   --text: #352c29;
-  --muted: #77675f;
+  --muted: #695b53;
   --accent: #c44837;
   --accent-soft: #fcece5;
   --on-accent: #ffffff;
   --warm: #bd4c35;
   --gold: #98620d;
   --jade: #217b70;
+  font-size: 15px;
+  line-height: 1.6;
 }
 * {
   box-sizing: border-box;
@@ -138,13 +140,14 @@ svg {
 .brand-caption {
   display: block;
   color: var(--muted);
-  font-size: 8px;
+  font-size: 10px;
   font-weight: 600;
-  letter-spacing: 1.7px;
+  letter-spacing: 0.8px;
+  white-space: nowrap;
   margin-top: 4px;
 }
 .nav-label {
-  font-size: 10px;
+  font-size: 12px;
   color: var(--muted);
   margin: 59px 12px 16px;
   letter-spacing: 1px;
@@ -152,8 +155,8 @@ svg {
   gap: 9px;
 }
 .nav-label span {
-  font-size: 8px;
-  opacity: 0.6;
+  font-size: 12px;
+  opacity: 1;
 }
 .main-nav {
   display: flex;
@@ -170,7 +173,7 @@ svg {
   padding: 14px 14px;
   border-radius: 9px;
   color: var(--muted);
-  font-size: 13px;
+  font-size: 14px;
   font-weight: 500;
   transition:
     background 0.2s,
@@ -188,8 +191,8 @@ svg {
 .nav-key {
   margin-left: auto;
   font-family: Manrope, sans-serif;
-  font-size: 10px;
-  opacity: 0.5;
+  font-size: 12px;
+  opacity: 1;
 }
 .sidebar-bottom {
   margin-top: auto;
@@ -201,11 +204,11 @@ svg {
   align-items: center;
   gap: 7px;
   color: var(--muted);
-  font-size: 10px;
+  font-size: 12px;
 }
 .sidebar-footer > span:last-child {
   margin-left: auto;
-  font-size: 9px;
+  font-size: 12px;
 }
 .status-dot {
   display: inline-block;
@@ -239,7 +242,7 @@ svg {
   align-items: center;
   gap: 13px;
   color: var(--muted);
-  font-size: 11px;
+  font-size: 12px;
 }
 .breadcrumb > span {
   color: var(--text);
@@ -252,7 +255,7 @@ svg {
   align-items: center;
   gap: 22px;
   color: var(--muted);
-  font-size: 11px;
+  font-size: 12px;
   letter-spacing: 0.5px;
 }
 .avatar {
@@ -265,7 +268,7 @@ svg {
   border-radius: 50%;
   color: var(--accent);
   font-family: Manrope, sans-serif;
-  font-size: 10px;
+  font-size: 12px;
   font-weight: 700;
 }
 .main-content {
@@ -282,9 +285,9 @@ svg {
   margin: 0 42px;
   padding: 21px 0 25px;
   border-top: 1px solid var(--border);
-  font-size: 9px;
+  font-size: 12px;
   color: var(--muted);
-  letter-spacing: 1px;
+  letter-spacing: 0;
   gap: 12px;
 }
 .page-footer > span {
@@ -298,7 +301,7 @@ svg {
   background: var(--surface);
 }
 .section-eyebrow {
-  font-size: 9px;
+  font-size: 12px;
   font-weight: 600;
   letter-spacing: 2px;
   color: var(--muted);
@@ -320,7 +323,7 @@ svg {
   min-height: 40px;
   border-radius: 7px;
   padding: 10px 17px;
-  font-size: 12px;
+  font-size: 14px;
   font-weight: 600;
   transition:
     transform 0.2s,
@@ -353,13 +356,13 @@ svg {
   padding: 7px 10px;
   border: 1px solid var(--border);
   border-radius: 5px;
-  font-size: 10px;
+  font-size: 12px;
   letter-spacing: 1px;
   color: var(--accent);
   background: var(--surface);
 }
 .pill-small {
-  font-size: 9px;
+  font-size: 12px;
   padding: 5px 8px;
   letter-spacing: 0;
   border-color: var(--border);
@@ -384,7 +387,7 @@ svg {
   letter-spacing: 0.5px;
 }
 .subtle-tag {
-  font-size: 10px;
+  font-size: 12px;
   color: var(--muted);
   display: flex;
   align-items: center;
@@ -397,18 +400,22 @@ svg {
   align-items: center;
   gap: 20px;
   margin-bottom: 27px;
+  flex-wrap: wrap;
+  row-gap: 16px;
 }
 .page-heading h1 {
   font-size: 29px;
-  font-weight: 550;
+  font-weight: 650;
   letter-spacing: 1px;
   margin: 9px 0 10px;
   display: flex;
   align-items: center;
   gap: 12px;
+  flex-wrap: wrap;
+  line-height: 1.35;
 }
 .page-heading p {
-  font-size: 11px;
+  font-size: 14px;
   color: var(--muted);
   line-height: 1.8;
 }
@@ -416,7 +423,7 @@ svg {
   border: 1px solid var(--border);
   color: var(--muted);
   background: var(--surface);
-  font-size: 9px;
+  font-size: 12px;
   font-weight: 400;
   letter-spacing: 0.5px;
   padding: 5px 8px;
@@ -426,6 +433,7 @@ svg {
   display: flex;
   align-items: center;
   gap: 10px;
+  flex-shrink: 0;
 }
 .date-badge {
   display: flex;
@@ -435,14 +443,14 @@ svg {
   padding: 11px 13px;
   border: 1px solid var(--border);
   border-radius: 6px;
-  font-size: 11px;
+  font-size: 12px;
   color: var(--muted);
   background: var(--panel);
   font-family: Manrope, sans-serif;
 }
 .stats-grid {
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 15px;
   margin-bottom: 24px;
 }
@@ -454,12 +462,13 @@ svg {
   overflow: hidden;
   position: relative;
   box-shadow: 0 3px 16px rgba(97, 57, 35, 0.025);
+  min-width: 0;
 }
 .stat-label {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  font-size: 11px;
+  font-size: 13px;
   color: var(--muted);
   gap: 8px;
 }
@@ -474,9 +483,10 @@ svg {
   margin: 13px 0 10px;
   line-height: 1.2;
   font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
 }
 .stat-value small {
-  font-size: 11px;
+  font-size: 13px;
   font-weight: 400;
   margin-left: 7px;
   letter-spacing: 0;
@@ -484,7 +494,7 @@ svg {
 }
 .stat-note {
   color: var(--muted);
-  font-size: 9px;
+  font-size: 12px;
   line-height: 1.7;
 }
 .stat-accent {
@@ -534,10 +544,11 @@ svg {
   display: flex;
   align-items: center;
   gap: 8px;
+  flex-wrap: wrap;
 }
 .panel-title h2 {
-  font-size: 15px;
-  font-weight: 500;
+  font-size: 18px;
+  font-weight: 600;
   letter-spacing: 0.5px;
 }
 .panel-title .status-dot {
@@ -545,7 +556,7 @@ svg {
   height: 5px;
 }
 .subtle-count {
-  font-size: 9px;
+  font-size: 12px;
   color: var(--muted);
   background: var(--surface);
   padding: 3px 7px;
@@ -554,7 +565,7 @@ svg {
   font-family: Manrope, sans-serif;
 }
 .panel-heading p {
-  font-size: 10px;
+  font-size: 13px;
   color: var(--muted);
   margin-top: 8px;
   line-height: 1.8;
@@ -569,13 +580,14 @@ svg {
   padding: 9px 10px;
   color: var(--muted);
   min-width: 207px;
+  min-height: 44px;
 }
 .search-box input {
   background: none;
   border: 0;
   width: 160px;
   color: var(--text);
-  font-size: 10px;
+  font-size: 14px;
   outline: none !important;
 }
 .search-box:focus-within {
@@ -596,9 +608,10 @@ svg {
   align-items: center;
   border-top: 1px solid var(--border);
   padding: 16px 0 13px;
-  font-size: 9px;
+  font-size: 12px;
   color: var(--muted);
   gap: 10px;
+  flex-wrap: wrap;
 }
 .heatmap-meta > span {
   display: flex;
@@ -609,7 +622,7 @@ svg {
   display: flex;
   align-items: center;
   gap: 8px;
-  font-size: 8px;
+  font-size: 12px;
   color: var(--muted);
 }
 .heat-legend i {
@@ -622,18 +635,19 @@ svg {
 .legend-type {
   margin-left: 5px;
   color: var(--muted);
-  font-size: 8px;
+  font-size: 12px;
 }
 .heatmap-grid {
   display: grid;
   grid-template-columns: repeat(var(--columns), minmax(0, 1fr));
-  gap: 5px;
-  aspect-ratio: 1;
+  gap: 8px;
+  aspect-ratio: auto;
   background: var(--surface);
   border: 1px solid var(--border);
   padding: 6px;
   border-radius: 7px;
   align-content: stretch;
+  grid-auto-rows: minmax(112px, auto);
 }
 .heat-cell {
   display: flex;
@@ -642,7 +656,7 @@ svg {
   min-width: 0;
   position: relative;
   border-radius: 4px;
-  padding: 8px 7px;
+  padding: 10px;
   background: var(--cell-bg);
   color: var(--cell-fg);
   transition:
@@ -652,6 +666,8 @@ svg {
   animation: tile-in 0.45s ease both;
   animation-delay: var(--delay);
   overflow: hidden;
+  min-height: 112px;
+  aspect-ratio: auto;
 }
 .heat-cell:hover {
   transform: translateY(-2px) scale(1.035);
@@ -664,8 +680,8 @@ svg {
   align-items: center;
   justify-content: space-between;
   font-family: Manrope, sans-serif;
-  font-size: 8px;
-  opacity: 0.8;
+  font-size: 12px;
+  opacity: 1;
   margin-bottom: auto;
   padding-bottom: 6px;
 }
@@ -677,7 +693,7 @@ svg {
   opacity: 1;
 }
 .cell-name {
-  font-size: clamp(9px, 0.85vw, 13px);
+  font-size: 13px;
   font-weight: 500;
   line-height: 1.4;
   overflow: hidden;
@@ -686,7 +702,7 @@ svg {
   -webkit-box-orient: vertical;
 }
 .cell-value {
-  font-size: clamp(14px, 1.55vw, 23px);
+  font-size: 22px;
   font-weight: 650;
   font-family: Manrope, sans-serif;
   font-variant-numeric: tabular-nums;
@@ -701,7 +717,7 @@ svg {
   align-items: center;
   gap: 12px;
   color: var(--muted);
-  font-size: 9px;
+  font-size: 12px;
   margin-top: 15px;
   line-height: 1.7;
 }
@@ -718,7 +734,7 @@ svg {
 }
 .leader-grid {
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
   gap: 13px;
 }
 .leader-card {
@@ -744,12 +760,12 @@ svg {
   font-weight: 500;
 }
 .leader-card h3 {
-  font-size: 12px;
+  font-size: 14px;
   font-weight: 500;
   margin-bottom: 5px;
 }
 .leader-card div > span {
-  font-size: 8px;
+  font-size: 12px;
   color: var(--muted);
 }
 .leader-score {
@@ -765,7 +781,7 @@ svg {
   display: flex;
   align-items: center;
   justify-content: flex-end;
-  font-size: 9px;
+  font-size: 12px;
   margin-top: 4px;
 }
 .leader-card > svg {
@@ -775,7 +791,7 @@ svg {
   display: flex;
   align-items: flex-start;
   gap: 7px;
-  font-size: 9px;
+  font-size: 13px;
   color: var(--muted);
   line-height: 1.9;
   margin-top: 22px;
@@ -788,7 +804,7 @@ svg {
   align-items: center;
   gap: 7px;
   color: var(--muted);
-  font-size: 11px;
+  font-size: 12px;
   margin: 0 0 24px;
 }
 .back-link:hover {
@@ -806,17 +822,19 @@ svg {
   border-radius: 6px;
   flex-shrink: 0;
   gap: 3px;
+  flex-wrap: wrap;
 }
 .range-switch button {
   padding: 7px 12px;
   color: var(--muted);
   background: transparent;
-  font-size: 10px;
+  font-size: 13px;
   border-radius: 4px;
   transition:
     background 0.2s,
     color 0.2s;
   white-space: nowrap;
+  min-height: 38px;
 }
 .range-switch button:hover {
   color: var(--accent);
@@ -838,7 +856,7 @@ svg {
   align-items: center;
   gap: 7px;
   padding-top: 10px;
-  font-size: 10px;
+  font-size: 12px;
   color: var(--muted);
 }
 .chart-legend > span:first-child {
@@ -852,7 +870,7 @@ svg {
 }
 .chart-legend .legend-extra {
   color: var(--muted);
-  font-size: 9px;
+  font-size: 12px;
   margin-left: 5px;
 }
 .trend-chart {
@@ -890,19 +908,19 @@ svg {
   flex-shrink: 0;
 }
 .method-card h3 {
-  font-size: 13px;
+  font-size: 14px;
   font-weight: 500;
   margin-bottom: 10px;
 }
 .method-card p {
-  font-size: 10px;
+  font-size: 13px;
   color: var(--muted);
   line-height: 1.9;
   max-width: 540px;
 }
 .method-card div > span {
   display: block;
-  font-size: 9px;
+  font-size: 12px;
   line-height: 1.8;
   color: var(--muted);
   margin-top: 12px;
@@ -914,7 +932,7 @@ svg {
   padding: 23px;
 }
 .observation-card .section-eyebrow {
-  font-size: 8px;
+  font-size: 12px;
   color: var(--muted);
   letter-spacing: 1.4px;
 }
@@ -927,20 +945,20 @@ svg {
   margin: 9px 0;
 }
 .observation-card strong small {
-  font-size: 10px;
+  font-size: 12px;
   font-weight: 400;
   margin-left: 8px;
   color: var(--muted);
 }
 .observation-card p {
-  font-size: 9px;
+  font-size: 12px;
   color: var(--muted);
 }
 .observation-card > span:last-child {
   display: flex;
   align-items: center;
   gap: 5px;
-  font-size: 9px;
+  font-size: 12px;
   color: var(--muted);
   margin-top: 12px;
 }
@@ -1056,7 +1074,7 @@ svg {
     font-size: 13px;
   }
   .cell-value {
-    font-size: 24px;
+    font-size: 22px;
   }
 }
 @media (max-width: 1200px) {
@@ -1069,7 +1087,7 @@ svg {
     font-size: 16px;
   }
   .brand-caption {
-    font-size: 7px;
+    font-size: 10px;
     letter-spacing: 1.2px;
   }
   .workspace {
@@ -1093,23 +1111,25 @@ svg {
     font-size: 28px;
   }
   .stat-note {
-    font-size: 8px;
+    font-size: 12px;
   }
   .heatmap-section {
     padding: 20px;
   }
   .heat-cell {
-    padding: 6px 5px;
+    padding: 10px;
+    min-height: 112px;
+    aspect-ratio: auto;
   }
   .cell-top {
-    font-size: 7px;
+    font-size: 12px;
     padding-bottom: 3px;
   }
   .cell-value {
-    font-size: 17px;
+    font-size: 22px;
   }
   .cell-name {
-    font-size: 9px;
+    font-size: 13px;
   }
   .leader-card {
     gap: 8px;
@@ -1119,13 +1139,13 @@ svg {
     font-size: 17px;
   }
   .leader-card h3 {
-    font-size: 10px;
+    font-size: 14px;
   }
   .leader-score strong {
     font-size: 17px;
   }
   .leader-card div > span {
-    font-size: 7px;
+    font-size: 12px;
   }
   .leader-card > svg {
     display: none;
@@ -1171,7 +1191,7 @@ svg {
   }
   .date-badge {
     padding: 11px 9px;
-    font-size: 10px;
+    font-size: 12px;
   }
 
   .detail-bottom {
@@ -1189,13 +1209,13 @@ svg {
     padding: 5px;
   }
   .cell-value {
-    font-size: 16px;
+    font-size: 22px;
   }
   .cell-name {
-    font-size: 9px;
+    font-size: 13px;
   }
   .cell-top {
-    font-size: 6px;
+    font-size: 12px;
   }
 }
 @media (max-width: 700px) {
@@ -1251,31 +1271,31 @@ svg {
   }
   .breadcrumb {
     gap: 8px;
-    font-size: 10px;
+    font-size: 12px;
   }
   .main-content {
     padding: 24px 18px 30px;
   }
   .page-footer {
     margin: 0 18px;
-    font-size: 7px;
+    font-size: 12px;
     letter-spacing: 0.7px;
     flex-wrap: wrap;
   }
   .section-eyebrow {
-    font-size: 8px;
+    font-size: 12px;
     letter-spacing: 1.4px;
   }
 
   .section-heading h2 {
-    font-size: 16px;
+    font-size: 18px;
   }
   .section-heading > .subtle-tag {
     display: none;
   }
 
   .pill-small {
-    font-size: 8px;
+    font-size: 12px;
     padding: 4px 6px;
   }
 
@@ -1290,16 +1310,16 @@ svg {
     margin-bottom: 8px;
   }
   .heading-tag {
-    font-size: 8px;
+    font-size: 12px;
   }
   .page-heading p {
-    font-size: 10px;
+    font-size: 14px;
   }
   .heading-actions {
     margin-top: 3px;
   }
   .date-badge {
-    font-size: 9px;
+    font-size: 12px;
     padding: 8px 10px;
     min-height: 34px;
   }
@@ -1320,10 +1340,10 @@ svg {
     margin: 12px 0 8px;
   }
   .stat-label {
-    font-size: 10px;
+    font-size: 13px;
   }
   .stat-note {
-    font-size: 8px;
+    font-size: 12px;
   }
   .heatmap-section {
     padding: 15px 12px;
@@ -1333,10 +1353,10 @@ svg {
     margin-bottom: 13px;
   }
   .panel-title h2 {
-    font-size: 14px;
+    font-size: 18px;
   }
   .panel-heading p {
-    font-size: 9px;
+    font-size: 13px;
     line-height: 1.8;
   }
   .search-box {
@@ -1346,15 +1366,15 @@ svg {
   }
   .search-box input {
     width: 100%;
-    font-size: 11px;
+    font-size: 14px;
   }
   .heatmap-meta {
     padding-top: 12px;
-    font-size: 8px;
+    font-size: 12px;
   }
   .heat-legend {
     gap: 5px;
-    font-size: 7px;
+    font-size: 12px;
   }
   .heat-legend i {
     width: 60px;
@@ -1369,25 +1389,25 @@ svg {
     padding: 4px;
   }
   .heat-cell {
-    aspect-ratio: 1;
-    min-height: 78px;
-    padding: 7px;
+    aspect-ratio: auto;
+    min-height: 112px;
+    padding: 10px;
   }
   .cell-top {
-    font-size: 7px;
+    font-size: 12px;
     padding-bottom: 4px;
   }
   .cell-name {
-    font-size: 10px;
+    font-size: 13px;
   }
   .cell-value {
-    font-size: 20px;
+    font-size: 22px;
   }
   .panel-bottom {
     flex-direction: column;
     align-items: flex-start;
     gap: 6px;
-    font-size: 8px;
+    font-size: 12px;
     margin-top: 12px;
   }
   .leader-grid {
@@ -1402,10 +1422,10 @@ svg {
     font-size: 21px;
   }
   .leader-card h3 {
-    font-size: 12px;
+    font-size: 14px;
   }
   .leader-card div > span {
-    font-size: 9px;
+    font-size: 12px;
   }
   .leader-score strong {
     font-size: 21px;
@@ -1414,10 +1434,10 @@ svg {
     display: block;
   }
   .data-note {
-    font-size: 8px;
+    font-size: 13px;
   }
   .back-link {
-    font-size: 10px;
+    font-size: 12px;
     margin-bottom: 20px;
   }
   .trend-panel {
@@ -1431,13 +1451,13 @@ svg {
   .range-switch button {
     padding: 8px 14px;
     flex: 1;
-    font-size: 10px;
+    font-size: 13px;
   }
   .trend-chart {
     height: 310px;
   }
   .chart-subtitle {
-    font-size: 8px;
+    font-size: 12px;
   }
   .detail-bottom {
     grid-template-columns: 1fr;
@@ -1447,7 +1467,7 @@ svg {
     padding: 18px 15px;
   }
   .method-card p {
-    font-size: 10px;
+    font-size: 13px;
   }
   .observation-card {
     padding: 20px;
@@ -1473,6 +1493,9 @@ svg {
 }
 .heat-cell {
   grid-column: var(--desktop-start, auto);
+  min-height: 112px;
+  padding: 10px;
+  aspect-ratio: auto;
 }
 .heatmap-compact {
   aspect-ratio: auto;
@@ -1487,6 +1510,9 @@ svg {
   }
   .heat-cell {
     grid-column: var(--mobile-start, auto);
+    min-height: 112px;
+    padding: 10px;
+    aspect-ratio: auto;
   }
 }
 @media (prefers-reduced-motion: reduce) {
@@ -1528,7 +1554,7 @@ svg {
   gap: 12px;
   flex-wrap: wrap;
   margin-top: 12px;
-  font-size: 12px;
+  font-size: 13px;
   color: var(--muted);
 }
 .crowding-toggle {
@@ -1536,7 +1562,7 @@ svg {
   align-items: center;
   gap: 8px;
   padding: 8px 24px;
-  font-size: 12px;
+  font-size: 13px;
   color: var(--text);
 }
 .crowding-toggle input {
@@ -1583,6 +1609,7 @@ svg {
   align-items: center;
   justify-content: space-between;
   gap: 12px;
+  flex-wrap: wrap;
 }
 .temperature-heading h2 {
   font-size: 19px;
@@ -1590,7 +1617,7 @@ svg {
   margin: 10px 0 0;
 }
 .temperature-heading > span {
-  font-size: 11px;
+  font-size: 12px;
   color: var(--muted);
 }
 .temperature-track {
@@ -1615,7 +1642,7 @@ svg {
 .temperature-scale {
   position: relative;
   height: 25px;
-  font-size: 10px;
+  font-size: 12px;
   color: var(--muted);
 }
 .temperature-scale span {
@@ -1654,7 +1681,7 @@ svg {
   padding-left: 14px;
 }
 .temperature-factors span {
-  font-size: 12px;
+  font-size: 13px;
   color: var(--text);
 }
 .temperature-factors strong {
@@ -1663,7 +1690,7 @@ svg {
   font-weight: 500;
 }
 .temperature-factors small {
-  font-size: 10px;
+  font-size: 12px;
   color: var(--muted);
   line-height: 1.5;
 }
@@ -1679,7 +1706,7 @@ svg {
   background: transparent;
   border: 1px solid var(--border);
   color: var(--muted);
-  font-size: 11px;
+  font-size: 14px;
   border-radius: 6px;
   padding: 9px 14px;
 }
@@ -1710,10 +1737,10 @@ svg {
     flex-direction: column;
     gap: 3px;
     padding: 5px 4px;
-    font-size: 10px;
+    font-size: 12px;
   }
   .main-nav a > span:not(.nav-key) {
-    font-size: 10px;
+    font-size: 12px;
   }
   .microcap-page .range-switch button {
     padding: 8px 5px;
@@ -1730,7 +1757,7 @@ svg {
   }
   .microcap-view-switch button {
     padding: 8px 10px;
-    font-size: 10px;
+    font-size: 14px;
   }
 }
 @media (prefers-reduced-motion: reduce) {
@@ -1759,5 +1786,77 @@ svg {
   }
   .workspace {
     padding-bottom: calc(65px + env(safe-area-inset-bottom));
+  }
+}
+/* Shared controls and headings stay readable at every viewport size. */
+select,
+textarea {
+  font: inherit;
+}
+select:focus-visible,
+textarea:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 4px;
+}
+input::placeholder,
+textarea::placeholder {
+  color: var(--muted);
+  opacity: 1;
+}
+.page-heading > div:first-child {
+  flex: 1;
+  min-width: min(100%, 280px);
+}
+.page-heading p {
+  max-width: 90ch;
+}
+.heading-tag {
+  flex-shrink: 0;
+}
+.date-badge,
+.icon-button {
+  min-height: 44px;
+}
+.icon-button {
+  width: 44px;
+}
+.search-box input {
+  min-width: 0;
+}
+@media (max-width: 1200px) {
+  .heatmap-grid {
+    grid-template-columns: repeat(var(--tablet-columns), minmax(0, 1fr));
+  }
+  .heat-cell {
+    grid-column: var(--tablet-start, auto);
+  }
+  .stats-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+@media (max-width: 700px) {
+  .heatmap-grid {
+    grid-template-columns: repeat(var(--mobile-columns), minmax(0, 1fr));
+  }
+  .heat-cell {
+    grid-column: var(--mobile-start, auto);
+    padding: 8px;
+  }
+  .cell-value {
+    font-size: 20px;
+  }
+  .sidebar {
+    height: calc(72px + env(safe-area-inset-bottom));
+  }
+  .workspace {
+    padding-bottom: calc(72px + env(safe-area-inset-bottom));
+  }
+  .main-nav a {
+    flex: 1 0 92px;
+    min-width: 92px;
+  }
+  .main-content :is(input:not([type]), input[type='text'], input[type='search'], select),
+  .cache-dialog select {
+    font-size: 16px;
   }
 }

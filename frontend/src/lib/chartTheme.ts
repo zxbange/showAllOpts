@@ -1,7 +1,7 @@
 // Shared light palette for canvas charts; keep aligned with global.css tokens.
 export const chartColors = {
   text: '#352c29',
-  muted: '#77675f',
+  muted: '#695b53',
   border: '#e9dfd5',
   grid: '#eee5dc',
   surface: '#f7f1eb',

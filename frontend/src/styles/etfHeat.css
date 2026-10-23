@@ -24,6 +24,7 @@
   padding: 0 24px 16px;
   font-size: 12px;
   color: var(--muted);
+  flex-wrap: wrap;
 }
 .etf-heat-grid {
   display: grid;
@@ -57,7 +58,7 @@
 .etf-tile-meta {
   display: flex;
   justify-content: space-between;
-  font-size: 10px;
+  font-size: 12px;
   gap: 8px;
 }
 .etf-heat-tile h3 {
@@ -72,8 +73,8 @@
 }
 .etf-tile-code,
 .etf-heat-tile small {
-  font-size: 11px;
-  opacity: 0.8;
+  font-size: 12px;
+  opacity: 1;
 }
 .etf-method-note {
   padding: 20px 4px;
@@ -125,7 +126,7 @@
   .etf-heat-legend {
     gap: 8px;
     padding: 0 12px 12px;
-    font-size: 10px;
+    font-size: 12px;
   }
 }
 @media (prefers-reduced-motion: reduce) {

@@ -16,7 +16,7 @@
 }
 .ownership-stock-heading small {
   font-size: 14px;
-  color: #82756c;
+  color: var(--muted);
 }
 .ownership-panel {
   background: #fff;
@@ -31,9 +31,9 @@
 }
 .ownership-panel h3 small {
   display: block;
-  font-size: 12px;
+  font-size: 13px;
   font-weight: 400;
-  color: #88766c;
+  color: var(--muted);
   margin-top: 8px;
 }
 .ownership-summary {
@@ -42,8 +42,8 @@
   line-height: 1.9;
 }
 .ownership-note {
-  font-size: 12px;
-  color: #87776d;
+  font-size: 13px;
+  color: var(--muted);
   line-height: 1.9;
 }
 .ownership-search {
@@ -88,7 +88,7 @@
 .ownership-results span,
 .ownership-table small {
   display: block;
-  color: #8c7a6c;
+  color: var(--muted);
   font-size: 12px;
   margin-top: 5px;
 }
@@ -112,8 +112,8 @@
   margin-bottom: 26px;
 }
 .ownership-metrics span {
-  font-size: 12px;
-  color: #89766a;
+  font-size: 13px;
+  color: var(--muted);
 }
 .ownership-metrics strong {
   display: block;
@@ -135,7 +135,7 @@
 }
 .ownership-missing {
   padding: 36px 10px;
-  color: #8c7a6c;
+  color: var(--muted);
   line-height: 1.8;
 }
 .ownership-table-wrap {
@@ -144,13 +144,13 @@
 .ownership-table {
   width: 100%;
   border-collapse: collapse;
-  font-size: 13px;
+  font-size: 14px;
   white-space: nowrap;
 }
 .ownership-table th {
   text-align: left;
-  color: #8c7a6c;
-  font-weight: 500;
+  color: var(--muted);
+  font-weight: 600;
   background: #fcf9f5;
 }
 .ownership-table td,
@@ -168,7 +168,7 @@
   cursor: pointer;
 }
 .ownership-controls label {
-  font-size: 13px;
+  font-size: 14px;
 }
 .ownership-page button:focus-visible,
 .ownership-page input:focus-visible,
@@ -217,10 +217,10 @@
   font-variant-numeric: tabular-nums;
 }
 .ownership-social-panel select[aria-label='社保报告期'] {
-  width: 124px;
+  width: 144px;
 }
 .ownership-social-panel select[aria-label='社保筛选口径'] {
-  width: 176px;
+  width: 220px;
 }
 .ownership-rules {
   display: grid;
@@ -287,4 +287,22 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.ownership-controls label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.ownership-table {
+  font-variant-numeric: tabular-nums;
+}
+
+.ownership-table tbody tr:hover {
+  background: #fcf8f3;
+}
+
+.ownership-grid > * {
+  min-width: 0;
 }

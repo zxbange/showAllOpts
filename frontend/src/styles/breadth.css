@@ -34,7 +34,7 @@
 }
 .breadth-period-title small {
   color: var(--muted);
-  font-size: 11px;
+  font-size: 12px;
   font-weight: 400;
 }
 .breadth-pair {
@@ -66,7 +66,7 @@
 .breadth-pair em {
   font-size: 12px;
   font-style: normal;
-  opacity: 0.85;
+  opacity: 1;
 }
 .breadth-high {
   color: var(--accent);
@@ -95,7 +95,7 @@
 .breadth-dominance p,
 .breadth-dominance small {
   color: var(--muted);
-  font-size: 12px;
+  font-size: 13px;
   line-height: 1.8;
 }
 .breadth-dominance-row {
@@ -132,11 +132,11 @@
   border-collapse: collapse;
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
-  font-size: 13px;
+  font-size: 14px;
 }
 .breadth-table th {
   color: var(--muted);
-  font-size: 11px;
+  font-size: 13px;
   font-weight: 500;
 }
 .breadth-table td,
