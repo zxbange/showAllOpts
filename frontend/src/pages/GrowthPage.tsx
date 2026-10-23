@@ -178,7 +178,7 @@ export function GrowthPage() {
           <h1>
             高增长 <span className="heading-tag">四类报告 · 双指标</span>
           </h1>
-          <p>跨越年度与季度，寻找盈利持续增长的公司。</p>
+          <p>年报、Q1、半年报、前三季分别检查。每类最新三期的归母净利润与基本 EPS 均连续两次同比增长 ≥ 20%，且最新一期均为正。按年报最近一次净利润增速降序排列。</p>
         </div>
         <div className="heading-actions">
           <span className="date-badge">
@@ -237,13 +237,6 @@ export function GrowthPage() {
               icon={<Layers3 size={18} />}
             />
           </div>
-          <section className="growth-rule">
-            <Info size={19} />
-            <p>
-              年报、Q1、半年报、前三季分别检查。每类最新三期的归母净利润与基本 EPS
-              均连续两次同比增长 ≥ 20%，且最新一期均为正。按年报最近一次净利润增速降序排列。
-            </p>
-          </section>
           <div className="growth-toolbar">
             <div>
               <h2>
