@@ -9,7 +9,7 @@ def stock_item(stock):
 def latest_quarter(today):
     return date(today.year, ((today.month - 1) // 3) * 3 + 1, 1) - timedelta(days=1)
 
-def social_total(payload):
+def social_total(payload, field="shares"):
     if not payload or not payload.get('float_complete') or not isinstance(payload.get('float_members'), list):
         return None
     total = Decimal(0)
@@ -19,21 +19,23 @@ def social_total(payload):
         if member['class_id'] != 307004:
             continue
         try:
-            shares = Decimal(str(member.get('shares')))
+            shares = Decimal(str(member.get(field)))
         except InvalidOperation:
             return None
         if not shares.is_finite() or shares < 0:
             return None
         total += shares
-    return total
+    return None if field == 'ratio' and total > 100 else total
 
 
 def social_increase(current, previous):
     current_total, previous_total = social_total(current), social_total(previous)
     if current_total is None or previous_total is None:
         return {'status': 'unknown'}
+    current_ratio = social_total(current, 'ratio')
     change = current_total - previous_total
     return {'status': 'comparable', 'previous_shares': float(previous_total),
+            'current_ratio': float(current_ratio) if current_ratio is not None else None,
             'current_shares': float(current_total), 'change_shares': float(change),
             'change_pct': float(change / previous_total * 100) if previous_total > 0 else None}
 

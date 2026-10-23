@@ -96,7 +96,7 @@ test('ownership error permits retry', async ({ page }) => {
 test('social increase shows aggregate quarter comparison', async ({ page }) => {
   await page.route('**/api/v1/institution-ownership/social-entries?*', r => r.fulfill({ json: {
     period: '2026-09-30', periods: ['2026-09-30'], comparable_count: 1, unknown_count: 0, collected_count: 1,
-    items: [{ ...stock, new_combinations: [], previous_shares: 1000000, current_shares: 1500000, change_shares: 500000, change_pct: 50, pub_date: '2026-10-20' }],
+    items: [{ ...stock, new_combinations: [], previous_shares: 1000000, current_shares: 1500000, change_shares: 500000, change_pct: 50, current_ratio: 1.9, pub_date: '2026-10-20' }],
   } }))
   await page.goto('/institution-ownership')
   await page.getByRole('button', { name: '社保新进', exact: true }).click()
@@ -104,4 +104,6 @@ test('social increase shows aggregate quarter comparison', async ({ page }) => {
   await expect(page.getByRole('columnheader', { name: '上季度合计（万股）' })).toBeVisible()
   await expect(page.getByRole('cell', { name: '150', exact: true })).toBeVisible()
   await expect(page.getByRole('cell', { name: '50%', exact: true })).toBeVisible()
+  await expect(page.getByRole('columnheader', { name: '本季度占流通股比例' })).toBeVisible()
+  await expect(page.getByRole('cell', { name: '1.9%', exact: true })).toBeVisible()
 })

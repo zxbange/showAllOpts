@@ -183,7 +183,7 @@ function SocialView({ onSelect }: { onSelect: (code: string) => void }) {
                     <th>股票 / 行业</th>
                     {mode === 'increase' ? <>
                       <th>上季度合计（万股）</th><th>本季度合计（万股）</th>
-                      <th>增加股数（万股）</th><th>增幅</th>
+                      <th>增加股数（万股）</th><th>增幅</th><th>本季度占流通股比例</th>
                     </> : <>
                     <th>新进社保组合</th>
                     <th>持股数量（万股）</th>
@@ -209,6 +209,7 @@ function SocialView({ onSelect }: { onSelect: (code: string) => void }) {
                         <td>{num(r.current_shares == null ? null : r.current_shares / 1e4, 2)}</td>
                         <td>{num(r.change_shares == null ? null : r.change_shares / 1e4, 2)}</td>
                         <td>{r.change_pct == null ? '上季为零' : `${num(r.change_pct, 2)}%`}</td>
+                        <td>{r.current_ratio == null ? '—' : `${num(r.current_ratio, 3)}%`}</td>
                       </> : <>
                       <td>
                         {r.new_combinations.map((m, i) => (

@@ -78,3 +78,20 @@ def test_social_increase_rejects_incomplete_and_invalid_quantities():
         assert social_increase(valid, bad)['status'] == 'unknown'
     assert social_increase(valid, {'float_complete': False, 'float_members': []})['status'] == 'unknown'
     assert social_increase(valid, {'float_complete': True})['status'] == 'unknown'
+
+
+def test_social_increase_sums_current_social_ratios_without_affecting_selection():
+    from app.services.ownership import social_increase
+    previous = {'float_complete': True, 'float_members': [{'class_id': 307004, 'shares': 10}]}
+    current = {'float_complete': True, 'float_members': [
+        {'class_id': 307004, 'shares': 20, 'ratio': 1.25},
+        {'class_id': 307004, 'shares': 30, 'ratio': 0.65},
+        {'class_id': 1, 'shares': 1000, 'ratio': 20}]}
+    result = social_increase(current, previous)
+    assert result['current_ratio'] == 1.9
+    assert result['change_shares'] == 40
+    for invalid in (None, -1, 'NaN', 'Infinity', 101):
+        current['float_members'][1]['ratio'] = invalid
+        result = social_increase(current, previous)
+        assert result['current_ratio'] is None
+        assert result['status'] == 'comparable' and result['change_shares'] == 40
