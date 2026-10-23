@@ -237,7 +237,7 @@ export function OwnershipPage() {
     const timer = setTimeout(() => setTerm(query.trim()), 250)
     return () => clearTimeout(timer)
   }, [query])
-  const loader = useCallback((signal: AbortSignal) => searchOwnership(term, signal), [term])
+  const loader = useCallback((signal: AbortSignal) => term ? searchOwnership(term, signal) : Promise.resolve({ stocks: [] }), [term])
   const { data, error, loading, reload } = useResource(loader)
   const select = (value: string) => setParams({ code: value, tab: 'stock' })
   return (
@@ -284,7 +284,7 @@ export function OwnershipPage() {
                 onChange={(e) => setQuery(e.target.value)}
               />
             </label>
-            {loading ? (
+            {query.trim() && query.trim() === term && (loading ? (
               <p>正在查询…</p>
             ) : error ? (
               <ErrorState message={error} retry={reload} />
@@ -301,8 +301,8 @@ export function OwnershipPage() {
                   </button>
                 ))}
               </div>
-            )}
-            {!loading && !error && !data?.stocks.length && (
+            ))}
+            {query.trim() && query.trim() === term && !loading && !error && !data?.stocks.length && (
               <p>暂无匹配股票。请先运行个股机构持仓采集脚本，再在“数据同步”中同步本模块。</p>
             )}
           </section>

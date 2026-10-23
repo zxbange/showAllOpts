@@ -62,6 +62,8 @@ test.beforeEach(async ({ page }) => {
 })
 test('ownership search, disclosure charts and social drilldown', async ({ page }, info) => {
   await page.goto('/institution-ownership')
+  await expect(page.locator('.ownership-results button')).toHaveCount(0)
+  await page.getByLabel('搜索股票').fill('600001')
   await page.getByRole('button', { name: '示例科技 600001.XSHG' }).click()
   await expect(page.getByRole('heading', { name: '股东户数', exact: true })).toBeVisible()
   await expect(page.getByText('27,000')).toBeVisible()
@@ -84,6 +86,8 @@ test('ownership error permits retry', async ({ page }) => {
     r.fulfill({ status: 503, json: { detail: '本地数据尚未准备好' } }),
   )
   await page.goto('/institution-ownership')
+  await expect(page.locator('.ownership-results button')).toHaveCount(0)
+  await page.getByLabel('搜索股票').fill('600001')
   await expect(page.getByText('本地数据尚未准备好')).toBeVisible()
   await expect(page.getByRole('button', { name: '重新加载' })).toBeVisible()
 })
