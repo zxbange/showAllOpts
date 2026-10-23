@@ -23,6 +23,7 @@ class Frame:
         self.columns = columns if columns is not None else list(self.data[0]) if self.data else []
         self.empty = not self.data
     def __len__(self): return len(self.data)
+    def __getitem__(self, key): return [row[key] for row in self.data]
     def to_dict(self, orient): return self.data
 
 
@@ -148,7 +149,11 @@ def test_failed_replacement_rolls_back_both_lists(ns):
 def test_dividend_dates_pagination_and_truncation_protection(module):
     table=Table('payout',MetaData(),Column('id',Integer),Column('code',String),Column('a_registration_date',Date),
                 Column('a_xr_date',Date),Column('bonus_amount_rmb',Numeric))
-    q=lambda *fields:SimpleNamespace(filter=lambda *a:SimpleNamespace(order_by=lambda *a:SimpleNamespace(limit=lambda n:n)))
+    class Query:
+        def filter(self, *conditions): return self
+        def order_by(self, *columns): return self
+        def limit(self, size): return size
+    q = lambda *fields: Query()
     columns=['id','code','a_registration_date','a_xr_date','bonus_amount_rmb']
     source=[dict(id=1,code='a',a_registration_date=DAY-dt.timedelta(days=500),a_xr_date=DAY-dt.timedelta(days=499),bonus_amount_rmb=200),
             dict(id=2,code='a',a_registration_date=DAY-dt.timedelta(days=1),a_xr_date=DAY,bonus_amount_rmb=300),

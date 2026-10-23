@@ -25,6 +25,11 @@ RESULT_COLUMNS = ['trade_date', 'top_pct', 'ratio', 'top_money', 'total_money',
                   'stock_count', 'top_stock_count', 'updated_at']
 
 
+def _closed_day(end, now):
+    """日行情在北京时间16点后使用当天；交易日仍由各策略的日历校验。"""
+    return end - datetime.timedelta(days=1) if end == now.date() and now.hour < 16 else end
+
+
 class MarketCrowding(Base):
     __tablename__ = 'market_crowding'
     __table_args__ = {'mysql_engine': 'InnoDB', 'mysql_charset': 'utf8mb4'}
@@ -189,8 +194,8 @@ def run(start_date=START_DATE, end_date=END_DATE, top_pct=TOP_PCT, incremental=T
     end = today if end_date is None else as_date(end_date)
     if start > end or end > today:
         raise ValueError('开始日期不能晚于结束日期，结束日期不能晚于运行当天。')
-    if skip_existing and end == today and now.hour < 16:
-        end = today - datetime.timedelta(days=1)
+    if skip_existing:
+        end = _closed_day(end, now)
         print('只新增模式：16:00 前不写入当天未完成快照。')
     pct = Decimal(str(top_pct))
     if not pct.is_finite() or not Decimal('0') < pct <= Decimal('1'):

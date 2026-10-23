@@ -61,6 +61,42 @@ _PREVIEW_COLUMNS = {'ETF动量热度': ('trade_date', 'code', 'name', 'score', '
 _PROGRESS_LOCAL = threading.local()
 
 
+def _decimal_number(value):
+    try:
+        result = Decimal(str(value))
+        return result if result.is_finite() else None
+    except (InvalidOperation, ValueError, TypeError):
+        return None
+
+def _closed_day(end, now):
+    """日行情在北京时间16点后使用当天；交易日仍由各策略的日历校验。"""
+    return end - datetime.timedelta(days=1) if end == now.date() and now.hour < 16 else end
+
+def _source_pages(fetch_page, key='id', start=-1, label='数据接口', progress=None, fields=(), page_size=None):
+    """普通主键分页只保留当前页，读到空页；服务端可能返回少于请求数量。"""
+    cursor, count = start, 0
+    while True:
+        if progress is not None:
+            progress('{}：已读取 {} 条，正在请求下一页'.format(label, count))
+        frame = fetch_page(cursor)
+        if frame is None:
+            raise ValueError('{} 未返回结果，取消本次入库。'.format(label))
+        if not set(fields).issubset(frame.columns):
+            raise ValueError('{} 返回字段不完整，取消本次入库。'.format(label))
+        if page_size is not None and len(frame) > page_size:
+            raise ValueError('{} 分页超限。'.format(label))
+        if frame.empty:
+            return
+        if key not in frame.columns:
+            raise ValueError('{} 缺少分页主键 {}。'.format(label, key))
+        ids = [int(value) for value in frame[key]]
+        if ids != sorted(set(ids)) or ids[0] <= cursor:
+            raise ValueError('{} 分页主键重复、乱序或未前进。'.format(label))
+        cursor, count = ids[-1], count + len(frame)
+        yield frame
+        del frame, ids
+
+
 class _ConsoleProgress:
     """仅后台刷新文字；采集与数据库操作始终在主线程串行执行。"""
     def __init__(self, name, index, total, stream, interval):
@@ -126,6 +162,7 @@ class _ConsoleProgress:
 def _progress_scope(name, index, total):
     progress = None
     ending = '完成'
+    _PROGRESS_LOCAL.output = sys.stdout
     try:
         if PROGRESS_ENABLED:
             progress = _ConsoleProgress(name, index, total, sys.stdout, PROGRESS_INTERVAL_SECONDS)
@@ -137,8 +174,23 @@ def _progress_scope(name, index, total):
         raise
     finally:
         _PROGRESS_LOCAL.current = None
+        _PROGRESS_LOCAL.output = None
         if progress is not None:
             progress.close(ending)
+
+
+def _progress_message(message):
+    """Keep brief collection-scope messages visible through the batch quiet stream."""
+    progress = getattr(_PROGRESS_LOCAL, 'current', None)
+    stream = getattr(_PROGRESS_LOCAL, 'output', None) or sys.stdout
+    if progress is not None:
+        with progress.lock:
+            stream.write('\r' + ' ' * progress.width + '\r' + message + '\n')
+            stream.flush()
+            progress.width = 0
+            progress.render(force=True)
+    else:
+        print(message, file=stream, flush=True)
 
 
 def _progress_note(message):
@@ -441,28 +493,13 @@ def _etf_heat_strategy(_apis, _config):
         return '' if value is None or pd.isna(value) else str(value).strip()
 
     def positive(value):
-        try:
-            number = Decimal(str(value))
-            return number if number.is_finite() and number > 0 else None
-        except (InvalidOperation, ValueError):
-            return None
+        value = _decimal_number(value)
+        return value if value is not None and value > 0 else None
 
     def read_pages(table, filters=()):
-        frames, cursor = [], -1
-        while True:
-            frame = finance.run_query(query(table).filter(*filters).filter(table.id > cursor)
-                                      .order_by(table.id.asc()).limit(PAGE_SIZE))
-            if frame is None:
-                raise ValueError('查询返回 None')
-            if frame.empty:
-                break
-            ids = frame['id'].tolist()
-            if ids != sorted(set(ids)) or ids[0] <= cursor:
-                raise ValueError('分页主键重复或乱序')
-            frames.append(frame)
-            cursor = ids[-1]
-            if len(frame) < PAGE_SIZE:
-                break
+        fetch_page = lambda cursor: finance.run_query(query(table).filter(*filters).filter(table.id > cursor)
+                                                     .order_by(table.id).limit(PAGE_SIZE))
+        frames = list(_source_pages(fetch_page, label='基金资料', progress=_progress_note))
         return pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
 
     def classify(target, override):
@@ -914,7 +951,7 @@ def _etf_heat_strategy(_apis, _config):
             raise ValueError('结束日期不能晚于今天')
         # Retention follows the actual run date even when end_date is historical.
         retention_start = get_retention_start(now.date())
-        end = requested - datetime.timedelta(days=1) if requested == now.date() and now.hour < 16 else requested
+        end = _closed_day(requested, now)
         days = [as_date(d) for d in api('get_trade_days')(end_date=end, count=settings['initial_trade_days'])]
         if not days or days != sorted(set(days)) or days[-1] > end:
             raise ValueError('交易日历无效')

@@ -42,6 +42,59 @@ PROGRESS_INTERVAL_SECONDS = 5.0  # 最多每隔多少秒刷新；等待接口/�
 _PROGRESS_LOCAL = threading.local()
 
 
+def _source_pages(fetch_page, key='id', start=-1, label='数据接口', progress=None, fields=(), page_size=None):
+    """普通主键分页只保留当前页，读到空页；服务端可能返回少于请求数量。"""
+    cursor, count = start, 0
+    while True:
+        if progress is not None:
+            progress('{}：已读取 {} 条，正在请求下一页'.format(label, count))
+        frame = fetch_page(cursor)
+        if frame is None:
+            raise ValueError('{} 未返回结果，取消本次入库。'.format(label))
+        if not set(fields).issubset(frame.columns):
+            raise ValueError('{} 返回字段不完整，取消本次入库。'.format(label))
+        if page_size is not None and len(frame) > page_size:
+            raise ValueError('{} 分页超限。'.format(label))
+        if frame.empty:
+            return
+        if key not in frame.columns:
+            raise ValueError('{} 缺少分页主键 {}。'.format(label, key))
+        ids = [int(value) for value in frame[key]]
+        if ids != sorted(set(ids)) or ids[0] <= cursor:
+            raise ValueError('{} 分页主键重复、乱序或未前进。'.format(label))
+        cursor, count = ids[-1], count + len(frame)
+        yield frame
+        del frame, ids
+
+
+def _decimal_number(value):
+    try:
+        result = Decimal(str(value))
+        return result if result.is_finite() else None
+    except (InvalidOperation, ValueError, TypeError):
+        return None
+
+def _round_decimal(value, places=6, precision=50):
+    value = _decimal_number(value)
+    if value is None:
+        return None
+    with localcontext() as ctx:
+        ctx.prec = precision
+        return value.quantize(Decimal(1).scaleb(-places), rounding=ROUND_HALF_UP)
+
+def _optional_date(value):
+    return None if value is None or pd.isna(value) else as_date(value)
+
+def _closed_day(end, now):
+    """日行情在北京时间16点后使用当天；交易日仍由各策略的日历校验。"""
+    return end - datetime.timedelta(days=1) if end == now.date() and now.hour < 16 else end
+
+def _checked_records(frame, fields, label):
+    if frame is None or not set(fields).issubset(frame.columns):
+        raise ValueError('{} 返回缺失或缺少字段，取消本次入库。'.format(label))
+    return frame.to_dict('records')
+
+
 class _ConsoleProgress:
     """仅后台刷新文字；采集与数据库操作始终在主线程串行执行。"""
     def __init__(self, name, index, total, stream, interval):
@@ -107,6 +160,7 @@ class _ConsoleProgress:
 def _progress_scope(name, index, total):
     progress = None
     ending = '完成'
+    _PROGRESS_LOCAL.output = sys.stdout
     try:
         if PROGRESS_ENABLED:
             progress = _ConsoleProgress(name, index, total, sys.stdout, PROGRESS_INTERVAL_SECONDS)
@@ -118,8 +172,23 @@ def _progress_scope(name, index, total):
         raise
     finally:
         _PROGRESS_LOCAL.current = None
+        _PROGRESS_LOCAL.output = None
         if progress is not None:
             progress.close(ending)
+
+
+def _progress_message(message):
+    """Keep brief collection-scope messages visible through the batch quiet stream."""
+    progress = getattr(_PROGRESS_LOCAL, 'current', None)
+    stream = getattr(_PROGRESS_LOCAL, 'output', None) or sys.stdout
+    if progress is not None:
+        with progress.lock:
+            stream.write('\r' + ' ' * progress.width + '\r' + message + '\n')
+            stream.flush()
+            progress.width = 0
+            progress.render(force=True)
+    else:
+        print(message, file=stream, flush=True)
 
 
 def _progress_note(message):
@@ -313,28 +382,14 @@ def _dividend_strategy(_apis, _config):
     RESULT_COLUMNS = [c.name for c in DividendStock.__table__.columns]
     META_COLUMNS = [c.name for c in DividendSnapshot.__table__.columns if c.name not in ('id', 'updated_at')]
 
-    def number(value):
-        try:
-            result = Decimal(str(value))
-            return result if result.is_finite() else None
-        except (InvalidOperation, ValueError, TypeError):
-            return None
+    number = _decimal_number
 
     def rounded(value):
-        value = number(value)
-        if value is None:
-            return None
-        with localcontext() as ctx:
-            ctx.prec = 40
-            return value.quantize(Decimal('0.000001'), rounding=ROUND_HALF_UP)
+        return _round_decimal(value, precision=40)
 
-    def optional_date(value):
-        return None if value is None or pd.isna(value) else as_date(value)
+    optional_date = _optional_date
 
-    def rows(frame, required, label):
-        if frame is None or not set(required).issubset(frame.columns):
-            raise ValueError('{} 返回空对象或缺少字段。'.format(label))
-        return frame.to_dict('records')
+    rows = _checked_records
 
     def by_code(frame, batch, required, label, complete=True):
         values = rows(frame, ['code']+list(required), label)
@@ -401,21 +456,14 @@ def _dividend_strategy(_apis, _config):
         total = {}
         for offset in _progress_items(range(0, len(codes), BATCH_SIZE), '分红批次'):
             batch = codes[offset:offset+BATCH_SIZE]
-            after = -1
-            while True:
-                _progress_note('读取分红明细（主键分页）')
-                fields = ('id', 'code', 'a_registration_date', 'a_xr_date', 'bonus_amount_rmb')
-                q = query(*[getattr(table, f) for f in fields]).filter(
-                    table.code.in_(batch), table.id > after,
-                    or_(and_(table.a_registration_date >= start3, table.a_registration_date <= day),
-                        and_(table.a_xr_date > start1, table.a_xr_date <= day)),
-                ).order_by(table.id).limit(PAGE_SIZE)
-                page = rows(finance.run_query(q), fields, '分红明细')
-                if not page:
-                    break
-                ids = [int(r['id']) for r in page]
-                if ids != sorted(set(ids)) or ids[0] <= after or len(page) > PAGE_SIZE:
-                    raise ValueError('分红分页重复、乱序或超限。')
+            fields = ('id', 'code', 'a_registration_date', 'a_xr_date', 'bonus_amount_rmb')
+            selection = query(*[getattr(table, f) for f in fields]).filter(
+                table.code.in_(batch),
+                or_(and_(table.a_registration_date >= start3, table.a_registration_date <= day),
+                    and_(table.a_xr_date > start1, table.a_xr_date <= day)))
+            fetch_page = lambda cursor: finance.run_query(selection.filter(table.id > cursor).order_by(table.id).limit(PAGE_SIZE))
+            for frame in _source_pages(fetch_page, label='分红明细', progress=_progress_note, fields=fields, page_size=PAGE_SIZE):
+                page = frame.to_dict('records')
                 for row in page:
                     code = str(row['code'])
                     if code not in batch:
@@ -436,7 +484,6 @@ def _dividend_strategy(_apis, _config):
                         item['has_3y'] = True
                     if in1:
                         item['cash_1y'] += cash
-                after = ids[-1]
         return total
 
     def financials(codes, day):
@@ -554,8 +601,7 @@ def _dividend_strategy(_apis, _config):
         end = as_date(end_date) if end_date is not None else now.date()
         if end > now.date():
             raise ValueError('结束日期不能晚于今天。')
-        if end == now.date() and now.hour < 16:
-            end -= datetime.timedelta(days=1)
+        end = _closed_day(end, now)
         _progress_note('确定最近完整交易日')
         days = get_trade_days(end_date=end, count=1)
         if days is None or len(days) != 1 or as_date(days[0]) > end:

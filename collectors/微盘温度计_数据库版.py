@@ -29,6 +29,18 @@ Q = Decimal('0.0000000001')
 Base = declarative_base()
 
 
+def _decimal_number(value):
+    try:
+        result = Decimal(str(value))
+        return result if result.is_finite() else None
+    except (InvalidOperation, ValueError, TypeError):
+        return None
+
+def _closed_day(end, now):
+    """日行情在北京时间16点后使用当天；交易日仍由各策略的日历校验。"""
+    return end - datetime.timedelta(days=1) if end == now.date() and now.hour < 16 else end
+
+
 class MicrocapTemperature(Base):
     __tablename__ = 'microcap_temperature'
     __table_args__ = {'mysql_engine': 'InnoDB', 'mysql_charset': 'utf8mb4'}
@@ -112,12 +124,7 @@ def as_date(value):
     return datetime.datetime.strptime(str(value)[:10], '%Y-%m-%d').date()
 
 
-def number(value):
-    try:
-        result = Decimal(str(value))
-    except (InvalidOperation, ValueError):
-        return None
-    return result if result.is_finite() else None
+number = _decimal_number
 
 
 def rounded(value):
@@ -380,8 +387,8 @@ def run(start_date=START_DATE, end_date=END_DATE, micro_num=MICRO_NUM, sample_st
     end = today if end_date is None else as_date(end_date)
     if start > end or end > today:
         raise ValueError('开始日期不能晚于结束日期，结束日期不能晚于今天。')
-    if skip_existing and end == today and now.hour < 16:
-        end = today - datetime.timedelta(days=1)
+    if skip_existing:
+        end = _closed_day(end, now)
         print('只新增模式：16:00 前不写入当天未完成快照。')
     for value in (micro_num, sample_step):
         if isinstance(value, builtins.bool) or not isinstance(value, builtins.int) or value <= 0:

@@ -43,6 +43,31 @@ PROGRESS_INTERVAL_SECONDS = 5.0  # 最多每隔多少秒刷新；等待接口/�
 _PROGRESS_LOCAL = threading.local()
 
 
+def _decimal_number(value):
+    try:
+        result = Decimal(str(value))
+        return result if result.is_finite() else None
+    except (InvalidOperation, ValueError, TypeError):
+        return None
+
+def _round_decimal(value, places=6, precision=50):
+    value = _decimal_number(value)
+    if value is None:
+        return None
+    with localcontext() as ctx:
+        ctx.prec = precision
+        return value.quantize(Decimal(1).scaleb(-places), rounding=ROUND_HALF_UP)
+
+def _closed_day(end, now):
+    """日行情在北京时间16点后使用当天；交易日仍由各策略的日历校验。"""
+    return end - datetime.timedelta(days=1) if end == now.date() and now.hour < 16 else end
+
+def _checked_records(frame, fields, label):
+    if frame is None or not set(fields).issubset(frame.columns):
+        raise ValueError('{} 返回缺失或缺少字段，取消本次入库。'.format(label))
+    return frame.to_dict('records')
+
+
 class _ConsoleProgress:
     """仅后台刷新文字；采集与数据库操作始终在主线程串行执行。"""
     def __init__(self, name, index, total, stream, interval):
@@ -108,6 +133,7 @@ class _ConsoleProgress:
 def _progress_scope(name, index, total):
     progress = None
     ending = '完成'
+    _PROGRESS_LOCAL.output = sys.stdout
     try:
         if PROGRESS_ENABLED:
             progress = _ConsoleProgress(name, index, total, sys.stdout, PROGRESS_INTERVAL_SECONDS)
@@ -119,8 +145,23 @@ def _progress_scope(name, index, total):
         raise
     finally:
         _PROGRESS_LOCAL.current = None
+        _PROGRESS_LOCAL.output = None
         if progress is not None:
             progress.close(ending)
+
+
+def _progress_message(message):
+    """Keep brief collection-scope messages visible through the batch quiet stream."""
+    progress = getattr(_PROGRESS_LOCAL, 'current', None)
+    stream = getattr(_PROGRESS_LOCAL, 'output', None) or sys.stdout
+    if progress is not None:
+        with progress.lock:
+            stream.write('\r' + ' ' * progress.width + '\r' + message + '\n')
+            stream.flush()
+            progress.width = 0
+            progress.render(force=True)
+    else:
+        print(message, file=stream, flush=True)
 
 
 def _progress_note(message):
@@ -301,25 +342,11 @@ def _growth_strategy(_apis, _config):
     RESULT_COLUMNS = [c.name for c in GrowthStock.__table__.columns]
     META_COLUMNS = [c.name for c in GrowthSnapshot.__table__.columns if c.name not in ('id', 'updated_at')]
 
-    def number(value):
-        try:
-            result = Decimal(str(value))
-            return result if result.is_finite() else None
-        except (InvalidOperation, ValueError, TypeError):
-            return None
+    number = _decimal_number
 
-    def rounded(value, places=6):
-        value = number(value)
-        if value is None:
-            return None
-        with localcontext() as ctx:
-            ctx.prec = 50
-            return value.quantize(Decimal(1).scaleb(-places), rounding=ROUND_HALF_UP)
+    rounded = _round_decimal
 
-    def rows(frame, required, label):
-        if frame is None or not set(required).issubset(frame.columns):
-            raise ValueError('{} 返回空对象或缺少字段，保留原快照。'.format(label))
-        return frame.to_dict('records')
+    rows = _checked_records
 
     def latest_reports(source, as_of):
         # 先选最新三期再检查质量，不可用旧的合格报表顶替最新不合格报表。
@@ -536,7 +563,7 @@ def _growth_strategy(_apis, _config):
         as_of = as_date(end_date) if end_date is not None else now.date()
         if as_of > now.date():
             raise ValueError('结束日期不能晚于今天。')
-        valuation_end = as_of-datetime.timedelta(days=1) if as_of == now.date() and now.hour < 16 else as_of
+        valuation_end = _closed_day(as_of, now)
         days = get_trade_days(end_date=valuation_end, count=1)
         if days is None or len(days) != 1 or as_date(days[0]) > valuation_end:
             raise ValueError('交易日历无效。')

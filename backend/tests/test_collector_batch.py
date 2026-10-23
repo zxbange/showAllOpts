@@ -91,13 +91,14 @@ def test_calculation_and_model_definitions_keep_original_rules(batch):
             used = {n.id for n in ast.walk(node) if isinstance(n, ast.Name)}
             if 'Session' in used or 'engine' in used:
                 continue
-            actual = next(n for n in body if isinstance(n, type(node)) and n.name == node.name)
+            actual = next(n for n in body + tree.body if isinstance(n, type(node)) and n.name == node.name)
             class WithoutProgressOutput(ast.NodeTransformer):
                 def visit_Expr(self, n):
                     if isinstance(n.value, ast.Call) and isinstance(n.value.func, ast.Name) and n.value.func.id in ('print', '_progress_note'):
                         return None
                     return self.generic_visit(n)
                 def visit_Call(self, n):
+                    n.keywords = [k for k in n.keywords if not (k.arg == 'progress' and isinstance(k.value, ast.Name) and k.value.id == '_progress_note')]
                     if isinstance(n.func, ast.Name) and n.func.id == '_progress_items':
                         return self.visit(n.args[0])
                     return self.generic_visit(n)

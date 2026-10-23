@@ -14,6 +14,8 @@ class Frame:
         self.rows = rows
         self.columns = columns or (list(rows[0]) if rows else [])
         self.empty = not rows
+    def __len__(self): return len(self.rows)
+    def __getitem__(self, key): return [row[key] for row in self.rows]
     def to_dict(self, orient): return self.rows
     def iterrows(self):
         for row in self.rows:
@@ -130,7 +132,9 @@ def test_keyset_pagination_does_not_stop_on_short_pages(c):
             ids=[r.id for r in q.limit(2).all()]
             calls.append(ids)
             return Frame([{'id':i} for i in ids],['id'])
-        assert len(c.env['paged'](Table,[],fetch))==5
+        stream = c.env['paged'](Table,[],fetch)
+        assert not calls  # Pagination is lazy until consumed.
+        assert len(list(stream))==5
         assert calls==[[1,2],[3,4],[5],[]]
 
 

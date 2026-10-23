@@ -6,6 +6,7 @@
 from jqdata import *
 from jqdata import jy, finance
 import builtins
+import datetime
 import datetime as dt
 import json
 import math
@@ -20,6 +21,47 @@ END_DATE = None  # 北京时间运行当天；16:00 前仅使用上一日及以�
 RULE_VERSION = 'announcement-open-v1'
 PAGE_SIZE = 1000
 Base = declarative_base()
+
+def _float_number(value):
+    try:
+        result = float(value)
+        return result if math.isfinite(result) else None
+    except (TypeError, ValueError):
+        return None
+
+def _closed_day(end, now):
+    """日行情在北京时间16点后使用当天；交易日仍由各策略的日历校验。"""
+    return end - datetime.timedelta(days=1) if end == now.date() and now.hour < 16 else end
+
+def _checked_records(frame, fields, label):
+    if frame is None or not set(fields).issubset(frame.columns):
+        raise ValueError('{} 返回缺失或缺少字段，取消本次入库。'.format(label))
+    return frame.to_dict('records')
+
+def _source_pages(fetch_page, key='id', start=-1, label='数据接口', progress=None, fields=(), page_size=None):
+    """普通主键分页只保留当前页，读到空页；服务端可能返回少于请求数量。"""
+    cursor, count = start, 0
+    while True:
+        if progress is not None:
+            progress('{}：已读取 {} 条，正在请求下一页'.format(label, count))
+        frame = fetch_page(cursor)
+        if frame is None:
+            raise ValueError('{} 未返回结果，取消本次入库。'.format(label))
+        if not set(fields).issubset(frame.columns):
+            raise ValueError('{} 返回字段不完整，取消本次入库。'.format(label))
+        if page_size is not None and len(frame) > page_size:
+            raise ValueError('{} 分页超限。'.format(label))
+        if frame.empty:
+            return
+        if key not in frame.columns:
+            raise ValueError('{} 缺少分页主键 {}。'.format(label, key))
+        ids = [int(value) for value in frame[key]]
+        if ids != sorted(set(ids)) or ids[0] <= cursor:
+            raise ValueError('{} 分页主键重复、乱序或未前进。'.format(label))
+        cursor, count = ids[-1], count + len(frame)
+        yield frame
+        del frame, ids
+
 
 class EarningsRun(Base):
     __tablename__ = 'earnings_gap_run'
@@ -105,12 +147,7 @@ def latest_period(day):
     return dt.date(day.year, ((day.month - 1) // 3) * 3 + 1, 1) - dt.timedelta(days=1)
 
 
-def number(value):
-    try:
-        result = float(value)
-        return result if math.isfinite(result) else None
-    except (TypeError, ValueError):
-        return None
+number = _float_number
 
 
 def clean(value):
@@ -128,30 +165,20 @@ def clean(value):
     return number(value)
 
 
-def checked_rows(frame, fields, label):
-    if frame is None or not set(fields).issubset(frame.columns):
-        raise ValueError('{} 返回缺失或字段不完整，取消本次入库。'.format(label))
-    return frame.to_dict('records')
+checked_rows = _checked_records
 
 
 def paged(table, filters, fetch):
-    # 主键分页，直到空页；避免平台行数限制造成漏数。
     key = getattr(table, 'id', None)
     if key is None:
         key = getattr(table, 'ID', None)
     if key is None:
         raise ValueError('数据表缺少分页主键，不能保证完整采集。')
-    after, rows = -1, []
-    while True:
-        frame = fetch(query(table).filter(*(filters + [key > after])).order_by(key).limit(PAGE_SIZE))
-        page = checked_rows(frame, [key.key], '公告接口')
-        if not page:
-            return rows
-        ids = [int(r[key.key]) for r in page]
-        if ids != sorted(set(ids)) or ids[0] <= after:
-            raise ValueError('公告分页顺序异常，取消本次入库。')
-        rows.extend(page)
-        after = ids[-1]
+    label = {'SecuMain': '公司代码映射', 'LC_FSPerformedLetters': '业绩快报',
+             'STK_FIN_FORCAST': '业绩预告'}.get(getattr(table, '__tablename__', ''), '公告分页')
+    fetch_page = lambda cursor: fetch(query(table).filter(*filters).filter(key > cursor).order_by(key).limit(PAGE_SIZE))
+    for frame in _source_pages(fetch_page, key=key.key, label=label, fields=(key.key,)):
+        yield from frame.to_dict('records')
 
 
 SOURCE_NAMES = {'express': '业绩快报', 'forecast': '业绩预告', 'formal': '正式财报'}
@@ -419,7 +446,7 @@ def run(end_date=END_DATE, skip_existing=True):
     if requested > now.date():
         raise ValueError('结束日期不能晚于今天。')
     period = latest_period(requested)
-    cutoff = requested - dt.timedelta(days=1) if requested == now.date() and now.hour < 16 else requested
+    cutoff = _closed_day(requested, now)
     days = get_trade_days(end_date=cutoff, count=1)
     if days is None or len(days) != 1:
         raise ValueError('无法获取最近完整交易日。')

@@ -51,6 +51,11 @@ def strategy_settings(name):
     return settings
 
 
+def _closed_day(end, now):
+    """日行情在北京时间16点后使用当天；交易日仍由各策略的日历校验。"""
+    return end - datetime.timedelta(days=1) if end == now.date() and now.hour < 16 else end
+
+
 def china_now():
     """所有策略统一按北京时间确定运行日期。"""
     return datetime.datetime.utcnow() + datetime.timedelta(hours=8)
@@ -323,8 +328,7 @@ def _breadth_strategy(_apis, _config):
         initial = as_date(start_date) if start_date is not None else end-datetime.timedelta(days=INITIAL_DAYS)
         if end > now.date() or initial > end:
             raise ValueError('日期范围无效或结束日期晚于今天。')
-        if end == now.date() and now.hour < 16:
-            end -= datetime.timedelta(days=1)
+        end = _closed_day(end, now)
         output = []
         with database_scope(Base, _config) as Session:
             latest = last_date(Session, series_key(micro_num))

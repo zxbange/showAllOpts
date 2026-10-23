@@ -44,6 +44,34 @@ _API_NAMES = ('finance', 'query', 'get_all_securities', 'get_industry', 'get_pri
 _PROGRESS_LOCAL = threading.local()
 
 
+def _optional_date(value):
+    return None if value is None or pd.isna(value) else as_date(value)
+
+def _source_pages(fetch_page, key='id', start=-1, label='数据接口', progress=None, fields=(), page_size=None):
+    """普通主键分页只保留当前页，读到空页；服务端可能返回少于请求数量。"""
+    cursor, count = start, 0
+    while True:
+        if progress is not None:
+            progress('{}：已读取 {} 条，正在请求下一页'.format(label, count))
+        frame = fetch_page(cursor)
+        if frame is None:
+            raise ValueError('{} 未返回结果，取消本次入库。'.format(label))
+        if not set(fields).issubset(frame.columns):
+            raise ValueError('{} 返回字段不完整，取消本次入库。'.format(label))
+        if page_size is not None and len(frame) > page_size:
+            raise ValueError('{} 分页超限。'.format(label))
+        if frame.empty:
+            return
+        if key not in frame.columns:
+            raise ValueError('{} 缺少分页主键 {}。'.format(label, key))
+        ids = [int(value) for value in frame[key]]
+        if ids != sorted(set(ids)) or ids[0] <= cursor:
+            raise ValueError('{} 分页主键重复、乱序或未前进。'.format(label))
+        cursor, count = ids[-1], count + len(frame)
+        yield frame
+        del frame, ids
+
+
 class _ConsoleProgress:
     """仅后台刷新文字；采集与数据库操作始终在主线程串行执行。"""
     def __init__(self, name, index, total, stream, interval):
@@ -406,33 +434,18 @@ def _ownership_strategy(_apis, _config):
     def text_value(value):
         return '' if value is None or pd.isnull(value) else str(value).strip()
 
-    def day(value):
-        return None if value is None or pd.isnull(value) else as_date(value)
+    day = _optional_date
 
     def previous_quarter(period):
         return datetime.date(period.year, ((period.month-1)//3)*3+1, 1)-datetime.timedelta(days=1)
 
     def pages(table, *conditions, columns=None):
-        """Yield one row at a time; only the current source page is retained."""
-        cursor, count = 0, 0
+        selection = query(*columns) if columns is not None else query(table)
         size = builtins.min(settings['page_size'], 2000)
-        while True:
-            _progress_note('读取 {}，已读取 {} 条'.format(table.__name__, count))
-            selection = query(*columns) if columns is not None else query(table)
-            frame = finance.run_query(selection.filter(table.id > cursor, *conditions).order_by(table.id).limit(size))
-            if frame is None:
-                raise ValueError('数据接口未返回结果')
-            if frame.empty:
-                break
-            rows = frame.to_dict('records')
-            del frame
-            ids = [int(r['id']) for r in rows]
-            if ids != sorted(set(ids)) or ids[0] <= cursor:
-                raise ValueError('数据接口分页未按 ID 递增')
-            cursor = ids[-1]
-            count += len(rows)
-            yield from rows
-            del rows, ids
+        fetch_page = lambda cursor: finance.run_query(selection.filter(table.id > cursor, *conditions)
+                                                     .order_by(table.id).limit(size))
+        for frame in _source_pages(fetch_page, start=0, label=table.__name__, progress=_progress_note):
+            yield from frame.to_dict('records')
             # Query until empty even when upstream caps below requested page size.
 
     def grouped_pages(table, columns, *conditions, label='报告索引'):
@@ -766,35 +779,34 @@ def _ownership_strategy(_apis, _config):
                     _progress_message('个股机构持仓：未检测到新增披露，跳过持仓复查、户数采集和社保比较。')
                     return pd.DataFrame(columns=['kind', 'code', 'date'])
 
-        securities = _apis['get_all_securities'](types=['stock'],date=as_of)
-        if securities is None or securities.empty:
-            raise ValueError('股票清单为空，停止写入')
-        codes = sorted(str(code) for code in securities.index)
-        fund_map = {}
-        main = finance.FUND_MAIN_INFO
-        for row in pages(main,columns=[main.id,main.main_code,main.statistics_main_code]):
-            fund = text_value(row.get('main_code')).split('.')[0]
-            canonical = text_value(row.get('statistics_main_code')).split('.')[0] or fund
-            if fund:
-                fund_map[fund] = canonical
-        targeted = (not full_refresh and previous_probe is not None
-                    and previous_probe.get('history_years') == settings['history_years']
-                    and previous_probe.get('refresh_quarters') == settings['refresh_quarters'])
-        review_codes = None
-        if targeted:
-            with database_scope(Base, _config) as Session:
+            securities = _apis['get_all_securities'](types=['stock'],date=as_of)
+            if securities is None or securities.empty:
+                raise ValueError('股票清单为空，停止写入')
+            codes = sorted(str(code) for code in securities.index)
+            fund_map = {}
+            main = finance.FUND_MAIN_INFO
+            for row in pages(main,columns=[main.id,main.main_code,main.statistics_main_code]):
+                fund = text_value(row.get('main_code')).split('.')[0]
+                canonical = text_value(row.get('statistics_main_code')).split('.')[0] or fund
+                if fund:
+                    fund_map[fund] = canonical
+            targeted = (not full_refresh and previous_probe is not None
+                        and previous_probe.get('history_years') == settings['history_years']
+                        and previous_probe.get('refresh_quarters') == settings['refresh_quarters'])
+            review_codes = None
+            if targeted:
                 with session_scope(Session) as session:
                     known = set(codes) | {r[0] for r in session.query(OwnershipStock.code).all()}
-            review_codes = affected_stocks(previous_probe, previous_day, signature, as_of,
-                                           fund_map, known, periods[-settings['refresh_quarters']:])
-            codes = [c for c in codes if c in set(review_codes)]
-            periods = periods[-settings['refresh_quarters']:] if review_codes else []
-            _progress_message('个股机构持仓：新增披露影响 {} 只股票，仅复查这些股票最近 {} 个季度。'.format(len(review_codes), settings['refresh_quarters']))
-        else:
-            _progress_message('个股机构持仓：首次建立基线或手动完整刷新，按原有断点采集。')
-        # Compact keys only: no raw rows or JSON payloads are accumulated for the preview.
-        changed = set()
-        with database_scope(Base,_config) as Session:
+                review_codes = affected_stocks(previous_probe, previous_day, signature, as_of,
+                                               fund_map, known, periods[-settings['refresh_quarters']:])
+                affected = set(review_codes)
+                codes = [c for c in codes if c in affected]
+                periods = periods[-settings['refresh_quarters']:] if review_codes else []
+                _progress_message('个股机构持仓：新增披露影响 {} 只股票，仅复查这些股票最近 {} 个季度。'.format(len(review_codes), settings['refresh_quarters']))
+            else:
+                _progress_message('个股机构持仓：首次建立基线或手动完整刷新，按原有断点采集。')
+            # Compact keys only: no raw rows or JSON payloads are accumulated for the preview.
+            changed = set()
             install_change_tracking(Session)
             with session_scope(Session) as session:
                 for batch in _progress_items(list(batches(codes)),'股票资料',lambda b:b[0]):
@@ -865,7 +877,7 @@ def _ownership_strategy(_apis, _config):
                 else:
                     probe.payload, probe.as_of = signature, as_of
                 session.commit()
-        return pd.DataFrame(sorted(changed),columns=['kind','code','date'])
+            return pd.DataFrame(sorted(changed),columns=['kind','code','date'])
     return SimpleNamespace(**locals())
 
 

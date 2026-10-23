@@ -44,6 +44,18 @@ PROGRESS_INTERVAL_SECONDS = 5.0  # 最多每隔多少秒刷新；等待接口/�
 _PROGRESS_LOCAL = threading.local()
 
 
+def _float_number(value):
+    try:
+        result = float(value)
+        return result if math.isfinite(result) else None
+    except (TypeError, ValueError):
+        return None
+
+def _closed_day(end, now):
+    """日行情在北京时间16点后使用当天；交易日仍由各策略的日历校验。"""
+    return end - datetime.timedelta(days=1) if end == now.date() and now.hour < 16 else end
+
+
 class _ConsoleProgress:
     """仅后台刷新文字；采集与数据库操作始终在主线程串行执行。"""
     def __init__(self, name, index, total, stream, interval):
@@ -109,6 +121,7 @@ class _ConsoleProgress:
 def _progress_scope(name, index, total):
     progress = None
     ending = '完成'
+    _PROGRESS_LOCAL.output = sys.stdout
     try:
         if PROGRESS_ENABLED:
             progress = _ConsoleProgress(name, index, total, sys.stdout, PROGRESS_INTERVAL_SECONDS)
@@ -120,8 +133,23 @@ def _progress_scope(name, index, total):
         raise
     finally:
         _PROGRESS_LOCAL.current = None
+        _PROGRESS_LOCAL.output = None
         if progress is not None:
             progress.close(ending)
+
+
+def _progress_message(message):
+    """Keep brief collection-scope messages visible through the batch quiet stream."""
+    progress = getattr(_PROGRESS_LOCAL, 'current', None)
+    stream = getattr(_PROGRESS_LOCAL, 'output', None) or sys.stdout
+    if progress is not None:
+        with progress.lock:
+            stream.write('\r' + ' ' * progress.width + '\r' + message + '\n')
+            stream.flush()
+            progress.width = 0
+            progress.render(force=True)
+    else:
+        print(message, file=stream, flush=True)
 
 
 def _progress_note(message):
@@ -281,7 +309,6 @@ def _short_term_strategy(_apis, _config):
         payload = Column(JSON, nullable=False)
         updated_at = Column(DateTime, nullable=False)
 
-    ST_STOCKS = set()
     RISE_THRESHOLD, VOLUME_ENLARGE_T2, VOLUME_SHRINK_T1, VOLUME_ENLARGE_T = 3.0, 1.2, 0.8, 1.2
 
     def compute_bbi(df):
@@ -364,7 +391,7 @@ def _short_term_strategy(_apis, _config):
                     picks.append(code)
             return picks
 
-    def get_limit_rate(ts_code: str, pct_chg: float) -> float:
+    def get_limit_rate(ts_code: str) -> float:
         """根据股票代码判断涨停阈值（10%/20%/30%）"""
         code = ts_code.upper()
         if code.startswith("300") or code.startswith("301") or code.startswith("688"):
@@ -375,7 +402,7 @@ def _short_term_strategy(_apis, _config):
 
     def is_limit_up(ts_code: str, pct_chg: float) -> bool:
         """判断是否涨停（根据板块不同阈值）"""
-        rate = get_limit_rate(ts_code, pct_chg)
+        rate = get_limit_rate(ts_code)
         threshold = 9.5 if rate == 0.10 else (19.5 if rate == 0.20 else 29.5)
         return pct_chg >= threshold
 
@@ -387,19 +414,15 @@ def _short_term_strategy(_apis, _config):
         row_t1 = df.iloc[-2]
         row_t = df.iloc[-1]
 
-        # 0. 过滤ST股票
-        if ts_code in ST_STOCKS:
-            return None
-
         # 1. T-2日必须涨停
         if not is_limit_up(ts_code, row_t2["pct_chg"]):
             return None
 
         # 计算T-2涨停价
-        rate_t2 = get_limit_rate(ts_code, row_t2["pct_chg"])
+        rate_t2 = get_limit_rate(ts_code)
         t2_limit_price = round(row_t2["pre_close"] * (1 + rate_t2), 2)
 
-        # 2. T-1日条件（不限是否涨停，只看低价和放量）
+        # 2. T-1日条件（不限是否涨停，只看最低价）
         if row_t1["low"] < t2_limit_price:
             return None
 
@@ -409,19 +432,8 @@ def _short_term_strategy(_apis, _config):
         if row_t["low"] < t2_limit_price:
             return None
 
-        return {
-            "ts_code": ts_code,
-            "date_t2": str(row_t2["date"]),
-            "date_t1": str(row_t1["date"]),
-            "date_t": str(row_t["date"]),
-            "t2_pct": round(row_t2["pct_chg"], 2),
-            "t2_limit_price": t2_limit_price,
-            "t1_pct": round(row_t1["pct_chg"], 2),
-            "t1_vol_ratio": round(row_t1["volume"] / row_t2["volume"], 2),
-            "t1_low": row_t1["low"],
-            "t_pct": round(row_t["pct_chg"], 2),
-            "t_low": row_t["low"],
-        }
+        return True
+
 
     def analyze_one(code, df):
         """
@@ -493,17 +505,14 @@ def _short_term_strategy(_apis, _config):
 
         return cond1_ok and cond2_ok and cond3_ok and cond4_ok
 
-    def finite(value):
-        try:
-            value = float(value)
-            return value if math.isfinite(value) else None
-        except (TypeError, ValueError):
-            return None
+    finite = _float_number
+
+    bbi_selector = BBIShortLongSelector()
 
     def evaluate(history, code, is_st=False):
         # Keep original strategy windows: BBI tail 60, xuli tail 65.
         matched = []
-        if BBIShortLongSelector().select(history['date'].iloc[-1], {code: history}):
+        if bbi_selector.select(history['date'].iloc[-1], {code: history}):
             matched.append('bukou')
         if not is_st and analyze_stock(history, code):
             matched.append('redhover')
@@ -628,7 +637,7 @@ def _short_term_strategy(_apis, _config):
         return meta, selected
 
     def save_day(Session, day, meta, records):
-        stamp = datetime.datetime.utcnow() + datetime.timedelta(hours=8)
+        stamp = china_now()
         with session_scope(Session) as session:
             previous = session.query(ShortTermRun).filter_by(trade_date=day).first()
             if previous is not None and previous.payload.get('rule_version') == meta.get('rule_version'):
@@ -651,7 +660,7 @@ def _short_term_strategy(_apis, _config):
         if skip_existing is not True:
             raise ValueError('短线选股固定只新增完整交易日快照。')
         clock = china_now()
-        latest = clock.date() if clock.hour >= 16 else clock.date() - datetime.timedelta(days=1)
+        latest = _closed_day(clock.date(), clock)
         keep_days = [as_date(d) for d in get_trade_days(end_date=latest, count=3)]
         if len(keep_days) != 3:
             raise ValueError('最近三个完整交易日日历不足。')

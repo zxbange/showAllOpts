@@ -89,19 +89,6 @@ _RUN_LOCK = globals().get('_RUN_LOCK') or threading.Lock()
 _API_NAMES = ('get_all_securities', 'get_trade_days', 'get_price', 'get_extras',
               'get_industries', 'get_industry_stocks', 'get_industry', 'get_fundamentals',
               'query', 'valuation', 'indicator', 'income', 'finance', 'jy')
-_PREVIEW_COLUMNS = {
-    '短线选股': ('trade_date', 'code', 'name', 'methods', 'close'),
-    '个股机构持仓': ('kind', 'code', 'date'),
-    'ETF动量热度': ('trade_date', 'code', 'name', 'score', 'annual_return', 'r2'),
-    '高增长': ('rank', 'code', 'name', 'industry_name', 'annual_profit_growth', 'pe_ttm', 'pb'),
-    '高股息选股': ('method', 'rank', 'code', 'name', 'dividend_yield_1y', 'dividend_ratio_3y', 'pe_ttm'),
-    '行业动量': ('trade_date', 'industry_name', 'momentum', 'momentum_rank'),
-    '抱团拥挤度': ('trade_date', 'top_pct', 'ratio', 'top_money', 'total_money'),
-    '微盘温度计': ('trade_date', 'score', 'micro_index', 'sample_count'),
-    'ETF份额': ('trade_date', 'fund_code', 'fund_name', 'shares'),
-    '微盘新高新低': ('trade_date', 'sample_count', 'high_5', 'low_5', 'high_30', 'low_30'),
-    '净利润断层': ('report_period', 'code', 'name', 'industry_name', 'signal_date', 'profit_yoy'),
-}
 
 
 _PROGRESS_LOCAL = threading.local()
@@ -261,6 +248,71 @@ def as_date(value):
     return datetime.datetime.strptime(str(value)[:10], '%Y-%m-%d').date()
 
 
+def _decimal_number(value):
+    try:
+        result = Decimal(str(value))
+        return result if result.is_finite() else None
+    except (InvalidOperation, ValueError, TypeError):
+        return None
+
+
+def _float_number(value):
+    try:
+        result = float(value)
+        return result if math.isfinite(result) else None
+    except (TypeError, ValueError):
+        return None
+
+
+def _round_decimal(value, places=6, precision=50):
+    value = _decimal_number(value)
+    if value is None:
+        return None
+    with localcontext() as ctx:
+        ctx.prec = precision
+        return value.quantize(Decimal(1).scaleb(-places), rounding=ROUND_HALF_UP)
+
+
+def _optional_date(value):
+    return None if value is None or pd.isna(value) else as_date(value)
+
+
+def _closed_day(end, now):
+    """日行情在北京时间16点后使用当天；交易日仍由各策略的日历校验。"""
+    return end - datetime.timedelta(days=1) if end == now.date() and now.hour < 16 else end
+
+
+def _checked_records(frame, fields, label):
+    if frame is None or not set(fields).issubset(frame.columns):
+        raise ValueError('{} 返回缺失或缺少字段，取消本次入库。'.format(label))
+    return frame.to_dict('records')
+
+
+def _source_pages(fetch_page, key='id', start=-1, label='数据接口', progress=None, fields=(), page_size=None):
+    """普通主键分页只保留当前页，读到空页；服务端可能返回少于请求数量。"""
+    cursor, count = start, 0
+    while True:
+        if progress is not None:
+            progress('{}：已读取 {} 条，正在请求下一页'.format(label, count))
+        frame = fetch_page(cursor)
+        if frame is None:
+            raise ValueError('{} 未返回结果，取消本次入库。'.format(label))
+        if not set(fields).issubset(frame.columns):
+            raise ValueError('{} 返回字段不完整，取消本次入库。'.format(label))
+        if page_size is not None and len(frame) > page_size:
+            raise ValueError('{} 分页超限。'.format(label))
+        if frame.empty:
+            return
+        if key not in frame.columns:
+            raise ValueError('{} 缺少分页主键 {}。'.format(label, key))
+        ids = [int(value) for value in frame[key]]
+        if ids != sorted(set(ids)) or ids[0] <= cursor:
+            raise ValueError('{} 分页主键重复、乱序或未前进。'.format(label))
+        cursor, count = ids[-1], count + len(frame)
+        yield frame
+        del frame, ids
+
+
 def connect_database(config):
     """统一建立连接、有限重试；调用策略负责最终释放 engine。"""
     opts = DB_OPTIONS
@@ -396,11 +448,12 @@ def run_all(strategy_names=None, options=None, db_config=None, preview_rows=None
             started = time.monotonic()
             row = dict(strategy=name, status='FAILED', rows=None, error_type=None, error=None)
             result = None
+            _, write_mode, preview_columns = STRATEGY_SPECS[name]
             try:
                 with _progress_scope(name, strategy_index, len(names)), _QuietStream() as quiet, redirect_stdout(quiet), redirect_stderr(quiet):
                     run = _load_strategy(name, config, apis)
                     kwargs = dict(options.get(name, {}))
-                    if name in ('高股息选股', '高增长'):
+                    if write_mode == 'latest':
                         kwargs.pop('skip_existing', None)  # 此模块显式授权每次更新最新结果。
                     else:
                         kwargs['skip_existing'] = True
@@ -414,14 +467,14 @@ def run_all(strategy_names=None, options=None, db_config=None, preview_rows=None
             row['elapsed_seconds'] = builtins.round(time.monotonic() - started, 3)
             summary.append(row)
             if row['status'] == 'SUCCESS':
-                label = '新增或更新' if name == '个股机构持仓' else '当前选股结果' if name in ('高股息选股', '高增长') else '新增'
+                label = {'changes': '新增或更新', 'latest': '当前选股结果', 'append': '新增'}[write_mode]
                 print('\n【{}】成功：{} {} 条，耗时 {:.2f} 秒。'.format(name, label, row['rows'], row['elapsed_seconds']))
                 if not row['rows']:
-                    print('本次选股无匹配，最新结果已保存。' if name in ('高股息选股', '高增长')
+                    print('本次选股无匹配，最新结果已保存。' if write_mode == 'latest'
                           else '无新增数据；已有记录跳过，或数据源尚无可入库数据。')
                 elif preview_rows:
                     try:
-                        columns = [c for c in _PREVIEW_COLUMNS[name] if c in result.columns]
+                        columns = [c for c in preview_columns if c in result.columns]
                         print('本次结果预览（最后 {} 条，字段单位沿用策略）：'.format(builtins.min(preview_rows, row['rows'])))
                         print(result[columns].tail(preview_rows).to_string(index=False))
                     except Exception:
@@ -628,8 +681,8 @@ def _momentum_strategy(_apis, _config):
         initial_start, end = as_date(start_date), as_date(end_date)
         if end > today_china:
             raise ValueError('结束日期不能晚于运行当天。')
-        if skip_existing and end == today_china and now_china.hour < 16:
-            end = today_china - datetime.timedelta(days=1)
+        if skip_existing:
+            end = _closed_day(end, now_china)
         # 即使手动指定历史 end_date，保留范围仍以实际运行当天为基准。
         # 日历验证在任何数据库修改之前完成，节假日自动使用最近交易日。
         retention_start = get_retention_start(today_china, RETENTION_TRADE_DAYS)
@@ -789,8 +842,8 @@ def _crowding_strategy(_apis, _config):
         end = today if end_date is None else as_date(end_date)
         if start > end or end > today:
             raise ValueError('开始日期不能晚于结束日期，结束日期不能晚于运行当天。')
-        if skip_existing and end == today and now.hour < 16:
-            end = today - datetime.timedelta(days=1)
+        if skip_existing:
+            end = _closed_day(end, now)
         pct = Decimal(str(top_pct))
         if not pct.is_finite() or not Decimal('0') < pct <= Decimal('1'):
             raise ValueError('TOP_PCT 必须在 (0, 1] 内。')
@@ -894,12 +947,7 @@ def _microcap_strategy(_apis, _config):
     RESULT_COLUMNS = [column.name for column in MicrocapTemperature.__table__.columns
                       if column.name != 'member_codes']
 
-    def number(value):
-        try:
-            result = Decimal(str(value))
-        except (InvalidOperation, ValueError):
-            return None
-        return result if result.is_finite() else None
+    number = _decimal_number
 
     def rounded(value):
         return Decimal(value).quantize(Q)
@@ -1143,8 +1191,8 @@ def _microcap_strategy(_apis, _config):
         end = today if end_date is None else as_date(end_date)
         if start > end or end > today:
             raise ValueError('开始日期不能晚于结束日期，结束日期不能晚于今天。')
-        if skip_existing and end == today and now.hour < 16:
-            end = today - datetime.timedelta(days=1)
+        if skip_existing:
+            end = _closed_day(end, now)
         for value in (micro_num, sample_step):
             if isinstance(value, builtins.bool) or not isinstance(value, builtins.int) or value <= 0:
                 raise ValueError('微盘数量和采样步长必须是正整数。')
@@ -1450,12 +1498,7 @@ def _earnings_strategy(_apis, _config):
         # 当前季度开始前一天；10 月运行统一取 9 月 30 日。
         return dt.date(day.year, ((day.month - 1) // 3) * 3 + 1, 1) - dt.timedelta(days=1)
 
-    def number(value):
-        try:
-            result = float(value)
-            return result if math.isfinite(result) else None
-        except (TypeError, ValueError):
-            return None
+    number = _float_number
 
     def clean(value):
         # 原始字段用于审计；JSON 不允许 NaN/Infinity。
@@ -1471,32 +1514,19 @@ def _earnings_strategy(_apis, _config):
             return value
         return number(value)
 
-    def checked_rows(frame, fields, label):
-        if frame is None or not set(fields).issubset(frame.columns):
-            raise ValueError('{} 返回缺失或字段不完整，取消本次入库。'.format(label))
-        return frame.to_dict('records')
+    checked_rows = _checked_records
 
     def paged(table, filters, fetch):
-        # 主键分页，直到空页；避免平台行数限制造成漏数。
         key = getattr(table, 'id', None)
         if key is None:
             key = getattr(table, 'ID', None)
         if key is None:
             raise ValueError('数据表缺少分页主键，不能保证完整采集。')
-        after, rows = -1, []
-        while True:
-            _progress_note('{}：已读取 {} 条，正在请求下一页'.format(
-                {'SecuMain': '公司代码映射', 'LC_FSPerformedLetters': '业绩快报', 'STK_FIN_FORCAST': '业绩预告'}.get(
-                    getattr(table, '__tablename__', ''), '公告分页'), len(rows)))
-            frame = fetch(query(table).filter(*(filters + [key > after])).order_by(key).limit(PAGE_SIZE))
-            page = checked_rows(frame, [key.key], '公告接口')
-            if not page:
-                return rows
-            ids = [int(r[key.key]) for r in page]
-            if ids != sorted(set(ids)) or ids[0] <= after:
-                raise ValueError('公告分页顺序异常，取消本次入库。')
-            rows.extend(page)
-            after = ids[-1]
+        label = {'SecuMain': '公司代码映射', 'LC_FSPerformedLetters': '业绩快报',
+                 'STK_FIN_FORCAST': '业绩预告'}.get(getattr(table, '__tablename__', ''), '公告分页')
+        fetch_page = lambda cursor: fetch(query(table).filter(*filters).filter(key > cursor).order_by(key).limit(PAGE_SIZE))
+        for frame in _source_pages(fetch_page, key=key.key, label=label, progress=_progress_note, fields=(key.key,)):
+            yield from frame.to_dict('records')
 
     SOURCE_NAMES = {'express': '业绩快报', 'forecast': '业绩预告', 'formal': '正式财报'}
 
@@ -1748,7 +1778,7 @@ def _earnings_strategy(_apis, _config):
         if requested > now.date():
             raise ValueError('结束日期不能晚于今天。')
         period = latest_period(requested)
-        cutoff = requested - dt.timedelta(days=1) if requested == now.date() and now.hour < 16 else requested
+        cutoff = _closed_day(requested, now)
         days = get_trade_days(end_date=cutoff, count=1)
         if days is None or len(days) != 1:
             raise ValueError('无法获取最近完整交易日。')
@@ -1970,8 +2000,7 @@ def _breadth_strategy(_apis, _config):
         initial = as_date(start_date) if start_date is not None else end-datetime.timedelta(days=INITIAL_DAYS)
         if end > now.date() or initial > end:
             raise ValueError('日期范围无效或结束日期晚于今天。')
-        if end == now.date() and now.hour < 16:
-            end -= datetime.timedelta(days=1)
+        end = _closed_day(end, now)
         output = []
         with database_scope(Base, _config) as Session:
             latest = last_date(Session, series_key(micro_num))
@@ -2049,28 +2078,14 @@ def _dividend_strategy(_apis, _config):
     RESULT_COLUMNS = [c.name for c in DividendStock.__table__.columns]
     META_COLUMNS = [c.name for c in DividendSnapshot.__table__.columns if c.name not in ('id', 'updated_at')]
 
-    def number(value):
-        try:
-            result = Decimal(str(value))
-            return result if result.is_finite() else None
-        except (InvalidOperation, ValueError, TypeError):
-            return None
+    number = _decimal_number
 
     def rounded(value):
-        value = number(value)
-        if value is None:
-            return None
-        with localcontext() as ctx:
-            ctx.prec = 40
-            return value.quantize(Decimal('0.000001'), rounding=ROUND_HALF_UP)
+        return _round_decimal(value, precision=40)
 
-    def optional_date(value):
-        return None if value is None or pd.isna(value) else as_date(value)
+    optional_date = _optional_date
 
-    def rows(frame, required, label):
-        if frame is None or not set(required).issubset(frame.columns):
-            raise ValueError('{} 返回空对象或缺少字段。'.format(label))
-        return frame.to_dict('records')
+    rows = _checked_records
 
     def by_code(frame, batch, required, label, complete=True):
         values = rows(frame, ['code']+list(required), label)
@@ -2137,21 +2152,14 @@ def _dividend_strategy(_apis, _config):
         total = {}
         for offset in _progress_items(range(0, len(codes), BATCH_SIZE), '分红批次'):
             batch = codes[offset:offset+BATCH_SIZE]
-            after = -1
-            while True:
-                _progress_note('读取分红明细（主键分页）')
-                fields = ('id', 'code', 'a_registration_date', 'a_xr_date', 'bonus_amount_rmb')
-                q = query(*[getattr(table, f) for f in fields]).filter(
-                    table.code.in_(batch), table.id > after,
-                    or_(and_(table.a_registration_date >= start3, table.a_registration_date <= day),
-                        and_(table.a_xr_date > start1, table.a_xr_date <= day)),
-                ).order_by(table.id).limit(PAGE_SIZE)
-                page = rows(finance.run_query(q), fields, '分红明细')
-                if not page:
-                    break
-                ids = [int(r['id']) for r in page]
-                if ids != sorted(set(ids)) or ids[0] <= after or len(page) > PAGE_SIZE:
-                    raise ValueError('分红分页重复、乱序或超限。')
+            fields = ('id', 'code', 'a_registration_date', 'a_xr_date', 'bonus_amount_rmb')
+            selection = query(*[getattr(table, f) for f in fields]).filter(
+                table.code.in_(batch),
+                or_(and_(table.a_registration_date >= start3, table.a_registration_date <= day),
+                    and_(table.a_xr_date > start1, table.a_xr_date <= day)))
+            fetch_page = lambda cursor: finance.run_query(selection.filter(table.id > cursor).order_by(table.id).limit(PAGE_SIZE))
+            for frame in _source_pages(fetch_page, label='分红明细', progress=_progress_note, fields=fields, page_size=PAGE_SIZE):
+                page = frame.to_dict('records')
                 for row in page:
                     code = str(row['code'])
                     if code not in batch:
@@ -2172,7 +2180,6 @@ def _dividend_strategy(_apis, _config):
                         item['has_3y'] = True
                     if in1:
                         item['cash_1y'] += cash
-                after = ids[-1]
         return total
 
     def financials(codes, day):
@@ -2290,8 +2297,7 @@ def _dividend_strategy(_apis, _config):
         end = as_date(end_date) if end_date is not None else now.date()
         if end > now.date():
             raise ValueError('结束日期不能晚于今天。')
-        if end == now.date() and now.hour < 16:
-            end -= datetime.timedelta(days=1)
+        end = _closed_day(end, now)
         _progress_note('确定最近完整交易日')
         days = get_trade_days(end_date=end, count=1)
         if days is None or len(days) != 1 or as_date(days[0]) > end:
@@ -2353,25 +2359,11 @@ def _growth_strategy(_apis, _config):
     RESULT_COLUMNS = [c.name for c in GrowthStock.__table__.columns]
     META_COLUMNS = [c.name for c in GrowthSnapshot.__table__.columns if c.name not in ('id', 'updated_at')]
 
-    def number(value):
-        try:
-            result = Decimal(str(value))
-            return result if result.is_finite() else None
-        except (InvalidOperation, ValueError, TypeError):
-            return None
+    number = _decimal_number
 
-    def rounded(value, places=6):
-        value = number(value)
-        if value is None:
-            return None
-        with localcontext() as ctx:
-            ctx.prec = 50
-            return value.quantize(Decimal(1).scaleb(-places), rounding=ROUND_HALF_UP)
+    rounded = _round_decimal
 
-    def rows(frame, required, label):
-        if frame is None or not set(required).issubset(frame.columns):
-            raise ValueError('{} 返回空对象或缺少字段，保留原快照。'.format(label))
-        return frame.to_dict('records')
+    rows = _checked_records
 
     def latest_reports(source, as_of):
         # 先选最新三期再检查质量，不可用旧的合格报表顶替最新不合格报表。
@@ -2588,7 +2580,7 @@ def _growth_strategy(_apis, _config):
         as_of = as_date(end_date) if end_date is not None else now.date()
         if as_of > now.date():
             raise ValueError('结束日期不能晚于今天。')
-        valuation_end = as_of-datetime.timedelta(days=1) if as_of == now.date() and now.hour < 16 else as_of
+        valuation_end = _closed_day(as_of, now)
         days = get_trade_days(end_date=valuation_end, count=1)
         if days is None or len(days) != 1 or as_date(days[0]) > valuation_end:
             raise ValueError('交易日历无效。')
@@ -2665,28 +2657,13 @@ def _etf_heat_strategy(_apis, _config):
         return '' if value is None or pd.isna(value) else str(value).strip()
 
     def positive(value):
-        try:
-            number = Decimal(str(value))
-            return number if number.is_finite() and number > 0 else None
-        except (InvalidOperation, ValueError):
-            return None
+        value = _decimal_number(value)
+        return value if value is not None and value > 0 else None
 
     def read_pages(table, filters=()):
-        frames, cursor = [], -1
-        while True:
-            frame = finance.run_query(query(table).filter(*filters).filter(table.id > cursor)
-                                      .order_by(table.id.asc()).limit(PAGE_SIZE))
-            if frame is None:
-                raise ValueError('查询返回 None')
-            if frame.empty:
-                break
-            ids = frame['id'].tolist()
-            if ids != sorted(set(ids)) or ids[0] <= cursor:
-                raise ValueError('分页主键重复或乱序')
-            frames.append(frame)
-            cursor = ids[-1]
-            if len(frame) < PAGE_SIZE:
-                break
+        fetch_page = lambda cursor: finance.run_query(query(table).filter(*filters).filter(table.id > cursor)
+                                                     .order_by(table.id).limit(PAGE_SIZE))
+        frames = list(_source_pages(fetch_page, label='基金资料', progress=_progress_note))
         return pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
 
     def classify(target, override):
@@ -3138,7 +3115,7 @@ def _etf_heat_strategy(_apis, _config):
             raise ValueError('结束日期不能晚于今天')
         # Retention follows the actual run date even when end_date is historical.
         retention_start = get_retention_start(now.date())
-        end = requested - datetime.timedelta(days=1) if requested == now.date() and now.hour < 16 else requested
+        end = _closed_day(requested, now)
         days = [as_date(d) for d in api('get_trade_days')(end_date=end, count=settings['initial_trade_days'])]
         if not days or days != sorted(set(days)) or days[-1] > end:
             raise ValueError('交易日历无效')
@@ -3376,33 +3353,18 @@ def _ownership_strategy(_apis, _config):
     def text_value(value):
         return '' if value is None or pd.isnull(value) else str(value).strip()
 
-    def day(value):
-        return None if value is None or pd.isnull(value) else as_date(value)
+    day = _optional_date
 
     def previous_quarter(period):
         return datetime.date(period.year, ((period.month-1)//3)*3+1, 1)-datetime.timedelta(days=1)
 
     def pages(table, *conditions, columns=None):
-        """Yield one row at a time; only the current source page is retained."""
-        cursor, count = 0, 0
+        selection = query(*columns) if columns is not None else query(table)
         size = builtins.min(settings['page_size'], 2000)
-        while True:
-            _progress_note('读取 {}，已读取 {} 条'.format(table.__name__, count))
-            selection = query(*columns) if columns is not None else query(table)
-            frame = finance.run_query(selection.filter(table.id > cursor, *conditions).order_by(table.id).limit(size))
-            if frame is None:
-                raise ValueError('数据接口未返回结果')
-            if frame.empty:
-                break
-            rows = frame.to_dict('records')
-            del frame
-            ids = [int(r['id']) for r in rows]
-            if ids != sorted(set(ids)) or ids[0] <= cursor:
-                raise ValueError('数据接口分页未按 ID 递增')
-            cursor = ids[-1]
-            count += len(rows)
-            yield from rows
-            del rows, ids
+        fetch_page = lambda cursor: finance.run_query(selection.filter(table.id > cursor, *conditions)
+                                                     .order_by(table.id).limit(size))
+        for frame in _source_pages(fetch_page, start=0, label=table.__name__, progress=_progress_note):
+            yield from frame.to_dict('records')
             # Query until empty even when upstream caps below requested page size.
 
     def grouped_pages(table, columns, *conditions, label='报告索引'):
@@ -3736,35 +3698,34 @@ def _ownership_strategy(_apis, _config):
                     _progress_message('个股机构持仓：未检测到新增披露，跳过持仓复查、户数采集和社保比较。')
                     return pd.DataFrame(columns=['kind', 'code', 'date'])
 
-        securities = _apis['get_all_securities'](types=['stock'],date=as_of)
-        if securities is None or securities.empty:
-            raise ValueError('股票清单为空，停止写入')
-        codes = sorted(str(code) for code in securities.index)
-        fund_map = {}
-        main = finance.FUND_MAIN_INFO
-        for row in pages(main,columns=[main.id,main.main_code,main.statistics_main_code]):
-            fund = text_value(row.get('main_code')).split('.')[0]
-            canonical = text_value(row.get('statistics_main_code')).split('.')[0] or fund
-            if fund:
-                fund_map[fund] = canonical
-        targeted = (not full_refresh and previous_probe is not None
-                    and previous_probe.get('history_years') == settings['history_years']
-                    and previous_probe.get('refresh_quarters') == settings['refresh_quarters'])
-        review_codes = None
-        if targeted:
-            with database_scope(Base, _config) as Session:
+            securities = _apis['get_all_securities'](types=['stock'],date=as_of)
+            if securities is None or securities.empty:
+                raise ValueError('股票清单为空，停止写入')
+            codes = sorted(str(code) for code in securities.index)
+            fund_map = {}
+            main = finance.FUND_MAIN_INFO
+            for row in pages(main,columns=[main.id,main.main_code,main.statistics_main_code]):
+                fund = text_value(row.get('main_code')).split('.')[0]
+                canonical = text_value(row.get('statistics_main_code')).split('.')[0] or fund
+                if fund:
+                    fund_map[fund] = canonical
+            targeted = (not full_refresh and previous_probe is not None
+                        and previous_probe.get('history_years') == settings['history_years']
+                        and previous_probe.get('refresh_quarters') == settings['refresh_quarters'])
+            review_codes = None
+            if targeted:
                 with session_scope(Session) as session:
                     known = set(codes) | {r[0] for r in session.query(OwnershipStock.code).all()}
-            review_codes = affected_stocks(previous_probe, previous_day, signature, as_of,
-                                           fund_map, known, periods[-settings['refresh_quarters']:])
-            codes = [c for c in codes if c in set(review_codes)]
-            periods = periods[-settings['refresh_quarters']:] if review_codes else []
-            _progress_message('个股机构持仓：新增披露影响 {} 只股票，仅复查这些股票最近 {} 个季度。'.format(len(review_codes), settings['refresh_quarters']))
-        else:
-            _progress_message('个股机构持仓：首次建立基线或手动完整刷新，按原有断点采集。')
-        # Compact keys only: no raw rows or JSON payloads are accumulated for the preview.
-        changed = set()
-        with database_scope(Base,_config) as Session:
+                review_codes = affected_stocks(previous_probe, previous_day, signature, as_of,
+                                               fund_map, known, periods[-settings['refresh_quarters']:])
+                affected = set(review_codes)
+                codes = [c for c in codes if c in affected]
+                periods = periods[-settings['refresh_quarters']:] if review_codes else []
+                _progress_message('个股机构持仓：新增披露影响 {} 只股票，仅复查这些股票最近 {} 个季度。'.format(len(review_codes), settings['refresh_quarters']))
+            else:
+                _progress_message('个股机构持仓：首次建立基线或手动完整刷新，按原有断点采集。')
+            # Compact keys only: no raw rows or JSON payloads are accumulated for the preview.
+            changed = set()
             install_change_tracking(Session)
             with session_scope(Session) as session:
                 for batch in _progress_items(list(batches(codes)),'股票资料',lambda b:b[0]):
@@ -3835,7 +3796,7 @@ def _ownership_strategy(_apis, _config):
                 else:
                     probe.payload, probe.as_of = signature, as_of
                 session.commit()
-        return pd.DataFrame(sorted(changed),columns=['kind','code','date'])
+            return pd.DataFrame(sorted(changed),columns=['kind','code','date'])
     return SimpleNamespace(**locals())
 
 
@@ -3864,7 +3825,6 @@ def _short_term_strategy(_apis, _config):
         payload = Column(JSON, nullable=False)
         updated_at = Column(DateTime, nullable=False)
 
-    ST_STOCKS = set()
     RISE_THRESHOLD, VOLUME_ENLARGE_T2, VOLUME_SHRINK_T1, VOLUME_ENLARGE_T = 3.0, 1.2, 0.8, 1.2
 
     def compute_bbi(df):
@@ -3947,7 +3907,7 @@ def _short_term_strategy(_apis, _config):
                     picks.append(code)
             return picks
 
-    def get_limit_rate(ts_code: str, pct_chg: float) -> float:
+    def get_limit_rate(ts_code: str) -> float:
         """根据股票代码判断涨停阈值（10%/20%/30%）"""
         code = ts_code.upper()
         if code.startswith("300") or code.startswith("301") or code.startswith("688"):
@@ -3958,7 +3918,7 @@ def _short_term_strategy(_apis, _config):
 
     def is_limit_up(ts_code: str, pct_chg: float) -> bool:
         """判断是否涨停（根据板块不同阈值）"""
-        rate = get_limit_rate(ts_code, pct_chg)
+        rate = get_limit_rate(ts_code)
         threshold = 9.5 if rate == 0.10 else (19.5 if rate == 0.20 else 29.5)
         return pct_chg >= threshold
 
@@ -3970,19 +3930,15 @@ def _short_term_strategy(_apis, _config):
         row_t1 = df.iloc[-2]
         row_t = df.iloc[-1]
 
-        # 0. 过滤ST股票
-        if ts_code in ST_STOCKS:
-            return None
-
         # 1. T-2日必须涨停
         if not is_limit_up(ts_code, row_t2["pct_chg"]):
             return None
 
         # 计算T-2涨停价
-        rate_t2 = get_limit_rate(ts_code, row_t2["pct_chg"])
+        rate_t2 = get_limit_rate(ts_code)
         t2_limit_price = round(row_t2["pre_close"] * (1 + rate_t2), 2)
 
-        # 2. T-1日条件（不限是否涨停，只看低价和放量）
+        # 2. T-1日条件（不限是否涨停，只看最低价）
         if row_t1["low"] < t2_limit_price:
             return None
 
@@ -3992,19 +3948,8 @@ def _short_term_strategy(_apis, _config):
         if row_t["low"] < t2_limit_price:
             return None
 
-        return {
-            "ts_code": ts_code,
-            "date_t2": str(row_t2["date"]),
-            "date_t1": str(row_t1["date"]),
-            "date_t": str(row_t["date"]),
-            "t2_pct": round(row_t2["pct_chg"], 2),
-            "t2_limit_price": t2_limit_price,
-            "t1_pct": round(row_t1["pct_chg"], 2),
-            "t1_vol_ratio": round(row_t1["volume"] / row_t2["volume"], 2),
-            "t1_low": row_t1["low"],
-            "t_pct": round(row_t["pct_chg"], 2),
-            "t_low": row_t["low"],
-        }
+        return True
+
 
     def analyze_one(code, df):
         """
@@ -4076,17 +4021,14 @@ def _short_term_strategy(_apis, _config):
 
         return cond1_ok and cond2_ok and cond3_ok and cond4_ok
 
-    def finite(value):
-        try:
-            value = float(value)
-            return value if math.isfinite(value) else None
-        except (TypeError, ValueError):
-            return None
+    finite = _float_number
+
+    bbi_selector = BBIShortLongSelector()
 
     def evaluate(history, code, is_st=False):
         # Keep original strategy windows: BBI tail 60, xuli tail 65.
         matched = []
-        if BBIShortLongSelector().select(history['date'].iloc[-1], {code: history}):
+        if bbi_selector.select(history['date'].iloc[-1], {code: history}):
             matched.append('bukou')
         if not is_st and analyze_stock(history, code):
             matched.append('redhover')
@@ -4211,7 +4153,7 @@ def _short_term_strategy(_apis, _config):
         return meta, selected
 
     def save_day(Session, day, meta, records):
-        stamp = datetime.datetime.utcnow() + datetime.timedelta(hours=8)
+        stamp = china_now()
         with session_scope(Session) as session:
             previous = session.query(ShortTermRun).filter_by(trade_date=day).first()
             if previous is not None and previous.payload.get('rule_version') == meta.get('rule_version'):
@@ -4234,7 +4176,7 @@ def _short_term_strategy(_apis, _config):
         if skip_existing is not True:
             raise ValueError('短线选股固定只新增完整交易日快照。')
         clock = china_now()
-        latest = clock.date() if clock.hour >= 16 else clock.date() - datetime.timedelta(days=1)
+        latest = _closed_day(clock.date(), clock)
         keep_days = [as_date(d) for d in get_trade_days(end_date=latest, count=3)]
         if len(keep_days) != 3:
             raise ValueError('最近三个完整交易日日历不足。')
@@ -4260,19 +4202,32 @@ def _short_term_strategy(_apis, _config):
     return SimpleNamespace(**locals())
 
 
-STRATEGIES = {
-    '短线选股': _short_term_strategy,
-    '个股机构持仓': _ownership_strategy,
-    '行业动量': _momentum_strategy,
-    '抱团拥挤度': _crowding_strategy,
-    '微盘温度计': _microcap_strategy,
-    'ETF份额': _etf_strategy,
-    '净利润断层': _earnings_strategy,
-    '微盘新高新低': _breadth_strategy,
-    '高股息选股': _dividend_strategy,
-    '高增长': _growth_strategy,
-    'ETF动量热度': _etf_heat_strategy,
+# 注册信息：(策略工厂, 写入模式, 预览字段)。顺序由顶部 STRATEGY_ORDER 控制。
+STRATEGY_SPECS = {
+    '短线选股': (_short_term_strategy, 'append',
+        ('trade_date', 'code', 'name', 'methods', 'close')),
+    '个股机构持仓': (_ownership_strategy, 'changes',
+        ('kind', 'code', 'date')),
+    '行业动量': (_momentum_strategy, 'append',
+        ('trade_date', 'industry_name', 'momentum', 'momentum_rank')),
+    '抱团拥挤度': (_crowding_strategy, 'append',
+        ('trade_date', 'top_pct', 'ratio', 'top_money', 'total_money')),
+    '微盘温度计': (_microcap_strategy, 'append',
+        ('trade_date', 'score', 'micro_index', 'sample_count')),
+    'ETF份额': (_etf_strategy, 'append',
+        ('trade_date', 'fund_code', 'fund_name', 'shares')),
+    '净利润断层': (_earnings_strategy, 'append',
+        ('report_period', 'code', 'name', 'industry_name', 'signal_date', 'profit_yoy')),
+    '微盘新高新低': (_breadth_strategy, 'append',
+        ('trade_date', 'sample_count', 'high_5', 'low_5', 'high_30', 'low_30')),
+    '高股息选股': (_dividend_strategy, 'latest',
+        ('method', 'rank', 'code', 'name', 'dividend_yield_1y', 'dividend_ratio_3y', 'pe_ttm')),
+    '高增长': (_growth_strategy, 'latest',
+        ('rank', 'code', 'name', 'industry_name', 'annual_profit_growth', 'pe_ttm', 'pb')),
+    'ETF动量热度': (_etf_heat_strategy, 'append',
+        ('trade_date', 'code', 'name', 'score', 'annual_return', 'r2')),
 }
+STRATEGIES = {name: spec[0] for name, spec in STRATEGY_SPECS.items()}
 
 if __name__ == '__main__':
     batch_summary = run_all()

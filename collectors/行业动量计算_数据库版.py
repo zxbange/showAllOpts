@@ -34,6 +34,11 @@ RESULT_COLUMNS = [
 ]
 
 
+def _closed_day(end, now):
+    """日行情在北京时间16点后使用当天；交易日仍由各策略的日历校验。"""
+    return end - datetime.timedelta(days=1) if end == now.date() and now.hour < 16 else end
+
+
 class IndustryMomentum(Base):
     __tablename__ = 'industry_momentum'
     __table_args__ = {'mysql_engine': 'InnoDB', 'mysql_charset': 'utf8mb4'}
@@ -267,8 +272,8 @@ def run(start_date=START_DATE, end_date=END_DATE, industry_type=INDUSTRY_TYPE, s
     initial_start, end = as_date(start_date), as_date(end_date)
     if end > today_china:
         raise ValueError('结束日期不能晚于运行当天。')
-    if skip_existing and end == today_china and now_china.hour < 16:
-        end = today_china - datetime.timedelta(days=1)
+    if skip_existing:
+        end = _closed_day(end, now_china)
         print('只新增模式：16:00 前不写入当天未完成快照。')
     # 即使手动指定历史 end_date，保留范围仍以实际运行当天为基准。
     # 日历验证在任何数据库修改之前完成，节假日自动使用最近交易日。
