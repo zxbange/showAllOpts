@@ -5,6 +5,8 @@ import { HomePage } from './pages/HomePage'
 import { MomentumPage } from './pages/MomentumPage'
 import { LoadingState } from './components/States'
 
+const ShortTermPage = lazy(() => import('./pages/ShortTermPage').then(m => ({ default: m.ShortTermPage })))
+
 const OwnershipPage = lazy(() =>
   import('./pages/OwnershipPage').then((m) => ({ default: m.OwnershipPage })),
 )
@@ -55,6 +57,7 @@ export default function App() {
       <Routes>
         <Route element={<Layout />}>
           <Route index element={<HomePage />} />
+          <Route path="short-term" element={<Suspense fallback={<LoadingState />}><ShortTermPage /></Suspense>} />
           <Route
             path="institution-ownership"
             element={

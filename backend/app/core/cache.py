@@ -20,6 +20,7 @@ from app.core.cache_errors import failure_details, retryable_source_error, Snaps
 from app.core.cache_sync import sync_tables
 from app.core.sync_progress import reporter, report
 from app.core.ownership_sync import copy_ownership
+from app.models.short_term import ShortTermRun, ShortTermStock
 from app.models.ownership import OwnershipStock, OwnershipReport, OwnershipHolders
 from app.models.etf_heat import Heat, Pool
 from app.models.growth import GrowthSnapshot, GrowthStock
@@ -43,6 +44,7 @@ MODULES = {
     'dividend-selection': ('高股息选股', (DividendSnapshot, DividendStock)),
     'high-growth': ('高增长', (GrowthSnapshot, GrowthStock)),
     'etf-momentum': ('ETF动量热度', (Pool, Heat)),
+    'short-term': ('短线选股', (ShortTermRun, ShortTermStock)),
     'institution-ownership': ('个股机构持仓', (OwnershipStock, OwnershipReport, OwnershipHolders)),
 }
 
@@ -72,7 +74,9 @@ class SnapshotCache:
         self.settings = settings
         self.source = source
         schema = [(key, [(m.__tablename__, [(c.name, str(c.type)) for c in m.__table__.columns])
-                         for m in models]) for key, (_, models) in MODULES.items()]
+                         for m in models]) for key, (_, models) in MODULES.items() if key != 'short-term']
+        # Preserve the pre-existing cache namespace and ownership resume checkpoint.
+        # This additive module owns separate tables/files; no old schema changed.
         identity = [source.url.drivername, source.url.host, source.url.port, source.url.database,
                     source.url.username, schema, 'provider-results-v2']
         key = hashlib.sha256(json.dumps(identity, ensure_ascii=True).encode()).hexdigest()[:20]

@@ -37,6 +37,10 @@ export interface ResearchModule {
 }
 
 const individualModules: ResearchModule[] = [
+  { id: 'short-term', name: '短线选股', path: '/short-term', category: '趋势观察',
+    english: 'SHORT TERM PATTERNS', question: '三种形态，哪些股票正在出现信号？',
+    description: '补票龙、红悬停龙与蓄力龙，结合30日K线、成交量及均线观察。',
+    tags: ['补票龙', '红悬停龙', '蓄力龙'], icon: ChartNoAxesCombined, tone: 'coral', illustration: 'breadth' },
   {
     id: 'institution-ownership',
     name: '个股机构持仓',

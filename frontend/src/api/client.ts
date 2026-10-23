@@ -123,3 +123,7 @@ export async function cancelCache(runId: string, module?: string) {
     throw new Error(typeof body?.detail === 'string' ? body.detail : '无法停止同步，请稍后重试。')
   }
 }
+
+export const getShortTerm = (day: string, method: string, offset: number, signal?: AbortSignal) =>
+  request<import('../types/shortTerm').ShortOverview>(
+    '/short-term/latest?' + new URLSearchParams({ ...(day ? { day } : {}), method, offset: String(offset), limit: '6' }), signal)
