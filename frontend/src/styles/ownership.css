@@ -196,3 +196,95 @@
     height: 270px;
   }
 }
+
+/* Stable social-filter layout from first load through mode changes and empty results. */
+.ownership-social-summary {
+  display: flex;
+  flex-wrap: wrap;
+  column-gap: 10px;
+}
+.ownership-summary-item {
+  white-space: nowrap;
+}
+.ownership-summary-item + .ownership-summary-item::before {
+  content: '·';
+  margin-right: 10px;
+}
+.ownership-summary-value {
+  display: inline-block;
+  min-width: 4ch;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+.ownership-social-panel select[aria-label='社保报告期'] {
+  width: 124px;
+}
+.ownership-social-panel select[aria-label='社保筛选口径'] {
+  width: 176px;
+}
+.ownership-rules {
+  display: grid;
+  margin-bottom: 8px;
+}
+.ownership-rules > p {
+  grid-area: 1 / 1;
+  margin: 0;
+}
+.ownership-rule-reserve {
+  visibility: hidden;
+  pointer-events: none;
+}
+.ownership-social-results {
+  height: clamp(360px, 60vh, 720px);
+  overflow: auto;
+  scrollbar-gutter: stable;
+}
+.ownership-social-table {
+  min-width: 1080px;
+  table-layout: fixed;
+}
+.ownership-social-table th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+}
+.ownership-social-table td {
+  height: 72px;
+}
+.ownership-social-table td:first-child {
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+.ownership-cell-placeholder {
+  display: block;
+  width: 70%;
+  height: 12px;
+  border: 0;
+  border-radius: 4px;
+}
+.ownership-cell-secondary {
+  width: 90%;
+  height: 10px;
+  margin-top: 9px;
+}
+.ownership-table-message {
+  position: sticky;
+  left: 0;
+  width: 100%;
+  white-space: normal;
+}
+.ownership-table-message .state-panel {
+  min-height: 280px;
+  border: 0;
+}
+@media (prefers-reduced-motion: reduce) {
+  .ownership-cell-placeholder {
+    animation: none;
+  }
+}
+
+.ownership-member-names > div {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}

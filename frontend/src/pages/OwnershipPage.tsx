@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { Search, Users, RefreshCw } from 'lucide-react'
 import { getOwnership, searchOwnership, getSocialEntries } from '../api/client'
@@ -11,15 +11,18 @@ import '../styles/ownership.css'
 const socialModes: Record<SocialMode, { label: string; description: string }> = {
   first: {
     label: '股票首次出现社保持仓',
-    description: '上季无社保组合，本季有新进社保组合。比较相邻两季完整的十大流通股东名单，按新进组合估算市值降序；“首次”不代表历史首次买入。',
+    description:
+      '上季无社保组合，本季有新进社保组合。比较相邻两季完整的十大流通股东名单，按新进组合估算市值降序；“首次”不代表历史首次买入。',
   },
   combination: {
     label: '新增社保组合',
-    description: '本季出现上季名单中没有的社保组合，允许原有社保继续持有。比较相邻两季完整的十大流通股东名单，按新进组合估算市值降序；名单新进不代表首次买入。',
+    description:
+      '本季出现上季名单中没有的社保组合，允许原有社保继续持有。比较相邻两季完整的十大流通股东名单，按新进组合估算市值降序；名单新进不代表首次买入。',
   },
   increase: {
     label: '社保组合加仓',
-    description: '本季十大流通股东中全部社保组合的持股总数高于上季即入选（含上季为零）。两季名单与持股数须完整，按增加股数降序；送转股和名单变动也可能导致增加。',
+    description:
+      '本季十大流通股东中全部社保组合的持股总数高于上季即入选（含上季为零）。两季名单与持股数须完整，按增加股数降序；送转股和名单变动也可能导致增加。',
   },
 }
 
@@ -98,9 +101,7 @@ function StockView({ code }: { code: string }) {
         ) : (
           <p>暂无股东户数记录。</p>
         )}
-        <p className="ownership-note">
-          A 股户数与上一条记录比较，缺失不以总户数代替。
-        </p>
+        <p className="ownership-note">A 股户数与上一条记录比较，缺失不以总户数代替。</p>
       </section>
       <div className="ownership-grid">
         {categories.map(([key, label]) => {
@@ -137,39 +138,92 @@ function SocialView({ onSelect }: { onSelect: (code: string) => void }) {
   const [period, setPeriod] = useState('')
   const [mode, setMode] = useState<SocialMode>('first')
   const [query, setQuery] = useState('')
+  // Keep only report metadata while loading; never reuse another mode's result rows.
+  const [reportOptions, setReportOptions] = useState({ period: '', periods: [] as string[] })
+  const resultsRef = useRef<HTMLDivElement>(null)
   const loader = useCallback(
     (signal: AbortSignal) => getSocialEntries(period, mode, signal),
     [period, mode],
   )
   const { data, error, loading, reload } = useResource(loader)
+  useEffect(() => {
+    if (data) setReportOptions({ period: data.period, periods: data.periods })
+  }, [data])
+  useEffect(() => {
+    if (resultsRef.current) resultsRef.current.scrollTop = 0
+  }, [period, mode, query])
+  const periods = data?.periods ?? reportOptions.periods
+  const selectedPeriod = period || data?.period || reportOptions.period
   const items = data?.items.filter((r) => r.code.includes(query) || r.name.includes(query)) || []
+  const columns =
+    mode === 'increase'
+      ? [
+          { label: '股票 / 行业', width: '20%' },
+          { label: '上季度合计（万股）', width: '15%' },
+          { label: '本季度合计（万股）', width: '15%' },
+          { label: '增加股数（万股）', width: '14%' },
+          { label: '增幅', width: '10%' },
+          { label: '本季度占流通股比例', width: '16%' },
+          { label: '披露日期', width: '10%' },
+        ]
+      : [
+          { label: '股票 / 行业', width: '20%' },
+          { label: '新进社保组合', width: '28%' },
+          { label: '持股数量（万股）', width: '14%' },
+          { label: '占流通股比例', width: '12%' },
+          { label: '估算市值（亿元）', width: '16%' },
+          { label: '披露日期', width: '10%' },
+        ]
+  const counts = [
+    { label: '已采集', value: data?.collected_count },
+    { label: '可比较', value: data?.comparable_count },
+    { label: '无法判定', value: data?.unknown_count },
+    { label: '当前匹配', value: data ? items.length : undefined },
+  ]
   return (
     <>
-      {!loading && !error && (
-        <p className="ownership-summary" aria-live="polite">
-          已采集 {data?.collected_count || 0} 只 · 可比较 {data?.comparable_count || 0} 只 ·
-          无法判定 {data?.unknown_count || 0} 只 · 当前匹配 {items.length} 只
-        </p>
-      )}
-      <section className="ownership-panel">
+      <p
+        className="ownership-summary ownership-social-summary"
+        aria-live="polite"
+        aria-busy={loading}
+      >
+        {counts.map(({ label, value }) => (
+          <span className="ownership-summary-item" key={label}>
+            {label} <span className="ownership-summary-value">{value ?? '—'}</span> 只
+          </span>
+        ))}
+      </p>
+      <section className="ownership-panel ownership-social-panel">
         <div className="ownership-controls">
           <label>
             报告期{' '}
             <select
               aria-label="社保报告期"
-              value={period || data?.period || ''}
+              value={selectedPeriod}
+              disabled={!periods.length}
               onChange={(e) => setPeriod(e.target.value)}
             >
-              {data?.periods.map((p) => (
+              {!periods.includes(selectedPeriod) && (
+                <option value={selectedPeriod}>
+                  {selectedPeriod || (loading ? '最新报告期' : '暂无报告期')}
+                </option>
+              )}
+              {periods.map((p) => (
                 <option key={p}>{p}</option>
               ))}
             </select>
           </label>
           <label>
             筛选口径{' '}
-            <select aria-label="社保筛选口径" value={mode} onChange={(e) => setMode(e.target.value as SocialMode)}>
+            <select
+              aria-label="社保筛选口径"
+              value={mode}
+              onChange={(e) => setMode(e.target.value as SocialMode)}
+            >
               {Object.entries(socialModes).map(([value, option]) => (
-                <option key={value} value={value}>{option.label}</option>
+                <option key={value} value={value}>
+                  {option.label}
+                </option>
               ))}
             </select>
           </label>
@@ -183,77 +237,124 @@ function SocialView({ onSelect }: { onSelect: (code: string) => void }) {
             刷新
           </button>
         </div>
-        <p className="ownership-note ownership-rule">{socialModes[mode].description}</p>
-        {loading ? (
-          <LoadingState />
-        ) : error ? (
-          <ErrorState message={error} retry={reload} />
-        ) : (
-          <>
-            {items.length ? (
-              <div className="ownership-table-wrap">
-                <table className="ownership-table">
-                  <thead>
-                    <tr>
-                      <th>股票 / 行业</th>
-                      {mode === 'increase' ? <>
-                        <th>上季度合计（万股）</th><th>本季度合计（万股）</th>
-                        <th>增加股数（万股）</th><th>增幅</th><th>本季度占流通股比例</th>
-                      </> : <>
-                      <th>新进社保组合</th>
-                      <th>持股数量（万股）</th>
-                      <th>占流通股比例</th>
-                      <th>估算市值（亿元）</th>
-                      </>}
-                      <th>披露日期</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {items.map((r) => (
-                      <tr key={r.code}>
-                        <td>
-                          <button className="ownership-stock-link" onClick={() => onSelect(r.code)}>
-                            {r.name}
-                          </button>
-                          <small>
-                            {r.code} · {r.industry || '暂无行业'}
-                          </small>
+        <div className="ownership-rules">
+          {Object.entries(socialModes).map(([value, option]) => (
+            <p
+              key={value}
+              className={
+                'ownership-note ' + (mode === value ? 'ownership-rule' : 'ownership-rule-reserve')
+              }
+              aria-hidden={mode !== value}
+            >
+              {option.description}
+            </p>
+          ))}
+        </div>
+        {loading && (
+          <span className="sr-only" role="status" aria-label="正在加载数据">
+            正在加载数据…
+          </span>
+        )}
+        <div
+          className="ownership-table-wrap ownership-social-results"
+          ref={resultsRef}
+          aria-busy={loading}
+          role="region"
+          aria-label="社保筛选结果"
+          tabIndex={0}
+        >
+          <table className="ownership-table ownership-social-table">
+            <colgroup>
+              {columns.map((column) => (
+                <col key={column.label} style={{ width: column.width }} />
+              ))}
+            </colgroup>
+            <thead>
+              <tr>
+                {columns.map((column) => (
+                  <th key={column.label} scope="col">
+                    {column.label}
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {loading
+                ? Array.from({ length: 8 }, (_, row) => (
+                    <tr key={row} className="ownership-loading-row" aria-hidden="true">
+                      {columns.map((column, index) => (
+                        <td key={column.label}>
+                          <span className="skeleton ownership-cell-placeholder" />
+                          {index === 0 && (
+                            <span className="skeleton ownership-cell-placeholder ownership-cell-secondary" />
+                          )}
                         </td>
-                        {mode === 'increase' ? <>
-                          <td>{num(r.previous_shares == null ? null : r.previous_shares / 1e4, 2)}</td>
-                          <td>{num(r.current_shares == null ? null : r.current_shares / 1e4, 2)}</td>
+                      ))}
+                    </tr>
+                  ))
+                : !error &&
+                  items.map((r) => (
+                    <tr key={r.code}>
+                      <td>
+                        <button className="ownership-stock-link" onClick={() => onSelect(r.code)}>
+                          {r.name}
+                        </button>
+                        <small>
+                          {r.code} · {r.industry || '暂无行业'}
+                        </small>
+                      </td>
+                      {mode === 'increase' ? (
+                        <>
+                          <td>
+                            {num(r.previous_shares == null ? null : r.previous_shares / 1e4, 2)}
+                          </td>
+                          <td>
+                            {num(r.current_shares == null ? null : r.current_shares / 1e4, 2)}
+                          </td>
                           <td>{num(r.change_shares == null ? null : r.change_shares / 1e4, 2)}</td>
                           <td>{r.change_pct == null ? '上季为零' : `${num(r.change_pct, 2)}%`}</td>
                           <td>{r.current_ratio == null ? '—' : `${num(r.current_ratio, 3)}%`}</td>
-                        </> : <>
-                        <td>
-                          {r.new_combinations?.map((m, i) => (
-                            <div key={m.id || i}>{m.name}</div>
-                          ))}
-                        </td>
-                        <td>{num(r.new_shares == null ? null : r.new_shares / 1e4, 2)}</td>
-                        <td>
-                          {r.new_combinations?.map((m, i) => (
-                            <div key={m.id || i}>{m.ratio == null ? '—' : `${num(m.ratio, 3)}%`}</div>
-                          ))}
-                        </td>
-                        <td>
-                          {num(r.new_market_value == null ? null : r.new_market_value / 1e8, 3)}
-                        </td>
-                        </>}
-                        <td>{r.pub_date || '未知'}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
+                        </>
+                      ) : (
+                        <>
+                          <td className="ownership-member-names">
+                            {r.new_combinations?.map((m, i) => (
+                              <div key={m.id || i} title={m.name}>
+                                {m.name}
+                              </div>
+                            ))}
+                          </td>
+                          <td>{num(r.new_shares == null ? null : r.new_shares / 1e4, 2)}</td>
+                          <td>
+                            {r.new_combinations?.map((m, i) => (
+                              <div key={m.id || i}>
+                                {m.ratio == null ? '—' : `${num(m.ratio, 3)}%`}
+                              </div>
+                            ))}
+                          </td>
+                          <td>
+                            {num(r.new_market_value == null ? null : r.new_market_value / 1e8, 3)}
+                          </td>
+                        </>
+                      )}
+                      <td>{r.pub_date || '未知'}</td>
+                    </tr>
+                  ))}
+            </tbody>
+          </table>
+          {!loading &&
+            (error ? (
+              <div className="ownership-table-message">
+                <ErrorState message={error} retry={reload} />
               </div>
             ) : (
-              <p className="ownership-missing">
-                暂无匹配记录；未披露或名单不完整不参与判定。
-              </p>
-            )}
-          </>
-        )}
+              !items.length && (
+                <p className="ownership-missing ownership-table-message">
+                  暂无匹配记录；未披露或名单不完整不参与判定。
+                </p>
+              )
+            ))}
+        </div>
       </section>
     </>
   )
@@ -269,7 +370,11 @@ export function OwnershipPage() {
     const timer = setTimeout(() => setTerm(query.trim()), 250)
     return () => clearTimeout(timer)
   }, [query])
-  const loader = useCallback((signal: AbortSignal) => term ? searchOwnership(term, signal) : Promise.resolve({ stocks: [] }), [term])
+  const loader = useCallback(
+    (signal: AbortSignal) =>
+      term ? searchOwnership(term, signal) : Promise.resolve({ stocks: [] }),
+    [term],
+  )
   const { data, error, loading, reload } = useResource(loader)
   const select = (value: string) => setParams({ code: value, tab: 'stock' })
   return (
@@ -315,35 +420,36 @@ export function OwnershipPage() {
                 onChange={(e) => setQuery(e.target.value)}
               />
             </label>
-            {query.trim() && query.trim() === term && (loading ? (
-              <p>正在查询…</p>
-            ) : error ? (
-              <ErrorState message={error} retry={reload} />
-            ) : (
-              <div className="ownership-results">
-                {data?.stocks.map((s) => (
-                  <button
-                    key={s.code}
-                    className={s.code === code ? 'selected' : ''}
-                    onClick={() => select(s.code)}
-                  >
-                    <strong>{s.name}</strong>
-                    <span>{s.code}</span>
-                  </button>
-                ))}
-              </div>
-            ))}
-            {query.trim() && query.trim() === term && !loading && !error && !data?.stocks.length && (
-              <p>暂无匹配股票；尚未采集的股票需先入库并同步。</p>
-            )}
+            {query.trim() &&
+              query.trim() === term &&
+              (loading ? (
+                <p>正在查询…</p>
+              ) : error ? (
+                <ErrorState message={error} retry={reload} />
+              ) : (
+                <div className="ownership-results">
+                  {data?.stocks.map((s) => (
+                    <button
+                      key={s.code}
+                      className={s.code === code ? 'selected' : ''}
+                      onClick={() => select(s.code)}
+                    >
+                      <strong>{s.name}</strong>
+                      <span>{s.code}</span>
+                    </button>
+                  ))}
+                </div>
+              ))}
+            {query.trim() &&
+              query.trim() === term &&
+              !loading &&
+              !error &&
+              !data?.stocks.length && <p>暂无匹配股票；尚未采集的股票需先入库并同步。</p>}
           </section>
           {code ? (
             <StockView key={code} code={code} />
           ) : (
-            <EmptyState
-              title="选择股票查看持仓"
-              description="输入代码或名称，或从社保列表进入。"
-            />
+            <EmptyState title="选择股票查看持仓" description="输入代码或名称，或从社保列表进入。" />
           )}
         </>
       )}

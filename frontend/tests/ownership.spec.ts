@@ -1,4 +1,4 @@
-import { expect, test } from '@playwright/test'
+import { expect, test, type Route } from '@playwright/test'
 const stock = { code: '600001.XSHG', name: '示例科技', industry: '半导体' }
 const fixture = {
   stock,
@@ -92,12 +92,29 @@ test('ownership error permits retry', async ({ page }) => {
   await expect(page.getByRole('button', { name: '重新加载' })).toBeVisible()
 })
 
-
 test('social increase shows aggregate quarter comparison', async ({ page }) => {
-  await page.route('**/api/v1/institution-ownership/social-entries?*', r => r.fulfill({ json: {
-    period: '2026-09-30', periods: ['2026-09-30'], comparable_count: 1, unknown_count: 0, collected_count: 1,
-    items: [{ ...stock, previous_shares: 1000000, current_shares: 1500000, change_shares: 500000, change_pct: 50, current_ratio: 1.9, pub_date: '2026-10-20' }],
-  } }))
+  await page.route('**/api/v1/institution-ownership/social-entries?*', (r) =>
+    r.fulfill({
+      json: {
+        period: '2026-09-30',
+        periods: ['2026-09-30'],
+        comparable_count: 1,
+        unknown_count: 0,
+        collected_count: 1,
+        items: [
+          {
+            ...stock,
+            previous_shares: 1000000,
+            current_shares: 1500000,
+            change_shares: 500000,
+            change_pct: 50,
+            current_ratio: 1.9,
+            pub_date: '2026-10-20',
+          },
+        ],
+      },
+    }),
+  )
   await page.goto('/institution-ownership')
   await page.getByRole('button', { name: '社保新进', exact: true }).click()
   await page.getByLabel('社保筛选口径').selectOption('increase')
@@ -108,29 +125,54 @@ test('social increase shows aggregate quarter comparison', async ({ page }) => {
   await expect(page.getByRole('cell', { name: '1.9%', exact: true })).toBeVisible()
 })
 
-
-test('social modes use their own response and explanation when switching', async ({ page }, info) => {
+test('social modes use their own response and explanation when switching', async ({
+  page,
+}, info) => {
   const errors: string[] = []
-  page.on('pageerror', error => errors.push(error.message))
+  page.on('pageerror', (error) => errors.push(error.message))
   let blockCombination = false
   let releaseCombination!: () => void
-  const combinationGate = new Promise<void>(resolve => { releaseCombination = resolve })
+  const combinationGate = new Promise<void>((resolve) => {
+    releaseCombination = resolve
+  })
   let markCombinationRequested!: () => void
-  const combinationRequested = new Promise<void>(resolve => { markCombinationRequested = resolve })
-  await page.route('**/api/v1/institution-ownership/social-entries?*', async route => {
+  const combinationRequested = new Promise<void>((resolve) => {
+    markCombinationRequested = resolve
+  })
+  await page.route('**/api/v1/institution-ownership/social-entries?*', async (route) => {
     const mode = new URL(route.request().url()).searchParams.get('mode')
     if (mode === 'combination' && blockCombination) {
       markCombinationRequested()
       await combinationGate
     }
-    const row = mode === 'increase'
-      ? { ...stock, name: '加仓样本', previous_shares: 1000000, current_shares: 1500000,
-          change_shares: 500000, change_pct: 50, current_ratio: 1.9 }
-      : { ...stock, name: mode === 'first' ? '首次样本' : '新增样本',
-          new_combinations: [{ id: 'new', name: '全国社保基金一零一组合', ratio: 0.5 }],
-          new_shares: 1000000, new_market_value: 20000000 }
-    await route.fulfill({ json: { period: '2026-09-30', periods: ['2026-09-30'],
-      collected_count: 125, comparable_count: 100, unknown_count: 25, items: [row] } })
+    const row =
+      mode === 'increase'
+        ? {
+            ...stock,
+            name: '加仓样本',
+            previous_shares: 1000000,
+            current_shares: 1500000,
+            change_shares: 500000,
+            change_pct: 50,
+            current_ratio: 1.9,
+          }
+        : {
+            ...stock,
+            name: mode === 'first' ? '首次样本' : '新增样本',
+            new_combinations: [{ id: 'new', name: '全国社保基金一零一组合', ratio: 0.5 }],
+            new_shares: 1000000,
+            new_market_value: 20000000,
+          }
+    await route.fulfill({
+      json: {
+        period: '2026-09-30',
+        periods: ['2026-09-30'],
+        collected_count: 125,
+        comparable_count: 100,
+        unknown_count: 25,
+        items: [row],
+      },
+    })
   })
   await page.goto('/institution-ownership?tab=social')
   await expect(page.getByRole('button', { name: '首次样本', exact: true })).toBeVisible()
@@ -138,7 +180,9 @@ test('social modes use their own response and explanation when switching', async
   await mode.selectOption('increase')
   await expect(page.getByRole('button', { name: '加仓样本', exact: true })).toBeVisible()
   await mode.selectOption('combination')
-  await expect(page.getByRole('button', { name: '新增样本', exact: true })).toBeVisible({ timeout: 5000 })
+  await expect(page.getByRole('button', { name: '新增样本', exact: true })).toBeVisible({
+    timeout: 5000,
+  })
   await expect(page.locator('.ownership-rule')).toContainText('本季出现上季名单中没有的社保组合')
   await expect(page.locator('.ownership-summary')).toContainText('当前匹配 1 只')
   await expect(page.getByText('仅统计公开披露', { exact: false })).toHaveCount(0)
@@ -163,5 +207,136 @@ test('social modes use their own response and explanation when switching', async
   await page.getByRole('button', { name: '刷新', exact: true }).click()
   await expect(page.getByRole('button', { name: '首次样本', exact: true })).toBeVisible()
   expect(errors).toEqual([])
-  await page.screenshot({ path: `../.runtime/social-modes-${info.project.name}.png`, fullPage: true })
+  await page.screenshot({
+    path: `../.runtime/social-modes-${info.project.name}.png`,
+    fullPage: true,
+  })
+})
+
+test('social filters reserve layout during loading, mode switches, errors and empty results', async ({
+  page,
+}, info) => {
+  const pending: Route[] = []
+  await page.route('**/api/v1/institution-ownership/social-entries?*', (route) => {
+    pending.push(route)
+  })
+  const nextRequest = async () => {
+    await expect.poll(() => pending.length).toBeGreaterThan(0)
+    // StrictMode can issue and abort an initial development-only request.
+    const latest = pending.pop()!
+    await Promise.all(pending.splice(0).map((route) => route.abort()))
+    return latest
+  }
+  const response = (mode: string, count: number, period = '2026-09-30') => ({
+    period,
+    periods: ['2026-09-30', '2026-06-30'],
+    collected_count: 5196,
+    comparable_count: 4869,
+    unknown_count: 327,
+    items: Array.from({ length: count }, (_, i) => ({
+      ...stock,
+      code: `600${String(i).padStart(3, '0')}.XSHG`,
+      name: `${mode}样本${i}`,
+      ...(mode === 'increase'
+        ? {
+            previous_shares: 1000000,
+            current_shares: 1500000,
+            change_shares: 500000,
+            change_pct: 50,
+            current_ratio: 1.9,
+          }
+        : {
+            new_combinations: [
+              {
+                id: 'new',
+                name: '中国某某基金管理有限公司－全国社会保障基金一零一组合',
+                ratio: 0.5,
+              },
+            ],
+            new_shares: 1000000,
+            new_market_value: 20000000,
+          }),
+      pub_date: '2026-10-20',
+    })),
+  })
+  const layout = () =>
+    page.evaluate(() =>
+      [
+        '.ownership-summary',
+        '.ownership-controls',
+        '.ownership-rules',
+        '.ownership-social-results',
+        '[aria-label="社保报告期"]',
+        '[aria-label="社保筛选口径"]',
+      ].map((selector) => {
+        const { x, y, width, height } = document.querySelector(selector)!.getBoundingClientRect()
+        return [x + scrollX, y + scrollY, width, height]
+      }),
+    )
+  const expectLayout = async (expected: number[][]) => {
+    const actual = await layout()
+    actual.forEach((box, i) =>
+      box.forEach((value, j) => expect(Math.abs(value - expected[i][j])).toBeLessThanOrEqual(1)),
+    )
+  }
+  const columns = () =>
+    page
+      .locator('.ownership-social-table th')
+      .evaluateAll((headers) => headers.map((header) => header.getBoundingClientRect().width))
+  await page.goto('/institution-ownership?tab=social')
+  await page.addStyleTag({ content: '.page-enter { animation: none !important; }' })
+  await page.evaluate(() => document.fonts.ready)
+  const initialRequest = await nextRequest()
+  const initialLayout = await layout()
+  const initialColumns = await columns()
+  await expect(page.locator('.ownership-loading-row')).toHaveCount(8)
+  await expect(page.locator('.ownership-summary')).toContainText('已采集 — 只')
+  await page.screenshot({
+    path: `../.runtime/social-loading-${info.project.name}.png`,
+    fullPage: true,
+  })
+  await initialRequest.fulfill({ json: response('first', 20) })
+  await expect(page.locator('.ownership-summary')).toContainText('当前匹配 20 只')
+  await expectLayout(initialLayout)
+  expect(await columns()).toEqual(initialColumns)
+  const results = page.getByRole('region', { name: '社保筛选结果' })
+  expect(await results.evaluate((el) => el.scrollHeight > el.clientHeight)).toBe(true)
+  const modeSelect = page.getByLabel('社保筛选口径')
+  for (const mode of ['increase', 'combination']) {
+    await modeSelect.selectOption(mode)
+    const request = await nextRequest()
+    await expect(results).toHaveAttribute('aria-busy', 'true')
+    await expect(page.getByLabel('社保报告期')).toHaveValue('2026-09-30')
+    await expect(page.getByLabel('社保报告期').locator('option')).toHaveCount(2)
+    await expect(page.locator('.ownership-stock-link')).toHaveCount(0)
+    await expectLayout(initialLayout)
+    const loadingColumns = await columns()
+    await request.fulfill({ json: response(mode, mode === 'increase' ? 3 : 1) })
+    await expect(page.getByRole('button', { name: `${mode}样本0`, exact: true })).toBeVisible()
+    await expect(results).toHaveAttribute('aria-busy', 'false')
+    await expectLayout(initialLayout)
+    expect(await columns()).toEqual(loadingColumns)
+  }
+  await page.screenshot({
+    path: `../.runtime/social-stable-${info.project.name}.png`,
+    fullPage: true,
+  })
+  await modeSelect.selectOption('first')
+  await (await nextRequest()).fulfill({ status: 503, json: { detail: '测试加载失败' } })
+  await expect(page.getByRole('alert')).toContainText('测试加载失败')
+  await expectLayout(initialLayout)
+  await page.getByRole('button', { name: '重新加载', exact: true }).click()
+  const retryRequest = await nextRequest()
+  await expectLayout(initialLayout)
+  await retryRequest.fulfill({ json: response('first', 0) })
+  await expect(page.getByText('暂无匹配记录；未披露或名单不完整不参与判定。')).toBeVisible()
+  await expectLayout(initialLayout)
+  await page.getByLabel('社保报告期').selectOption('2026-06-30')
+  const periodRequest = await nextRequest()
+  expect(new URL(periodRequest.request().url()).searchParams.get('period')).toBe('2026-06-30')
+  await expectLayout(initialLayout)
+  await periodRequest.fulfill({ json: response('first', 1, '2026-06-30') })
+  await expect(page.getByRole('button', { name: 'first样本0', exact: true })).toBeVisible()
+  await expectLayout(initialLayout)
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
 })
