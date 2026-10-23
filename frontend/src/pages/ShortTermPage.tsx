@@ -22,14 +22,14 @@ export function ShortTermPage() {
   const selected = methods.find(m => m.id === method)!
   return <div className="short-page page-enter">
     <div className="page-heading">
-      <div><span className="eyebrow">SHORT TERM PATTERN LAB</span><h1>短线选股 <span className="heading-tag">形态观察</span></h1>
-        <p>把信号放回走势里，观察价格、均线与量能的配合。</p></div><CandlestickChart size={32} />
-    </div>
-    <div className="short-date-toolbar"><div className="short-controls"><label>选股日期 <select aria-label="短线选股日期" value={day || data?.trade_date || ''}
+      <div><span className="eyebrow">SHORT TERM PATTERN LAB</span><div className="short-title-row"><h1>短线选股 <span className="heading-tag">形态观察</span></h1><div className="short-controls"><label>选股日期 <select aria-label="短线选股日期" value={day || data?.trade_date || ''}
         onChange={e => { setDay(e.target.value); setOffset(0) }}>
         {!data?.dates.length && <option value={day}>{day || '暂无快照'}</option>}
         {data?.dates.map(d => <option key={d}>{d}</option>)}
       </select></label><button className="button button-quiet" onClick={reload} disabled={loading} aria-label="刷新短线选股"><RefreshCw size={16} /></button></div></div>
+        <p>把信号放回走势里，观察价格、均线与量能的配合。</p></div><CandlestickChart size={32} />
+    </div>
+
     <div className="short-methods" role="tablist" aria-label="短线选股战法">
       {methods.map(m => <button key={m.id} role="tab" aria-selected={method === m.id}
         className={method === m.id ? 'active' : ''} onClick={() => { setMethod(m.id); setOffset(0) }}>

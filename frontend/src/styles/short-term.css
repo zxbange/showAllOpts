@@ -11,5 +11,6 @@
 @media (max-width: 520px) { .short-methods { grid-template-columns: 1fr; } .short-methods button { padding: 14px 18px; } .short-methods button small { margin-top: 3px; } .short-methods b small { display: inline; margin-left: 5px; } .short-stock-card { padding: 13px; } .short-chart { height: 300px; } }
 @media (prefers-reduced-motion: reduce) { .short-methods button { transition: none; } }
 
-.short-date-toolbar { display: flex; justify-content: flex-end; margin-top: 24px; }
-.short-date-toolbar + .short-methods { margin-top: 16px; }
+.short-title-row { display: flex; align-items: center; flex-wrap: wrap; column-gap: clamp(24px, 8vw, 120px); row-gap: 8px; }
+.short-title-row .short-controls { flex-shrink: 0; }
+@media (max-width: 520px) { .short-title-row { margin-bottom: 10px; } }
