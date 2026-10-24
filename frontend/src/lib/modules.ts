@@ -152,7 +152,7 @@ export const individualModules: ResearchModule[] = [
     path: '/microcap-temperature',
     category: '风格观察',
     description: '微盘1000的估值、拥挤度及等权指数。',
-    tags: ['综合温度', '等权指数', '每 5 交易日采样'],
+    tags: ['综合温度', '等权指数', '每个交易日采样'],
     icon: Thermometer,
     tone: 'gold',
     illustration: 'temperature',
@@ -215,3 +215,14 @@ export const researchModules: ResearchModule[] = individualModules
         }
       : m
   })
+
+const navigationFirst = [
+  'market-crowding',
+  'industry-momentum',
+  'microcap-temperature',
+  'etf-shares',
+]
+export const navigationModules = [
+  ...navigationFirst.flatMap((id) => researchModules.filter((module) => module.id === id)),
+  ...researchModules.filter((module) => !navigationFirst.includes(module.id)),
+]

@@ -89,12 +89,12 @@ def test_calculation_and_model_definitions_keep_original_rules(batch):
                 continue
             # Resource-owning functions have intentionally moved to common context managers.
             used = {n.id for n in ast.walk(node) if isinstance(n, ast.Name)}
-            if 'Session' in used or 'engine' in used:
+            if ('Session' in used or 'engine' in used) and node.name not in ('collect_daily', 'load_daily_history', 'stored_period', 'repair_daily_derived'):
                 continue
             actual = next(n for n in body + tree.body if isinstance(n, type(node)) and n.name == node.name)
             class WithoutProgressOutput(ast.NodeTransformer):
                 def visit_Expr(self, n):
-                    if isinstance(n.value, ast.Call) and isinstance(n.value.func, ast.Name) and n.value.func.id in ('print', '_progress_note'):
+                    if isinstance(n.value, ast.Call) and isinstance(n.value.func, ast.Name) and n.value.func.id in ('print', '_progress_note', '_progress_message'):
                         return None
                     return self.generic_visit(n)
                 def visit_Call(self, n):

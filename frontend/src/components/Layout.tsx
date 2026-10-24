@@ -2,7 +2,7 @@ import { useLayoutEffect, useRef } from 'react'
 import { ArrowUpRight, ChartNoAxesCombined, ChevronRight, House, Layers3 } from 'lucide-react'
 import { Link, NavLink, Outlet, useLocation } from 'react-router-dom'
 import { CacheControl } from './CacheControl'
-import { researchModules, groupForPath } from '../lib/modules'
+import { researchModules, navigationModules, groupForPath } from '../lib/modules'
 
 export function Layout() {
   const location = useLocation()
@@ -32,14 +32,13 @@ export function Layout() {
           </span>
           <span>发奋墙</span>
         </Link>
-        <div className="nav-label">工作空间</div>
         <nav ref={navigation} className="main-nav" aria-label="主导航">
           <NavLink to="/" end aria-label="总览" title="总览">
             <House size={18} />
             <span>总览</span>
             <span className="nav-key">01</span>
           </NavLink>
-          {researchModules.map((module, index) => {
+          {navigationModules.map((module, index) => {
             const Icon = module.icon
             return (
               <Link

@@ -5,14 +5,14 @@ import pytest
 from sqlalchemy import event
 from sqlalchemy.exc import OperationalError
 
-from app.models.microcap import DEFAULT_SERIES, MicrocapTemperature
+from app.models.microcap import DEFAULT_SERIES, LEGACY_SERIES, MicrocapTemperature
 from app.repositories.microcap import MicrocapRepository
 from app.services.momentum import china_today
 
 
 def row(day, score, index=1000, series=DEFAULT_SERIES, growth=None):
     return MicrocapTemperature(
-        series_id=series, trade_date=day, micro_num=1000, sample_step=5, sample_count=20,
+        series_id=series, trade_date=day, micro_num=1000, sample_step=5 if series == LEGACY_SERIES else 1, sample_count=20,
         universe_count=3000, profit_growth_count=0 if growth is None else 950,
         micro_median=15, all_median=25, relative_ratio=.6, crowding_ratio=1.5,
         amount_crowding_ratio=.2, pe_median=-5, pb_median=2, avg_np_growth=growth,
@@ -91,3 +91,32 @@ def test_future_end_and_database_error(client, monkeypatch):
     monkeypatch.setattr(MicrocapRepository, 'history', fail)
     response = client.get('/api/v1/microcap-temperature/history')
     assert response.status_code == 503 and 'private-password' not in response.text
+
+
+def test_daily_series_catches_up_before_replacing_legacy_and_never_mixes(client,session):
+    session.add_all([row(date(2026,1,5),.2,series=LEGACY_SERIES),row(date(2026,1,6),.4,series=LEGACY_SERIES)])
+    session.commit()
+    assert client.get('/api/v1/microcap-temperature/history').json()['latest']['sample_step']==5
+    session.add(row(date(2026,1,5),.8))
+    session.commit()
+    data=client.get('/api/v1/microcap-temperature/history').json()
+    assert [p['score'] for p in data['points']]==[.2,.4]  # unfinished backfill
+    session.add(row(date(2026,1,6),.9))
+    session.commit()
+    data=client.get('/api/v1/microcap-temperature/history').json()
+    assert [p['score'] for p in data['points']]==[.8,.9]
+    assert data['latest']['sample_step']==1
+
+
+def test_unfinished_daily_repair_uses_only_consistent_prefix_or_legacy(client,session):
+    old=row(date(2026,1,6),.4,series=LEGACY_SERIES)
+    first=row(date(2026,1,5),.6)
+    pending=row(date(2026,1,6),.8)
+    pending.sample_count=0
+    session.add_all([old,first,pending,row(date(2026,1,7),.9)])
+    session.commit()
+    assert client.get('/api/v1/microcap-temperature/history').json()['latest']['sample_step']==5
+    session.delete(old)
+    session.commit()
+    data=client.get('/api/v1/microcap-temperature/history').json()
+    assert [p['date'] for p in data['points']]==['2026-01-05']

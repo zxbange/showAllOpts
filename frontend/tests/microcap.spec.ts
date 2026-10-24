@@ -24,7 +24,7 @@ const history = {
   latest: {
     ...points[3],
     micro_num: 1000,
-    sample_step: 5,
+    sample_step: 1,
     sample_count: 300,
     universe_count: 4000,
     profit_growth_count: 950,

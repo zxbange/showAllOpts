@@ -445,3 +445,23 @@ def test_progress_stage_is_persisted_before_blocking_operation(cached, engine, m
     monkeypatch.setattr(cache, 'copy_module', copy)
     cache.refresh('industry-momentum', background=False)
     assert not cache.read_state()['modules']['industry-momentum']['error']
+
+
+def test_microcap_repair_marker_syncs_when_mysql_timestamps_are_the_same(cached,engine,session):
+    from app.models.microcap import MicrocapTemperature,DEFAULT_SERIES
+    from test_microcap_api import row as micro_row
+    _,cache=cached
+    record=micro_row(datetime(2026,1,6).date(),.4)
+    session.add(record)
+    session.commit()
+    cache.refresh('microcap-temperature',background=False)
+    record.sample_count=0
+    session.commit()
+    cache.refresh('microcap-temperature',background=False)
+    with cache.session('microcap-temperature') as local:
+        assert local.get(MicrocapTemperature,(DEFAULT_SERIES,record.trade_date)).sample_count==0
+    record.sample_count=21
+    session.commit()
+    cache.refresh('microcap-temperature',background=False)
+    with cache.session('microcap-temperature') as local:
+        assert local.get(MicrocapTemperature,(DEFAULT_SERIES,record.trade_date)).sample_count==21

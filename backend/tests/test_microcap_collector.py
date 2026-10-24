@@ -53,7 +53,7 @@ def collector(tmp_path):
             micro_median=value, all_median=30, relative_ratio=value / 30,
             crowding_ratio=Decimal('1.2'), amount_crowding_ratio=value / 100,
             pe_median=-5, pb_median=2, avg_np_growth=None,
-            micro_index=Decimal('1000') if previous is None else Decimal(previous['micro_index']) * Decimal('1.1'),
+            micro_index=Decimal('1000') if previous is None else (Decimal(previous['micro_index']) * Decimal('1.1')).quantize(Decimal('0.00000001')),
             period_return=Decimal('0') if previous is None else Decimal('.1'),
             member_codes=json.dumps(['A', 'B']), updated_at=env['china_now'](),
         )
@@ -69,11 +69,11 @@ def saved(c):
                 for row in session.query(c.env['MicrocapTemperature']).order_by(c.env['MicrocapTemperature'].trade_date)]
 
 
-def test_original_parameters_and_first_run_grid(collector):
+def test_daily_default_and_explicit_legacy_grid(collector):
     c = collector
     assert c.env['START_DATE'] == '2021-01-01'
-    assert c.env['MICRO_NUM'] == 1000 and c.env['SAMPLE_STEP'] == 5
-    c.env['run'](micro_num=2, skip_existing=False)
+    assert c.env['MICRO_NUM'] == 1000 and c.env['SAMPLE_STEP'] == 1
+    c.env['run'](sample_step=5, micro_num=2, skip_existing=False)
     rows = saved(c)
     assert [row['trade_date'] for row in rows] == c.days[::5]
     assert [row['sample_count'] for row in rows] == [1, 2, 3, 4]
@@ -82,28 +82,28 @@ def test_original_parameters_and_first_run_grid(collector):
 
 def test_incremental_equals_full_and_latest_refresh_is_idempotent(collector):
     c = collector
-    c.env['run'](micro_num=2, end_date=c.days[6], skip_existing=False)
-    c.env['run'](micro_num=2, end_date=c.days[12], skip_existing=False)
-    c.env['run'](micro_num=2, skip_existing=False)
+    c.env['run'](sample_step=5, micro_num=2, end_date=c.days[6], skip_existing=False)
+    c.env['run'](sample_step=5, micro_num=2, end_date=c.days[12], skip_existing=False)
+    c.env['run'](sample_step=5, micro_num=2, skip_existing=False)
     incremental = saved(c)
     c.calculated.clear()
-    c.env['run'](micro_num=2, skip_existing=False)
+    c.env['run'](sample_step=5, micro_num=2, skip_existing=False)
     assert c.calculated == [c.days[15]]
     assert saved(c) == incremental
     with c.Session() as session:
         session.query(c.env['MicrocapTemperature']).delete()
         session.commit()
-    c.env['run'](micro_num=2, skip_existing=False)
+    c.env['run'](sample_step=5, micro_num=2, skip_existing=False)
     assert saved(c) == incremental
 
 
 def test_refresh_before_next_sampling_day_does_not_shift_schedule(collector):
     c = collector
-    c.env['run'](micro_num=2, end_date=c.days[7], skip_existing=False)
+    c.env['run'](sample_step=5, micro_num=2, end_date=c.days[7], skip_existing=False)
     c.calculated.clear()
-    c.env['run'](micro_num=2, end_date=c.days[9], skip_existing=False)
+    c.env['run'](sample_step=5, micro_num=2, end_date=c.days[9], skip_existing=False)
     assert c.calculated == [c.days[5]]
-    c.env['run'](micro_num=2, end_date=c.days[10], skip_existing=False)
+    c.env['run'](sample_step=5, micro_num=2, end_date=c.days[10], skip_existing=False)
     assert [row['trade_date'] for row in saved(c)] == c.days[:11:5]
 
 
@@ -116,16 +116,16 @@ def test_failure_stops_and_resume_preserves_prior_index(collector):
         return calculate(day, previous, micro_num)
     c.env['calculate_period'] = fail
     with pytest.raises(ValueError):
-        c.env['run'](micro_num=2, skip_existing=False)
+        c.env['run'](sample_step=5, micro_num=2, skip_existing=False)
     assert len(saved(c)) == 1
     c.env['calculate_period'] = calculate
-    c.env['run'](micro_num=2, skip_existing=False)
+    c.env['run'](sample_step=5, micro_num=2, skip_existing=False)
     assert saved(c)[-1]['micro_index'] == 1331
 
 
 def test_rollback_preserves_whole_snapshot_and_members(collector):
     c = collector
-    c.env['run'](micro_num=2, end_date=c.days[0], skip_existing=False)
+    c.env['run'](sample_step=5, micro_num=2, end_date=c.days[0], skip_existing=False)
     old = saved(c)[0]
     class FailCommit(c.Session.class_):
         def commit(self):
@@ -236,12 +236,12 @@ def test_calculation_adapters_five_day_turnover_and_nullable_profit(collector):
 
 def test_missing_old_sample_is_detected(collector):
     c = collector
-    c.env['run'](micro_num=2, skip_existing=False)
+    c.env['run'](sample_step=5, micro_num=2, skip_existing=False)
     with c.Session() as session:
         session.query(c.env['MicrocapTemperature']).filter_by(trade_date=c.days[5]).delete()
         session.commit()
     with pytest.raises(ValueError, match='历史样本不连续'):
-        c.env['run'](micro_num=2, skip_existing=False)
+        c.env['run'](sample_step=5, micro_num=2, skip_existing=False)
 
 
 @pytest.mark.parametrize('bad_days', [None, ['2020-12-31'], ['2021-02-01'], ['2021-01-04']*2])
@@ -249,7 +249,7 @@ def test_bad_calendar_prevents_writes(collector, bad_days):
     c = collector
     c.env['get_trade_days'] = lambda **kwargs: bad_days
     with pytest.raises(ValueError):
-        c.env['run'](micro_num=2, skip_existing=False)
+        c.env['run'](sample_step=5, micro_num=2, skip_existing=False)
     assert saved(c) == []
 
 
@@ -293,7 +293,7 @@ def test_fundamentals_batching_and_requested_fields(collector):
 def test_latest_query_is_index_bounded_and_baseline_has_only_four_metrics(collector):
     from sqlalchemy import event
     c = collector
-    c.env['run'](micro_num=2, skip_existing=False)
+    c.env['run'](sample_step=5, micro_num=2, skip_existing=False)
     statements = []
     def capture(conn, cursor, statement, parameters, context, executemany):
         if statement.lstrip().startswith('SELECT'):
@@ -314,10 +314,10 @@ def test_latest_query_is_index_bounded_and_baseline_has_only_four_metrics(collec
 def test_insert_only_microcap_preserves_sampling_index_and_noop_writes(collector):
     from sqlalchemy import event
     c=collector
-    c.env['run'](micro_num=2,end_date=c.days[5],skip_existing=True)
+    c.env['run'](sample_step=5, micro_num=2,end_date=c.days[5],skip_existing=True)
     original=saved(c)
     c.calculated.clear()
-    result=c.env['run'](micro_num=2,skip_existing=True)
+    result=c.env['run'](sample_step=5, micro_num=2,skip_existing=True)
     assert len(result)==2 and c.calculated==c.days[10::5]
     assert saved(c)[:2]==original
     assert [r['sample_count'] for r in saved(c)]==[1,2,3,4]
@@ -330,7 +330,7 @@ def test_insert_only_microcap_preserves_sampling_index_and_noop_writes(collector
             statements.append(statement)
     event.listen(c.engine,'before_cursor_execute',capture)
     try:
-        assert c.env['run'](micro_num=2,skip_existing=True)==[]
+        assert c.env['run'](sample_step=5, micro_num=2,skip_existing=True)==[]
         assert not c.env['save_period'](c.Session,dict(before[-1],micro_index=9999),skip_existing=True)
     finally:
         event.remove(c.engine,'before_cursor_execute',capture)
@@ -339,7 +339,7 @@ def test_insert_only_microcap_preserves_sampling_index_and_noop_writes(collector
 
 def test_insert_only_microcap_failure_resumes_after_committed_sample(collector):
     c=collector
-    c.env['run'](micro_num=2,end_date=c.days[5],skip_existing=True)
+    c.env['run'](sample_step=5, micro_num=2,end_date=c.days[5],skip_existing=True)
     calculate=c.env['calculate_period']
     def fail(day,previous,micro_num):
         if day==c.days[15]:
@@ -347,11 +347,11 @@ def test_insert_only_microcap_failure_resumes_after_committed_sample(collector):
         return calculate(day,previous,micro_num)
     c.env['calculate_period']=fail
     with pytest.raises(ValueError):
-        c.env['run'](micro_num=2,skip_existing=True)
+        c.env['run'](sample_step=5, micro_num=2,skip_existing=True)
     assert len(saved(c))==3
     c.env['calculate_period']=calculate
     c.calculated.clear()
-    result=c.env['run'](micro_num=2,skip_existing=True)
+    result=c.env['run'](sample_step=5, micro_num=2,skip_existing=True)
     assert len(result)==1 and c.calculated==[c.days[15]]
     assert saved(c)[-1]['micro_index']==1331
 
@@ -359,9 +359,141 @@ def test_insert_only_microcap_failure_resumes_after_committed_sample(collector):
 def test_insert_only_microcap_defers_intraday_sample(collector):
     c=collector
     c.env['china_now']=lambda: datetime.datetime.combine(c.days[5],datetime.time(15,30))
-    c.env['run'](micro_num=2,skip_existing=True)
+    c.env['run'](sample_step=5, micro_num=2,skip_existing=True)
     assert c.calculated==[c.days[0]]
     c.calculated.clear()
     c.env['china_now']=lambda: datetime.datetime.combine(c.days[5],datetime.time(16))
-    c.env['run'](micro_num=2,skip_existing=True)
+    c.env['run'](sample_step=5, micro_num=2,skip_existing=True)
     assert c.calculated==[c.days[5]]
+
+# Daily series: migration, missing-date repair, continuity and idempotence.
+def daily_rows(c):
+    return [r for r in saved(c) if r['series_id']==c.env['series_key']('2021-01-01',2,1)]
+
+
+def daily_index(c):
+    def index(previous,day,micro_num):
+        return ((Decimal('1000') if previous is None else Decimal(previous['micro_index'])*Decimal('1.1'))
+                .quantize(Decimal('0.00000001')),Decimal(0) if previous is None else Decimal('.1'))
+    c.env['index_return']=index
+    return index
+
+
+def test_daily_backfill_reuses_old_raw_data_without_recollecting_existing_dates(collector):
+    c=collector
+    daily_index(c)
+    c.env['run'](sample_step=5,micro_num=2)
+    legacy=saved(c)
+    c.calculated.clear()
+    result=c.env['run'](micro_num=2)
+    assert len(result)==len(c.days)
+    assert c.calculated==[day for day in c.days if day not in c.days[::5]]
+    daily=daily_rows(c)
+    assert [row['trade_date'] for row in daily]==c.days
+    assert [row['sample_count'] for row in daily]==list(range(1,len(c.days)+1))
+    assert all(row['sample_step']==1 for row in daily)
+    assert [r for r in saved(c) if r['sample_step']==5]==legacy
+    # Compare with a new all-daily run to verify index/rank migration, not just row counts.
+    with c.Session() as session:
+        session.query(c.env['MicrocapTemperature']).delete()
+        session.commit()
+    c.env['run'](micro_num=2)
+    assert daily_rows(c)==daily
+
+
+def test_daily_noop_does_not_read_prices_constituents_or_write(collector):
+    from sqlalchemy import event
+    c=collector
+    daily_index(c)
+    c.env['run'](micro_num=2)
+    before=daily_rows(c)
+    c.calculated.clear()
+    statements=[]
+    def capture(conn,cursor,statement,*args): statements.append(statement)
+    event.listen(c.engine,'before_cursor_execute',capture)
+    try:
+        assert c.env['run'](micro_num=2)==[]
+    finally:
+        event.remove(c.engine,'before_cursor_execute',capture)
+    assert not c.calculated and daily_rows(c)==before
+    assert not any(s.lstrip().split()[0].upper() in ('INSERT','UPDATE','DELETE') for s in statements)
+    assert not any('member_codes' in s for s in statements)
+
+
+@pytest.mark.parametrize('shift_counts', [True, False])
+def test_daily_historical_gap_repairs_only_dependent_fields_and_can_resume_repair(collector, shift_counts):
+    c=collector
+    index=daily_index(c)
+    c.env['run'](micro_num=2)
+    expected=daily_rows(c)
+    model=c.env['MicrocapTemperature']
+    with c.Session() as session:
+        # Emulate an older incomplete daily sequence: downstream counts and index reflect the hole.
+        session.query(model).filter_by(trade_date=c.days[5]).delete()
+        session.query(model).filter(model.trade_date>c.days[5]).update({model.sample_count:model.sample_count-1 if shift_counts else model.sample_count, model.micro_index:1000})
+        session.commit()
+    def fail(previous,day,micro_num):
+        if day==c.days[8]: raise RuntimeError('repair interrupted')
+        return index(previous,day,micro_num)
+    c.env['index_return']=fail
+    c.calculated.clear()
+    with pytest.raises(RuntimeError,match='repair interrupted'):
+        c.env['run'](micro_num=2)
+    assert c.calculated==[c.days[5]]
+    assert daily_rows(c)[7]['sample_count']==8
+    assert daily_rows(c)[8]['sample_count']==0  # persisted marker detects unfinished suffix
+    c.env['index_return']=index
+    c.calculated.clear()
+    # The hole is now filled, but the next run must still finish updating the dependent suffix.
+    assert c.env['run'](micro_num=2)==[]
+    assert c.calculated==[]
+    assert daily_rows(c)==expected
+
+
+def test_daily_initial_failure_and_next_day_incremental(collector):
+    c=collector
+    daily_index(c)
+    calculate=c.env['calculate_period']
+    def fail(day,previous,micro_num):
+        if day==c.days[4]: raise ValueError('fixture source missing')
+        return calculate(day,previous,micro_num)
+    c.env['calculate_period']=fail
+    with pytest.raises(ValueError,match='source missing'):
+        c.env['run'](micro_num=2,end_date=c.days[5])
+    assert len(daily_rows(c))==4
+    c.env['calculate_period']=calculate
+    c.calculated.clear()
+    c.env['run'](micro_num=2,end_date=c.days[5])
+    assert c.calculated==c.days[4:6]
+    before=daily_rows(c)
+    c.calculated.clear()
+    c.env['run'](micro_num=2,end_date=c.days[6])
+    assert c.calculated==[c.days[6]]
+    assert daily_rows(c)[:6]==before
+
+
+def test_daily_before_close_defers_only_today(collector):
+    c=collector
+    c.env['china_now']=lambda: datetime.datetime.combine(c.days[5],datetime.time(15,30))
+    c.env['run'](micro_num=2)
+    assert c.calculated==c.days[:5]
+    c.env['china_now']=lambda: datetime.datetime.combine(c.days[5],datetime.time(16))
+    c.calculated.clear()
+    c.env['run'](micro_num=2)
+    assert c.calculated==[c.days[5]]
+
+
+def test_daily_hole_insert_and_pending_marker_rollback_together(collector):
+    c=collector
+    daily_index(c)
+    c.env['run'](micro_num=2)
+    before=daily_rows(c)
+    with c.Session() as session:
+        session.query(c.env['MicrocapTemperature']).filter_by(trade_date=c.days[5]).delete()
+        session.commit()
+    class FailCommit(c.Session.class_):
+        def commit(self): raise RuntimeError('fixture commit failed')
+    with pytest.raises(RuntimeError):
+        c.env['save_period'](sessionmaker(bind=c.engine,class_=FailCommit),before[5],
+                             skip_existing=True,invalidate_next=c.days[6])
+    assert daily_rows(c)==before[:5]+before[6:]

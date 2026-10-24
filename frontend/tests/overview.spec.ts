@@ -179,3 +179,39 @@ test('shared module cards stay available while loading and after failures', asyn
     await page.unrouteAll({ behavior: 'wait' })
   }
 })
+
+test('navigation prioritizes market views and removes workspace label', async ({
+  page,
+}, testInfo) => {
+  await page.route('**/api/v1/**', (route) =>
+    route.fulfill({ status: 503, json: { detail: '离线测试' } }),
+  )
+  await page.goto('/')
+  const navigation = page.getByRole('navigation', { name: '主导航' })
+  const names = await navigation
+    .getByRole('link')
+    .evaluateAll((links) => links.map((link) => link.getAttribute('aria-label')))
+  expect(names).toEqual([
+    '总览',
+    '市场情绪',
+    '动量观察',
+    '微盘观察',
+    'ETF份额仪表盘',
+    '短线选股',
+    '个股机构持仓',
+    '业绩选股',
+    '高股息选股',
+  ])
+  await expect(page.getByText('工作空间', { exact: true })).toHaveCount(0)
+  if (testInfo.project.name === 'desktop') {
+    const brand = page.getByRole('link', { name: '发奋墙 首页' })
+    await expect(brand).toBeVisible()
+    expect(await brand.evaluate((el) => getComputedStyle(el).borderBottomWidth)).toBe('1px')
+  }
+  await page.screenshot({
+    path: testInfo.outputPath('navigation-order.png'),
+    fullPage: true,
+    animations: 'disabled',
+  })
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
+})

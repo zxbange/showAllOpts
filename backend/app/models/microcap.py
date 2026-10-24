@@ -6,7 +6,8 @@ from sqlalchemy.orm import Mapped, mapped_column
 
 from app.models.base import Base
 
-DEFAULT_SERIES = 'micro1000_5d_20210101_v1'
+DEFAULT_SERIES = 'micro1000_1d_20210101_v1'
+LEGACY_SERIES = 'micro1000_5d_20210101_v1'
 
 
 class MicrocapTemperature(Base):

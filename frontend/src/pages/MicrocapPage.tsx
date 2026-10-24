@@ -34,7 +34,7 @@ export function MicrocapPage() {
           <h1>
             微盘温度计<span className="heading-tag">估值 · 交易 · 温度</span>
           </h1>
-          <p>市值最小 1000 只股票的估值与交易拥挤度，每 5 个交易日采样。</p>
+          <p>市值最小 1000 只股票的估值与交易拥挤度，每个交易日采集。</p>
         </div>
         <div className="heading-actions">
           <span className="date-badge">
@@ -95,7 +95,11 @@ export function MicrocapPage() {
                 <div>
                   <h2>温度构成</h2>
                 </div>
-                <span>每 {latest.sample_step} 个交易日采样</span>
+                <span>
+                  {latest.sample_step === 1
+                    ? '每个交易日采集'
+                    : `旧版：每 ${latest.sample_step} 个交易日采样`}
+                </span>
               </div>
               <div
                 className="temperature-track"
@@ -160,7 +164,7 @@ export function MicrocapPage() {
             <p>
               {data?.start_date
                 ? `${formatDate(data.start_date)} — ${formatDate(data.end_date)}`
-                : '自 2021 年起 · 每 5 个交易日采样'}
+                : '自 2021 年起 · 每个交易日采集'}
             </p>
           </div>
           <div className="range-switch" aria-label="微盘温度历史范围">

@@ -58,7 +58,7 @@ STRATEGY_CONFIG = {
     },
     '微盘温度计': {
         'start_date': '2021-01-01', 'end_date': None,
-        'micro_num': 1000, 'sample_step': 5, 'batch_size': 1000,
+        'micro_num': 1000, 'sample_step': 1, 'batch_size': 1000,
     },
     'ETF份额': {
         'start_date': None, 'end_date': None, 'initial_trade_days': 300,
@@ -1332,7 +1332,7 @@ def _microcap_strategy(_apis, _config):
                 raise ValueError('历史样本不连续，请检查历史删除或外部修改，不能直接续算分位。')
             return day, previous, histories
 
-    def save_period(Session, record, skip_existing=False):
+    def save_period(Session, record, skip_existing=False, invalidate_next=None):
         _progress_note('写入当前采样期温度数据')
         required = RESULT_COLUMNS + ['member_codes']
         for field in required:
@@ -1351,8 +1351,115 @@ def _microcap_strategy(_apis, _config):
             else:
                 query.delete(synchronize_session=False)
             session.add(MicrocapTemperature(**record))
+            mark_daily_pending(session, record['series_id'], invalidate_next)
             session.commit()
             return True
+
+    def mark_daily_pending(session, series_id, day):
+        if day is not None:
+            # 与当前日期一起提交：即使下一行原计数恰好正确，也能识别尚未完成的派生修复。
+            changed = session.query(MicrocapTemperature).filter_by(series_id=series_id, trade_date=day).update(
+                {'sample_count': 0, 'updated_at': china_now()}, synchronize_session=False)
+            if changed != 1:
+                raise ValueError('待衔接日期被其他任务修改，请停止并重跑。')
+
+
+    def load_daily_history(Session, series_id, end):
+        """只读日期、计数及四个分位基准；无缺口时不下载成分股名单。"""
+        session = Session()
+        try:
+            fields = ('trade_date', 'sample_count', 'sample_step') + RAW_FIELDS
+            rows = session.query(*[getattr(MicrocapTemperature, field) for field in fields]).filter(
+                MicrocapTemperature.series_id == series_id, MicrocapTemperature.trade_date <= end,
+            ).order_by(MicrocapTemperature.trade_date).all()
+            return {as_date(row[0]): dict(zip(fields, row)) for row in rows}
+        finally:
+            session.close()
+
+
+    def stored_period(Session, series_id, day):
+        session = Session()
+        try:
+            row = session.query(MicrocapTemperature).filter_by(series_id=series_id, trade_date=day).first()
+            return None if row is None else {
+                column.name: getattr(row, column.name) for column in MicrocapTemperature.__table__.columns}
+        finally:
+            session.close()
+
+
+    def repair_daily_derived(Session, record, old, invalidate_next=None):
+        # 补齐更早日期后，仅修正依赖历史序列的列，不重新采集或覆盖原始指标、成分股。
+        fields = ('sample_step', 'sample_count') + PCT_FIELDS + ('score', 'micro_index', 'period_return')
+        updates = {field: record[field] for field in fields if record[field] != old[field]}
+        if not updates:
+            return
+        updates['updated_at'] = china_now()
+        session = Session()
+        try:
+            changed = session.query(MicrocapTemperature).filter_by(
+                series_id=record['series_id'], trade_date=record['trade_date']).update(updates, synchronize_session=False)
+            if changed != 1:
+                raise ValueError('每日序列被其他任务修改，请停止并重跑。')
+            mark_daily_pending(session, record['series_id'], invalidate_next)
+            session.commit()
+        except BaseException:
+            session.rollback()
+            raise
+        finally:
+            session.close()
+
+
+    def collect_daily(Session, start, end, micro_num):
+        days = calendar(start, end)
+        if not days:
+            return pd.DataFrame(columns=RESULT_COLUMNS)
+        series_id = series_key(start, micro_num, 1)
+        legacy_id = series_key(start, micro_num, 5)
+        all_saved = load_daily_history(Session, series_id, china_now().date())
+        saved = {day: row for day, row in all_saved.items() if day <= end}
+        saved_dates = sorted(all_saved)
+        if set(saved) - set(days):
+            raise ValueError('已有每日记录不在完整交易日历中，停止写入。')
+        # sample_count 也是连续性检查点。补缺后若中断，后续行计数仍旧，下次继续修正。
+        first = next((i for i, day in enumerate(days)
+                      if day not in saved or saved[day]['sample_count'] != i + 1 or saved[day]['sample_step'] != 1), len(days))
+        missing = len(set(days) - set(saved))
+        _progress_message('微盘温度计：检查 {} 至 {}，缺失 {} 个交易日。'.format(start, end, missing))
+        if first == len(days):
+            _progress_note('历史交易日完整，跳过行情采集和写入。')
+            return pd.DataFrame(columns=RESULT_COLUMNS)
+        histories = {field: sorted(Decimal(saved[day][field]) for day in days[:first]) for field in RAW_FIELDS}
+        previous = stored_period(Session, series_id, days[first-1]) if first else None
+        legacy = load_daily_history(Session, legacy_id, end)
+        records = []
+        reused = 0
+        for day in _progress_items(days[first:], '补齐交易日'):
+            _progress_note('检查已有指标并补采缺失日期 {}'.format(day))
+            old = stored_period(Session, series_id, day) if day in saved else None
+            record = dict(old) if old is not None else (stored_period(Session, legacy_id, day) if day in legacy else None)
+            if record is None:
+                record = calculate_period(day, previous, micro_num)
+            else:
+                # 五日采样的原始指标仍有效；指数必须按前一交易日的成分股衔接。
+                record['micro_index'], record['period_return'] = index_return(previous, day, micro_num)
+                reused += int(old is None)
+            if record['trade_date'] != day or record['micro_num'] != micro_num:
+                raise ValueError('计算结果日期或微盘数量不一致。')
+            record.update(series_id=series_id, sample_step=1)
+            append_percentiles(record, histories)
+            following = bisect.bisect_right(saved_dates, day)
+            next_day = saved_dates[following] if following < len(saved_dates) else None
+            if old is not None:
+                repair_daily_derived(Session, record, old, invalidate_next=next_day)
+            else:
+                record['updated_at'] = china_now()
+                if not save_period(Session, record, skip_existing=True, invalidate_next=next_day):
+                    raise ValueError('该日期已被其他任务写入，请重跑加载最新基准。')
+                records.append({field: record[field] for field in RESULT_COLUMNS})
+            previous = record
+        _progress_message('每日序列新增 {} 行，其中复用旧采样日原始指标 {} 行。'.format(len(records), reused))
+        return pd.DataFrame(records, columns=RESULT_COLUMNS)
+
 
     def run(start_date=START_DATE, end_date=END_DATE, micro_num=MICRO_NUM, sample_step=SAMPLE_STEP, skip_existing=True):
         start = as_date(start_date)
@@ -1369,6 +1476,8 @@ def _microcap_strategy(_apis, _config):
         series_id = series_key(start, micro_num, sample_step)
         records = []
         with database_scope(Base, _config) as Session:
+            if sample_step == 1:
+                return collect_daily(Session, start, end, micro_num)
             last, previous, histories = load_resume(Session, series_id, include_latest=skip_existing)
             if last is not None and last > today:
                 raise ValueError('最新入库日期晚于今天，请检查已有数据。')

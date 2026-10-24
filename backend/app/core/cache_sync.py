@@ -120,6 +120,9 @@ def sync_history(source, target, table):
     """Compare keys/timestamps, including late backfills and removed source rows."""
     keys = list(table.primary_key.columns)
     columns = keys + [table.c.updated_at]
+    if table.name == 'microcap_temperature':
+        # MySQL DATETIME may have only second precision; detect repair marker transitions too.
+        columns.append(table.c.sample_count)
     logger.info('Cache metadata read started table=%s', table.name)
     remote = read_map(source, columns, len(keys))
     local = read_map(target, columns, len(keys))
