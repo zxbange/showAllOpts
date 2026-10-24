@@ -261,3 +261,60 @@ def test_real_historical_selection_st_cap_filter_and_warmup(mod):
     apis['get_extras'] = lambda *a, **kw: pd.DataFrame() if kw.get('df') else {}
     with pytest.raises(ValueError, match='ST'):
         mod.collect_selections(apis, mod.make_selector(apis), day, 50)
+
+
+def test_fresh_research_environment_uses_builtin_market_apis(mod, monkeypatch, tmp_path):
+    # Mirror the reported research environment: jqdata exposes calendar/query only;
+    # the remaining five APIs live in builtins, with no prior Notebook imports.
+    import builtins
+    days, calls, apis, _ = setup_apis(mod, monkeypatch, tmp_path)
+    for name, value in apis.items():
+        monkeypatch.delattr(mod, name, raising=False)
+        if name in ('get_trade_days', 'query'):
+            monkeypatch.setattr(mod.jq, name, value, raising=False)
+            monkeypatch.delattr(builtins, name, raising=False)
+        else:
+            monkeypatch.delattr(mod.jq, name, raising=False)
+            monkeypatch.setattr(builtins, name, value, raising=False)
+    assert mod.resolve_apis() == apis
+    result = mod.run(start_date=days[0], end_date=days[0], as_of_date=days[10],
+                     cache_dir=str(tmp_path), show=False)
+    assert calls['selected'] == [days[0]]
+    assert result.summary['有效样本'].sum() == 3
+    again = mod.run(start_date=days[0], end_date=days[0], as_of_date=days[10],
+                    cache_dir=str(tmp_path), show=False)
+    pd.testing.assert_frame_equal(result.summary, again.summary)
+    assert len(calls['selected']) == len(calls['prices']) == 1
+
+
+def test_api_resolution_precedence_and_no_truth_testing_table_objects(mod, monkeypatch):
+    import builtins
+    class Table:
+        def __bool__(self):
+            raise AssertionError('Do not truth-test provider table objects.')
+    default = {name: object() for name in mod.API_NAMES}
+    for name, value in default.items():
+        monkeypatch.setattr(builtins, name, value, raising=False)
+        monkeypatch.delattr(mod.jq, name, raising=False)
+        monkeypatch.delattr(mod, name, raising=False)
+    jq_price, global_price, explicit_price = object(), object(), object()
+    monkeypatch.setattr(mod.jq, 'get_price', jq_price, raising=False)
+    monkeypatch.setattr(mod, 'get_price', global_price, raising=False)
+    assert mod.resolve_apis()['get_price'] is global_price
+    table = Table()
+    resolved = mod.resolve_apis({'get_price': explicit_price, 'valuation': table})
+    assert resolved['get_price'] is explicit_price
+    assert resolved['valuation'] is table
+    assert mod.resolve_apis({'get_price': None})['get_price'] is jq_price
+    monkeypatch.setattr(mod.jq, 'get_price', None)
+    assert mod.resolve_apis({})['get_price'] is default['get_price']
+
+
+def test_missing_api_reports_only_unavailable_names(mod, monkeypatch):
+    import builtins
+    namespace = {name: object() for name in mod.API_NAMES}
+    namespace['get_price'] = None
+    monkeypatch.delattr(mod.jq, 'get_price', raising=False)
+    monkeypatch.delattr(builtins, 'get_price', raising=False)
+    with pytest.raises(RuntimeError, match='未找到聚宽研究接口：get_price；'):
+        mod.resolve_apis(namespace)

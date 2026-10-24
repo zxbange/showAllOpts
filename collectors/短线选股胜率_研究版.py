@@ -2,6 +2,7 @@
 """聚宽独立研究：短线三战法入选后第2/4/10个交易日的收盘表现。
 直接显示胜率及涨跌幅门槛统计；不生成CSV、不连接业务数据库、不下单。
 """
+import builtins
 import datetime
 import json
 import math
@@ -30,6 +31,23 @@ THRESHOLDS = (('涨幅>0%', 'up_0'), ('涨幅>5%', 'up_5'), ('涨幅>10%', 'up_1
               ('涨幅<0%', 'down_0'), ('涨幅<-5%', 'down_5'), ('涨幅<-10%', 'down_10'))
 API_NAMES = ('get_all_securities', 'get_trade_days', 'get_price', 'get_extras',
              'get_fundamentals', 'query', 'valuation')
+
+
+def resolve_apis(api_namespace=None):
+    """研究环境可能把行情/财务接口注入builtins，而不是导出为jqdata属性。"""
+    namespace = api_namespace if api_namespace is not None else globals()
+    apis = {}
+    for name in API_NAMES:
+        value = namespace.get(name)
+        if value is None:
+            value = getattr(jq, name, None)
+        if value is None:
+            value = getattr(builtins, name, None)
+        apis[name] = value
+    missing = [name for name, value in apis.items() if value is None]
+    if missing:
+        raise RuntimeError('未找到聚宽研究接口：{}；请在聚宽研究环境执行完整脚本。'.format(', '.join(missing)))
+    return apis
 
 
 def china_now():
@@ -554,10 +572,7 @@ def run(start_date=START_DATE, end_date=END_DATE, as_of_date=AS_OF_DATE,
                              (FUNDAMENTAL_BATCH_SIZE, 1000, 'FUNDAMENTAL_BATCH_SIZE')):
         if isinstance(value, bool) or not isinstance(value, int) or not 1 <= value <= cap:
             raise ValueError('{} 必须为1至{}的整数。'.format(name, cap))
-    namespace = api_namespace if api_namespace is not None else globals()
-    apis = {name: namespace.get(name) or getattr(jq, name, None) for name in API_NAMES}
-    if any(apis[name] is None for name in API_NAMES):
-        raise RuntimeError('请在聚宽研究环境运行，缺少接口：{}'.format(', '.join(n for n in API_NAMES if apis[n] is None)))
+    apis = resolve_apis(api_namespace)
     now = china_now()
     closed = now.date() - datetime.timedelta(days=1) if now.hour < 16 else now.date()
     start = as_date(start_date)
