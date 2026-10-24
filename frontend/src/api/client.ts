@@ -1,3 +1,4 @@
+import type { SentimentHistory } from '../types/sentiment'
 import type { SocialMode } from '../types/ownership'
 import type { GrowthOverview } from '../types/growth'
 import type { DividendOverview } from '../types/dividend'
@@ -43,6 +44,9 @@ export function getHistory(
     signal,
   )
 }
+
+export const getSentimentHistory = (days: number, signal?: AbortSignal) =>
+  request<SentimentHistory>(`/market-sentiment/history?days=${days}`, signal)
 
 export const getCrowdingHistory = (days: number, signal?: AbortSignal) =>
   request<CrowdingHistory>(`/market-crowding/history?days=${days}`, signal)
@@ -127,4 +131,7 @@ export async function cancelCache(runId: string, module?: string) {
 
 export const getShortTerm = (day: string, method: string, offset: number, signal?: AbortSignal) =>
   request<import('../types/shortTerm').ShortOverview>(
-    '/short-term/latest?' + new URLSearchParams({ ...(day ? { day } : {}), method, offset: String(offset), limit: '6' }), signal)
+    '/short-term/latest?' +
+      new URLSearchParams({ ...(day ? { day } : {}), method, offset: String(offset), limit: '6' }),
+    signal,
+  )

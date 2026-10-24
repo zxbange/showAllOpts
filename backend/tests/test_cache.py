@@ -32,7 +32,7 @@ def cached(engine, session, tmp_path):
 
 
 PATHS = ['/industry-momentum/latest', '/industry-momentum/industries/A/history',
-         '/market-crowding/history', '/microcap-temperature/history', '/etf-shares/history',
+         '/market-crowding/history', '/market-sentiment/history', '/microcap-temperature/history', '/etf-shares/history',
          '/earnings-gap/stocks?period=2026-09-30&search=测试&sort=profit_yoy',
          '/earnings-gap/stocks/600001.XSHG?period=2026-09-30',
          '/microcap-breadth/history', '/dividend-selection/latest', '/high-growth/latest', '/etf-momentum/latest']

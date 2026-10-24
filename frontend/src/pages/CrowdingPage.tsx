@@ -29,7 +29,7 @@ export function CrowdingPage() {
       <PageHeader>
         <div>
           <h1>
-            抱团拥挤度<span className="heading-tag">成交额集中度</span>
+            市场情绪<span className="heading-tag">抱团拥挤度</span>
           </h1>
           <p>成交额前 5% 股票占全市场成交额的比例。</p>
         </div>

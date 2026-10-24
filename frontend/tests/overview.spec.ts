@@ -17,7 +17,7 @@ test('overview directory is independent of database, searchable and categorized'
     'href',
     '/industry-momentum',
   )
-  await expect(page.getByRole('link', { name: '进入抱团拥挤度', exact: true })).toHaveAttribute(
+  await expect(page.getByRole('link', { name: '进入市场情绪', exact: true })).toHaveAttribute(
     'href',
     '/market-crowding',
   )
@@ -53,7 +53,7 @@ test('overview directory is independent of database, searchable and categorized'
     animations: 'disabled',
   })
   // A failed database must not prevent keyboard access to any registered module.
-  await page.getByRole('link', { name: '进入抱团拥挤度', exact: true }).focus()
+  await page.getByRole('link', { name: '进入市场情绪', exact: true }).focus()
   await page.keyboard.press('Enter')
   await expect(page).toHaveURL(/market-crowding$/)
   await expect(page.getByRole('alert')).toContainText('数据库暂不可用')
@@ -68,7 +68,7 @@ test('all module routes remain reachable from navigation', async ({ page }) => {
   const navigation = page.getByRole('navigation', { name: '主导航' })
   for (const [name, path] of [
     ['动量观察', 'industry-momentum'],
-    ['抱团拥挤度', 'market-crowding'],
+    ['市场情绪', 'market-crowding'],
     ['微盘观察', 'microcap-temperature'],
     ['ETF份额仪表盘', 'etf-shares'],
     ['高股息选股', 'dividend-selection'],
@@ -100,6 +100,7 @@ test('group tabs preserve direct links, active navigation and mobile layout', as
   )
   for (const [group, first, second, label] of [
     ['动量观察', 'industry-momentum', 'etf-momentum', 'ETF动量热度'],
+    ['市场情绪', 'market-crowding', 'market-sentiment', '市场情绪跟踪'],
     ['微盘观察', 'microcap-temperature', 'microcap-breadth', '微盘新高新低'],
     ['业绩选股', 'high-growth', 'earnings-gap', '净利润断层'],
   ]) {

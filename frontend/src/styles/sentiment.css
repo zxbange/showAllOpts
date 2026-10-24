@@ -1,0 +1,33 @@
+.sentiment-state {
+  display: inline-flex;
+  align-items: center;
+  padding: 4px 12px;
+  border-radius: 20px;
+  font-size: 13px;
+  font-weight: 600;
+}
+.sentiment-cold {
+  color: #1a6c61;
+  background: #e5f2ee;
+}
+.sentiment-hot {
+  color: #ac3929;
+  background: #fce9e3;
+}
+.sentiment-normal {
+  color: var(--muted);
+  background: var(--surface);
+}
+.sentiment-page .panel-title {
+  flex-wrap: wrap;
+}
+.sentiment-page .method-card {
+  margin-top: 24px;
+}
+.sentiment-page .chart-skeleton {
+  height: 430px;
+}
+
+.sentiment-page .method-card p {
+  max-width: none;
+}

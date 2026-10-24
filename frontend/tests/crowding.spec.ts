@@ -50,8 +50,8 @@ test('home to crowding, chart, ranges and smoothing on desktop/mobile', async ({
     })
   })
   await page.goto('/')
-  await page.getByRole('link', { name: '进入抱团拥挤度', exact: true }).click()
-  await expect(page.getByRole('heading', { name: /抱团拥挤度.*成交额集中度/ })).toBeVisible()
+  await page.getByRole('link', { name: '进入市场情绪', exact: true }).click()
+  await expect(page.getByRole('heading', { name: /市场情绪.*抱团拥挤度/ })).toBeVisible()
   await expect(page.locator('.trend-chart canvas')).toBeVisible()
   await expect(page.locator('.stats-grid')).toContainText('40.00%')
   await page.getByRole('button', { name: '全部', exact: true }).click()
@@ -63,7 +63,7 @@ test('home to crowding, chart, ranges and smoothing on desktop/mobile', async ({
   await expect(smoothing).not.toBeChecked()
   await smoothing.check()
   await expect(smoothing).toBeChecked()
-  await expect(page.locator('.breadcrumb')).toContainText('抱团拥挤度')
+  await expect(page.locator('.breadcrumb')).toContainText('市场情绪')
   // React StrictMode may start/abort the initial request twice in development.
   expect([...new Set(ranges)]).toEqual(['365', '0', '30'])
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(

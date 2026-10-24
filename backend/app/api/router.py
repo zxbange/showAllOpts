@@ -1,3 +1,4 @@
+from app.api.routes.sentiment import router as sentiment_router
 from app.api.routes.short_term import router as short_term_router
 from app.api.routes.ownership import router as ownership_router
 from fastapi import APIRouter
@@ -18,6 +19,7 @@ router.include_router(short_term_router)
 router.include_router(ownership_router)
 router.include_router(momentum_router)
 router.include_router(crowding_router)
+router.include_router(sentiment_router)
 router.include_router(microcap_router)
 router.include_router(etf_router)
 router.include_router(earnings_router)
@@ -35,9 +37,13 @@ def modules():
         'description': '从行业热力分布到长期动量趋势，捕捉市场的集体方向。',
         'path': '/industry-momentum', 'status': 'available',
     }, {
-        'id': 'market-crowding', 'name': '抱团拥挤度',
-        'description': '观察前 5% 股票成交额占比，追踪市场成交的集中与分散。',
+        'id': 'market-crowding', 'name': '市场情绪',
+        'description': '抱团拥挤度与全市场站上 MA20 的股票比例。',
         'path': '/market-crowding', 'status': 'available',
+    }, {
+        'id': 'market-sentiment', 'name': '市场情绪跟踪',
+        'description': '站上20日均线股票比例，低于20%为冰点，高于80%为过热。',
+        'path': '/market-sentiment', 'status': 'available',
     }, {
         'id': 'microcap-temperature', 'name': '微盘温度计',
         'description': '从估值与交易拥挤度，观察微盘 1000 的温度与等权指数。',

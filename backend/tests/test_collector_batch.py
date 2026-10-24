@@ -129,7 +129,7 @@ def test_pasted_notebook_without_file_or_sibling_files(batch, monkeypatch, tmp_p
                    and n.func.id in ('exec', 'eval', 'compile', 'open') for n in ast.walk(tree))
     namespace = {'__name__': 'notebook_cell'}
     exec(compile(source, '<ipython-input-test>', 'exec'), namespace)
-    assert len(namespace['STRATEGIES']) == 11
+    assert len(namespace['STRATEGIES']) == 12
     # Construct all nine real strategies without accessing any project files.
     for name in namespace['STRATEGY_ORDER']:
         assert callable(namespace['_load_strategy'](name, CONFIG, {}))
@@ -218,7 +218,7 @@ def test_failure_continues_and_marks_partial_completion(batch, monkeypatch, caps
     assert result[1]['status'] == 'FAILED' and result[1]['rows'] is None
     assert result[-1]['status'] == 'SUCCESS'
     output = capsys.readouterr().out
-    assert '成功 10，失败 1' in output and '未完成' in output and 'synthetic failure' in output
+    assert '成功 {}，失败 1'.format(len(batch.STRATEGY_ORDER)-1) in output and '未完成' in output and 'synthetic failure' in output
 
 
 def test_strategy_initialization_failure_does_not_stop_later_strategy(batch, monkeypatch, capsys):

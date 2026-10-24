@@ -26,6 +26,7 @@ from app.models.etf_heat import Heat, Pool
 from app.models.growth import GrowthSnapshot, GrowthStock
 from app.models.momentum import IndustryMomentum
 from app.models.crowding import MarketCrowding
+from app.models.sentiment import MarketSentiment
 from app.models.microcap import MicrocapTemperature
 from app.models.etf import ETFShare
 from app.models.earnings import EarningsRun, EarningsStock
@@ -37,6 +38,7 @@ CHINA = timezone(timedelta(hours=8))
 MODULES = {
     'industry-momentum': ('行业动量', (IndustryMomentum,)),
     'market-crowding': ('抱团拥挤度', (MarketCrowding,)),
+    'market-sentiment': ('市场情绪跟踪', (MarketSentiment,)),
     'microcap-temperature': ('微盘温度计', (MicrocapTemperature,)),
     'etf-shares': ('ETF份额仪表盘', (ETFShare,)),
     'earnings-gap': ('净利润断层', (EarningsRun, EarningsStock)),
@@ -74,7 +76,7 @@ class SnapshotCache:
         self.settings = settings
         self.source = source
         schema = [(key, [(m.__tablename__, [(c.name, str(c.type)) for c in m.__table__.columns])
-                         for m in models]) for key, (_, models) in MODULES.items() if key != 'short-term']
+                         for m in models]) for key, (_, models) in MODULES.items() if key not in ('short-term', 'market-sentiment')]
         # Preserve the pre-existing cache namespace and ownership resume checkpoint.
         # This additive module owns separate tables/files; no old schema changed.
         identity = [source.url.drivername, source.url.host, source.url.port, source.url.database,

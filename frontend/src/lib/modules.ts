@@ -19,6 +19,7 @@ export interface ResearchModule {
   category: string
   description: string
   tags: string[]
+  searchTerms?: string[]
   icon: LucideIcon
   tone: 'coral' | 'jade' | 'gold'
   illustration:
@@ -124,6 +125,17 @@ export const individualModules: ResearchModule[] = [
     illustration: 'heatmap',
   },
   {
+    id: 'market-sentiment',
+    name: '市场情绪跟踪',
+    path: '/market-sentiment',
+    category: '市场结构',
+    description: '全市场站上20日均线的股票比例，跟踪冰点与过热。',
+    tags: ['MA20', '冰点20%', '过热80%'],
+    icon: Thermometer,
+    tone: 'jade',
+    illustration: 'temperature',
+  },
+  {
     id: 'market-crowding',
     name: '抱团拥挤度',
     path: '/market-crowding',
@@ -160,6 +172,12 @@ export const individualModules: ResearchModule[] = [
 
 export const moduleGroups = [
   {
+    name: '市场情绪',
+    description: '成交集中度与站上20日均线的股票比例。',
+    ids: ['market-crowding', 'market-sentiment'],
+    labels: ['抱团拥挤度', '市场情绪跟踪'],
+  },
+  {
     name: '动量观察',
     description: '行业强势股集中度与 ETF / LOF 动量排名。',
     ids: ['industry-momentum', 'etf-momentum'],
@@ -190,6 +208,9 @@ export const researchModules: ResearchModule[] = individualModules
           ...m,
           name: group.name,
           tags: group.labels,
+          searchTerms: individualModules
+            .filter((item) => group.ids.includes(item.id))
+            .flatMap((item) => [item.name, ...item.tags]),
           description: group.description,
         }
       : m

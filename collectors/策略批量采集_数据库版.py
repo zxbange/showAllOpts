@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """聚宽单文件串行采集：直接粘贴到 Notebook，或 %run -i 本文件。
-十一个策略在本文件内独立实现；不读取外部策略、配置或日志文件。
+十二个策略在本文件内独立实现；不读取外部策略、配置或日志文件。
 依赖和参数集中在开头；共用连接、会话及日期工具。用法见 docs/collector-batch.md。
 """
 import bisect
@@ -52,6 +52,7 @@ STRATEGY_CONFIG = {
         'start_date': '2025-01-01', 'end_date': None,
         'industry_type': 'sw_l2', 'retention_trade_days': 180,
     },
+    '市场情绪跟踪': {'end_date': None, 'batch_size': 300, 'window_size': 40},
     '抱团拥挤度': {
         'start_date': '2020-01-01', 'end_date': None, 'top_pct': 0.05,
     },
@@ -78,7 +79,7 @@ STRATEGY_CONFIG = {
     '微盘新高新低': {'start_date': None, 'end_date': None, 'micro_num': 400, 'initial_days': 180, 'batch_size': 500, 'price_batch_size': 100},
 }
 
-STRATEGY_ORDER = ['行业动量', '抱团拥挤度', '微盘温度计', 'ETF份额', '净利润断层', '微盘新高新低', '高股息选股', '高增长', 'ETF动量热度', '个股机构持仓', '短线选股']
+STRATEGY_ORDER = ['行业动量', '抱团拥挤度', '市场情绪跟踪', '微盘温度计', 'ETF份额', '净利润断层', '微盘新高新低', '高股息选股', '高增长', 'ETF动量热度', '个股机构持仓', '短线选股']
 STRATEGY_OPTIONS = {}  # 原六策略固定只新增；高股息选股和高增长每次重算并替换最新快照。
 PREVIEW_ROWS = 5  # 每个策略展示最后几条新增记录；0 表示仅展示条数。
 PROGRESS_ENABLED = True  # 控制台进度条；关闭后仍保留各策略结果和最终汇总。
@@ -720,6 +721,175 @@ def _momentum_strategy(_apis, _config):
                 records = save_day(Session, day, industry_type, records, skip_existing=skip_existing)
                 all_records.extend(records)
         return pd.DataFrame(all_records, columns=RESULT_COLUMNS)
+    return SimpleNamespace(**locals())
+
+
+# ---------- 市场情绪跟踪 ----------
+
+def _sentiment_strategy(_apis, _config):
+    """全市场 MA20 广度；分窗口复用行情，只保存每日汇总。"""
+    settings = strategy_settings('市场情绪跟踪')
+    get_all_securities = _apis.get('get_all_securities')
+    get_trade_days = _apis.get('get_trade_days')
+    get_price = _apis.get('get_price')
+    Base = declarative_base()
+    RESULT_COLUMNS = ['trade_date', 'ratio', 'above_count', 'eligible_count', 'universe_count', 'updated_at']
+
+    class MarketSentiment(Base):
+        __tablename__ = 'market_sentiment'
+        __table_args__ = {'mysql_engine': 'InnoDB', 'mysql_charset': 'utf8mb4'}
+        trade_date = Column(Date, primary_key=True)
+        ratio = Column(Numeric(18, 10), nullable=False)
+        above_count = Column(Integer, nullable=False)
+        eligible_count = Column(Integer, nullable=False)
+        universe_count = Column(Integer, nullable=False)
+        updated_at = Column(DateTime, nullable=False)
+
+    def three_years_ago(day):
+        try:
+            return day.replace(year=day.year - 3)
+        except ValueError:  # 2 月 29 日对应三年前的 2 月 28 日。
+            return day.replace(year=day.year - 3, day=28)
+
+    def checked_days(values, start, end):
+        if values is None:
+            raise ValueError('交易日历未返回，取消采集。')
+        days = [as_date(value) for value in values]
+        if days != sorted(set(days)) or builtins.any(day < start or day > end for day in days):
+            raise ValueError('交易日历越界、重复或乱序，取消采集。')
+        return days
+
+    def security_dates():
+        # date=None 获取含已退市股票的完整资料，再按各历史日期筛选，避免幸存者偏差。
+        frame = get_all_securities(types=['stock'], date=None)
+        if frame is None or frame.empty or not {'start_date', 'end_date'}.issubset(frame.columns):
+            raise ValueError('股票上市/退市资料缺失，取消采集。')
+        if frame.index.has_duplicates:
+            raise ValueError('股票资料代码重复，取消采集。')
+        dates = {}
+        for code, row in frame.iterrows():
+            if not isinstance(code, str):
+                raise ValueError('股票代码无效，取消采集。')
+            # 若接口提供 B 股，排除其六位代码；不排除 ST 或任何 A 股板块。
+            if code.split('.')[0].startswith(('200', '900')):
+                continue
+            if pd.isna(row['start_date']) or pd.isna(row['end_date']):
+                raise ValueError('股票上市/退市日期缺失，取消采集。')
+            start, end = as_date(row['start_date']), as_date(row['end_date'])
+            if start > end:
+                raise ValueError('股票上市/退市日期无效，取消采集。')
+            dates[code] = (start, end)
+        if not dates:
+            raise ValueError('未取得 A 股股票池，取消采集。')
+        return dates
+
+    def batch_counts(frame, codes, calendar, metadata):
+        """校验上市期间数据完整，再计算当日收盘严格高于含当日的 MA20。"""
+        if frame is None or frame.empty or not {'code', 'time', 'close', 'paused'}.issubset(frame.columns):
+            raise ValueError('行情为空或缺少 close/paused/code/time，取消当前窗口入库。')
+        frame = frame[['code', 'time', 'close', 'paused']].copy()
+        frame['day'] = [as_date(value) for value in frame['time']]
+        if (frame.duplicated(['day', 'code']).any()
+                or not set(frame['code']).issubset(codes)
+                or not set(frame['day']).issubset(calendar)):
+            raise ValueError('行情存在重复或越界数据，取消当前窗口入库。')
+        close = frame.pivot(index='day', columns='code', values='close').reindex(index=calendar, columns=codes).astype(float)
+        paused = frame.pivot(index='day', columns='code', values='paused').reindex(index=calendar, columns=codes).astype(float)
+        listed = np.array([[metadata[code][0] <= day <= metadata[code][1] for code in codes] for day in calendar])
+        values, pauses = close.values, paused.values
+        valid_price = np.isfinite(values) & (values > 0)
+        valid_status = (pauses == 0) | (pauses == 1)
+        if np.any(listed & ~(valid_price & valid_status)):
+            raise ValueError('上市期间行情或停牌状态缺失，拒绝缩小分母写入。')
+        # 历史停牌日沿用平台填充收盘价；当日停牌不计入当日分母。
+        close = close.where(listed)
+        mean = close.rolling(window=20, min_periods=20).mean().values
+        eligible = listed & valid_price & np.isfinite(mean) & (pauses == 0)
+        # 防止相等价格因浮点求均值的尾差被当作站上均线。
+        above = eligible & ((values - mean) > np.maximum(np.abs(values), np.abs(mean)) * 1e-12)
+        return np.column_stack((listed.sum(axis=1), eligible.sum(axis=1), above.sum(axis=1)))
+
+    def collect_window(days, pending, metadata, batch_size):
+        warmup = checked_days(get_trade_days(end_date=days[0], count=20), datetime.date(1990, 1, 1), days[0])
+        if len(warmup) != 20 or warmup[-1] != days[0]:
+            raise ValueError('MA20 预热交易日不足或错位，取消当前窗口入库。')
+        calendar = warmup[:-1] + days
+        codes = sorted(code for code, (start, end) in metadata.items() if start <= days[-1] and end >= days[0])
+        if not codes:
+            raise ValueError('历史股票池为空，取消当前窗口入库。')
+        counts = np.zeros((len(calendar), 3), dtype=np.int64)
+        offsets = list(range(0, len(codes), batch_size))
+        for offset in _progress_items(offsets, '行情分批', lambda i: '{} / {} 只'.format(i, len(codes))):
+            batch = codes[offset:offset + batch_size]
+            _progress_note('读取 {} 至 {} 的前复权收盘价和停牌状态'.format(calendar[0], calendar[-1]))
+            frame = get_price(security=batch, start_date=calendar[0], end_date=calendar[-1], frequency='daily',
+                              fields=['close', 'paused'], fq='pre', skip_paused=False, panel=False)
+            counts += batch_counts(frame, batch, calendar, metadata)
+            del frame
+        records = []
+        stamp = china_now()
+        for day, (universe, eligible, above) in zip(calendar, counts):
+            if day not in pending:
+                continue
+            if eligible <= 0:
+                raise ValueError('{} 没有有效 MA20 样本，拒绝写入零值。'.format(day))
+            records.append(dict(trade_date=day, ratio=(Decimal(int(above)) / Decimal(int(eligible))).quantize(Decimal('0.0000000001')),
+                                above_count=int(above), eligible_count=int(eligible), universe_count=int(universe), updated_at=stamp))
+        return records
+
+    def save_records(Session, records):
+        # 主键 + 入库前复核；已有日期既不覆盖，也不重复插入。
+        with session_scope(Session) as session:
+            dates = [record['trade_date'] for record in records]
+            existing = {row[0] for row in session.query(MarketSentiment.trade_date).filter(MarketSentiment.trade_date.in_(dates)).all()}
+            added = [record for record in records if record['trade_date'] not in existing]
+            session.add_all([MarketSentiment(**record) for record in added])
+            session.commit()
+            return added
+
+    def run(end_date=settings['end_date'], start_date=None, batch_size=settings['batch_size'],
+            window_size=settings['window_size'], skip_existing=True):
+        if skip_existing is not True:
+            raise ValueError('市场情绪仅新增，已有日期不覆盖。')
+        for name, value in (('batch_size', batch_size), ('window_size', window_size)):
+            if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+                raise ValueError('{} 必须是正整数。'.format(name))
+        now = china_now()
+        end = now.date() if end_date is None else as_date(end_date)
+        if end > now.date():
+            raise ValueError('结束日期不能晚于今天。')
+        end = _closed_day(end, now)
+        cutoff = three_years_ago(now.date())
+        start = cutoff if start_date is None else builtins.max(cutoff, as_date(start_date))
+        if start > end:
+            raise ValueError('采集范围须在最近三年且开始日期不晚于结束日期。')
+        days = checked_days(get_trade_days(start_date=start, end_date=end), start, end)
+        if not days:
+            raise ValueError('指定区间未返回交易日，未清理或写入数据。')
+        results = []
+        with database_scope(Base, _config) as Session:
+            with session_scope(Session) as session:
+                removed = session.query(MarketSentiment).filter(MarketSentiment.trade_date < cutoff).delete(synchronize_session=False)
+                session.commit()
+                existing = {as_date(row[0]) for row in session.query(MarketSentiment.trade_date).filter(
+                    MarketSentiment.trade_date >= start, MarketSentiment.trade_date <= end).all()}
+            pending = set(days) - existing
+            _progress_message('市场情绪：近三年缺失 {} 个交易日；已清理过期 {} 行。'.format(len(pending), removed))
+            if not pending:
+                _progress_note('已有日期完整，跳过股票资料和行情查询')
+                return pd.DataFrame(columns=RESULT_COLUMNS)
+            metadata = security_dates()
+            # 沿完整日历分窗，避免少数跨年缺口被拼成一个巨大的行情请求。
+            windows = [days[i:i + window_size] for i in range(0, len(days), window_size)]
+            windows = [window for window in windows if pending.intersection(window)]
+            for window in _progress_items(windows, '历史窗口', lambda ds: '{}—{}'.format(ds[0], ds[-1])):
+                wanted = sorted(pending.intersection(window))
+                window = window[window.index(wanted[0]):window.index(wanted[-1]) + 1]
+                records = collect_window(window, set(wanted), metadata, batch_size)
+                _progress_note('保存 {} 个交易日的情绪汇总'.format(len(records)))
+                results.extend(save_records(Session, records))
+        return pd.DataFrame(results, columns=RESULT_COLUMNS)
+
     return SimpleNamespace(**locals())
 
 
@@ -4210,6 +4380,8 @@ STRATEGY_SPECS = {
         ('kind', 'code', 'date')),
     '行业动量': (_momentum_strategy, 'append',
         ('trade_date', 'industry_name', 'momentum', 'momentum_rank')),
+    '市场情绪跟踪': (_sentiment_strategy, 'append',
+        ('trade_date', 'ratio', 'above_count', 'eligible_count', 'universe_count')),
     '抱团拥挤度': (_crowding_strategy, 'append',
         ('trade_date', 'top_pct', 'ratio', 'top_money', 'total_money')),
     '微盘温度计': (_microcap_strategy, 'append',

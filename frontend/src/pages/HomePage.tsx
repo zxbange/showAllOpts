@@ -217,7 +217,7 @@ export function HomePage() {
   const visible = researchModules.filter(
     (module) =>
       (category === '全部模块' || module.category === category) &&
-      [module.name, module.description, ...module.tags]
+      [module.name, module.description, ...module.tags, ...(module.searchTerms ?? [])]
         .join(' ')
         .toLowerCase()
         .includes(search.trim().toLowerCase()),

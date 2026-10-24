@@ -5,7 +5,9 @@ import { HomePage } from './pages/HomePage'
 import { MomentumPage } from './pages/MomentumPage'
 import { LoadingState } from './components/States'
 
-const ShortTermPage = lazy(() => import('./pages/ShortTermPage').then(m => ({ default: m.ShortTermPage })))
+const ShortTermPage = lazy(() =>
+  import('./pages/ShortTermPage').then((m) => ({ default: m.ShortTermPage })),
+)
 
 const OwnershipPage = lazy(() =>
   import('./pages/OwnershipPage').then((m) => ({ default: m.OwnershipPage })),
@@ -26,6 +28,10 @@ const DividendPage = lazy(() =>
 
 const IndustryPage = lazy(() =>
   import('./pages/IndustryPage').then((module) => ({ default: module.IndustryPage })),
+)
+
+const SentimentPage = lazy(() =>
+  import('./pages/SentimentPage').then((module) => ({ default: module.SentimentPage })),
 )
 
 const CrowdingPage = lazy(() =>
@@ -57,7 +63,14 @@ export default function App() {
       <Routes>
         <Route element={<Layout />}>
           <Route index element={<HomePage />} />
-          <Route path="short-term" element={<Suspense fallback={<LoadingState />}><ShortTermPage /></Suspense>} />
+          <Route
+            path="short-term"
+            element={
+              <Suspense fallback={<LoadingState />}>
+                <ShortTermPage />
+              </Suspense>
+            }
+          />
           <Route
             path="institution-ownership"
             element={
@@ -136,6 +149,14 @@ export default function App() {
             element={
               <Suspense fallback={<LoadingState />}>
                 <MicrocapPage />
+              </Suspense>
+            }
+          />
+          <Route
+            path="market-sentiment"
+            element={
+              <Suspense fallback={<LoadingState />}>
+                <SentimentPage />
               </Suspense>
             }
           />
