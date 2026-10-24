@@ -64,7 +64,7 @@ def as_date(value):
 
 def finite(value):
     try:
-        result = float(value)
+        result = builtins.float(value)
         return result if math.isfinite(result) else None
     except (TypeError, ValueError):
         return None
@@ -79,8 +79,11 @@ def checked_calendar(raw, start=None, end=None):
     if raw is None:
         raise ValueError('交易日历接口返回空对象。')
     days = [as_date(d) for d in raw]
-    if days != sorted(set(days)) or any((start and d < start) or (end and d > end) for d in days):
-        raise ValueError('交易日历重复、乱序或越界。')
+    if days != sorted(set(days)):
+        raise ValueError('交易日历重复或乱序：前3项={}，后3项={}。'.format(days[:3], days[-3:]))
+    outside = [day for day in days if (start is not None and day < start) or (end is not None and day > end)]
+    if outside:
+        raise ValueError('交易日历越界：请求{}至{}，首个越界日期={}。'.format(start, end, outside[0]))
     return days
 
 
@@ -110,7 +113,7 @@ def make_selector(apis):
         bbi = bbi.dropna()
         if len(bbi) < min_window:
             return False
-        longest = min(len(bbi), max_window or len(bbi))
+        longest = builtins.min(len(bbi), max_window or len(bbi))
         for w in range(longest, min_window - 1, -1):
             seg = bbi.iloc[-w:]
             norm = seg / seg.iloc[0]
@@ -161,14 +164,14 @@ def make_selector(apis):
                 hist = df[df["date"] <= date]
                 if hist.empty:
                     continue
-                need_len = (max(self.n_short, self.n_long)
+                need_len = (builtins.max(self.n_short, self.n_long)
                             + self.bbi_min_window + self.m)
-                hist = hist.tail(max(need_len, self.max_window))
+                hist = hist.tail(builtins.max(need_len, self.max_window))
                 if self._passes_filters(hist):
                     picks.append(code)
             return picks
 
-    def get_limit_rate(ts_code: str) -> float:
+    def get_limit_rate(ts_code: str) -> builtins.float:
         """根据股票代码判断涨停阈值（10%/20%/30%）"""
         code = ts_code.upper()
         if code.startswith("300") or code.startswith("301") or code.startswith("688"):
@@ -177,7 +180,7 @@ def make_selector(apis):
             return 0.30
         return 0.10
 
-    def is_limit_up(ts_code: str, pct_chg: float) -> bool:
+    def is_limit_up(ts_code: str, pct_chg: builtins.float) -> builtins.bool:
         """判断是否涨停（根据板块不同阈值）"""
         rate = get_limit_rate(ts_code)
         threshold = 9.5 if rate == 0.10 else (19.5 if rate == 0.20 else 29.5)
@@ -197,7 +200,7 @@ def make_selector(apis):
 
         # 计算T-2涨停价
         rate_t2 = get_limit_rate(ts_code)
-        t2_limit_price = round(row_t2["pre_close"] * (1 + rate_t2), 2)
+        t2_limit_price = builtins.round(row_t2["pre_close"] * (1 + rate_t2), 2)
 
         # 2. T-1日条件（不限是否涨停，只看最低价）
         if row_t1["low"] < t2_limit_price:
@@ -232,11 +235,11 @@ def make_selector(apis):
         day_t   = df.iloc[-1]  # T
 
         # ---- 条件1: T-2日阳线 + 涨幅 > 3% + 放量 ----
-        t2_pct   = float(day_t2['pct_chg'])
-        t2_open  = float(day_t2['open'])
-        t2_close = float(day_t2['close'])
-        t2_vol   = float(day_t2['volume'])
-        t3_vol   = float(day_t3['volume'])
+        t2_pct   = builtins.float(day_t2['pct_chg'])
+        t2_open  = builtins.float(day_t2['open'])
+        t2_close = builtins.float(day_t2['close'])
+        t2_vol   = builtins.float(day_t2['volume'])
+        t3_vol   = builtins.float(day_t3['volume'])
 
         cond1_ok = (
             t2_close > t2_open and                          # 阳线
@@ -245,10 +248,10 @@ def make_selector(apis):
         )
 
         # ---- 条件2: T-1日阴线 + 收盘>T-2开盘 + 跌幅<4% + 缩量 ----
-        t1_pct   = float(day_t1['pct_chg'])
-        t1_open  = float(day_t1['open'])
-        t1_close = float(day_t1['close'])
-        t1_vol   = float(day_t1['volume'])
+        t1_pct   = builtins.float(day_t1['pct_chg'])
+        t1_open  = builtins.float(day_t1['open'])
+        t1_close = builtins.float(day_t1['close'])
+        t1_vol   = builtins.float(day_t1['volume'])
 
         cond2_ok = (
             t1_close < t1_open and                           # 阴线（收<开）
@@ -258,10 +261,10 @@ def make_selector(apis):
         )
 
         # ---- 条件3: T日阳线 + 收盘>T-2收盘 + 涨幅>3% + 放量 ----
-        t_pct   = float(day_t['pct_chg'])
-        t_open  = float(day_t['open'])
-        t_close = float(day_t['close'])
-        t_vol   = float(day_t['volume'])
+        t_pct   = builtins.float(day_t['pct_chg'])
+        t_open  = builtins.float(day_t['open'])
+        t_close = builtins.float(day_t['close'])
+        t_vol   = builtins.float(day_t['volume'])
 
         cond3_ok = (
             t_close > t_open and                            # 阳线
@@ -271,7 +274,7 @@ def make_selector(apis):
         )
 
         # ---- 条件4: 均线多头（MA10>MA20>MA30>MA60） ----
-        closes = df['close'].values.astype(float)
+        closes = df['close'].values.astype(builtins.float)
         ma10 = closes[-10:].mean() if len(closes) >= 10 else 0
         ma20 = closes[-20:].mean() if len(closes) >= 20 else 0
         ma30 = closes[-30:].mean() if len(closes) >= 30 else 0
@@ -323,8 +326,8 @@ def make_selector(apis):
                 for code in codes:
                     if code in rows.columns:
                         value = rows[code].iloc[0]
-                        if not pd.isnull(value) and isinstance(value, (bool, np.bool_, int, float, np.integer, np.floating)) and value in (0, 1):
-                            flags[code] = bool(value)
+                        if not pd.isnull(value) and isinstance(value, (builtins.bool, np.bool_, builtins.int, builtins.float, np.integer, np.floating)) and value in (0, 1):
+                            flags[code] = builtins.bool(value)
         for code in codes:
             if code in flags:
                 continue
@@ -333,8 +336,8 @@ def make_selector(apis):
             values = extra.get(code, []) if isinstance(extra, dict) else []
             if len(values) == 1:
                 value = values[0]
-                if not pd.isnull(value) and isinstance(value, (bool, np.bool_, int, float, np.integer, np.floating)) and value in (0, 1):
-                    flags[code] = bool(value)
+                if not pd.isnull(value) and isinstance(value, (builtins.bool, np.bool_, builtins.int, builtins.float, np.integer, np.floating)) and value in (0, 1):
+                    flags[code] = builtins.bool(value)
         missing = [code for code in codes if code not in flags]
         if missing:
             raise ValueError('短线股票池ST状态缺失：日期 {}，股票 {}；批量查询及逐只补查后仍无有效数据，该日未写入，请稍后重试。'.format(day, ', '.join(missing)))
@@ -416,7 +419,7 @@ def read_checkpoint(folder, day):
     for stock in result['selected']:
         if stock['code'] in seen or not stock['methods'] or len(set(stock['methods'])) != len(stock['methods']):
             raise ValueError('研究断点包含重复样本。')
-        if any(method not in METHODS for method in stock['methods']):
+        if builtins.any(method not in METHODS for method in stock['methods']):
             raise ValueError('研究断点包含未知策略。')
         seen.add(stock['code'])
     return result
@@ -443,11 +446,11 @@ def measure_return(before, after):
         flags['up_' + str(n)] = change > base * n
         flags['down_' + str(n)] = change < -base * n
     flags['flat'] = change == 0
-    return float(change / base), flags
+    return builtins.float(change / base), flags
 
 
 def valid_flag(value):
-    return (not pd.isnull(value) and isinstance(value, (bool, np.bool_, int, float, np.integer, np.floating))
+    return (not pd.isnull(value) and isinstance(value, (builtins.bool, np.bool_, builtins.int, builtins.float, np.integer, np.floating))
             and value in (0, 1))
 
 
@@ -462,7 +465,7 @@ def collect_outcomes(apis, record, targets, folder, batch_size):
                 needed.setdefault(stock['code'], []).append((horizon, target))
     stocks = {stock['code']: stock for stock in record['selected']}
     for batch in chunks(sorted(needed), batch_size):
-        last_day = max(target for code in batch for _, target in needed[code])
+        last_day = builtins.max(target for code in batch for _, target in needed[code])
         raw = apis['get_price'](batch, start_date=day, end_date=last_day, frequency='daily',
                                fields=['close', 'paused'], fq='pre', skip_paused=False, panel=False)
         if raw is None or not {'code', 'time', 'close', 'paused'}.issubset(raw.columns):
@@ -489,8 +492,8 @@ def collect_outcomes(apis, record, targets, folder, batch_size):
                 elif (before is not None and after is not None and before > 0 and after > 0
                       and valid_flag(base.get('paused')) and valid_flag(point.get('paused'))):
                     pct, flags = measure_return(before, after)
-                    result.update(status='有效', reason='', base_paused=bool(base['paused']),
-                                  target_paused=bool(point['paused']), return_pct=pct, flags=flags)
+                    result.update(status='有效', reason='', base_paused=builtins.bool(base['paused']),
+                                  target_paused=builtins.bool(point['paused']), return_pct=pct, flags=flags)
                 outcomes['{}|{}'.format(code, horizon)] = result
         save_checkpoint(folder, record)
 
@@ -517,8 +520,8 @@ def detail_rows(record, targets):
                        '观察日收盘价（前复权）': result.get('target_close'), '涨跌幅（%）': result.get('return_pct'),
                        '入选日停牌': result.get('base_paused'), '观察日停牌': result.get('target_paused'),
                        '说明': result.get('reason', '尚未走满{}个交易日'.format(horizon))}
-                row.update({label: bool(result.get('flags', {}).get(key, False)) for label, key in THRESHOLDS})
-                row['持平'] = bool(result.get('flags', {}).get('flat', False))
+                row.update({label: builtins.bool(result.get('flags', {}).get(key, False)) for label, key in THRESHOLDS})
+                row['持平'] = builtins.bool(result.get('flags', {}).get('flat', False))
                 rows.append(row)
     return rows
 
@@ -529,19 +532,19 @@ def summarize(details):
         for horizon in HORIZONS:
             group = details[(details['策略'] == method) & (details['观察期限（交易日）'] == horizon)]
             valid = group[group['状态'] == '有效']
-            n, wins = len(valid), int(valid['涨幅>0%'].sum())
+            n, wins = len(valid), builtins.int(valid['涨幅>0%'].sum())
             row = {'策略': method, '观察期限（交易日）': horizon, '总入选次数': len(group), '有效样本': n,
-                   '上涨次数': wins, '下跌次数': int(valid['涨幅<0%'].sum()), '持平次数': int(valid['持平'].sum()),
+                   '上涨次数': wins, '下跌次数': builtins.int(valid['涨幅<0%'].sum()), '持平次数': builtins.int(valid['持平'].sum()),
                    '胜率（%）': 100.0 * wins / n if n else None,
                    '超过50%': ('是' if 2 * wins > n else '否') if n else '无有效样本',
-                   '待观察': int((group['状态'] == '待观察').sum()),
-                   '数据缺失': int((group['状态'] == '数据缺失').sum()),
-                   '停牌估值样本': int(((valid['入选日停牌'] == True) | (valid['观察日停牌'] == True)).sum()),
-                   '平均涨跌幅（%）': float(valid['涨跌幅（%）'].mean()) if n else None,
-                   '中位涨跌幅（%）': float(valid['涨跌幅（%）'].median()) if n else None}
+                   '待观察': builtins.int((group['状态'] == '待观察').sum()),
+                   '数据缺失': builtins.int((group['状态'] == '数据缺失').sum()),
+                   '停牌估值样本': builtins.int(((valid['入选日停牌'] == True) | (valid['观察日停牌'] == True)).sum()),
+                   '平均涨跌幅（%）': builtins.float(valid['涨跌幅（%）'].mean()) if n else None,
+                   '中位涨跌幅（%）': builtins.float(valid['涨跌幅（%）'].median()) if n else None}
             summary.append(row)
             dist = {'策略': method, '观察期限（交易日）': horizon, '有效样本': n}
-            dist.update({label: int(valid[label].sum()) for label, _ in THRESHOLDS})
+            dist.update({label: builtins.int(valid[label].sum()) for label, _ in THRESHOLDS})
             distribution.append(dist)
     columns = ['策略', '观察期限（交易日）', '总入选次数', '有效样本', '上涨次数', '下跌次数', '持平次数',
                '胜率（%）', '超过50%', '待观察', '数据缺失', '停牌估值样本', '平均涨跌幅（%）', '中位涨跌幅（%）']
@@ -570,7 +573,7 @@ def run(start_date=START_DATE, end_date=END_DATE, as_of_date=AS_OF_DATE,
         api_namespace=None, show=True):
     for value, cap, name in ((price_batch_size, 100, 'PRICE_BATCH_SIZE'),
                              (FUNDAMENTAL_BATCH_SIZE, 1000, 'FUNDAMENTAL_BATCH_SIZE')):
-        if isinstance(value, bool) or not isinstance(value, int) or not 1 <= value <= cap:
+        if isinstance(value, builtins.bool) or not isinstance(value, builtins.int) or not 1 <= value <= cap:
             raise ValueError('{} 必须为1至{}的整数。'.format(name, cap))
     apis = resolve_apis(api_namespace)
     now = china_now()
@@ -603,7 +606,7 @@ def run(start_date=START_DATE, end_date=END_DATE, as_of_date=AS_OF_DATE,
         collect_outcomes(apis, record, targets, folder, price_batch_size)
         rows.extend(detail_rows(record, targets))
         daily.append(dict(入选日=day.isoformat(), 股票池=record['universe_count'], 扫描股票=record['evaluated_count'],
-                          **{name: sum(key in stock['methods'] for stock in record['selected']) for key, name in METHODS.items()}))
+                          **{name: builtins.sum(key in stock['methods'] for stock in record['selected']) for key, name in METHODS.items()}))
         print('  完成：' + '，'.join('{} {}次'.format(name, daily[-1][name]) for name in METHODS.values()), flush=True)
     details = pd.DataFrame(rows, columns=DETAIL_COLUMNS)
     summary, distribution = summarize(details)

@@ -58,10 +58,16 @@ def test_selectors_match_live_rules_and_python36():
     original = ast.parse((ROOT / 'collectors' / '短线选股_数据库版.py').read_text(encoding='utf-8'))
     source_factory = next(n for n in original.body if isinstance(n, ast.FunctionDef) and n.name == '_short_term_strategy')
     target_factory = next(n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == 'make_selector')
+    class NormalizeBuiltins(ast.NodeTransformer):
+        def visit_Attribute(self, node):
+            if isinstance(node.value, ast.Name) and node.value.id == 'builtins':
+                return ast.copy_location(ast.Name(id=node.attr, ctx=node.ctx), node)
+            return self.generic_visit(node)
     originals = {n.name: ast.dump(n) for n in source_factory.body if isinstance(n, (ast.FunctionDef, ast.ClassDef))}
     for node in target_factory.body:
         if isinstance(node, (ast.FunctionDef, ast.ClassDef)):
-            assert ast.dump(node) == originals[node.name], node.name
+            # Explicit builtin qualification is equivalent; all strategy expressions must still match.
+            assert ast.dump(NormalizeBuiltins().visit(node)) == originals[node.name], node.name
     text = SOURCE.read_text(encoding='utf-8')
     assert '.to_numpy(' not in text and '.to_csv(' not in text
     assert 'create_engine' not in text and '__file__' not in text
@@ -318,3 +324,73 @@ def test_missing_api_reports_only_unavailable_names(mod, monkeypatch):
     monkeypatch.delattr(builtins, 'get_price', raising=False)
     with pytest.raises(RuntimeError, match='未找到聚宽研究接口：get_price；'):
         mod.resolve_apis(namespace)
+
+
+def test_notebook_numpy_any_does_not_reject_valid_calendar(mod, monkeypatch):
+    monkeypatch.setattr(mod, 'any', np.any, raising=False)
+    start, end = dt.date(2026, 7, 1), dt.date(2026, 7, 3)
+    days = [start, dt.date(2026, 7, 2), end]
+    assert mod.checked_calendar(days, start, end) == days
+    for invalid in ([start, start], [end, start], [start-dt.timedelta(days=1)], [end+dt.timedelta(days=1)]):
+        with pytest.raises(ValueError):
+            mod.checked_calendar(invalid, start, end)
+
+
+def test_pasted_notebook_with_numpy_names_runs_real_selection_and_resumes(mod, monkeypatch, tmp_path):
+    import builtins
+    # Reproduce a Notebook populated by numerical imports before this script is pasted.
+    namespace = {'__name__': 'notebook_cell', 'any': np.any, 'all': np.all,
+                 'min': np.min, 'max': np.max, 'sum': np.sum, 'round': np.round,
+                 'bool': np.bool_, 'int': np.int64, 'float': np.float64}
+    exec(compile(SOURCE.read_text(encoding='utf-8'), '<ipython-input-test>', 'exec'), namespace)
+    day = dt.date(2026, 7, 1)
+    past = [d.date() for d in pd.bdate_range(end=day, periods=90)]
+    future = [d.date() for d in pd.bdate_range(start=day, periods=11)]
+    code = '600001.XSHG'
+    calls = {'stock_pool': 0, 'signal_prices': 0, 'forward_prices': 0}
+    def calendar(start_date=None, end_date=None, count=None):
+        return past if count else [d for d in future if start_date <= d <= end_date]
+    def stocks(**kwargs):
+        calls['stock_pool'] += 1
+        assert kwargs['date'] == day
+        return pd.DataFrame([dict(display_name='测试股票', start_date=past[0])], index=[code])
+    def prices(codes, **kwargs):
+        assert codes == [code]
+        if 'open' in kwargs['fields']:
+            calls['signal_prices'] += 1
+            assert kwargs['end_date'] == day
+            close = np.linspace(10, 20, 90)
+            close[-4:] = [20, 21, 20.5, 21.5]
+            frame = pd.DataFrame(dict(time=past, code=code, close=close, open=close-.1,
+                                     low=close-.2, high=close+.2, volume=100.))
+            frame.loc[87, 'open'], frame.loc[88, 'open'] = 20, 21
+            frame.loc[87:, 'volume'] = [130, 80, 130]
+            return frame
+        calls['forward_prices'] += 1
+        return pd.DataFrame([dict(code=code, time=d, close=100+i, paused=0)
+                             for i, d in enumerate(future) if day <= d <= kwargs['end_date']])
+    class Field:
+        def in_(self, values): return values
+    class Query:
+        def filter(self, values): return values
+    apis = dict(get_trade_days=calendar, get_all_securities=stocks, get_price=prices,
+                get_fundamentals=lambda *a, **kw: pd.DataFrame([dict(code=code, market_cap=30)]),
+                get_extras=lambda *a, **kw: pd.DataFrame({code: [False]}, index=[day]),
+                query=lambda *a: Query(), valuation=SimpleNamespace(code=Field(), market_cap=Field()))
+    for name, value in apis.items():
+        if name in ('get_trade_days', 'query'):
+            monkeypatch.setattr(namespace['jq'], name, value, raising=False)
+        else:
+            monkeypatch.setattr(builtins, name, value, raising=False)
+    namespace['china_now'] = lambda: dt.datetime(2026, 10, 24, 18)
+    options = dict(start_date=day, end_date=day, as_of_date=future[-1], cache_dir=str(tmp_path), show=False)
+    result = namespace['run'](**options)
+    xuli = result.summary[result.summary['策略'] == '蓄力龙']
+    assert list(xuli['胜率（%）']) == [100, 100, 100]
+    assert list(xuli['超过50%']) == ['是', '是', '是']
+    assert result.daily_counts.iloc[0]['蓄力龙'] == 1
+    assert calls == {'stock_pool': 1, 'signal_prices': 1, 'forward_prices': 1}
+    namespace['show_results'](result)
+    again = namespace['run'](**options)
+    pd.testing.assert_frame_equal(result.summary, again.summary)
+    assert calls == {'stock_pool': 1, 'signal_prices': 1, 'forward_prices': 1}
