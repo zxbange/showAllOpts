@@ -34,7 +34,7 @@ def record(mod, day, codes=('600001.XSHG',), methods=('xuli',)):
 def setup_apis(mod, monkeypatch, tmp_path, end='2026-07-21', methods=('xuli',)):
     days = [d.date() for d in pd.bdate_range('2026-07-01', end)]
     calls = {'selected': [], 'prices': []}
-    def select(apis, selector, day, size):
+    def select(apis, selector, day, size, progress=None):
         calls['selected'].append(day)
         return record(mod, day, methods=methods)
     monkeypatch.setattr(mod, 'collect_selections', select)
@@ -186,7 +186,7 @@ def test_paused_and_delisted_are_explicit(mod):
 def test_zero_selection_days_are_cached_and_summary_still_has_nine_rows(mod, monkeypatch, tmp_path):
     days, calls, apis, run = setup_apis(mod, monkeypatch, tmp_path, methods=())
     count = []
-    def empty(*args):
+    def empty(*args, **kwargs):
         count.append(args[2])
         return record(mod, args[2], codes=())
     monkeypatch.setattr(mod, 'collect_selections', empty)
@@ -200,7 +200,7 @@ def test_zero_selection_days_are_cached_and_summary_still_has_nine_rows(mod, mon
 
 def test_incomplete_selection_does_not_mark_day_complete(mod, monkeypatch, tmp_path):
     days, calls, apis, run = setup_apis(mod, monkeypatch, tmp_path)
-    monkeypatch.setattr(mod, 'collect_selections', lambda *a: (_ for _ in ()).throw(ValueError('ST missing')))
+    monkeypatch.setattr(mod, 'collect_selections', lambda *a, **kw: (_ for _ in ()).throw(ValueError('ST missing')))
     with pytest.raises(ValueError, match='ST missing'):
         run(days[0], days[10])
     assert not list(tmp_path.rglob('*.json'))

@@ -1,13 +1,16 @@
 # -*- coding: utf-8 -*-
 """聚宽独立研究：短线三战法入选后第2/4/10个交易日的收盘表现。
-直接显示胜率及涨跌幅门槛统计；不生成CSV、不连接业务数据库、不下单。
+进度条展示采集，保留每日选股结果及胜率统计；不生成CSV、不连接业务数据库、不下单。
 """
 import builtins
 import datetime
 import json
 import math
 import os
+import sys
 import time
+import uuid
+from html import escape
 from decimal import Decimal
 from pathlib import Path
 from types import SimpleNamespace
@@ -31,6 +34,111 @@ THRESHOLDS = (('涨幅>0%', 'up_0'), ('涨幅>5%', 'up_5'), ('涨幅>10%', 'up_1
               ('涨幅<0%', 'down_0'), ('涨幅<-5%', 'down_5'), ('涨幅<-10%', 'down_10'))
 API_NAMES = ('get_all_securities', 'get_trade_days', 'get_price', 'get_extras',
              'get_fundamentals', 'query', 'valuation')
+
+
+class ResearchProgress:
+    """Notebook updates one display area; console rewrites one line without clearing results."""
+    def __init__(self, total, enabled=True):
+        self.total, self.enabled = total, enabled
+        self.completed, self.day, self.stage = 0, '', '准备采集'
+        self.done, self.stage_total, self.note = 0, 0, ''
+        self.started, self.last_render, self.width = time.monotonic(), -math.inf, 0
+        self.stream = sys.stdout
+        self.display_id = 'short-winrate-' + uuid.uuid4().hex
+        self.notebook, self.displayed = None, False
+        if enabled:
+            try:
+                from IPython import get_ipython
+                from IPython.display import HTML, display, update_display
+                if getattr(get_ipython(), 'kernel', None) is not None:
+                    self.notebook = (HTML, display, update_display)
+            except ImportError:
+                pass
+
+    def __enter__(self):
+        self.render(force=True)
+        return self
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        status = ('完成' if self.completed == self.total else '未完成') if exc_type is None else (
+            '已中断' if issubclass(exc_type, KeyboardInterrupt) else '未完成')
+        self.render(force=True, status=status)
+        return False
+
+    def start_day(self, day):
+        self.day, self.stage, self.note = str(day), '读取研究断点', ''
+        self.done, self.stage_total = 0, 0
+        self.render(force=True)
+
+    def update(self, stage, done=0, total=0, note=''):
+        force = stage != self.stage or (total > 0 and done == total)
+        self.stage, self.done, self.stage_total, self.note = stage, done, total, note
+        self.render(force=force)
+
+    def finish_day(self):
+        self.completed += 1
+        self.stage, self.done, self.stage_total, self.note = '当日完成', 0, 0, ''
+        self.render(force=True)
+
+    def render(self, force=False, status=None):
+        if not self.enabled:
+            return
+        now = time.monotonic()
+        if not force and now - self.last_render < 0.5:
+            return
+        self.last_render = now
+        percent = 100 * self.completed // self.total
+        filled = 20 * self.completed // self.total
+        phase = self.stage
+        if self.stage_total:
+            phase += ' {}/{}（{}%）'.format(self.done, self.stage_total, 100*self.done//self.stage_total)
+        detail = '{} | {}{} | 已用 {:.0f}s'.format(
+            self.day, phase, ' · ' + self.note if self.note else '', now-self.started)
+        title = '研究进度：{}/{} 天 {}%{}'.format(
+            self.completed, self.total, percent, ' · ' + status if status else '')
+        if self.notebook is not None:
+            HTML, display, update_display = self.notebook
+            content = HTML('<div style="max-width:1000px;padding:10px 0;font-size:14px;color:#333">'
+                           '<strong>{}</strong><br><progress value="{}" max="{}" '
+                           'style="width:100%;height:18px"></progress><br>{}</div>'.format(
+                               escape(title), self.completed, self.total, escape(detail)))
+            try:
+                if self.displayed:
+                    update_display(content, display_id=self.display_id)
+                else:
+                    display(content, display_id=self.display_id)
+                    self.displayed = True
+                return
+            except Exception:
+                self.notebook = None  # Older Notebook display support: keep collection running.
+        line = title + ' [' + '#' * filled + '-' * (20-filled) + '] | ' + detail
+        self.stream.write('\r' + line + ' ' * builtins.max(0, self.width-len(line)) + ('\n' if status else ''))
+        self.stream.flush()
+        self.width = len(line)
+
+    def write_result(self, text):
+        if not self.enabled:
+            return
+        if self.notebook is None and self.width:
+            self.stream.write('\r' + ' ' * self.width + '\r')
+            self.width = 0
+        print(text, file=self.stream, flush=True)
+        if self.notebook is None:
+            self.render(force=True)
+
+
+def daily_selection_text(record, cached=False):
+    counts = ['{} {}只'.format(name, builtins.sum(key in stock['methods'] for stock in record['selected']))
+              for key, name in METHODS.items()]
+    title = '\n{} 选股结果{}\n扫描 {}只 · {}'.format(
+        record['day'], '（复用名单）' if cached else '', record['evaluated_count'], ' · '.join(counts))
+    rows = [dict(策略=name, 股票代码=stock['code'], 股票名称=stock['name'],
+                 **{'收盘价（前复权）': stock.get('selection_close'), '总市值（亿元）': stock['market_cap']})
+            for key, name in METHODS.items() for stock in record['selected'] if key in stock['methods']]
+    if not rows:
+        return title + '\n当日三个策略均无入选股票。'
+    table = pd.DataFrame(rows, columns=['策略', '股票代码', '股票名称', '收盘价（前复权）', '总市值（亿元）'])
+    return title + '\n' + table.to_string(index=False, na_rep='--', float_format=lambda v: '{:.3f}'.format(v))
 
 
 def resolve_apis(api_namespace=None):
@@ -347,8 +455,10 @@ def make_selector(apis):
     return SimpleNamespace(evaluate=evaluate, clean_history=clean_history, read_st_flags=read_st_flags)
 
 
-def collect_selections(apis, selector, day, price_batch_size):
+def collect_selections(apis, selector, day, price_batch_size, progress=None):
     """只用目标日及之前数据筛选；先批量过滤市值和ST，再读取90日日线。"""
+    report = progress if progress is not None else lambda *args, **kwargs: None
+    report('读取历史股票池')
     days = checked_calendar(apis['get_trade_days'](end_date=day, count=90), end=day)
     if len(days) != 90 or days[-1] != day:
         raise ValueError('{} 的90日指标预热日历不完整。'.format(day))
@@ -362,7 +472,8 @@ def collect_selections(apis, selector, day, price_batch_size):
         raise ValueError('历史A股股票池为空。')
     caps, eligible = {}, []
     valuation, query = apis['valuation'], apis['query']
-    for batch in chunks(codes, FUNDAMENTAL_BATCH_SIZE):
+    for offset, batch in enumerate(chunks(codes, FUNDAMENTAL_BATCH_SIZE)):
+        report('市值与ST筛选', offset*FUNDAMENTAL_BATCH_SIZE, len(codes))
         q = query(valuation.code, valuation.market_cap).filter(valuation.code.in_(batch))
         frame = apis['get_fundamentals'](q, date=day)
         if frame is None or not {'code', 'market_cap'}.issubset(frame.columns):
@@ -378,12 +489,11 @@ def collect_selections(apis, selector, day, price_batch_size):
         large = [code for code in batch if caps[code] >= 30]
         flags = selector.read_st_flags(large, day)
         eligible.extend(code for code in large if not flags[code])
-    selected, started = [], time.monotonic()
+        report('市值与ST筛选', builtins.min((offset+1)*FUNDAMENTAL_BATCH_SIZE, len(codes)), len(codes))
+    selected = []
     batches = list(chunks(eligible, price_batch_size))
     for i, batch in enumerate(batches, 1):
-        if i == 1 or i % 10 == 0 or i == len(batches):
-            print('  {} 行情批次 {}/{}，已入选 {} 只，已用 {:.0f}s'.format(
-                day, i, len(batches), len(selected), time.monotonic() - started), flush=True)
+        report('选股行情批次', i-1, len(batches), '已入选 {}只'.format(len(selected)))
         raw = apis['get_price'](batch, start_date=days[0], end_date=day, frequency='daily',
                                fields=['open', 'high', 'low', 'close', 'volume'],
                                fq='pre', skip_paused=False, panel=False)
@@ -399,6 +509,7 @@ def collect_selections(apis, selector, day, price_batch_size):
                                      methods=methods, market_cap=caps[code],
                                      selection_close=finite(history['close'].iloc[-1]),
                                      end_date=None if pd.isnull(end_value) else as_date(end_value).isoformat()))
+        report('选股行情批次', i, len(batches), '已入选 {}只'.format(len(selected)))
     return dict(version=CACHE_VERSION, rule_version=RULE_VERSION, day=day.isoformat(),
                 universe_count=len(codes), evaluated_count=len(eligible), selected=selected, outcomes={})
 
@@ -454,7 +565,7 @@ def valid_flag(value):
             and value in (0, 1))
 
 
-def collect_outcomes(apis, record, targets, folder, batch_size):
+def collect_outcomes(apis, record, targets, folder, batch_size, progress=None):
     """入选日和观察日复权价一并查询，避免新旧价格复权基准不同。"""
     day, outcomes, needed = as_date(record['day']), record['outcomes'], {}
     for stock in record['selected']:
@@ -464,7 +575,10 @@ def collect_outcomes(apis, record, targets, folder, batch_size):
                                           and old.get('target_date') == target.isoformat()):
                 needed.setdefault(stock['code'], []).append((horizon, target))
     stocks = {stock['code']: stock for stock in record['selected']}
-    for batch in chunks(sorted(needed), batch_size):
+    report = progress if progress is not None else lambda *args, **kwargs: None
+    report('后续收盘表现', 0, len(needed), '' if needed else '无需补采')
+    for offset, batch in enumerate(chunks(sorted(needed), batch_size)):
+        report('后续收盘表现', offset*batch_size, len(needed))
         last_day = builtins.max(target for code in batch for _, target in needed[code])
         raw = apis['get_price'](batch, start_date=day, end_date=last_day, frequency='daily',
                                fields=['close', 'paused'], fq='pre', skip_paused=False, panel=False)
@@ -496,6 +610,7 @@ def collect_outcomes(apis, record, targets, folder, batch_size):
                                   target_paused=builtins.bool(point['paused']), return_pct=pct, flags=flags)
                 outcomes['{}|{}'.format(code, horizon)] = result
         save_checkpoint(folder, record)
+        report('后续收盘表现', builtins.min((offset+1)*batch_size, len(needed)), len(needed))
 
 
 DETAIL_COLUMNS = ['策略', '入选日', '股票代码', '股票名称', '总市值（亿元）', '观察期限（交易日）',
@@ -592,22 +707,27 @@ def run(start_date=START_DATE, end_date=END_DATE, as_of_date=AS_OF_DATE,
         folder.mkdir(parents=True, exist_ok=True)
     selector = make_selector(apis)
     rows, daily = [], []
-    print('短线胜率研究：{} 至 {}，共{}个入选交易日；观察截至{}。'.format(
-        start, selected_days[-1], len(selected_days), days[-1]), flush=True)
-    for i, day in enumerate(selected_days):
-        record = read_checkpoint(folder, day)
-        if record is None:
-            print('[{}/{}] {} 历史选股'.format(i + 1, len(selected_days), day), flush=True)
-            record = collect_selections(apis, selector, day, price_batch_size)
-            save_checkpoint(folder, record)  # 零入选也保存；后续行情失败不必重扫全市场。
-        else:
-            print('[{}/{}] {} 复用已完成名单，{}只'.format(i + 1, len(selected_days), day, len(record['selected'])), flush=True)
-        targets = {n: days[i + n] if i + n < len(days) else None for n in HORIZONS}
-        collect_outcomes(apis, record, targets, folder, price_batch_size)
-        rows.extend(detail_rows(record, targets))
-        daily.append(dict(入选日=day.isoformat(), 股票池=record['universe_count'], 扫描股票=record['evaluated_count'],
-                          **{name: builtins.sum(key in stock['methods'] for stock in record['selected']) for key, name in METHODS.items()}))
-        print('  完成：' + '，'.join('{} {}次'.format(name, daily[-1][name]) for name in METHODS.values()), flush=True)
+    if show:
+        print('短线胜率研究：{} 至 {}，共{}个入选交易日；观察截至{}。'.format(
+            start, selected_days[-1], len(selected_days), days[-1]), flush=True)
+    with ResearchProgress(len(selected_days), enabled=show) as progress:
+        for i, day in enumerate(selected_days):
+            progress.start_day(day)
+            record = read_checkpoint(folder, day)
+            cached = record is not None
+            if not cached:
+                record = collect_selections(apis, selector, day, price_batch_size, progress=progress.update)
+                save_checkpoint(folder, record)  # 零入选也保存；后续行情失败不必重扫全市场。
+            else:
+                progress.update('复用已完成名单', note='{}只'.format(len(record['selected'])))
+            if show:
+                progress.write_result(daily_selection_text(record, cached))
+            targets = {n: days[i + n] if i + n < len(days) else None for n in HORIZONS}
+            collect_outcomes(apis, record, targets, folder, price_batch_size, progress=progress.update)
+            rows.extend(detail_rows(record, targets))
+            daily.append(dict(入选日=day.isoformat(), 股票池=record['universe_count'], 扫描股票=record['evaluated_count'],
+                              **{name: builtins.sum(key in stock['methods'] for stock in record['selected']) for key, name in METHODS.items()}))
+            progress.finish_day()
     details = pd.DataFrame(rows, columns=DETAIL_COLUMNS)
     summary, distribution = summarize(details)
     result = SimpleNamespace(summary=summary, distribution=distribution, details=details,
