@@ -68,7 +68,7 @@ def test_factories_match_and_python36():
 
 @pytest.mark.parametrize('batch_size', [1, 50])
 @pytest.mark.parametrize('missing_price', [False, True])
-def test_full_collection_repeat_correction_future_filter_and_social(mod,monkeypatch,tmp_path,batch_size,missing_price):
+def test_full_collection_repeat_correction_future_filter_and_social(mod,monkeypatch,tmp_path,capsys,batch_size,missing_price):
     base=declarative_base()
     class Fund(base):
         __tablename__='fund'
@@ -108,10 +108,13 @@ def test_full_collection_repeat_correction_future_filter_and_social(mod,monkeypa
                             pub_date=dt.date(2026,10,20),report_type_id=403003,report_type='第三季度',shares=1,market_cap=1))
     source_session.commit()
     fail_late = [False]
+    fail_holder = [False]
     source_calls = []
     def run_query(q):
         params = q.statement.compile().params
-        source_calls.append(params)
+        source_calls.append(dict(params, _tables=tuple(t.name for t in q.statement.get_final_froms())))
+        if fail_holder[0] and source_calls[-1]['_tables'] == ('holder',) and 'code_1' in params:
+            raise RuntimeError('synthetic holder failure')
         if fail_late[0] and params.get('period_end_1') == dt.date(2026,9,30) and params.get('symbol_1') == ['600002',other]:
             raise RuntimeError('synthetic late batch failure')
         with source.connect() as c:
@@ -163,17 +166,19 @@ def test_full_collection_repeat_correction_future_filter_and_social(mod,monkeypa
         assert session.query(n.SyncHead).one().revision==revision_before
     monkeypatch.setattr(mod,'china_now',lambda:dt.datetime(2026,10,22,15))
     source_calls.clear()
+    capsys.readouterr()
     assert len(run()) == 1  # Previously future-dated disclosure now becomes visible.
-    stock_queries = [q['symbol_1'] for q in source_calls if 'symbol_1' in q]
-    assert stock_queries and all(other not in values and '600002' not in values for values in stock_queries)
-    # Quarterly document metadata must be stock-scoped or related-fund-scoped.
-    # The unrelated source fund must never be included in document selection.
-    quarterly_pages = [q for q in source_calls if q.get('period_end_1') in
-                       [dt.date(2025,12,31),dt.date(2026,3,31),dt.date(2026,6,30),dt.date(2026,9,30)]
-                       and 'id_1' in q]
-    assert quarterly_pages
-    assert all('symbol_1' in q or 'code_1' in q for q in quarterly_pages)
-    assert all('UNRELATED' not in q.get('code_1', []) for q in quarterly_pages)
+    output = capsys.readouterr().out
+    assert '触发来源 股东户数' in output
+    assert '无持仓新增披露，跳过报告期、持仓明细和社保比较' in output
+    assert '股东户数更新范围 1 只股票' in output
+    # A holder-count disclosure must not read fund metadata or quarterly holdings.
+    assert source_calls[6:] and all(q['_tables'] == ('holder',) for q in source_calls[6:])
+    with sessionmaker(bind=target)() as session:
+        report = session.query(n.OwnershipReport).filter_by(code=code,report_date=dt.date(2026,9,30)).one()
+        assert report.updated_at == stamp
+        assert session.query(n.Checkpoint).filter_by(key='report:2026-09-30').one().as_of == dt.date(2026,10,21)
+        assert session.query(n.DisclosureProbe).one().as_of == dt.date(2026,10,22)
 
     monkeypatch.setattr(mod,'china_now',lambda:dt.datetime(2026,10,23,15))
     assert run().empty  # Another day without disclosures still skips.
@@ -199,13 +204,36 @@ def test_full_collection_repeat_correction_future_filter_and_social(mod,monkeypa
     source_session.add(Fund(id=101,code='A',symbol='600002',period_end=dt.date(2026,9,30),
                            pub_date=dt.date(2026,10,23),report_type_id=403003,report_type='第三季度',shares=75,market_cap=150))
     source_session.commit()
+    source_calls.clear()
     assert len(run()) >= 2
+    assert all(q['_tables'] != ('holder',) for q in source_calls[6:])
+    # Fund refresh still finds removed constituents and remains stock/fund-scoped.
+    quarterly_pages = [q for q in source_calls[6:] if q.get('period_end_1') in
+                       [dt.date(2025,12,31),dt.date(2026,3,31),dt.date(2026,6,30),dt.date(2026,9,30)]
+                       and 'id_1' in q]
+    assert quarterly_pages
+    assert all('symbol_1' in q or 'code_1' in q for q in quarterly_pages)
+    assert all('UNRELATED' not in q.get('code_1', []) for q in quarterly_pages)
     with sessionmaker(bind=target)() as session:
         old = session.query(n.OwnershipReport).filter_by(code=code,report_date=dt.date(2026,9,30)).one()
         new = session.query(n.OwnershipReport).filter_by(code=other,report_date=dt.date(2026,9,30)).one()
         assert old.payload['categories']['public_fund'] is None
         assert new.payload['categories']['public_fund']['shares'] == 75
     assert run().empty
+    # Float-holder disclosure alone updates holdings/social results, not holder counts.
+    def add_float_version(first_id, shares):
+        for rank in range(1,11):
+            old = source_session.query(Floats).filter_by(id=10+rank).one()
+            values = {column.name: getattr(old, column.name) for column in Floats.__table__.columns}
+            values.update(id=first_id+rank, pub_date=dt.date(2026,10,23), share_number=shares if rank == 1 else 100)
+            source_session.add(Floats(**values))
+    add_float_version(200, 300)
+    source_session.commit()
+    source_calls.clear()
+    assert len(run()) == 1
+    assert all(q['_tables'] != ('holder',) for q in source_calls[6:])
+    with sessionmaker(bind=target)() as session:
+        assert session.query(n.OwnershipReport).filter_by(code=code,report_date=dt.date(2026,9,30)).one().payload['social_entry']['new_shares'] == 300
     # An unrelated disclosure identifier must never enter the stock/price scope.
     # Keep a valid disclosure in the same run to ensure it is still updated.
     invalid = ['K0470.XSHG', '600001.XSHE']
@@ -233,16 +261,51 @@ def test_full_collection_repeat_correction_future_filter_and_social(mod,monkeypa
     assert not any('period_end_1' in q or 'symbol_1' in q for q in source_calls[6:])
     source_calls.clear()
     assert run().empty and len(source_calls) == 6
+    # A newly listed stock with only a holder disclosure still gets stock metadata.
+    original_universe = api['get_all_securities']
+    new_code = '600003.XSHG'
+    api['get_all_securities'] = lambda **kw: pd.concat([original_universe(**kw),
+        pd.DataFrame({'display_name':['新股']},index=[new_code])])
+    source_session.add(Holder(id=1003,code=new_code,end_date=dt.date(2026,9,30),pub_date=dt.date(2026,10,23),share_holders=70))
+    source_session.commit()
+    source_calls.clear()
+    assert len(run()) == 1
+    assert all(q['_tables'] == ('holder',) for q in source_calls[6:])
+    with sessionmaker(bind=target)() as session:
+        assert session.query(n.OwnershipStock).filter_by(code=new_code).one().name == '新股'
+        assert session.query(n.OwnershipHolders).filter_by(code=new_code).one().payload['share_holders'] == 70
+        assert session.query(n.OwnershipReport).filter_by(code=new_code).count() == 0
     # Existing history remains eligible even after the stock leaves today's list.
     original_securities = api['get_all_securities']
     api['get_all_securities'] = lambda **kw: (pd.DataFrame({'display_name':['示例']}, index=[code])
         if kw['date'] == dt.date(2026,10,23) else original_securities(**kw))
-    source_session.add(Holder(id=1003,code=other,end_date=dt.date(2026,9,30),pub_date=dt.date(2026,10,23),share_holders=88))
+    source_session.add(Holder(id=1004,code=other,end_date=dt.date(2026,9,30),pub_date=dt.date(2026,10,23),share_holders=88))
     source_session.commit()
     assert len(run()) == 1
     with sessionmaker(bind=target)() as session:
         assert session.query(n.OwnershipStock).filter_by(code=other).count() == 1
         assert session.query(n.OwnershipHolders).filter_by(code=other).one().payload['share_holders'] == 88
+    # Mixed changes: do not advance the global probe if holder collection fails
+    # after the holdings transactions committed; retry must finish both sources.
+    with sessionmaker(bind=target)() as session:
+        old_probe = session.query(n.DisclosureProbe).one().payload
+    add_float_version(2000, 350)
+    source_session.add(Holder(id=2000,code=code,end_date=dt.date(2026,9,30),pub_date=dt.date(2026,10,23),share_holders=60))
+    source_session.commit()
+    fail_holder[0] = True
+    with pytest.raises(RuntimeError, match='synthetic holder failure'):
+        run()
+    with sessionmaker(bind=target)() as session:
+        assert session.query(n.DisclosureProbe).one().payload == old_probe
+        assert session.query(n.OwnershipReport).filter_by(code=code,report_date=dt.date(2026,9,30)).one().payload['social_entry']['new_shares'] == 350
+        assert session.query(n.OwnershipHolders).filter_by(code=code,end_date=dt.date(2026,9,30)).one().payload['share_holders'] == 65
+    fail_holder[0] = False
+    assert len(run()) == 1
+    with sessionmaker(bind=target)() as session:
+        assert session.query(n.DisclosureProbe).one().payload != old_probe
+        assert session.query(n.OwnershipHolders).filter_by(code=code,end_date=dt.date(2026,9,30)).one().payload['share_holders'] == 60
+    source_calls.clear()
+    assert run().empty and len(source_calls) == 6
     source_session.close();source.dispose();target.dispose()
 
 
