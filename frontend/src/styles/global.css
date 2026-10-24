@@ -137,15 +137,6 @@ svg {
   border-radius: 11px;
   box-shadow: 0 4px 30px rgba(97, 57, 35, 0.08);
 }
-.brand-caption {
-  display: block;
-  color: var(--muted);
-  font-size: 10px;
-  font-weight: 600;
-  letter-spacing: 0.8px;
-  white-space: nowrap;
-  margin-top: 4px;
-}
 .nav-label {
   font-size: 12px;
   color: var(--muted);
@@ -153,10 +144,6 @@ svg {
   letter-spacing: 1px;
   display: flex;
   gap: 9px;
-}
-.nav-label span {
-  font-size: 12px;
-  opacity: 1;
 }
 .main-nav {
   display: flex;
@@ -299,16 +286,6 @@ svg {
   height: 9px;
   width: 1px;
   background: var(--surface);
-}
-.section-eyebrow {
-  font-size: 12px;
-  font-weight: 600;
-  letter-spacing: 2px;
-  color: var(--muted);
-  display: flex;
-  align-items: center;
-  gap: 9px;
-  font-family: Manrope, sans-serif;
 }
 .tiny-line {
   width: 18px;
@@ -931,11 +908,6 @@ svg {
   border-radius: 10px;
   padding: 23px;
 }
-.observation-card .section-eyebrow {
-  font-size: 12px;
-  color: var(--muted);
-  letter-spacing: 1.4px;
-}
 .observation-card strong {
   display: block;
   font-family: Manrope, sans-serif;
@@ -1085,10 +1057,6 @@ svg {
   }
   .brand {
     font-size: 16px;
-  }
-  .brand-caption {
-    font-size: 10px;
-    letter-spacing: 1.2px;
   }
   .workspace {
     margin-left: 205px;
@@ -1272,6 +1240,22 @@ svg {
   .breadcrumb {
     gap: 8px;
     font-size: 12px;
+    min-width: 0;
+  }
+  .breadcrumb > a,
+  .breadcrumb > svg:nth-of-type(2) {
+    display: none;
+  }
+  .breadcrumb > span {
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .topbar {
+    gap: 12px;
+  }
+  .topbar-right {
+    flex-shrink: 0;
   }
   .main-content {
     padding: 24px 18px 30px;
@@ -1281,10 +1265,6 @@ svg {
     font-size: 12px;
     letter-spacing: 0.7px;
     flex-wrap: wrap;
-  }
-  .section-eyebrow {
-    font-size: 12px;
-    letter-spacing: 1.4px;
   }
 
   .section-heading h2 {

@@ -143,3 +143,20 @@ test('earnings no collection, zero results, filtered empty and retry', async ({ 
   await page.getByRole('button', { name: '重新加载' }).click()
   await expect(page.getByText('本季度暂未出现符合条件的股票')).toBeVisible()
 })
+
+test('detail failure keeps the shared header and module navigation', async ({ page }) => {
+  await page.route('**/api/v1/**', (route) =>
+    route.fulfill({ status: 503, json: { detail: '测试详情不可用' } }),
+  )
+  await page.goto('/earnings-gap/stocks/600001.XSHG?period=2026-09-30')
+  await expect(page.getByRole('alert')).toContainText('测试详情不可用')
+  await expect(page.getByRole('heading', { level: 1 })).toContainText('净利润断层详情')
+  await expect(page.locator('.page-header .page-code')).toHaveText('600001.XSHG')
+  const modules = page.getByRole('navigation', { name: '业绩选股模块切换' })
+  await expect(modules.getByRole('link', { name: '净利润断层', exact: true })).toHaveAttribute(
+    'aria-current',
+    'page',
+  )
+  await modules.getByRole('link', { name: '高增长', exact: true }).click()
+  await expect(page).toHaveURL(/high-growth$/)
+})

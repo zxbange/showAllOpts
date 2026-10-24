@@ -17,7 +17,6 @@ export interface ResearchModule {
   name: string
   path: string
   category: string
-  english: string
   description: string
   tags: string[]
   icon: LucideIcon
@@ -35,17 +34,23 @@ export interface ResearchModule {
     | 'ownership'
 }
 
-const individualModules: ResearchModule[] = [
-  { id: 'short-term', name: '短线选股', path: '/short-term', category: '趋势观察',
-    english: 'SHORT TERM PATTERNS',
+export const individualModules: ResearchModule[] = [
+  {
+    id: 'short-term',
+    name: '短线选股',
+    path: '/short-term',
+    category: '趋势观察',
     description: '补票龙、红悬停龙、蓄力龙选股结果及K线。',
-    tags: ['补票龙', '红悬停龙', '蓄力龙'], icon: ChartNoAxesCombined, tone: 'coral', illustration: 'breadth' },
+    tags: ['补票龙', '红悬停龙', '蓄力龙'],
+    icon: ChartNoAxesCombined,
+    tone: 'coral',
+    illustration: 'breadth',
+  },
   {
     id: 'institution-ownership',
     name: '个股机构持仓',
     path: '/institution-ownership',
     category: '筹码观察',
-    english: 'INSTITUTION OWNERSHIP',
     description: '七类机构持仓、股东户数、社保新进与加仓。',
     tags: ['机构持仓', '股东户数', '社保新进'],
     icon: Users,
@@ -57,7 +62,6 @@ const individualModules: ResearchModule[] = [
     name: 'ETF动量热度',
     path: '/etf-momentum',
     category: '趋势观察',
-    english: 'ETF MOMENTUM AT THE CLOSE',
     description: 'ETF / LOF 动量排名及历史热度。',
     tags: ['ETF热力图', '跨资产', '收盘动量'],
     icon: TrendingUp,
@@ -69,7 +73,6 @@ const individualModules: ResearchModule[] = [
     name: '高增长',
     path: '/high-growth',
     category: '业绩观察',
-    english: 'SUSTAINED EARNINGS GROWTH',
     description: '四类报告的归母净利润与 EPS 连续增长筛选。',
     tags: ['四类财报', '持续增长', '净利润与EPS'],
     icon: TrendingUp,
@@ -81,7 +84,6 @@ const individualModules: ResearchModule[] = [
     name: '高股息选股',
     path: '/dividend-selection',
     category: '价值观察',
-    english: 'DIVIDEND SELECTION',
     description: '纯高股息、高股息低估值，两组各取前25只。',
     tags: ['双策略选股', '股息率', 'PE估值'],
     icon: Coins,
@@ -93,7 +95,6 @@ const individualModules: ResearchModule[] = [
     name: '微盘新高新低',
     path: '/microcap-breadth',
     category: '风格观察',
-    english: 'MICROCAP MARKET BREADTH',
     description: '微盘400的新高、新低数量及市场强度。',
     tags: ['新高新低', '微盘400', '每日采样'],
     icon: ArrowUpDown,
@@ -105,7 +106,6 @@ const individualModules: ResearchModule[] = [
     name: '净利润断层',
     path: '/earnings-gap',
     category: '业绩观察',
-    english: 'EARNINGS GAP OBSERVATORY',
     description: '净利润增长、高开收阳信号及公告明细。',
     tags: ['季度选股', '公告证据', '信号日期'],
     icon: FileSearch,
@@ -117,7 +117,6 @@ const individualModules: ResearchModule[] = [
     name: '行业动量',
     path: '/industry-momentum',
     category: '市场结构',
-    english: 'INDUSTRY MOMENTUM',
     description: '申万二级行业动量排名与历史趋势。',
     tags: ['行业热力图', '趋势下钻', '每日采样'],
     icon: Grid2X2,
@@ -129,7 +128,6 @@ const individualModules: ResearchModule[] = [
     name: '抱团拥挤度',
     path: '/market-crowding',
     category: '市场结构',
-    english: 'MARKET CROWDING',
     description: '成交额前5%股票占全市场成交额的比例。',
     tags: ['成交额集中度', '历史曲线', 'EMA 参考'],
     icon: Activity,
@@ -141,7 +139,6 @@ const individualModules: ResearchModule[] = [
     name: '微盘温度计',
     path: '/microcap-temperature',
     category: '风格观察',
-    english: 'MICROCAP THERMOMETER',
     description: '微盘1000的估值、拥挤度及等权指数。',
     tags: ['综合温度', '等权指数', '每 5 交易日采样'],
     icon: Thermometer,
@@ -153,7 +150,6 @@ const individualModules: ResearchModule[] = [
     name: 'ETF份额仪表盘',
     path: '/etf-shares',
     category: '资金观察',
-    english: 'ETF SHARE OBSERVATORY',
     description: '沪深300、中证500 ETF 的份额与每日增减。',
     tags: ['ETF总份额', '沪深300', '中证500'],
     icon: ChartNoAxesCombined,
@@ -175,7 +171,12 @@ export const moduleGroups = [
     ids: ['microcap-temperature', 'microcap-breadth'],
     labels: ['微盘温度计', '微盘新高新低'],
   },
-  { name: '业绩选股', description: '财报持续增长筛选与公告后的高开收阳信号。', ids: ['high-growth', 'earnings-gap'], labels: ['高增长', '净利润断层'] },
+  {
+    name: '业绩选股',
+    description: '财报持续增长筛选与公告后的高开收阳信号。',
+    ids: ['high-growth', 'earnings-gap'],
+    labels: ['高增长', '净利润断层'],
+  },
 ]
 export function groupForPath(path: string) {
   return moduleGroups.find((g) => g.ids.includes(path.split('/')[1]))

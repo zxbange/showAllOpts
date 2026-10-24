@@ -1,3 +1,4 @@
+import { PageHeader } from '../components/PageHeader'
 import { useCallback, useState } from 'react'
 import {
   CalendarDays,
@@ -28,9 +29,8 @@ export function MicrocapPage() {
   const latest = data?.latest
   return (
     <div className="page-enter microcap-page">
-      <div className="page-heading">
+      <PageHeader>
         <div>
-          <span className="section-eyebrow">MICROCAP THERMOMETER / 1000</span>
           <h1>
             微盘温度计<span className="heading-tag">估值 · 交易 · 温度</span>
           </h1>
@@ -50,7 +50,7 @@ export function MicrocapPage() {
             <RefreshCw size={16} className={loading ? 'spin' : ''} />
           </button>
         </div>
-      </div>
+      </PageHeader>
       {loading ? (
         <LoadingState />
       ) : error ? (
@@ -93,7 +93,6 @@ export function MicrocapPage() {
             <section className="panel microcap-thermometer">
               <div className="temperature-heading">
                 <div>
-                  <span className="section-eyebrow">TEMPERATURE COMPOSITION</span>
                   <h2>温度构成</h2>
                 </div>
                 <span>每 {latest.sample_step} 个交易日采样</span>

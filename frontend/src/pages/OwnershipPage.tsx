@@ -1,3 +1,5 @@
+import { ModuleSwitch } from '../components/ModuleSwitch'
+import { PageHeader } from '../components/PageHeader'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { Search, Users, RefreshCw } from 'lucide-react'
@@ -379,30 +381,28 @@ export function OwnershipPage() {
   const select = (value: string) => setParams({ code: value, tab: 'stock' })
   return (
     <div className="page-enter ownership-page">
-      <div className="page-heading">
+      <PageHeader
+        switcher={
+          <ModuleSwitch
+            label="机构持仓模块切换"
+            value={tab}
+            onChange={(id) => setParams({ tab: id, ...(id === 'stock' && code ? { code } : {}) })}
+            items={[
+              { id: 'stock', name: '个股查询', description: '机构持仓 · 股东户数', icon: Search },
+              { id: 'social', name: '社保新进', description: '新进组合 · 持股增减', icon: Users },
+            ]}
+          />
+        }
+      >
         <div>
-          <span className="eyebrow">INSTITUTION OWNERSHIP OBSERVATORY</span>
           <h1>
             个股机构持仓 <span className="heading-tag">筹码观察</span>
           </h1>
           <p>查询机构持仓、股东户数与季度社保变动。</p>
         </div>
         <Users size={32} />
-      </div>
-      <div className="ownership-tabs">
-        <button
-          className={'button ' + (tab === 'stock' ? 'button-primary' : 'button-quiet')}
-          onClick={() => setParams({ tab: 'stock', ...(code ? { code } : {}) })}
-        >
-          个股查询
-        </button>
-        <button
-          className={'button ' + (tab === 'social' ? 'button-primary' : 'button-quiet')}
-          onClick={() => setParams({ tab: 'social' })}
-        >
-          社保新进
-        </button>
-      </div>
+      </PageHeader>
+
       {tab === 'social' ? (
         <SocialView onSelect={select} />
       ) : (

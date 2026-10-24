@@ -1,3 +1,4 @@
+import { PageHeader } from '../components/PageHeader'
 import { useCallback } from 'react'
 import { Link, useParams, useSearchParams } from 'react-router-dom'
 import { ArrowLeft, FileText } from 'lucide-react'
@@ -23,6 +24,27 @@ export function EarningsDetailPage() {
         <ArrowLeft size={16} />
         返回入选列表
       </Link>
+      <PageHeader>
+        <div>
+          <span className="page-code">{data?.code ?? code}</span>
+          <h1>
+            {data?.name ?? '净利润断层详情'}
+            {(data?.report_period || period) && (
+              <span className="heading-tag">{quarter(data?.report_period || period)}</span>
+            )}
+          </h1>
+          <p>
+            {data ? (
+              <>
+                {data.industry_name ?? '行业未提供'} · {industryLevel(data.industry_level)} · 信号{' '}
+                {data.signal_date} · 公告 {data.announcement_date}
+              </>
+            ) : (
+              '查看业绩公告与价格信号。'
+            )}
+          </p>
+        </div>
+      </PageHeader>
       {loading ? (
         <LoadingState />
       ) : error ? (
@@ -30,19 +52,6 @@ export function EarningsDetailPage() {
       ) : (
         data && (
           <>
-            <div className="page-heading">
-              <div>
-                <span className="section-eyebrow">{data.code} / EARNINGS EVIDENCE</span>
-                <h1>
-                  {data.name}
-                  <span className="heading-tag">{quarter(data.report_period)}</span>
-                </h1>
-                <p>
-                  {data.industry_name ?? '行业未提供'} · {industryLevel(data.industry_level)} · 信号{' '}
-                  {data.signal_date} · 公告 {data.announcement_date}
-                </p>
-              </div>
-            </div>
             <div className="earnings-detail-metrics">
               {[
                 ['归母净利同比', percent(data.profit_yoy)],
@@ -77,7 +86,6 @@ export function EarningsDetailPage() {
               )}
             </section>
             <div className="earnings-evidence-heading">
-              <span className="section-eyebrow">FOLLOW THE EVIDENCE</span>
               <h2>同报告期公告</h2>
             </div>
             <div className="earnings-disclosures">

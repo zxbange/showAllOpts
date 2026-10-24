@@ -45,6 +45,16 @@ showAllOpts/
 └── compose.yaml
 ```
 
+## 页面布局约定
+
+所有业务页使用 `frontend/src/components/PageHeader.tsx`，顺序统一为：**中文标题、说明和操作区 → 卡片式模块切换 → 数据内容**。以 ETF 份额仪表盘为基准，不在标题上方单独放置模块标签。
+
+- 页内切换复用 `ModuleSwitch`，通过 `PageHeader` 的 `switcher` 属性传入；卡片支持图标、名称、简短说明及数量。日期、刷新等操作保留在标题区。
+- 跨路由分组在 `frontend/src/lib/modules.ts` 注册；`PageHeader` 自动显示该组的模块卡片，并保留直接链接与当前模块高亮。
+- 加载、空数据和错误状态下保留标题及模块入口。移动端卡片自动换行，切换控件支持键盘操作。
+- 不增加装饰性英文副标题或中英文重复翻译；保留 ETF、LOF、PE、PB、EPS、MA 等必要指标名称与证券代码。
+- 统一样式维护在 `frontend/src/styles/page-header.css`；新页面不要再复制独立的模块切换样式。
+
 ## 数据库配置与 GitHub 提交
 
 数据库配置与代码分开管理，前端只通过 `/api` 访问后端，不接触数据库凭据。

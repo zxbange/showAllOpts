@@ -1,3 +1,4 @@
+import { PageHeader } from '../components/PageHeader'
 import { useCallback, useState } from 'react'
 import {
   ArrowLeft,
@@ -34,9 +35,9 @@ export function IndustryPage() {
         <ArrowLeft size={15} />
         返回行业热力图
       </Link>
-      <div className="page-heading">
+      <PageHeader>
         <div>
-          <span className="section-eyebrow">SECTOR DEEP DIVE / {code}</span>
+          <span className="page-code">{code}</span>
           <h1>
             {name}
             <span className="heading-tag">动量趋势</span>
@@ -57,7 +58,7 @@ export function IndustryPage() {
             <RefreshCw size={16} className={loading ? 'spin' : ''} />
           </button>
         </div>
-      </div>
+      </PageHeader>
       {loading ? (
         <LoadingState />
       ) : error ? (
@@ -173,7 +174,6 @@ export function IndustryPage() {
             </div>
           </div>
           <div className="observation-card">
-            <span className="section-eyebrow">OBSERVATION WINDOW</span>
             <strong>
               {data.summary.observed_days}
               <small>个数据点</small>

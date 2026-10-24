@@ -1,3 +1,4 @@
+import { PageHeader } from '../components/PageHeader'
 import { useCallback, useState } from 'react'
 import {
   CalendarDays,
@@ -25,9 +26,8 @@ export function CrowdingPage() {
   const latest = data?.latest
   return (
     <div className="page-enter crowding-page">
-      <div className="page-heading">
+      <PageHeader>
         <div>
-          <span className="section-eyebrow">MARKET CROWDING / TOP 5%</span>
           <h1>
             抱团拥挤度<span className="heading-tag">成交额集中度</span>
           </h1>
@@ -47,7 +47,7 @@ export function CrowdingPage() {
             <RefreshCw size={16} className={loading ? 'spin' : ''} />
           </button>
         </div>
-      </div>
+      </PageHeader>
       {loading ? (
         <LoadingState />
       ) : error ? (
@@ -92,7 +92,6 @@ export function CrowdingPage() {
           </div>
           <div className="crowding-share panel">
             <div>
-              <span className="section-eyebrow">LATEST CONCENTRATION</span>
               <h2>前 5% 股票，贡献 {percent(latest.ratio)} 的成交额</h2>
             </div>
             <div
@@ -168,10 +167,12 @@ export function CrowdingPage() {
         <div>
           <h3>指标口径</h3>
           <p>
-            股票按成交额降序，取数量前 5%（向下取整），计算其成交额占比。占比越高，成交越集中，不代表涨跌方向。
+            股票按成交额降序，取数量前
+            5%（向下取整），计算其成交额占比。占比越高，成交越集中，不代表涨跌方向。
           </p>
           <span>
-            停牌股仍计入股票总数；卡片显示原始值，EMA 10 仅作平滑参考。时间范围按自然日，缺失日不补零。
+            停牌股仍计入股票总数；卡片显示原始值，EMA 10
+            仅作平滑参考。时间范围按自然日，缺失日不补零。
           </span>
         </div>
       </div>

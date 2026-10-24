@@ -1,3 +1,4 @@
+import { PageHeader } from '../components/PageHeader'
 import { useMemo, useState } from 'react'
 import {
   ArrowDownRight,
@@ -37,9 +38,8 @@ export function MomentumPage() {
   const leader = industries[0]
   return (
     <div className="page-enter">
-      <div className="page-heading">
+      <PageHeader>
         <div>
-          <span className="section-eyebrow">INDUSTRY MOMENTUM</span>
           <h1>
             行业动量<span className="heading-tag">申万二级</span>
           </h1>
@@ -59,7 +59,7 @@ export function MomentumPage() {
             <RefreshCw size={16} className={loading ? 'spin' : ''} />
           </button>
         </div>
-      </div>
+      </PageHeader>
       {loading ? (
         <LoadingState />
       ) : error ? (
@@ -163,7 +163,6 @@ export function MomentumPage() {
           <section className="leaders-section">
             <div className="section-heading">
               <div>
-                <span className="section-eyebrow">IN THE SPOTLIGHT</span>
                 <h2>当前领跑行业</h2>
               </div>
               <span className="subtle-tag">变化对比 {formatDate(data.previous_trade_date)}</span>

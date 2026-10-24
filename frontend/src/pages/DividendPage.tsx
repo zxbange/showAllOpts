@@ -1,3 +1,5 @@
+import { ModuleSwitch } from '../components/ModuleSwitch'
+import { PageHeader } from '../components/PageHeader'
 import { useCallback, useState } from 'react'
 import {
   CalendarDays,
@@ -37,11 +39,36 @@ export function DividendPage() {
   const maxYield = Math.max(1, ...(group?.items ?? []).map(metric))
   return (
     <div className="page-enter dividend-page">
-      <div className="page-heading">
+      <PageHeader
+        switcher={
+          <ModuleSwitch
+            label="选择高股息筛选方式"
+            value={method}
+            onChange={setMethod}
+            items={[
+              {
+                id: 'classic',
+                name: '纯高股息',
+                description: '三年分红前10% · PEG · 盈利增长',
+                icon: Coins,
+              },
+              {
+                id: 'value',
+                name: '高股息低估值',
+                description: '近一年股息率 > 4% · 0 < PE < 8',
+                icon: Coins,
+              },
+            ].map((item) => ({
+              ...item,
+              count: data ? (data.groups.find((g) => g.id === item.id)?.items.length ?? 0) : '—',
+              countLabel: '/ 25 只',
+            }))}
+          />
+        }
+      >
         <div>
-          <span className="section-eyebrow">DIVIDEND SELECTION</span>
           <h1>
-            高股息选股 <span className="heading-tag">双策略 · TOP 25</span>
+            高股息选股 <span className="heading-tag">双策略 · 前25只</span>
           </h1>
           <p>纯高股息与高股息低估值，两种口径各取前 25 只。</p>
         </div>
@@ -59,7 +86,7 @@ export function DividendPage() {
             <RefreshCw size={16} className={loading ? 'spin' : ''} />
           </button>
         </div>
-      </div>
+      </PageHeader>
       {loading ? (
         <LoadingState />
       ) : error ? (
@@ -71,40 +98,6 @@ export function DividendPage() {
         />
       ) : (
         <>
-          <div className="dividend-methods" aria-label="选择高股息筛选方式">
-            {[
-              {
-                id: 'classic',
-                name: '纯高股息',
-                en: 'DIVIDEND & QUALITY',
-                detail: '三年分红前10% · PEG · 盈利增长',
-              },
-              {
-                id: 'value',
-                name: '高股息低估值',
-                en: 'YIELD & VALUE',
-                detail: '近一年股息率 > 4% · 0 < PE < 8',
-              },
-            ].map((m) => (
-              <button
-                key={m.id}
-                className={'dividend-method ' + (method === m.id ? 'selected' : '')}
-                aria-pressed={method === m.id}
-                onClick={() => setMethod(m.id)}
-              >
-                <Coins size={26} />
-                <span>
-                  <small>{m.en}</small>
-                  <strong>{m.name}</strong>
-                  <em>{m.detail}</em>
-                </span>
-                <b>
-                  {data.groups.find((g) => g.id === m.id)?.items.length ?? 0}
-                  <small> / 25 只</small>
-                </b>
-              </button>
-            ))}
-          </div>
           <div className="stats-grid">
             <StatCard
               label="本组入选"
@@ -139,7 +132,6 @@ export function DividendPage() {
           <section className="panel dividend-results">
             <div className="panel-heading">
               <div>
-                <span className="section-eyebrow">RANKED SELECTION</span>
                 <h2>{group?.name} · 前 25 名</h2>
                 <p>
                   {classic ? '按三年累计分红比例降序' : '按近一年股息率降序'}，同值按代码排序。不足
@@ -171,10 +163,7 @@ export function DividendPage() {
               </span>
             </div>
             {!group?.items.length ? (
-              <EmptyState
-                title="本组暂无符合条件的股票"
-                description="本次无股票满足全部条件。"
-              />
+              <EmptyState title="本组暂无符合条件的股票" description="本次无股票满足全部条件。" />
             ) : !items.length ? (
               <EmptyState
                 search

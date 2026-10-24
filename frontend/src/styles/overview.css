@@ -262,12 +262,6 @@
   border-radius: 50%;
   background: #9b6c1d;
 }
-.research-english {
-  color: var(--module-color);
-  font-size: 12px;
-  letter-spacing: 1.4px;
-  font-weight: 600;
-}
 .research-card h3 {
   font-size: 24px;
   font-weight: 600;

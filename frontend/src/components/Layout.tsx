@@ -1,11 +1,5 @@
 import { useLayoutEffect, useRef } from 'react'
-import {
-  ArrowUpRight,
-  ChartNoAxesCombined,
-  ChevronRight,
-  House,
-  Layers3,
-} from 'lucide-react'
+import { ArrowUpRight, ChartNoAxesCombined, ChevronRight, House, Layers3 } from 'lucide-react'
 import { Link, NavLink, Outlet, useLocation } from 'react-router-dom'
 import { CacheControl } from './CacheControl'
 import { researchModules, groupForPath } from '../lib/modules'
@@ -36,13 +30,9 @@ export function Layout() {
           <span className="brand-mark">
             <ChartNoAxesCombined size={22} strokeWidth={2.4} />
           </span>
-          <span>
-            发奋墙<span className="brand-caption">MARKET INTELLIGENCE</span>
-          </span>
+          <span>发奋墙</span>
         </Link>
-        <div className="nav-label">
-          工作空间 <span>WORKSPACE</span>
-        </div>
+        <div className="nav-label">工作空间</div>
         <nav ref={navigation} className="main-nav" aria-label="主导航">
           <NavLink to="/" end aria-label="总览" title="总览">
             <House size={18} />
@@ -100,24 +90,15 @@ export function Layout() {
           </div>
           <div className="topbar-right">
             <CacheControl />
-            <span className="avatar">SQ</span>
+            <span className="avatar">研</span>
           </div>
         </header>
         <main id="main-content" className="main-content">
-          {group && (
-            <nav className="module-switch" aria-label={`${group.name}模块切换`}>
-              {group.ids.map((id, index) => (
-                <NavLink key={id} to={`/${id}`}>
-                  {group.labels[index]}
-                </NavLink>
-              ))}
-            </nav>
-          )}
           <Outlet />
         </main>
         <footer className="page-footer">
           <span>
-            SHOWALLOPTS <i /> RESEARCH WORKSPACE
+            发奋墙 <i /> 研究工作台
           </span>
           <span>
             数据来源 · 聚宽采集 <ArrowUpRight size={12} />

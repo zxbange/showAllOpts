@@ -1,3 +1,4 @@
+import { PageHeader } from '../components/PageHeader'
 import { useCallback, useMemo, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import {
@@ -36,9 +37,8 @@ export function ETFHeatPage() {
   const valid = items.filter((i) => i.score !== null)
   return (
     <div className="page-enter">
-      <div className="page-heading">
+      <PageHeader>
         <div>
-          <span className="section-eyebrow">ETF MOMENTUM / AT THE CLOSE</span>
           <h1>
             ETF动量热度<span className="heading-tag">收盘观察</span>
           </h1>
@@ -58,7 +58,7 @@ export function ETFHeatPage() {
             <RefreshCw size={16} />
           </button>
         </div>
-      </div>
+      </PageHeader>
       {loading ? (
         <LoadingState />
       ) : error ? (
@@ -173,7 +173,9 @@ export function ETFHeatPage() {
                       <strong>{number(i.score)}</strong>
                       <span className="etf-tile-code">{i.code}</span>
                       <small>{i.fund.fund_type}</small>
-                      {i.score == null && <small>{i.details.reason ?? '暂无有效热度，请检查采集结果'}</small>}
+                      {i.score == null && (
+                        <small>{i.details.reason ?? '暂无有效热度，请检查采集结果'}</small>
+                      )}
                     </Link>
                   )
                 })}
@@ -218,9 +220,9 @@ export function ETFHeatDetailPage() {
         <ArrowLeft size={15} />
         返回ETF热力图
       </Link>
-      <div className="page-heading">
+      <PageHeader>
         <div>
-          <span className="section-eyebrow">ETF TREND / {code}</span>
+          <span className="page-code">{code}</span>
           <h1>{data?.name ?? 'ETF动量走势'}</h1>
           <p>查看基金热度与收盘价的历史变化。</p>
         </div>
@@ -231,7 +233,7 @@ export function ETFHeatDetailPage() {
         >
           <RefreshCw size={16} />
         </button>
-      </div>
+      </PageHeader>
       {loading ? (
         <LoadingState />
       ) : error ? (

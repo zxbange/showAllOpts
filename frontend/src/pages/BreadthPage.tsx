@@ -1,3 +1,4 @@
+import { PageHeader } from '../components/PageHeader'
 import { useCallback, useState } from 'react'
 import { Activity, ArrowUpDown, CalendarDays, Info, RefreshCw, TrendingUp } from 'lucide-react'
 import { getBreadthHistory } from '../api/client'
@@ -22,9 +23,8 @@ export function BreadthPage() {
   const latest = data?.latest
   return (
     <div className="page-enter breadth-page">
-      <div className="page-heading">
+      <PageHeader>
         <div>
-          <span className="eyebrow">MICROCAP MARKET BREADTH</span>
           <h1>
             微盘新高新低 <span className="heading-tag">宽度观察</span>
           </h1>
@@ -44,7 +44,7 @@ export function BreadthPage() {
             <RefreshCw size={16} className={loading ? 'spin' : ''} />
           </button>
         </div>
-      </div>
+      </PageHeader>
       {loading ? (
         <LoadingState />
       ) : error ? (
@@ -122,7 +122,6 @@ export function BreadthPage() {
           <section className="panel trend-panel">
             <div className="panel-heading">
               <div>
-                <span className="section-eyebrow">HIGHS & LOWS</span>
                 <h2>{period} 日新高新低趋势</h2>
                 <p>
                   {formatDate(data.start_date)} — {formatDate(data.end_date)}
@@ -169,7 +168,6 @@ export function BreadthPage() {
             <section className="panel trend-panel">
               <div className="panel-heading">
                 <div>
-                  <span className="section-eyebrow">MARKET STRENGTH</span>
                   <h2>市场强度趋势</h2>
                 </div>
               </div>
@@ -193,7 +191,6 @@ export function BreadthPage() {
               <BreadthChart points={data.points} period={period} view={strengthView} />
             </section>
             <section className="panel breadth-dominance">
-              <span className="section-eyebrow">BREADTH PERSISTENCE</span>
               <h2>新高占优的持续性</h2>
               <p>近 15 个已采集交易日中新高数量大于新低数量的天数比例。</p>
               {latest.periods.map((m) => (
@@ -266,8 +263,9 @@ export function BreadthPage() {
                 使用前复权价格及停牌填充值，持平可能同时计入两侧。
               </p>
               <span>
-                强度按四个周期的新高与新低比例差加权，权重依次为 48%、24%、16%、12%。
-                情绪值按 exp(−N/20) 加权求和，不归一化。变化以点数差表示；历史范围按已采集交易日，缺失不补零。
+                强度按四个周期的新高与新低比例差加权，权重依次为 48%、24%、16%、12%。 情绪值按
+                exp(−N/20)
+                加权求和，不归一化。变化以点数差表示；历史范围按已采集交易日，缺失不补零。
               </span>
             </div>
           </section>

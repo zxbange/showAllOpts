@@ -188,7 +188,7 @@ function ModuleIllustration({ kind }: { kind: ResearchModule['illustration'] }) 
         {kind === 'ownership'
           ? '机构持仓 · 股东户数'
           : kind === 'etf-heat'
-            ? 'ETF MOMENTUM'
+            ? 'ETF动量'
             : kind === 'growth'
               ? '四类报告 · 持续增长'
               : kind === 'dividend'
@@ -217,7 +217,7 @@ export function HomePage() {
   const visible = researchModules.filter(
     (module) =>
       (category === '全部模块' || module.category === category) &&
-      [module.name, module.english, module.description, ...module.tags]
+      [module.name, module.description, ...module.tags]
         .join(' ')
         .toLowerCase()
         .includes(search.trim().toLowerCase()),
@@ -231,7 +231,6 @@ export function HomePage() {
       >
         <div className="directory-heading">
           <div>
-            <span className="section-eyebrow">RESEARCH MODULES</span>
             <h1 id="directory-title">
               全部研究模块
               <span>{researchModules.length.toString().padStart(2, '0')}</span>
@@ -292,7 +291,7 @@ export function HomePage() {
                   <ArrowUpRight className="research-arrow" size={21} />
                 </div>
                 <ModuleIllustration kind={module.illustration} />
-                <span className="research-english">{module.english}</span>
+
                 <h3>{module.name}</h3>
                 <p>{module.description}</p>
                 <div className="research-tags">

@@ -105,6 +105,11 @@ test('group tabs preserve direct links, active navigation and mobile layout', as
   ]) {
     await page.goto('/' + first)
     const tabs = page.getByRole('navigation', { name: group + '模块切换' })
+    await expect(tabs).toBeVisible()
+    const heading = await page.locator('.page-header .page-heading').boundingBox()
+    const cards = await tabs.boundingBox()
+    expect(cards!.y).toBeGreaterThan(heading!.y + heading!.height)
+    await expect(tabs.locator('.module-card')).toHaveCount(2)
     await tabs.getByRole('link', { name: label, exact: true }).click()
     await expect(page).toHaveURL(new RegExp(second + '$'))
     await expect(tabs.getByRole('link', { name: label, exact: true })).toHaveAttribute(
@@ -119,5 +124,57 @@ test('group tabs preserve direct links, active navigation and mobile layout', as
     await page.reload()
     await expect(tabs).toBeVisible()
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
+  }
+})
+
+test('shared module cards stay available while loading and after failures', async ({ page }) => {
+  test.setTimeout(60000)
+  for (const [path, count] of [
+    ['etf-shares', 2],
+    ['dividend-selection', 2],
+    ['short-term', 3],
+  ] as const) {
+    let release!: () => void
+    const response = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    await page.route('**/api/v1/**', async (route) => {
+      await response
+      await route.fulfill({ status: 503, json: { detail: '测试加载失败' } })
+    })
+    await page.goto('/' + path)
+    const cards = page.locator('.page-header .module-card')
+    try {
+      await expect(cards).toHaveCount(count)
+      await expect(cards.first()).toBeVisible()
+      await expect(page.locator('.section-eyebrow, .eyebrow, .research-english')).toHaveCount(0)
+      expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(
+        true,
+      )
+    } finally {
+      release()
+    }
+    await expect(page.getByRole('alert')).toContainText('测试加载失败')
+    await expect(cards).toHaveCount(count)
+    if (path === 'short-term') {
+      await page.getByRole('tab', { name: '补票龙', exact: true }).focus()
+      await page.keyboard.press('ArrowRight')
+      await expect(page.getByRole('tab', { name: '红悬停龙', exact: true })).toBeFocused()
+      await expect(page.getByRole('tab', { name: '红悬停龙', exact: true })).toHaveAttribute(
+        'aria-selected',
+        'true',
+      )
+      await page.keyboard.press('End')
+      await expect(page.getByRole('tab', { name: '蓄力龙', exact: true })).toHaveAttribute(
+        'aria-selected',
+        'true',
+      )
+      await page.keyboard.press('Home')
+      await expect(page.getByRole('tab', { name: '补票龙', exact: true })).toHaveAttribute(
+        'aria-selected',
+        'true',
+      )
+    }
+    await page.unrouteAll({ behavior: 'wait' })
   }
 })

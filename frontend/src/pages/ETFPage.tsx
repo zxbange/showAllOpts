@@ -1,3 +1,5 @@
+import { ModuleSwitch } from '../components/ModuleSwitch'
+import { PageHeader } from '../components/PageHeader'
 import { useCallback, useState } from 'react'
 import type { CSSProperties } from 'react'
 import { CalendarDays, ChartNoAxesCombined, Info, RefreshCw } from 'lucide-react'
@@ -22,9 +24,33 @@ export function ETFPage() {
   const selectedFund = data?.funds.find((fund) => fund.code === selected)
   return (
     <div className="page-enter etf-page">
-      <div className="page-heading">
+      <PageHeader
+        switcher={
+          <ModuleSwitch
+            label="ETF指数分组"
+            value={group}
+            onChange={(id) => {
+              setGroup(id)
+              setSelected(null)
+            }}
+            items={[
+              {
+                id: 'hs300',
+                name: '沪深300 ETF',
+                description: '大盘视角 · 跟踪 5 只',
+                icon: ChartNoAxesCombined,
+              },
+              {
+                id: 'zz500',
+                name: '中证500 ETF',
+                description: '中盘视角 · 跟踪 5 只',
+                icon: ChartNoAxesCombined,
+              },
+            ]}
+          />
+        }
+      >
         <div>
-          <span className="section-eyebrow">ETF SHARE OBSERVATORY</span>
           <h1>
             ETF份额仪表盘<span className="heading-tag">申赎观察</span>
           </h1>
@@ -44,29 +70,8 @@ export function ETFPage() {
             <RefreshCw size={16} className={loading ? 'spin' : ''} />
           </button>
         </div>
-      </div>
-      <div className="etf-group-switch" aria-label="ETF指数分组">
-        {[
-          ['hs300', '沪深300 ETF', '大盘视角'],
-          ['zz500', '中证500 ETF', '中盘视角'],
-        ].map(([id, name, note]) => (
-          <button
-            key={id}
-            aria-pressed={group === id}
-            className={group === id ? 'active' : ''}
-            onClick={() => {
-              setGroup(id)
-              setSelected(null)
-            }}
-          >
-            <ChartNoAxesCombined size={22} />
-            <span>
-              <strong>{name}</strong>
-              <small>{note} · 跟踪 5 只</small>
-            </span>
-          </button>
-        ))}
-      </div>
+      </PageHeader>
+
       {loading ? (
         <LoadingState />
       ) : error ? (

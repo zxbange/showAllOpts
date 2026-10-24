@@ -111,7 +111,6 @@ export function CacheControl() {
       >
         <div className="cache-heading">
           <div>
-            <span className="eyebrow">DATA SYNC</span>
             <h2 id="cache-title">数据同步</h2>
           </div>
           <button className="cache-close" onClick={() => setOpen(false)} aria-label="关闭数据同步">
@@ -164,23 +163,37 @@ export function CacheControl() {
                         </small>
                       </div>
                     )}
-                    {item.error && !['waiting', 'running'].includes(item.progress?.status ?? '') && <p className="cache-row-error">{item.error}</p>}
+                    {item.error &&
+                      !['waiting', 'running'].includes(item.progress?.status ?? '') && (
+                        <p className="cache-row-error">{item.error}</p>
+                      )}
                   </div>
                   <div className="cache-row-actions">
-                  <span
-                    className={`cache-badge ${item.error || !item.ready ? 'cache-badge-warn' : ''}`}
-                  >
-                    {item.ready ? (item.error ? '保留旧快照' : '已就绪') : '待同步'}
-                  </span>
-                  {status.refreshing && ['running', 'waiting'].includes(item.progress?.status ?? '') && (
-                  <button type="button" className="cache-stop"
-                    aria-label={`停止${item.name}同步`}
-                    onClick={() => void cancel(item.id)}
-                    disabled={!status.refreshing || !status.run_id || !!stopping || status.cancelling || item.cancelling || !['running', 'waiting'].includes(item.progress?.status ?? '')}>
-                    {item.cancelling || stopping === item.id ? '正在停止…' : '停止'}
-                  </button>
-                  )}
-                  {item.cancelling && <small>等待当前操作结束</small>}
+                    <span
+                      className={`cache-badge ${item.error || !item.ready ? 'cache-badge-warn' : ''}`}
+                    >
+                      {item.ready ? (item.error ? '保留旧快照' : '已就绪') : '待同步'}
+                    </span>
+                    {status.refreshing &&
+                      ['running', 'waiting'].includes(item.progress?.status ?? '') && (
+                        <button
+                          type="button"
+                          className="cache-stop"
+                          aria-label={`停止${item.name}同步`}
+                          onClick={() => void cancel(item.id)}
+                          disabled={
+                            !status.refreshing ||
+                            !status.run_id ||
+                            !!stopping ||
+                            status.cancelling ||
+                            item.cancelling ||
+                            !['running', 'waiting'].includes(item.progress?.status ?? '')
+                          }
+                        >
+                          {item.cancelling || stopping === item.id ? '正在停止…' : '停止'}
+                        </button>
+                      )}
+                    {item.cancelling && <small>等待当前操作结束</small>}
                   </div>
                 </div>
               ))}
@@ -219,7 +232,9 @@ export function CacheControl() {
                 <RefreshCw size={15} className={busy ? 'cache-spin' : ''} />
                 {busy ? '同步进行中…' : '立即同步'}
               </button>
-              {status.cancelling && <p role="status">正在等待当前数据库操作结束；保留成功快照和续传断点。</p>}
+              {status.cancelling && (
+                <p role="status">正在等待当前数据库操作结束；保留成功快照和续传断点。</p>
+              )}
               {message && (
                 <p role="status" className="cache-message">
                   {message}

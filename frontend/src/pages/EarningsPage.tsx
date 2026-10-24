@@ -1,3 +1,4 @@
+import { PageHeader } from '../components/PageHeader'
 import { useCallback } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
 import { ArrowUpRight, CalendarDays, FileSearch, Layers3, RefreshCw, Search } from 'lucide-react'
@@ -31,12 +32,13 @@ export function EarningsPage() {
   ] as string[]
   return (
     <div className="page-enter earnings-page">
-      <div className="page-heading">
+      <PageHeader>
         <div>
-          <span className="section-eyebrow">EARNINGS GAP OBSERVATORY</span>
           <h1>
             净利润断层<span className="heading-tag">业绩 × 价格</span>
-            <span className="earnings-title-quarter">{data ? quarter(data.target_period) : '最新已结束季度'}</span>
+            <span className="earnings-title-quarter">
+              {data ? quarter(data.target_period) : '最新已结束季度'}
+            </span>
           </h1>
           <p>归母净利润同比 ≥ 20% · 公告对应交易日高开 &gt; 3% · 收盘 ≥ 开盘</p>
         </div>
@@ -54,7 +56,7 @@ export function EarningsPage() {
             <RefreshCw size={16} className={loading ? 'spin' : ''} />
           </button>
         </div>
-      </div>
+      </PageHeader>
       <div className="earnings-filters">
         <label>
           报告季度

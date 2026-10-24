@@ -1,3 +1,4 @@
+import { PageHeader } from '../components/PageHeader'
 import { useCallback, useState } from 'react'
 import {
   CalendarDays,
@@ -172,13 +173,15 @@ export function GrowthPage() {
     current = Math.min(page, pages)
   return (
     <div className="page-enter growth-page">
-      <div className="page-heading">
+      <PageHeader>
         <div>
-          <span className="section-eyebrow">SUSTAINED EARNINGS GROWTH</span>
           <h1>
             高增长 <span className="heading-tag">四类报告 · 双指标</span>
           </h1>
-          <p>年报、Q1、半年报、前三季各取最新三期：归母净利润和基本 EPS 连续两次同比增长均 ≥ 20%，最新一期均为正。按年报最新净利润增速降序。</p>
+          <p>
+            年报、Q1、半年报、前三季各取最新三期：归母净利润和基本 EPS 连续两次同比增长均 ≥
+            20%，最新一期均为正。按年报最新净利润增速降序。
+          </p>
         </div>
         <div className="heading-actions">
           <span className="date-badge">
@@ -194,7 +197,7 @@ export function GrowthPage() {
             <RefreshCw size={16} className={loading ? 'spin' : ''} />
           </button>
         </div>
-      </div>
+      </PageHeader>
       {loading ? (
         <LoadingState />
       ) : error ? (
