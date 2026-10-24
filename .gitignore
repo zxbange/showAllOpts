@@ -34,3 +34,6 @@ test-results/
 
 # Application logs, daily archives and inter-process lock files
 log/
+
+# Local research checkpoints
+short_term_winrate_cache/

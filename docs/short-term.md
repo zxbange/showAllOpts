@@ -34,3 +34,7 @@
 页面可切换三个战法和保留日期，按代码顺序分页，每页6只，避免一次创建太多图表；支持K线缩放、均线图例开关和成交量对照。
 
 接口用法参考：[聚宽官方 JQData API 源码](https://github.com/JoinQuant/jqdatasdk/blob/master/jqdatasdk/api.py)。实际研究环境由 Notebook 提供 API，采集代码不导入外部策略文件。
+
+## 历史胜率研究
+
+独立研究脚本 `collectors/短线选股胜率_研究版.py` 从2026年7月1日起回放三个策略，直接展示入选后第2、4、10个交易日的胜率、是否超过50%及涨跌幅门槛次数。支持断点续算，不生成CSV，不连接业务数据库。运行和统计口径见[短线胜率研究](short-term-winrate.md)。
