@@ -3501,6 +3501,7 @@ def _ownership_strategy(_apis, _config):
     """披露持仓、股东户数与社保新进；仅公开披露口径，无交易操作。"""
     settings = strategy_settings('个股机构持仓')
     finance, query = _apis.get('finance'), _apis.get('query')
+    price_universes = {}  # Report-date stock membership, reused across stock batches.
     Base = declarative_base()
 
     class OwnershipStock(Base):
@@ -3709,8 +3710,14 @@ def _ownership_strategy(_apis, _config):
 
     def affected_stocks(previous, previous_day, current, as_of, fund_map, known_codes, periods):
         """Find affected stocks from newly inserted/published source rows, not all A shares."""
-        affected, changed_funds = set(), set()
+        affected, changed_funds, ignored = set(), set(), set()
+        known_codes = set(known_codes)
         code_map = {c.split('.')[0]: c for c in known_codes}
+        def stock_code(value):
+            value = text_value(value)
+            # Resolve bare fund symbols, but never replace an explicit exchange.
+            code = value if '.' in value else code_map.get(value)
+            return code if code in known_codes else None
         specs = (('fund', finance.FUND_PORTFOLIO_STOCK, 'period_end'),
                  ('float', finance.STK_SHAREHOLDER_FLOATING_TOP10, 'end_date'),
                  ('holders', finance.STK_HOLDER_NUM, 'end_date'))
@@ -3734,9 +3741,11 @@ def _ownership_strategy(_apis, _config):
                 if name == 'fund':
                     fund = text_value(row['code']).split('.')[0]
                     changed_funds.add(fund_map.get(fund, fund))
-                    code = code_map.get(text_value(row['symbol']).split('.')[0])
+                    code = stock_code(row['symbol'])
                 else:
-                    code = text_value(row['code'])
+                    code = stock_code(row['code'])
+                    if code is None:
+                        ignored.add(text_value(row['code']))
                 if code:
                     affected.add(code)
         # Include old constituents: a new fund report may remove a stock entirely.
@@ -3746,9 +3755,12 @@ def _ownership_strategy(_apis, _config):
             for batch in batches(funds):
                 for row in grouped_pages(table, [table.symbol], table.code.in_(batch), table.period_end.in_(periods),
                                          table.pub_date <= as_of, label='新旧报告关联股票'):
-                    code = code_map.get(text_value(row['symbol']).split('.')[0])
+                    code = stock_code(row['symbol'])
                     if code:
                         affected.add(code)
+        if ignored:
+            _progress_message('个股机构持仓：忽略 {} 个不在股票范围内的披露代码（如 {}）。'.format(
+                len(ignored), '、'.join(sorted(ignored)[:5])))
         return sorted(affected)
 
     def batch_funds(codes, period, as_of, fund_map, selected):
@@ -3933,9 +3945,21 @@ def _ownership_strategy(_apis, _config):
         if trade_days is None or len(trade_days) != 1:
             raise ValueError('报告期末交易日不可用')
         price_date = as_date(trade_days[0])
+        if price_date not in price_universes:
+            _progress_note('核对 {} 报告期末股票清单'.format(price_date))
+            securities = _apis['get_all_securities'](types=['stock'], date=price_date)
+            if securities is None or len(securities.index) == 0:
+                raise ValueError('报告期末股票清单为空，停止估值与写入')
+            price_universes[price_date] = set(str(code) for code in securities.index)
+        available = [code for code in codes if code in price_universes[price_date]]
+        if len(available) != len(codes):
+            _progress_message('{}：{} 只股票无当期上市行情，持仓数量保留，估算市值留空。'.format(
+                price_date, len(codes)-len(available)))
         result = {}
-        for offset in range(0,len(codes),300):
-            frame = _apis['get_price'](codes[offset:offset+300], start_date=price_date,
+        for offset in range(0,len(available),300):
+            batch = available[offset:offset+300]
+            _progress_note('获取 {} 报告期末行情（{} 只）'.format(price_date, len(batch)))
+            frame = _apis['get_price'](batch, start_date=price_date,
                 end_date=price_date, frequency='daily', fields=['close'], fq=None, panel=False)
             if frame is None:
                 raise ValueError('报告期末行情获取失败')
@@ -3947,6 +3971,7 @@ def _ownership_strategy(_apis, _config):
         return result
 
     def run(end_date=None, full_refresh=False, skip_existing=True):
+        price_universes.clear()
         as_of = as_date(end_date or settings.get('end_date') or china_now().date())
         if as_of > china_now().date():
             raise ValueError('结束日期不能晚于今天')
@@ -3963,7 +3988,7 @@ def _ownership_strategy(_apis, _config):
                    for m,d in ((3,31),(6,30),(9,30),(12,31))
                    if start <= datetime.date(y,m,d) <= as_of]
         periods.insert(0, previous_quarter(periods[0]))
-        _progress_message('个股机构持仓 [报告索引去重版 v4]：开始检查新增披露。')
+        _progress_message('个股机构持仓 [股票范围校验版 v5]：开始检查新增披露。')
         signature = disclosure_signature(as_of)
         previous_probe, previous_day = None, None
         with database_scope(Base, _config) as Session:

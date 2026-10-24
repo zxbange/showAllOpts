@@ -67,7 +67,8 @@ def test_factories_match_and_python36():
     assert ast.dump(factory(SOURCE))==ast.dump(factory(ROOT/'collectors'/'策略批量采集_数据库版.py'))
 
 @pytest.mark.parametrize('batch_size', [1, 50])
-def test_full_collection_repeat_correction_future_filter_and_social(mod,monkeypatch,tmp_path,batch_size):
+@pytest.mark.parametrize('missing_price', [False, True])
+def test_full_collection_repeat_correction_future_filter_and_social(mod,monkeypatch,tmp_path,batch_size,missing_price):
     base=declarative_base()
     class Fund(base):
         __tablename__='fund'
@@ -117,9 +118,13 @@ def test_full_collection_repeat_correction_future_filter_and_social(mod,monkeypa
             result=c.execute(q.statement)
             return pd.DataFrame(result.fetchall(),columns=result.keys())
     finance=SimpleNamespace(FUND_MAIN_INFO=Main,FUND_PORTFOLIO_STOCK=Fund,STK_SHAREHOLDER_FLOATING_TOP10=Floats,STK_HOLDER_NUM=Holder,run_query=run_query)
+    def get_price(codes, **kwargs):
+        if any(c not in (code, other) for c in codes):
+            raise ValueError('找不到标的K0470.XSHG')
+        return pd.DataFrame({'code': codes, 'close': [2]*len(codes)}) if not missing_price else pd.DataFrame(columns=['code','close'])
     api=dict(finance=finance,query=source_session.query,get_all_securities=lambda **kw:pd.DataFrame({'display_name':['示例','示例二']},index=[code,other]),
         get_industry=lambda codes,**kw:{code:{'sw_l2':{'industry_name':'行业'}}},get_trade_days=lambda **kw:[kw['end_date']],
-        get_price=lambda codes,**kw:pd.DataFrame({'code':codes,'close':[2]*len(codes)}))
+        get_price=get_price)
     target=create_engine('sqlite:///'+str(tmp_path/'target.sqlite'))
     scopes = []
     @contextmanager
@@ -147,6 +152,8 @@ def test_full_collection_repeat_correction_future_filter_and_social(mod,monkeypa
         report=session.query(n.OwnershipReport).filter_by(report_date=dt.date(2026,9,30)).one()
         assert report.payload['categories']['public_fund']['holder_count']==1
         assert report.payload['social_entry']['first_appearance']
+        assert report.payload['social_entry']['new_shares'] == 100
+        assert report.payload['social_entry']['new_market_value'] == (None if missing_price else 200)
         assert session.query(n.OwnershipHolders).count()==1
         stamp=report.updated_at
     with sessionmaker(bind=target)() as session:
@@ -199,6 +206,43 @@ def test_full_collection_repeat_correction_future_filter_and_social(mod,monkeypa
         assert old.payload['categories']['public_fund'] is None
         assert new.payload['categories']['public_fund']['shares'] == 75
     assert run().empty
+    # An unrelated disclosure identifier must never enter the stock/price scope.
+    # Keep a valid disclosure in the same run to ensure it is still updated.
+    invalid = ['K0470.XSHG', '600001.XSHE']
+    for i, bad_code in enumerate(invalid, 1000):
+        source_session.add(Floats(id=i,code=bad_code,end_date=dt.date(2026,9,30),pub_date=dt.date(2026,10,23),
+            change_reason_id=306019,sharesnature_id=308007,shareholder_rank=1,shareholder_id=77,
+            shareholder_name='其他主体',shareholder_class_id=307099,share_number=100,share_ratio=1))
+        source_session.add(Holder(id=i,code=bad_code,end_date=dt.date(2026,9,30),pub_date=dt.date(2026,10,23),share_holders=100))
+    source_session.add(Holder(id=3,code=code,end_date=dt.date(2026,9,30),pub_date=dt.date(2026,10,23),share_holders=65,a_share_holders=65))
+    source_session.commit()
+    source_calls.clear()
+    assert len(run()) == 1
+    with sessionmaker(bind=target)() as session:
+        assert session.query(n.OwnershipHolders).filter_by(code=code,end_date=dt.date(2026,9,30)).one().payload['share_holders'] == 65
+        assert session.query(n.OwnershipReport).filter(n.OwnershipReport.code.in_(invalid)).count() == 0
+        assert session.query(n.OwnershipHolders).filter(n.OwnershipHolders.code.in_(invalid)).count() == 0
+    scopes_read = [q['code_1'] for q in source_calls if isinstance(q.get('code_1'), list)]
+    assert scopes_read and all(not set(values).intersection(invalid) for values in scopes_read)
+    assert run().empty
+    # An unknown-only disclosure advances the probe without scanning four quarters.
+    source_session.add(Holder(id=1002,code=invalid[0],end_date=dt.date(2026,9,30),pub_date=dt.date(2026,10,23),share_holders=101))
+    source_session.commit()
+    source_calls.clear()
+    assert run().empty
+    assert not any('period_end_1' in q or 'symbol_1' in q for q in source_calls[6:])
+    source_calls.clear()
+    assert run().empty and len(source_calls) == 6
+    # Existing history remains eligible even after the stock leaves today's list.
+    original_securities = api['get_all_securities']
+    api['get_all_securities'] = lambda **kw: (pd.DataFrame({'display_name':['示例']}, index=[code])
+        if kw['date'] == dt.date(2026,10,23) else original_securities(**kw))
+    source_session.add(Holder(id=1003,code=other,end_date=dt.date(2026,9,30),pub_date=dt.date(2026,10,23),share_holders=88))
+    source_session.commit()
+    assert len(run()) == 1
+    with sessionmaker(bind=target)() as session:
+        assert session.query(n.OwnershipStock).filter_by(code=other).count() == 1
+        assert session.query(n.OwnershipHolders).filter_by(code=other).one().payload['share_holders'] == 88
     source_session.close();source.dispose();target.dispose()
 
 
@@ -283,3 +327,48 @@ def test_grouped_index_returns_one_row_per_document_across_capped_pages(mod):
     assert all('GROUP BY' in sql and 'HAVING min(' in sql and 'WHERE holdings.code' in sql for sql in sqls)
     session.close()
     engine.dispose()
+
+
+def test_prices_use_report_date_universe_and_keep_missing_values(mod):
+    period = dt.date(2025, 12, 31)
+    retired, current, future = '600010.XSHG', '000001.XSHE', '600020.XSHG'
+    universe_calls, price_calls = [], []
+    def securities(**kwargs):
+        universe_calls.append(kwargs)
+        assert kwargs == {'types': ['stock'], 'date': period}
+        return pd.DataFrame(index=[retired, current])
+    def get_price(codes, **kwargs):
+        price_calls.append((codes, kwargs))
+        assert set(codes) <= {retired, current}
+        assert kwargs['start_date'] == kwargs['end_date'] == period
+        assert kwargs['fq'] is None
+        return pd.DataFrame({'code': codes, 'close': [2.0]*len(codes)})
+    n = mod._ownership_strategy(dict(get_all_securities=securities, get_price=get_price,
+        get_trade_days=lambda **kwargs: [period]), mod.DB_CONFIG)
+    assert n.prices([], period) == {} and not universe_calls
+    assert n.prices([retired, future, 'K0470.XSHG'], period) == {retired: 2.0}
+    assert n.prices([current], period) == {current: 2.0}
+    assert len(universe_calls) == 1  # Once per report date, not once per stock batch.
+    assert n.prices([future, 'K0470.XSHG'], period) == {} and len(price_calls) == 2
+
+
+@pytest.mark.parametrize('failure', [None, pd.DataFrame(), RuntimeError('network unavailable')])
+def test_prices_do_not_swallow_universe_failure(mod, failure):
+    def securities(**kwargs):
+        if isinstance(failure, Exception):
+            raise failure
+        return failure
+    n = mod._ownership_strategy(dict(get_all_securities=securities,
+        get_trade_days=lambda **kwargs: [dt.date(2026,9,30)],
+        get_price=lambda *args,**kwargs: pytest.fail('must validate universe first')), mod.DB_CONFIG)
+    with pytest.raises((ValueError, RuntimeError), match='股票清单|network unavailable'):
+        n.prices(['600001.XSHG'], dt.date(2026,9,30))
+
+
+def test_prices_preserve_real_api_errors(mod):
+    def get_price(*args, **kwargs):
+        raise RuntimeError('network unavailable')
+    n = mod._ownership_strategy(dict(get_all_securities=lambda **kwargs: pd.DataFrame(index=['600001.XSHG']),
+        get_trade_days=lambda **kwargs: [dt.date(2026,9,30)], get_price=get_price), mod.DB_CONFIG)
+    with pytest.raises(RuntimeError, match='network unavailable'):
+        n.prices(['600001.XSHG'], dt.date(2026,9,30))
