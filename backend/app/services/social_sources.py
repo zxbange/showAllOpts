@@ -11,6 +11,7 @@ import httpx
 
 XUEQIU_TIMELINE_URL = 'https://www.xueqiu.com/statuses/original/timeline.json'
 XUEQIU_PAGE_SIZE = 10
+XUEQIU_PROFILE_URL = 'https://www.xueqiu.com/user/show.json'
 
 
 def xueqiu_items(payload):
@@ -152,6 +153,27 @@ def fetch_json(session, url, **kwargs):
     return payload
 
 
+def fetch_xueqiu_author_name(session, uid):
+    with closing(session.get(XUEQIU_PROFILE_URL, params={'id': uid}, timeout=30)) as response:
+        check_response(response)
+        try:
+            payload = response.json()
+        except ValueError:
+            check_payload({'message': plain_text(response.text)[:4000]})
+            raise PlatformIntervention('博主资料接口返回网页，请检查平台登录和验证状态',
+                                       'unexpected_html', response.status_code) from None
+    if not isinstance(payload, dict):
+        return None
+    if 'id' in payload:
+        # A profile biography can legitimately mention login/captcha. It is not an error.
+        if str(payload['id']) != str(uid):
+            return None
+        name = payload.get('screen_name')
+        return name.strip()[:100] if isinstance(name, str) and name.strip() and name.strip() != str(uid) else None
+    check_payload(payload)
+    return None
+
+
 def walk_cards(cards):
     for card in cards:
         if "mblog" in card:
@@ -202,6 +224,7 @@ def fetch_posts(author, pages):
     callback = author.get('_on_page')
     request_count = 0
     author_name_reported = False
+    fallback_name = author.get('screen_name') or author.get('name')
 
     def guard(_request):
         nonlocal request_count
@@ -221,6 +244,19 @@ def fetch_posts(author, pages):
             # Obtain ordinary visitor cookies; no verification bypass is attempted.
             with closing(session.get("https://www.xueqiu.com/", timeout=30)) as response:
                 check_response(response)
+        if platform == 'xueqiu' and author.get('_profile_lookup_due'):
+            try:
+                name = fetch_xueqiu_author_name(session, uid)
+            except (PlatformIntervention, RateLimited, MonitoringDeferred):
+                raise
+            except (RuntimeError, httpx.HTTPError):
+                # A temporary metadata failure must not discard otherwise readable posts.
+                name = None
+            if name:
+                fallback_name = name
+                if author.get('_on_author_name'):
+                    author['_on_author_name'](name)
+                author_name_reported = True
         found = {}
         page_numbers = ([1] if resume > 1 else []) + list(range(resume, resume + pages - int(resume > 1)))
         complete = False
@@ -250,7 +286,7 @@ def fetch_posts(author, pages):
                 if screen_name and not author_name_reported and author.get('_on_author_name'):
                     author['_on_author_name'](screen_name)
                     author_name_reported = True
-                preview = normalize_post(platform, uid, item, author.get('name'))
+                preview = normalize_post(platform, uid, item, fallback_name)
                 try:
                     timestamp = datetime.fromisoformat(preview['time'])
                     if timestamp.tzinfo is None:
@@ -274,7 +310,7 @@ def fetch_posts(author, pages):
                     if detail.get('ok') != 1 or not content:
                         raise RuntimeError('微博长文读取失败，保留到下轮重试')
                     item['text'] = content
-                post = normalize_post(platform, uid, item, author.get("name"))
+                post = normalize_post(platform, uid, item, fallback_name)
                 found[post["id"]] = post
                 page_posts.append(post)
             # The newest page is rechecked during a resumed scan, without losing

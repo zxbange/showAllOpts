@@ -96,7 +96,8 @@ class SocialMonitor:
             db.execute('BEGIN IMMEDIATE')
             columns = {row['name'] for row in db.execute('PRAGMA table_info(authors)')}
             for name, definition in {'last_success_at': 'TEXT', 'scan_since': 'TEXT',
-                                     'scan_page': 'INTEGER NOT NULL DEFAULT 1', 'added_at': 'TEXT', 'screen_name': 'TEXT'}.items():
+                                     'scan_page': 'INTEGER NOT NULL DEFAULT 1', 'added_at': 'TEXT', 'screen_name': 'TEXT',
+                                     'name_checked_at': 'TEXT'}.items():
                 if name not in columns:
                     db.execute(f'ALTER TABLE authors ADD COLUMN {name} {definition}')
             db.execute("UPDATE authors SET screen_name=(SELECT json_extract(p.payload,'$.name') FROM posts p "
@@ -202,8 +203,16 @@ class SocialMonitor:
         return {'total': total, 'page': page, 'items': [dict(row, payload=json.loads(row['payload'])) for row in rows]}
 
     def update_author_name(self, identifier, name):
+        if not isinstance(name, str) or not name.strip():
+            return
+        name = name.strip()[:100]
         with self.db() as db:
-            db.execute("UPDATE authors SET screen_name=? WHERE id=? AND uid<>? AND screen_name IS NOT ?", (name, identifier, name, name))
+            row = db.execute('SELECT uid FROM authors WHERE id=?', (identifier,)).fetchone()
+            if not row or name == row['uid']:
+                return
+            db.execute('UPDATE authors SET screen_name=?,name_checked_at=? WHERE id=?', (name, now(), identifier))
+            db.execute("UPDATE posts SET payload=json_set(payload,'$.name',?) WHERE author_id=? "
+                       "AND COALESCE(json_extract(payload,'$.name'),'') IN ('',?)", (name, identifier, row['uid']))
 
     def collect(self, author, posts, baseline=None, finalize=True, notify_since=None):
         discovered = now()
@@ -421,6 +430,9 @@ class SocialMonitor:
                               _initial=not author['initialized'] and notify_since is None,
                               _stop_before=notify_since.isoformat() if notify_since else None,
                               _should_stop=should_stop, _on_page=save_page,
+                              _profile_lookup_due=author['platform'] == 'xueqiu' and (
+                                  not published_time(author['name_checked_at']) or
+                                  published_time(author['name_checked_at']) <= moment - timedelta(days=1)),
                               _on_author_name=lambda name: self.update_author_name(author['id'], name),
                               _wait=self.stop_event.wait, _retention_cutoff=retention_cutoff(moment).isoformat())
                 result = fetch_posts(source, pages=3 if source['_initial'] else 20)

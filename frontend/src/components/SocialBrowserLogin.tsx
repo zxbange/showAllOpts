@@ -129,13 +129,6 @@ export function SocialBrowserLogin({
 
   return (
     <div className="social-browser-login">
-      <div>
-        <h3>扫码登录</h3>
-        <p className="social-muted">
-          浏览器运行在服务器上，无需 Ubuntu
-          桌面。每个平台登录一次，所有博主共用；会话过期后在这里续登。
-        </p>
-      </div>
       {!available ? (
         <p className="social-muted">
           请先在服务器私有配置中设置至少 24 位的 SOCIAL_BROWSER_LOGIN_KEY，并安装 Chromium
@@ -185,10 +178,6 @@ export function SocialBrowserLogin({
               </button>
             )}
           </form>
-          <p className="social-muted">
-            密钥仅用于保护二维码和服务器登录画面，保存在本页内存中。请使用 HTTPS 或 SSH
-            隧道访问。窗口六分钟后自动关闭；隐藏窗口不会取消正在进行的登录。
-          </p>
           {error && (
             <p role="alert" className="social-error">
               {error}

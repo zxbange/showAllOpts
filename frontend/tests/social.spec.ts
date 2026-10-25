@@ -71,6 +71,7 @@ test('open the monitor directly, configure users, notifications and inspect post
   }
   let showFeed = false
   let postRequests = 0
+  const configPayloads: Record<string, unknown>[] = []
   await page.route('**/api/v1/**', async (route) => {
     const request = route.request()
     const path = new URL(request.url()).pathname
@@ -109,6 +110,7 @@ test('open the monitor directly, configure users, notifications and inspect post
     }
     if (path.endsWith('/config')) {
       const body = request.postDataJSON()
+      configPayloads.push(body)
       expect(body).not.toHaveProperty('weibo_cookie')
       expect(body).not.toHaveProperty('xueqiu_cookie')
       if (body.token) status.token_configured = true
@@ -153,7 +155,34 @@ test('open the monitor directly, configure users, notifications and inspect post
   await expect(page.getByRole('button', { name: /清空已保存的.*登录凭据/ })).toHaveCount(0)
   await page.getByRole('button', { name: '保存配置' }).click()
   await expect(page.getByRole('status')).toContainText('配置已保存')
-  await expect(page.getByLabel('机器人密钥')).toHaveValue('')
+  await expect(page.getByLabel('机器人密钥', { exact: true })).toHaveCount(0)
+  await expect(page.getByLabel('接收会话编号', { exact: true })).toHaveCount(0)
+  await expect(page.getByRole('group', { name: '机器人密钥已配置' })).toContainText('***')
+  await expect(page.getByRole('group', { name: '接收会话编号已配置' })).toContainText('***')
+  await expect(page.getByRole('button', { name: '保存配置' })).toHaveCount(0)
+  expect(configPayloads).toEqual([{ token: 'fake-token', chat_id: '123' }])
+  expect(await page.content()).not.toContain('fake-token')
+  await page.getByRole('button', { name: '修改机器人密钥' }).click()
+  await expect(page.getByLabel('机器人密钥', { exact: true })).toHaveValue('')
+  await expect(page.getByRole('button', { name: '保存机器人密钥' })).toBeDisabled()
+  await page.getByLabel('机器人密钥', { exact: true }).fill('cancelled-token')
+  await page.getByRole('button', { name: '取消修改机器人密钥' }).click()
+  await expect(page.getByLabel('机器人密钥', { exact: true })).toHaveCount(0)
+  expect(configPayloads).toHaveLength(1)
+  expect(await page.content()).not.toContain('cancelled-token')
+  await page.getByRole('button', { name: '修改机器人密钥' }).click()
+  await expect(page.getByLabel('机器人密钥', { exact: true })).toHaveValue('')
+  await page.getByLabel('机器人密钥', { exact: true }).fill('updated-token')
+  await page.getByRole('button', { name: '保存机器人密钥' }).click()
+  await expect(page.getByLabel('机器人密钥', { exact: true })).toHaveCount(0)
+  expect(configPayloads.at(-1)).toEqual({ token: 'updated-token' })
+  expect(await page.content()).not.toContain('updated-token')
+  await page.getByRole('button', { name: '修改接收会话编号' }).click()
+  await expect(page.getByLabel('接收会话编号', { exact: true })).toHaveValue('')
+  await page.getByLabel('接收会话编号', { exact: true }).fill('456')
+  await page.getByLabel('接收会话编号', { exact: true }).press('Enter')
+  await expect(page.getByLabel('接收会话编号', { exact: true })).toHaveCount(0)
+  expect(configPayloads.at(-1)).toEqual({ chat_id: '456' })
   await page.getByRole('button', { name: '发送测试消息' }).click()
   await expect(page.getByRole('status')).toContainText('测试消息已发送')
   await page.getByRole('button', { name: '启动监控', exact: true }).click()
@@ -202,7 +231,7 @@ test('open the monitor directly, configure users, notifications and inspect post
   await page.getByRole('tab', { name: '最新动态' }).focus()
   await page.keyboard.press('End')
   await expect(page.getByRole('tab', { name: '通知设置' })).toBeFocused()
-  await expect(page.getByLabel('机器人密钥')).toBeVisible()
+  await expect(page.getByRole('group', { name: '机器人密钥已配置' })).toBeVisible()
   await page.screenshot({ path: testInfo.outputPath('social-settings.png'), fullPage: true })
   await page.getByRole('tab', { name: /监控博主/ }).click()
   await expect(page.locator('.social-author strong[title]')).toBeVisible()

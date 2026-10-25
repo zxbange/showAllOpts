@@ -496,6 +496,29 @@
   display: grid;
   align-content: start;
   gap: 8px;
+  min-width: 0;
+}
+.social-credential-field > .social-label-row {
+  font-size: 13px;
+}
+.social-credential-saved {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 42px;
+  padding: 8px 12px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+}
+.social-credential-saved > .button {
+  padding: 5px 12px;
+  font-size: 12px;
+}
+.social-secret-mask {
+  color: var(--muted);
+  font-size: 18px;
+  letter-spacing: 3px;
 }
 .social-label-row {
   display: flex;

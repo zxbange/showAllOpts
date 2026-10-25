@@ -16,6 +16,7 @@ import { SocialBrowserLogin } from '../components/SocialBrowserLogin'
 
 type Platform = 'weibo' | 'xueqiu'
 type View = 'feed' | 'authors' | 'settings'
+type TelegramSetting = 'token' | 'chat_id'
 const views = [
   { id: 'feed', label: '最新动态', icon: MessageSquare },
   { id: 'authors', label: '监控博主', icon: Users },
@@ -133,6 +134,7 @@ export function SocialMonitorPage() {
     token: '',
     chat_id: '',
   })
+  const [editingSecrets, setEditingSecrets] = useState({ token: false, chat_id: false })
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const [notice, setNotice] = useState('')
@@ -192,6 +194,30 @@ export function SocialMonitorPage() {
     } finally {
       setBusy(false)
     }
+  }
+
+  function saveTelegramConfig(key?: TelegramSetting) {
+    if (!status) return
+    const changes = key
+      ? { [key]: secrets[key].trim() }
+      : Object.fromEntries(
+          Object.entries(secrets).filter(
+            ([field, value]) => !status[`${field as TelegramSetting}_configured`] && value.trim(),
+          ),
+        )
+    if (!Object.values(changes).some(Boolean)) return
+    void action(async () => {
+      setStatus(await api<Status>('/config', changes))
+      setSecrets((current) => ({
+        ...current,
+        ...Object.fromEntries(Object.keys(changes).map((field) => [field, ''])),
+      }))
+      setEditingSecrets((current) => ({
+        ...current,
+        ...Object.fromEntries(Object.keys(changes).map((field) => [field, false])),
+      }))
+      setNotice('配置已保存。')
+    })
   }
 
   const activeAuthors = status?.authors.filter((author) => author.enabled) ?? []
@@ -554,7 +580,6 @@ export function SocialMonitorPage() {
           <div className="social-panel-heading">
             <div>
               <h2>通知与平台登录</h2>
-              <p className="social-muted">配置一次，所有监控博主共用。</p>
             </div>
             <Settings2 size={20} />
           </div>
@@ -567,21 +592,7 @@ export function SocialMonitorPage() {
             />
           )}
           <h3>Telegram 通知配置</h3>
-          <p className="social-muted">通知配置加密保存在服务端。留空保留原值，输入新内容可替换。</p>
-          <form
-            className="social-form"
-            onSubmit={(event) => {
-              event.preventDefault()
-              void action(async () => {
-                const changes = Object.fromEntries(
-                  Object.entries(secrets).filter(([, value]) => value.trim()),
-                )
-                setStatus(await api<Status>('/config', changes))
-                setSecrets({ token: '', chat_id: '' })
-                setNotice('配置已保存。')
-              })
-            }}
-          >
+          <div className="social-form">
             <div className="social-field-grid">
               {(
                 [
@@ -589,31 +600,99 @@ export function SocialMonitorPage() {
                   ['chat_id', '接收会话编号', status.chat_id_configured],
                 ] as const
               ).map(([key, title, configured]) => (
-                <div className="social-credential-field" key={key}>
-                  <label>
-                    <span className="social-label-row">
-                      {title}
-                      <span className={`social-config-state ${configured ? 'configured' : ''}`}>
-                        {configured ? '已配置' : '未配置'}
-                      </span>
+                <form
+                  className="social-credential-field"
+                  key={key}
+                  onSubmit={(event) => {
+                    event.preventDefault()
+                    saveTelegramConfig(configured ? key : undefined)
+                  }}
+                >
+                  <div className="social-label-row">
+                    <span>{title}</span>
+                    <span className={`social-config-state ${configured ? 'configured' : ''}`}>
+                      {configured ? '已配置' : '未配置'}
                     </span>
+                  </div>
+                  {configured && !editingSecrets[key] ? (
+                    <div
+                      className="social-credential-saved"
+                      role="group"
+                      aria-label={`${title}已配置`}
+                    >
+                      <span className="social-secret-mask" aria-hidden="true">
+                        ***
+                      </span>
+                      <button
+                        type="button"
+                        className="button"
+                        aria-label={`修改${title}`}
+                        disabled={busy}
+                        onClick={() => {
+                          setSecrets((current) => ({ ...current, [key]: '' }))
+                          setEditingSecrets((current) => ({ ...current, [key]: true }))
+                        }}
+                      >
+                        修改
+                      </button>
+                    </div>
+                  ) : (
                     <input
                       type="password"
                       aria-label={title}
                       autoComplete="off"
+                      disabled={busy}
                       value={secrets[key]}
-                      onChange={(e) => setSecrets({ ...secrets, [key]: e.target.value })}
-                      placeholder={configured ? '已保存，输入以替换' : `填写 ${title}`}
+                      onChange={(e) =>
+                        setSecrets((current) => ({ ...current, [key]: e.target.value }))
+                      }
+                      placeholder={configured ? `填写新的${title}` : `填写 ${title}`}
                       maxLength={key === 'token' ? 300 : 100}
                     />
-                  </label>
-                </div>
+                  )}
+                  {configured && editingSecrets[key] && (
+                    <div className="social-actions">
+                      <button
+                        disabled={busy || !secrets[key].trim()}
+                        className="button button-primary"
+                        aria-label={`保存${title}`}
+                      >
+                        保存
+                      </button>
+                      <button
+                        type="button"
+                        disabled={busy}
+                        className="button"
+                        aria-label={`取消修改${title}`}
+                        onClick={() => {
+                          setSecrets((current) => ({ ...current, [key]: '' }))
+                          setEditingSecrets((current) => ({ ...current, [key]: false }))
+                        }}
+                      >
+                        取消
+                      </button>
+                    </div>
+                  )}
+                </form>
               ))}
             </div>
             <div className="social-actions">
-              <button disabled={busy} className="button button-primary">
-                保存配置
-              </button>
+              {(!status.token_configured || !status.chat_id_configured) && (
+                <button
+                  type="button"
+                  disabled={
+                    busy ||
+                    !(
+                      (!status.token_configured && secrets.token.trim()) ||
+                      (!status.chat_id_configured && secrets.chat_id.trim())
+                    )
+                  }
+                  className="button button-primary"
+                  onClick={() => saveTelegramConfig()}
+                >
+                  保存配置
+                </button>
+              )}
               <button
                 type="button"
                 disabled={busy || !status.token_configured || !status.chat_id_configured}
@@ -629,16 +708,7 @@ export function SocialMonitorPage() {
                 发送测试消息
               </button>
             </div>
-          </form>
-          <details className="social-help">
-            <summary>平台登录过期后怎么办？</summary>
-            <p>
-              在上方扫码登录区域重新登录对应平台，验证成功后会自动保存会话。若平台此前已暂停，处理完成后再手动恢复监控。
-            </p>
-          </details>
-          <p className="social-muted">
-            消息通过 Telegram 推送。遇到平台验证会暂停对应平台，处理后需手动恢复。
-          </p>
+          </div>
         </section>
       </div>
       <section

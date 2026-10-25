@@ -11,7 +11,8 @@ from app.core.config import Settings
 from app.main import create_app
 from app.services.social import SocialMonitor, CHINA, retention_cutoff, next_check_time
 from app.services.social_sources import (normalize_post, message_parts, fetch_posts,
-                                         PlatformIntervention, RateLimited, PostBatch, check_payload)
+                                         PlatformIntervention, RateLimited, PostBatch, check_payload,
+                                         fetch_xueqiu_author_name)
 
 
 @contextmanager
@@ -523,6 +524,7 @@ def test_existing_database_schema_upgrades_without_losing_authors(social_client)
     restarted = SocialMonitor(service.settings)
     author = restarted.overview()['authors'][0]
     assert author['name'] == '原有博主' and author['scan_page'] == 1
+    assert author['name_checked_at'] is None
     with restarted.db() as db:
         assert restarted.decode(restarted.config(db)['token']) == 'existing-token'
 
@@ -634,3 +636,185 @@ def test_network_backoff_keeps_a_safe_visible_reason(social_client, failure, exp
     with patch('app.services.social.fetch_posts', return_value=[]):
         service.cycle()
     assert service.overview()['platforms']['weibo']['reason'] is None
+
+
+@pytest.mark.parametrize('profile,expected', [
+    ({'id': 123, 'screen_name': '  雪球真实昵称  '}, '雪球真实昵称'),
+    ({'id': '123', 'screen_name': '雪球真实昵称'}, '雪球真实昵称'),
+    ({'id': 456, 'screen_name': '其他博主'}, None),
+    ({'id': 123, 'screen_name': '123'}, None),
+    ({'id': 123, 'screen_name': '   '}, None),
+])
+def test_current_xueqiu_profile_endpoint_checks_target_identity(profile, expected):
+    requests = []
+
+    def handler(request):
+        requests.append(request)
+        assert request.method == 'GET'
+        assert request.url.host == 'www.xueqiu.com'
+        assert request.url.path == '/user/show.json'
+        assert dict(request.url.params) == {'id': '123'}
+        return httpx.Response(200, json=profile)
+
+    with httpx.Client(transport=httpx.MockTransport(handler)) as client:
+        assert fetch_xueqiu_author_name(client, '123') == expected
+    assert len(requests) == 1
+
+
+def test_xueqiu_profile_biography_is_content_not_a_login_error():
+    profile = {'id': 123, 'screen_name': '雪球昵称',
+               'description': '讨论验证码、登录失效和 captcha / login required 的文章作者'}
+    with httpx.Client(transport=httpx.MockTransport(lambda _: httpx.Response(200, json=profile))) as client:
+        assert fetch_xueqiu_author_name(client, '123') == '雪球昵称'
+
+
+@pytest.mark.parametrize('lookup_due,expected_name', [(True, '资料中的昵称'), (False, '缓存中的昵称')])
+def test_xueqiu_posts_without_user_use_profile_or_cached_name(lookup_due, expected_name):
+    paths, names = [], []
+
+    def handler(request):
+        paths.append(request.url.path)
+        assert request.headers['cookie'] == 'test-cookie'
+        if request.url.path == '/user/show.json':
+            return httpx.Response(200, json={'id': 123, 'screen_name': '资料中的昵称'})
+        assert request.url.path == '/statuses/original/timeline.json'
+        return httpx.Response(200, json={'list': [
+            {'id': 10, 'user_id': 123, 'created_at': 1792890000000, 'text': '没有 user 字段的正文'}]})
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    source = {'platform': 'xueqiu', 'uid': '123', 'cookie': 'test-cookie',
+              'name': '人工备注', 'screen_name': '缓存中的昵称', '_profile_lookup_due': lookup_due,
+              '_on_author_name': names.append}
+    with patch('app.services.social_sources.httpx.Client', return_value=client):
+        result = fetch_posts(source, pages=1)
+    assert result[0]['name'] == expected_name
+    assert result[0]['text'] == '没有 user 字段的正文'
+    assert names == (['资料中的昵称'] if lookup_due else [])
+    assert paths == (['/user/show.json'] if lookup_due else []) + ['/statuses/original/timeline.json']
+
+
+@pytest.mark.parametrize('lookup_due', [True, False])
+def test_known_xueqiu_posts_still_refresh_author_name(lookup_due):
+    names = []
+
+    def handler(request):
+        if request.url.path == '/user/show.json':
+            return httpx.Response(200, json={'id': 123, 'screen_name': '最新昵称'})
+        item = {'id': 10, 'user_id': 123, 'created_at': 1792890000000, 'text': '已入库正文'}
+        if not lookup_due:
+            item['user'] = {'id': 123, 'screen_name': '最新昵称'}
+        return httpx.Response(200, json={'list': [item]})
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    with patch('app.services.social_sources.httpx.Client', return_value=client):
+        result = fetch_posts({'platform': 'xueqiu', 'uid': '123', 'cookie': 'test-cookie',
+                              '_known_ids': {'10'}, '_profile_lookup_due': lookup_due,
+                              '_on_author_name': names.append}, pages=1)
+    assert result == [] and result.complete
+    assert names == ['最新昵称']
+
+
+@pytest.mark.parametrize('status,payload,reason', [
+    (403, {}, 'access_denied'),
+    (200, {'error_code': 'captcha', 'error_description': 'captcha required'}, 'captcha_required'),
+    (500, {'message': '需要验证码'}, 'captcha_required'),
+])
+def test_xueqiu_profile_intervention_stops_before_timeline(status, payload, reason):
+    paths = []
+
+    def handler(request):
+        paths.append(request.url.path)
+        return httpx.Response(status, json=payload)
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    with patch('app.services.social_sources.httpx.Client', return_value=client):
+        with pytest.raises(PlatformIntervention) as captured:
+            fetch_posts({'platform': 'xueqiu', 'uid': '123', 'cookie': 'test-cookie',
+                         '_profile_lookup_due': True}, pages=1)
+    assert captured.value.reason_code == reason
+    assert paths == ['/user/show.json']
+
+
+@pytest.mark.parametrize('failure', ['http_500', 'connect', 'timeout'])
+def test_temporary_xueqiu_profile_failure_preserves_readable_posts(failure):
+    paths, names = [], []
+
+    def handler(request):
+        paths.append(request.url.path)
+        if request.url.path == '/user/show.json':
+            if failure == 'connect':
+                raise httpx.ConnectError('temporary connection failure', request=request)
+            if failure == 'timeout':
+                raise httpx.ReadTimeout('temporary timeout', request=request)
+            return httpx.Response(500, json={'message': 'temporary service failure'})
+        return httpx.Response(200, json={'list': [{'id': 10, 'user_id': 123, 'text': '正常正文'}]})
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    with patch('app.services.social_sources.httpx.Client', return_value=client):
+        result = fetch_posts({'platform': 'xueqiu', 'uid': '123', 'cookie': 'test-cookie',
+                              'screen_name': '缓存昵称', '_profile_lookup_due': True,
+                              '_on_author_name': names.append}, pages=1)
+    assert result[0]['text'] == '正常正文' and result[0]['name'] == '缓存昵称'
+    assert names == []
+    assert paths == ['/user/show.json', '/statuses/original/timeline.json']
+
+
+def test_xueqiu_profile_name_cache_lasts_24_hours_across_restart(social_client):
+    _, service = social_client
+    service.add_author('xueqiu', '123', '人工备注')
+    service.update_config({'token': 'test-token', 'chat_id': '123', 'xueqiu_cookie': 'test-cookie', 'enabled': True})
+    paths = []
+    original_client = httpx.Client
+
+    def handler(request):
+        paths.append(request.url.path)
+        if request.url.path == '/user/show.json':
+            assert dict(request.url.params) == {'id': '123'}
+            return httpx.Response(200, json={'id': 123, 'screen_name': '持久化昵称'})
+        return httpx.Response(200, json={'list': []})
+
+    def client_factory(**kwargs):
+        return original_client(transport=httpx.MockTransport(handler), **kwargs)
+
+    with patch('app.services.social_sources.httpx.Client', side_effect=client_factory), \
+            patch.object(service.stop_event, 'wait', return_value=False):
+        service.cycle()
+    author = service.overview()['authors'][0]
+    assert author['screen_name'] == '持久化昵称'
+    assert author['name_checked_at'] == '2026-10-25T12:00:00+08:00'
+
+    restarted = SocialMonitor(service.settings)
+    with patch('app.services.social_sources.httpx.Client', side_effect=client_factory), \
+            patch.object(restarted.stop_event, 'wait', return_value=False):
+        with clock('2026-10-25T12:15:00+08:00'):
+            restarted.cycle()
+        with clock('2026-10-26T11:59:59+08:00'):
+            restarted.cycle()
+        assert paths.count('/user/show.json') == 1
+        with clock('2026-10-26T12:00:00+08:00'):
+            restarted.cycle()
+    assert paths.count('/user/show.json') == 2
+    assert paths.count('/statuses/original/timeline.json') == 4
+    assert restarted.overview()['authors'][0]['name_checked_at'] == '2026-10-26T12:00:00+08:00'
+
+
+def test_author_name_refresh_repairs_uid_payloads_without_overwriting_history_or_remarks(social_client):
+    _, service = social_client
+    service.add_author('xueqiu', '123', '人工备注')
+    author = service.overview()['authors'][0]
+    missing_name = post('4')
+    missing_name.pop('name')
+    service.collect(author, [dict(post('1'), name='123'), dict(post('2'), name=''),
+                             dict(post('3'), name='以前的有效昵称'), missing_name])
+    service.update_author_name(author['id'], '  当前真实昵称  ')
+    refreshed = service.overview()['authors'][0]
+    assert refreshed['screen_name'] == '当前真实昵称'
+    assert refreshed['name'] == '人工备注'
+    assert refreshed['name_checked_at'] == '2026-10-25T12:00:00+08:00'
+    rows = {row['post_id']: row for row in service.posts(None, None, 1, 20)['items']}
+    assert {identifier: row['payload']['name'] for identifier, row in rows.items()} == {
+        '1': '当前真实昵称', '2': '当前真实昵称', '3': '以前的有效昵称', '4': '当前真实昵称'}
+    assert all(row['author_name'] == '当前真实昵称' for row in rows.values())
+    for invalid_name in ('123', '', '   ', None):
+        service.update_author_name(author['id'], invalid_name)
+    assert service.overview()['authors'][0]['screen_name'] == '当前真实昵称'

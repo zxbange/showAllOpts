@@ -71,7 +71,7 @@ test('server login protects its requests and updates cookie status after confirm
   })
   await page.goto('/social-monitor')
   await page.getByRole('tab', { name: '通知设置' }).click()
-  await expect(page.getByRole('heading', { name: '扫码登录', exact: true })).toBeVisible()
+  await expect(page.getByRole('heading', { name: '扫码登录', exact: true })).toHaveCount(0)
   await page.getByLabel('浏览器登录管理密钥', { exact: true }).fill(key)
   await page.getByRole('button', { name: '查看登录状态' }).click()
   const weibo = page
