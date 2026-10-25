@@ -5,6 +5,14 @@
 
 ## 使用
 
+若普通 HTTP 诊断返回 `unidentified_html`，可在同一服务器做一次 Chromium 对照：
+
+```bash
+sudo -u ubuntu env APP_ENV_FILE=config/app.config backend/.venv/bin/python scripts/check_xueqiu_browser.py
+```
+
+该工具把已保存的 Cookie 导入临时浏览器目录，打开相同帖子接口并短暂等待页面渲染；不读写已有浏览器资料、不更新数据库或 Cookie，也不恢复监控。与普通 HTTP 诊断不同，一次浏览器页面加载会产生正常的资源请求和跳转；工具限制访问域名、总请求数与导航次数，不解决验证码、不反复刷新。输出仍仅包含分类及非敏感状态。`posts_json` 表示浏览器方式本次成功，可进一步评估抓取客户端适配；`security_block_page`、`verification_page`、`login_page` 表示浏览器也收到相应限制，不能据此认定具体封禁对象；`unidentified_html` 表示仍无法确认，需要进一步检查接口适配。浏览器启动要求与扫码登录一致，包括安装 Chromium 和可用的沙箱。
+
 雪球携带 Cookie 后仍返回网页时，可在服务器项目根目录运行一次只读诊断：
 
 ```bash
