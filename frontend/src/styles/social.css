@@ -497,9 +497,6 @@
   align-content: start;
   gap: 8px;
 }
-.social-credential-field > button {
-  justify-self: start;
-}
 .social-label-row {
   display: flex;
   justify-content: space-between;

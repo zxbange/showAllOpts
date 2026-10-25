@@ -132,8 +132,6 @@ export function SocialMonitorPage() {
   const [secrets, setSecrets] = useState({
     token: '',
     chat_id: '',
-    weibo_cookie: '',
-    xueqiu_cookie: '',
   })
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
@@ -365,7 +363,7 @@ export function SocialMonitorPage() {
                   {state.alert_sent_at
                     ? '提醒已发送，本次暂停不再重复提醒。'
                     : '提醒待发送，失败将自动重试。'}
-                  请先处理浏览器登录或验证，在通知设置中更新登录凭据后恢复。
+                  请在通知设置中重新扫码登录，完成平台验证后再恢复。
                 </p>
                 <button
                   disabled={busy}
@@ -568,12 +566,8 @@ export function SocialMonitorPage() {
               }}
             />
           )}
-          <h3>通知配置与手动凭据</h3>
-          <p className="social-muted">凭据加密保存在服务端。留空保留原值，输入新内容可替换。</p>
-          <p className="social-muted">
-            改用扫码登录可直接操作，成功后会覆盖对应
-            Cookie。若要清空，请先暂停对应平台的博主；清空不会删除浏览器会话。
-          </p>
+          <h3>Telegram 通知配置</h3>
+          <p className="social-muted">通知配置加密保存在服务端。留空保留原值，输入新内容可替换。</p>
           <form
             className="social-form"
             onSubmit={(event) => {
@@ -583,7 +577,7 @@ export function SocialMonitorPage() {
                   Object.entries(secrets).filter(([, value]) => value.trim()),
                 )
                 setStatus(await api<Status>('/config', changes))
-                setSecrets({ token: '', chat_id: '', weibo_cookie: '', xueqiu_cookie: '' })
+                setSecrets({ token: '', chat_id: '' })
                 setNotice('配置已保存。')
               })
             }}
@@ -593,8 +587,6 @@ export function SocialMonitorPage() {
                 [
                   ['token', '机器人密钥', status.token_configured],
                   ['chat_id', '接收会话编号', status.chat_id_configured],
-                  ['weibo_cookie', '微博登录凭据', status.weibo_cookie_configured],
-                  ['xueqiu_cookie', '雪球登录凭据', status.xueqiu_cookie_configured],
                 ] as const
               ).map(([key, title, configured]) => (
                 <div className="social-credential-field" key={key}>
@@ -612,25 +604,9 @@ export function SocialMonitorPage() {
                       value={secrets[key]}
                       onChange={(e) => setSecrets({ ...secrets, [key]: e.target.value })}
                       placeholder={configured ? '已保存，输入以替换' : `填写 ${title}`}
-                      maxLength={key.includes('cookie') ? 20000 : key === 'token' ? 300 : 100}
+                      maxLength={key === 'token' ? 300 : 100}
                     />
                   </label>
-                  {(key === 'weibo_cookie' || key === 'xueqiu_cookie') && (
-                    <button
-                      type="button"
-                      className="button"
-                      disabled={busy || !configured}
-                      onClick={() =>
-                        void action(async () => {
-                          setStatus(await api<Status>('/config', { [key]: '' }))
-                          setSecrets((current) => ({ ...current, [key]: '' }))
-                          setNotice(`已清空${title}，可使用扫码登录重新保存。`)
-                        })
-                      }
-                    >
-                      清空已保存的{title}
-                    </button>
-                  )}
                 </div>
               ))}
             </div>
@@ -655,9 +631,9 @@ export function SocialMonitorPage() {
             </div>
           </form>
           <details className="social-help">
-            <summary>如何获取平台登录凭据？</summary>
+            <summary>平台登录过期后怎么办？</summary>
             <p>
-              在浏览器登录微博移动网页版或雪球，打开开发者工具的「网络」面板，选择平台请求，复制请求标头中的完整登录凭据（Cookie）。过期或平台要求验证时，请重新登录并更新，不要向他人分享凭据。
+              在上方扫码登录区域重新登录对应平台，验证成功后会自动保存会话。若平台此前已暂停，处理完成后再手动恢复监控。
             </p>
           </details>
           <p className="social-muted">
