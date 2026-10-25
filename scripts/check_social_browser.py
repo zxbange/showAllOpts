@@ -6,12 +6,30 @@ import shutil
 from pathlib import Path
 import sys
 import tempfile
+from urllib.parse import quote, quote_plus
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'backend'))
 
 from app.core.config import Settings
-from app.services.social_browser import browser_error
+from app.core.logging import ANSI_ESCAPE, CREDENTIAL_URL, SECRET_FIELD
+from app.services.social_browser import browser_error, WIDTH, HEIGHT
+
+
+def safe_error_details(error, settings):
+    # This script only opens an empty temporary profile and inline HTML, never an account.
+    text = ANSI_ESCAPE.sub('', str(error))
+    text = CREDENTIAL_URL.sub(r'\1[REDACTED]@', text)
+    text = SECRET_FIELD.sub(r'\1[REDACTED]', text)
+    text = re.sub(r'(?im)^.*\b(?:cookie|set-cookie)\s*[:=].*$', '[REDACTED COOKIE HEADER]', text)
+    text = re.sub(r'(https?://[^\s?#]+)\?[^\s]*', r'\1?[REDACTED QUERY]', text)
+    for value in (settings.db_password.get_secret_value(), settings.social_browser_login_key.get_secret_value()):
+        if value:
+            for variant in (value, quote(value, safe=''), quote_plus(value)):
+                text = text.replace(variant, '[REDACTED]')
+    if len(text) > 10000:
+        text = text[:3000] + '\n[diagnostic middle truncated]\n' + text[-7000:]
+    return text
 
 
 def main():
@@ -42,6 +60,8 @@ def main():
         pass
     print('Display environment:', json.dumps(runtime, sort_keys=True))
     stage = 'load_playwright'
+    page = None
+    events = {'page_crashed': False, 'browser_disconnected': False}
     try:
         from playwright.sync_api import sync_playwright
         stage = 'prepare_profile'
@@ -49,18 +69,27 @@ def main():
         with tempfile.TemporaryDirectory(prefix='browser-check-', dir=settings.log_path) as profile:
             stage = 'start_playwright'
             with sync_playwright() as playwright:
-                options = {'headless': settings.social_browser_headless, 'chromium_sandbox': os.name != 'nt'}
+                options = {'headless': settings.social_browser_headless, 'chromium_sandbox': os.name != 'nt',
+                           'viewport': {'width': WIDTH, 'height': HEIGHT},
+                           'accept_downloads': False, 'service_workers': 'block'}
                 if settings.social_browser_channel:
                     options['channel'] = settings.social_browser_channel
                 stage = 'launch_browser'
                 context = playwright.chromium.launch_persistent_context(profile, **options)
+                if context.browser:
+                    context.browser.on('disconnected', lambda _: events.update(browser_disconnected=True))
                 try:
                     stage = 'render_test_page'
                     page = context.pages[0] if context.pages else context.new_page()
+                    page.on('crash', lambda _: events.update(page_crashed=True))
                     page.set_content('<html><body>Browser check</body></html>')
                     stage = 'capture_screenshot'
-                    page.screenshot(type='png')
+                    page.screenshot(type='png', timeout=15000)
                 except BaseException:
+                    # Record state before our own cleanup closes the context.
+                    print('Page state at failure:', json.dumps({
+                        'page_closed': page.is_closed() if page else None, **events,
+                    }, sort_keys=True))
                     try:
                         context.close()
                     except Exception:
@@ -76,6 +105,7 @@ def main():
         print('FAIL:', code, reason)
         print('Failed stage:', stage)
         print('Error type:', type(error).__name__)
+        print('Error details (redacted):\n' + safe_error_details(error, settings))
         print('For Chromium startup logs, run this temporary-profile check with DEBUG=pw:browser.')
         return 1
 

@@ -115,6 +115,8 @@ xvfb-run -a -e /dev/stderr env APP_ENV_FILE=config/app.config DEBUG=pw:browser \
 
 脚本会显示实际运行模式、失败阶段、DISPLAY、XAUTHORITY 是否可读、Xvfb/xauth 是否安装及当前进程的 NoNewPrivs/Seccomp。XAUTHORITY 内容不读取、不输出。DEBUG 仅用于这个临时空资料目录和内联测试页面的启动检查，不应直接用于含真实登录资料的扫码流程。日志中的 Chromium stderr 才能进一步判断进程为何退出；不能仅凭 NoNewPrivs 值或单个 DBus 告警确定故障。
 
+如果失败阶段为 `capture_screenshot`，说明启动和设置测试页面已经返回，但截图时仍可能发生浏览器退出或渲染错误。此时查看新增的 `Error details (redacted)`（保留协议错误和调用日志）以及关闭浏览器前采集的 `Page state at failure`。诊断视口与实际扫码统一为 1100×800，截图超时为 15 秒。`xkbcomp` 自报非致命的提示不能单独作为失败原因；不要在没有截图错误内容时关闭 GPU、沙箱或 AppArmor。
+
 手动诊断不处于 systemd 的沙箱环境：若脚本通过而网页仍失败，应进一步检查服务实际配置路径、环境变量和 systemd 的目录/权限限制。不要通过关闭 Chromium 沙箱或将服务改为 root 来排除问题。
 
 微博通过移动端官方登录状态接口确认已登录；雪球通过登录页所在浏览器请求官网当前使用的 `/user/show.json`，要求返回的账号 ID、昵称与 Cookie（包括刷新凭据）匹配。访客 Cookie 不算登录成功，不再依赖旧版 `SNB.data.user` 页面变量。身份校验返回访问拒绝或限流时停止窗口，不反复请求。不能仅凭二维码消失判断成功。
