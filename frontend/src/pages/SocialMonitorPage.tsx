@@ -299,7 +299,7 @@ export function SocialMonitorPage() {
             </strong>
           </div>
           <div>
-            <span>随机检查间隔</span>
+            <span>平台轮询周期</span>
             <strong>
               {status.interval_min / 60}–{status.interval_max / 60} <small>分钟</small>
             </strong>

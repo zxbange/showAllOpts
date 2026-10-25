@@ -146,6 +146,7 @@ class SocialMonitor:
                     config['next_check'] = next_check_time(datetime.now(CHINA))
                     if not was_enabled:
                         config['enabled_since'] = now()
+                        config['platform_queues'] = {}
             self.write_config(db, config)
 
     def overview(self):
@@ -172,15 +173,31 @@ class SocialMonitor:
         try:
             with self.db() as db:
                 db.execute('INSERT INTO authors(platform,uid,name,added_at) VALUES(?,?,?,?)', (platform, uid, name or uid, now()))
+                config = self.config(db)
+                if config['enabled']:
+                    config['next_check'] = next_check_time(datetime.now(CHINA))
+                    self.write_config(db, config)
         except sqlite3.IntegrityError:
             raise ValueError('这个平台用户已经在监控列表中') from None
 
     def change_author(self, identifier, enabled=None, delete=False):
         with self.db() as db:
+            db.execute('BEGIN IMMEDIATE')
+            author = db.execute('SELECT platform FROM authors WHERE id=?', (identifier,)).fetchone()
             if delete:
                 result = db.execute('DELETE FROM authors WHERE id=?', (identifier,))
             else:
                 result = db.execute('UPDATE authors SET enabled=? WHERE id=?', (int(enabled), identifier))
+            if result.rowcount:
+                config = self.config(db)
+                queue = config.get('platform_queues', {}).get(author['platform'])
+                if queue and (delete or not enabled):
+                    # SQLite may reuse a deleted id. Keep this cycle's slot excluded
+                    # even if a new author immediately receives the same id.
+                    queue['excluded_ids'] = sorted(set(queue.get('excluded_ids', ())) | {identifier})
+                if config['enabled']:
+                    config['next_check'] = next_check_time(datetime.now(CHINA))
+                self.write_config(db, config)
             return result.rowcount > 0
 
     def posts(self, author_id, platform, page, size, keyword=''):
@@ -202,11 +219,25 @@ class SocialMonitor:
                               (*values, size, (page - 1) * size)).fetchall()
         return {'total': total, 'page': page, 'items': [dict(row, payload=json.loads(row['payload'])) for row in rows]}
 
-    def update_author_name(self, identifier, name):
+    def active_author(self, db, author):
+        row = db.execute('SELECT * FROM authors WHERE id=? AND platform=? AND uid=? AND enabled=1',
+                         (author['id'], author['platform'], author['uid'])).fetchone()
+        if row and author.get('_queue_id'):
+            config = self.config(db)
+            queue = config.get('platform_queues', {}).get(author['platform'])
+            if (not config['enabled'] or not queue or queue['id'] != author['_queue_id']
+                    or author['id'] in queue['excluded_ids']):
+                return None
+        return row
+
+    def update_author_name(self, identifier, name, source=None):
         if not isinstance(name, str) or not name.strip():
             return
         name = name.strip()[:100]
         with self.db() as db:
+            db.execute('BEGIN IMMEDIATE')
+            if source is not None and not self.active_author(db, source):
+                return
             row = db.execute('SELECT uid FROM authors WHERE id=?', (identifier,)).fetchone()
             if not row or name == row['uid']:
                 return
@@ -218,8 +249,9 @@ class SocialMonitor:
         discovered = now()
         cutoff = retention_cutoff(datetime.fromisoformat(discovered))
         with self.db() as db:
+            db.execute('BEGIN IMMEDIATE')
             # Re-read after network I/O: user may have paused/deleted the author.
-            active = db.execute('SELECT * FROM authors WHERE id=? AND enabled=1', (author['id'],)).fetchone()
+            active = self.active_author(db, author)
             if not active:
                 return False
             for post in posts:
@@ -265,7 +297,86 @@ class SocialMonitor:
         with self.db() as db:
             db.execute('BEGIN IMMEDIATE')
             config = self.config(db)
+            config.get('platform_queues', {}).pop(platform, None)
             config['next_check'] = next_check_time(datetime.now(CHINA))
+            self.write_config(db, config)
+
+    @staticmethod
+    def advance_queue(queue, moment):
+        queue['index'] += 1
+        # Schedule from completion, never replay overdue slots in a burst.
+        queue['next_check'] = next_check_time(moment, queue['interval'] / len(queue['author_ids']))
+
+    def scheduled_author(self, platform):
+        """Return at most one due author; each platform owns its own stable queue."""
+        moment = datetime.now(CHINA)
+        if self.stop_event.is_set() or night_time(moment):
+            return None
+        if getattr(self, 'browser_login', None) and self.browser_login.active(platform):
+            return None
+        with self.db() as db:
+            db.execute('BEGIN IMMEDIATE')
+            config = self.config(db)
+            state = config.get('platforms', {}).get(platform, {})
+            if not config['enabled'] or state.get('paused') or moment.timestamp() < state.get('retry_at', 0):
+                return None
+            authors = {row['id']: dict(row) for row in db.execute(
+                'SELECT * FROM authors WHERE platform=? AND enabled=1 ORDER BY id', (platform,))}
+            queues = config.setdefault('platform_queues', {})
+            if not authors:
+                queues.pop(platform, None)
+                self.write_config(db, config)
+                return None
+            queue = queues.get(platform)
+            today = moment.date().isoformat()
+            if queue and queue['day'] == today and queue['next_check'] > moment.timestamp():
+                return None
+            if not queue or queue['day'] != today or queue['index'] >= len(queue['author_ids']):
+                queue = queues[platform] = {
+                    'id': uuid.uuid4().hex, 'author_ids': list(authors), 'excluded_ids': [],
+                    'index': 0, 'interval': random.uniform(POLL_INTERVAL_MIN, POLL_INTERVAL_MAX),
+                    'next_check': moment.timestamp(), 'day': today,
+                }
+            identifier = queue['author_ids'][queue['index']]
+            author = authors.get(identifier) if identifier not in queue['excluded_ids'] else None
+            if author is None:
+                # Preserve empty slots after a pause/deletion; additions join next cycle.
+                self.advance_queue(queue, moment)
+            self.write_config(db, config)
+            return (dict(author, _queue_id=queue['id']), queue['id']) if author else None
+
+    def finish_scheduled_author(self, platform, queue_id):
+        if self.stop_event.is_set():
+            return
+        with self.db() as db:
+            db.execute('BEGIN IMMEDIATE')
+            config = self.config(db)
+            queue = config.get('platform_queues', {}).get(platform)
+            # An operator may have restarted this platform/master switch during I/O.
+            if queue and queue['id'] == queue_id:
+                self.advance_queue(queue, datetime.now(CHINA))
+                self.write_config(db, config)
+
+    def save_next_check(self, error_message=None, checked=False):
+        moment = datetime.now(CHINA)
+        with self.db() as db:
+            db.execute('BEGIN IMMEDIATE')
+            config = self.config(db)
+            due_times = []
+            platforms = [row[0] for row in db.execute('SELECT DISTINCT platform FROM authors WHERE enabled=1')]
+            for platform in platforms:
+                state = config.get('platforms', {}).get(platform, {})
+                if state.get('paused'):
+                    continue
+                queue = config.get('platform_queues', {}).get(platform)
+                due = queue['next_check'] if queue and queue['day'] == moment.date().isoformat() else moment.timestamp()
+                due = max(due, state.get('retry_at', 0), moment.timestamp())
+                if getattr(self, 'browser_login', None) and self.browser_login.active(platform):
+                    due = max(due, moment.timestamp() + 5)
+                due_times.append(next_check_time(datetime.fromtimestamp(due, CHINA)))
+            config['next_check'] = min(due_times) if due_times and config['enabled'] else None
+            if checked:
+                config.update(last_check=now(), last_error=error_message)
             self.write_config(db, config)
 
     def send_alerts(self):
@@ -373,15 +484,15 @@ class SocialMonitor:
                 config['next_check'] = next_check_time(moment)
                 self.write_config(db, config)
             return
-        with self.db() as db:
-            config = self.config(db)
-            authors = [dict(row) for row in db.execute('SELECT * FROM authors WHERE enabled=1')]
         error_message = None
-        for author in authors:
+        checked = False
+        for platform in ('weibo', 'xueqiu'):
             if self.stop_event.is_set():
                 return
-            if getattr(self, 'browser_login', None) and self.browser_login.active(author['platform']):
+            scheduled = self.scheduled_author(platform)
+            if scheduled is None:
                 continue
+            author, queue_id = scheduled
             with self.db() as db:
                 current = self.config(db)
                 if not current['enabled']:
@@ -389,7 +500,10 @@ class SocialMonitor:
                 state = current.get('platforms', {}).get(author['platform'], {})
                 if state.get('paused') or time.time() < state.get('retry_at', 0):
                     continue
+                if not self.active_author(db, author):
+                    continue
                 known = {row[0] for row in db.execute('SELECT post_id FROM posts WHERE author_id=?', (author['id'],))}
+            checked = True
             try:
                 scan_since = author['scan_since'] or author['last_success_at'] or author['last_check']
                 scan_started = now()
@@ -407,6 +521,9 @@ class SocialMonitor:
                 if not scan_since:
                     scan_since = scan_started
                 with self.db() as db:
+                    db.execute('BEGIN IMMEDIATE')
+                    if not self.active_author(db, author):
+                        raise MonitoringDeferred('用户已暂停或删除，原任务停止')
                     db.execute('UPDATE authors SET scan_since=? WHERE id=?', (scan_since, author['id']))
 
                 def should_stop():
@@ -415,7 +532,7 @@ class SocialMonitor:
                     if getattr(self, 'browser_login', None) and self.browser_login.active(author['platform']):
                         return True
                     with self.db() as db:
-                        row = db.execute('SELECT enabled FROM authors WHERE id=?', (author['id'],)).fetchone()
+                        row = self.active_author(db, author)
                         cfg = self.config(db)
                         return not row or not row['enabled'] or not cfg['enabled'] or cfg.get('platforms', {}).get(author['platform'], {}).get('paused', False)
 
@@ -423,6 +540,9 @@ class SocialMonitor:
                     if not self.collect(author, posts, baseline=not author['initialized'], finalize=False, notify_since=notify_since):
                         raise MonitoringDeferred('用户已暂停或删除，本页补抓进度保留')
                     with self.db() as db:
+                        db.execute('BEGIN IMMEDIATE')
+                        if not self.active_author(db, author):
+                            raise MonitoringDeferred('用户已暂停或删除，原任务停止')
                         db.execute('UPDATE authors SET scan_page=? WHERE id=?', (next_page, author['id']))
 
                 source = dict(author, cookie=self.decode(current[author['platform'] + '_cookie']),
@@ -433,7 +553,7 @@ class SocialMonitor:
                               _profile_lookup_due=author['platform'] == 'xueqiu' and (
                                   not published_time(author['name_checked_at']) or
                                   published_time(author['name_checked_at']) <= moment - timedelta(days=1)),
-                              _on_author_name=lambda name: self.update_author_name(author['id'], name),
+                              _on_author_name=lambda name: self.update_author_name(author['id'], name, source=author),
                               _wait=self.stop_event.wait, _retention_cutoff=retention_cutoff(moment).isoformat())
                 result = fetch_posts(source, pages=3 if source['_initial'] else 20)
                 if not self.collect(author, result, baseline=not author['initialized'],
@@ -441,21 +561,28 @@ class SocialMonitor:
                     raise MonitoringDeferred('用户已暂停或删除')
                 if getattr(result, 'complete', True):
                     with self.db() as db:
+                        db.execute('BEGIN IMMEDIATE')
+                        if not self.active_author(db, author):
+                            raise MonitoringDeferred('用户已暂停或删除，原任务停止')
                         db.execute('UPDATE authors SET last_success_at=?,scan_since=NULL,scan_page=1 WHERE id=?',
                                    (scan_started, author['id']))
                 self.platform_state(author['platform'], failures=0, retry_at=0, reason=None, reason_code=None, http_status=None)
             except PlatformIntervention as error:
                 self.pause_platform(author['platform'], str(error), error.reason_code, error.http_status)
                 with self.db() as db:
-                    db.execute('UPDATE authors SET last_check=?,last_error=? WHERE id=?', (now(), str(error), author['id']))
+                    db.execute('BEGIN IMMEDIATE')
+                    if self.active_author(db, author):
+                        db.execute('UPDATE authors SET last_check=?,last_error=? WHERE id=?', (now(), str(error), author['id']))
                 error_message = '平台监控已暂停，需要人工处理；详情见平台状态'
             except RateLimited as error:
                 self.platform_state(author['platform'], retry_at=time.time() + error.retry_after, reason=str(error), reason_code='rate_limited', http_status=None)
                 with self.db() as db:
-                    db.execute('UPDATE authors SET last_check=?,last_error=? WHERE id=?', (now(), str(error), author['id']))
+                    db.execute('BEGIN IMMEDIATE')
+                    if self.active_author(db, author):
+                        db.execute('UPDATE authors SET last_check=?,last_error=? WHERE id=?', (now(), str(error), author['id']))
                 error_message = '平台已限流，已遵守等待时间暂缓请求'
             except MonitoringDeferred:
-                break
+                pass
             except Exception as error:
                 # Only controlled RuntimeError strings are safe for UI/logs.
                 message = str(error) if type(error) is RuntimeError else '抓取失败，请检查网络、UID、Cookie 或平台访问限制'
@@ -466,25 +593,25 @@ class SocialMonitor:
                 elif isinstance(error, httpx.HTTPError):
                     message = '平台网络传输异常，已暂缓抓取，系统会自动退避重试'
                 with self.db() as db:
-                    db.execute('UPDATE authors SET last_check=?,last_error=? WHERE id=?', (now(), message, author['id']))
+                    db.execute('BEGIN IMMEDIATE')
+                    if self.active_author(db, author):
+                        db.execute('UPDATE authors SET last_check=?,last_error=? WHERE id=?', (now(), message, author['id']))
                 error_message = '部分用户抓取失败，请查看用户列表'
                 failures = state.get('failures', 0) + 1
                 self.platform_state(author['platform'], failures=failures,
                                     reason=message, reason_code='fetch_failed', http_status=None,
                                     retry_at=time.time() + min(21600, random.uniform(POLL_INTERVAL_MIN, POLL_INTERVAL_MAX) * 2 ** min(failures - 1, 6)))
                 LOG.warning('Social fetch failed platform=%s uid=%s type=%s', author['platform'], author['uid'], type(error).__name__)
-        try:
-            self.send_alerts()
-            self.deliver(config)
-        except Exception as error:
-            error_message = str(error) if type(error) is RuntimeError else 'Telegram 发送失败，已保留待发送帖子'
-            LOG.warning('Social delivery failed type=%s', type(error).__name__)
-        with self.db() as db:
-            db.execute('BEGIN IMMEDIATE')
-            current = self.config(db)
-            current.update(last_check=now(), last_error=error_message,
-                           next_check=next_check_time(datetime.now(CHINA), random.uniform(POLL_INTERVAL_MIN, POLL_INTERVAL_MAX)))
-            self.write_config(db, current)
+            finally:
+                self.finish_scheduled_author(platform, queue_id)
+            try:
+                # Do not hold one author's new posts until the whole queue finishes.
+                self.send_alerts()
+                self.deliver(current)
+            except Exception as error:
+                error_message = str(error) if type(error) is RuntimeError else 'Telegram 发送失败，已保留待发送帖子'
+                LOG.warning('Social delivery failed type=%s', type(error).__name__)
+        self.save_next_check(error_message, checked)
 
     def start(self):
         if self.settings.social_worker_enabled:
@@ -518,7 +645,7 @@ class SocialMonitor:
                                     self.write_config(db, config)
                             self.stop_event.wait(1)
                             continue
-                        if config['enabled'] and time.time() >= config['next_check']:
+                        if config['enabled'] and config['next_check'] is not None and time.time() >= config['next_check']:
                             self.cycle()
                         self.stop_event.wait(1)
             except portalocker.exceptions.LockException:

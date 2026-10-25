@@ -1,5 +1,5 @@
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 from unittest.mock import patch
 from contextlib import contextmanager
 
@@ -11,7 +11,7 @@ from app.core.config import Settings
 from app.main import create_app
 from app.services.social import SocialMonitor, CHINA, retention_cutoff, next_check_time
 from app.services.social_sources import (normalize_post, message_parts, fetch_posts,
-                                         PlatformIntervention, RateLimited, PostBatch, check_payload,
+                                         PlatformIntervention, RateLimited, MonitoringDeferred, PostBatch, check_payload,
                                          fetch_xueqiu_author_name)
 
 
@@ -24,7 +24,8 @@ def clock(value):
         def now(cls, tz=None):
             return fixed.astimezone(tz) if tz else fixed.replace(tzinfo=None)
 
-    with patch('app.services.social.datetime', FixedDateTime):
+    with patch('app.services.social.datetime', FixedDateTime), \
+            patch('app.services.social.time.time', return_value=fixed.timestamp()):
         yield fixed
 
 
@@ -442,7 +443,8 @@ def test_morning_backfill_preserves_cursor_and_pushes_night_posts(social_client)
             return PostBatch([dict(post('201'), time='2026-10-25T01:00:00+08:00')], complete=True)
 
         with patch('app.services.social.fetch_posts', side_effect=resume_scan):
-            service.cycle()
+            with clock(service.overview()['next_check']):
+                service.cycle()
     assert service.overview()['counts'] == {'baseline': 1, 'sent': 2}
     assert service.overview()['authors'][0]['scan_page'] == 1
 
@@ -634,7 +636,8 @@ def test_network_backoff_keeps_a_safe_visible_reason(social_client, failure, exp
     assert state['reason_code'] == 'fetch_failed' and state['retry_at']
     service.platform_state('weibo', retry_at=0)
     with patch('app.services.social.fetch_posts', return_value=[]):
-        service.cycle()
+        with clock(service.overview()['next_check']):
+            service.cycle()
     assert service.overview()['platforms']['weibo']['reason'] is None
 
 
@@ -786,9 +789,9 @@ def test_xueqiu_profile_name_cache_lasts_24_hours_across_restart(social_client):
     restarted = SocialMonitor(service.settings)
     with patch('app.services.social_sources.httpx.Client', side_effect=client_factory), \
             patch.object(restarted.stop_event, 'wait', return_value=False):
-        with clock('2026-10-25T12:15:00+08:00'):
+        with clock('2026-10-25T12:20:00+08:00'):
             restarted.cycle()
-        with clock('2026-10-26T11:59:59+08:00'):
+        with clock('2026-10-26T11:40:00+08:00'):
             restarted.cycle()
         assert paths.count('/user/show.json') == 1
         with clock('2026-10-26T12:00:00+08:00'):
@@ -818,3 +821,274 @@ def test_author_name_refresh_repairs_uid_payloads_without_overwriting_history_or
     for invalid_name in ('123', '', '   ', None):
         service.update_author_name(author['id'], invalid_name)
     assert service.overview()['authors'][0]['screen_name'] == '当前真实昵称'
+
+
+def test_platform_queue_spreads_authors_in_fixed_order_and_redraws_each_round(social_client):
+    _, service = social_client
+    for uid in ('300', '100', '200'):
+        service.add_author('weibo', uid, uid)
+    enable(service)
+    started = datetime(2026, 10, 25, 12, tzinfo=CHINA)
+    requested = []
+
+    def fetch(source, pages):
+        requested.append((source['uid'], time.time() - started.timestamp()))
+        return []
+
+    with patch('app.services.social.fetch_posts', side_effect=fetch), \
+            patch('app.services.social.random.uniform', side_effect=[780, 900]):
+        for elapsed, count in ((0, 1), (259, 1), (260, 2), (519, 2), (520, 3),
+                               (779, 3), (780, 4), (1079, 4), (1080, 5)):
+            with clock((started + timedelta(seconds=elapsed)).isoformat()):
+                service.cycle()
+            assert len(requested) == count
+    assert requested == [('300', 0), ('100', 260), ('200', 520), ('300', 780), ('100', 1080)]
+
+
+def test_platform_queues_have_independent_intervals(social_client):
+    _, service = social_client
+    for platform, uids in (('weibo', ('11', '12', '13')), ('xueqiu', ('21', '22'))):
+        for uid in uids:
+            service.add_author(platform, uid, uid)
+    enable(service)
+    requested = []
+    started = datetime(2026, 10, 25, 12, tzinfo=CHINA)
+
+    def fetch(source, pages):
+        requested.append((source['platform'], source['uid'], time.time() - started.timestamp()))
+        return []
+
+    with patch('app.services.social.fetch_posts', side_effect=fetch), \
+            patch('app.services.social.random.uniform', side_effect=[600, 900]):
+        for elapsed in (0, 199, 200, 399, 400, 449, 450):
+            with clock((started + timedelta(seconds=elapsed)).isoformat()):
+                service.cycle()
+    assert requested == [('weibo', '11', 0), ('xueqiu', '21', 0),
+                         ('weibo', '12', 200), ('weibo', '13', 400), ('xueqiu', '22', 450)]
+
+
+def test_rate_limited_queue_does_not_delay_another_platform(social_client):
+    _, service = social_client
+    for platform, uids in (('weibo', ('11', '12', '13')), ('xueqiu', ('21', '22'))):
+        for uid in uids:
+            service.add_author(platform, uid, uid)
+    enable(service)
+    requested = []
+    started = datetime(2026, 10, 25, 12, tzinfo=CHINA)
+
+    def fetch(source, pages):
+        requested.append((source['platform'], source['uid'], time.time() - started.timestamp()))
+        if source['platform'] == 'weibo' and source['uid'] == '11':
+            raise RateLimited(900)
+        return []
+
+    with patch('app.services.social.fetch_posts', side_effect=fetch), \
+            patch('app.services.social.random.uniform', return_value=780):
+        for elapsed in (0, 260, 390, 520, 780, 899, 900):
+            with clock((started + timedelta(seconds=elapsed)).isoformat()):
+                service.cycle()
+    assert requested == [('weibo', '11', 0), ('xueqiu', '21', 0), ('xueqiu', '22', 390),
+                         ('xueqiu', '21', 780), ('weibo', '12', 900)]
+
+
+def test_morning_queues_restart_in_order_and_deliver_each_author_without_waiting(social_client):
+    _, service = social_client
+    with clock('2026-10-24T23:50:00+08:00'):
+        for platform, uids in (('weibo', ('11', '12', '13')), ('xueqiu', ('21', '22'))):
+            for uid in uids:
+                service.add_author(platform, uid, uid)
+        enable(service)
+        for author in service.overview()['authors']:
+            service.collect(author, [dict(post('1'), time='2026-10-24T23:00:00+08:00')])
+        with patch('app.services.social.fetch_posts', return_value=[]), \
+                patch('app.services.social.random.uniform', return_value=780):
+            service.cycle()
+    requested = []
+
+    def fetch(source, pages):
+        requested.append((source['platform'], source['uid']))
+        assert source['_scan_since'].startswith('2026-10-24T23:50:00')
+        return [dict(post(str(100 + int(source['uid']))), time='2026-10-25T02:00:00+08:00')]
+
+    with patch('app.services.social.fetch_posts', side_effect=fetch), \
+            patch('app.services.social.random.uniform', return_value=780), \
+            patch.object(service, 'send_part') as send, \
+            patch.object(service.stop_event, 'wait', return_value=False):
+        with clock('2026-10-25T06:59:59+08:00'):
+            service.cycle()
+        assert requested == [] and send.call_count == 0
+        for stamp, count in (('07:00:00', 2), ('07:04:19', 2), ('07:04:20', 3),
+                              ('07:06:30', 4), ('07:08:40', 5)):
+            with clock(f'2026-10-25T{stamp}+08:00'):
+                service.cycle()
+            assert len(requested) == count
+            assert send.call_count == count
+    assert requested == [('weibo', '11'), ('xueqiu', '21'), ('weibo', '12'),
+                         ('xueqiu', '22'), ('weibo', '13')]
+    assert service.overview()['counts'] == {'baseline': 5, 'sent': 5}
+
+
+def test_overdue_queue_survives_restart_without_replaying_missed_slots(social_client):
+    _, service = social_client
+    for uid in ('11', '12', '13'):
+        service.add_author('weibo', uid, uid)
+    enable(service)
+    started = datetime(2026, 10, 25, 12, tzinfo=CHINA)
+    requested = []
+
+    def fetch(source, pages):
+        requested.append((source['uid'], time.time() - started.timestamp()))
+        return []
+
+    with patch('app.services.social.fetch_posts', side_effect=fetch), \
+            patch('app.services.social.random.uniform', return_value=780):
+        service.cycle()
+        with clock('2026-10-25T12:20:00+08:00'):
+            restarted = SocialMonitor(service.settings)
+            restarted.cycle()
+            restarted.cycle()
+        for elapsed in (1459, 1460):
+            with clock((started + timedelta(seconds=elapsed)).isoformat()):
+                restarted.cycle()
+    assert requested == [('11', 0), ('12', 1200), ('13', 1460)]
+
+
+def test_slow_author_keeps_a_gap_before_the_next_author(social_client):
+    _, service = social_client
+    for uid in ('11', '12', '13'):
+        service.add_author('weibo', uid, uid)
+    enable(service)
+    started = datetime(2026, 10, 25, 12, tzinfo=CHINA)
+    current = [started]
+    requested = []
+
+    class AdvancingDateTime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return current[0].astimezone(tz) if tz else current[0].replace(tzinfo=None)
+
+    def fetch(source, pages):
+        requested.append((source['uid'], time.time() - started.timestamp()))
+        if source['uid'] == '11':
+            current[0] += timedelta(seconds=600)
+        return []
+
+    with patch('app.services.social.datetime', AdvancingDateTime), \
+            patch('app.services.social.time.time', side_effect=lambda: current[0].timestamp()), \
+            patch('app.services.social.fetch_posts', side_effect=fetch), \
+            patch('app.services.social.random.uniform', return_value=780):
+        service.cycle()
+        service.cycle()
+        assert len(requested) == 1
+        current[0] = started + timedelta(seconds=859)
+        service.cycle()
+        assert len(requested) == 1
+        current[0] = started + timedelta(seconds=860)
+        service.cycle()
+    assert requested == [('11', 0), ('12', 860)]
+
+
+def test_paused_deleted_and_new_authors_do_not_collapse_queue_slots(social_client):
+    _, service = social_client
+    for uid in ('11', '12', '13'):
+        service.add_author('weibo', uid, uid)
+    enable(service)
+    authors = service.overview()['authors']
+    started = datetime(2026, 10, 25, 12, tzinfo=CHINA)
+    requested = []
+
+    def fetch(source, pages):
+        requested.append((source['uid'], time.time() - started.timestamp()))
+        return []
+
+    with patch('app.services.social.fetch_posts', side_effect=fetch), \
+            patch('app.services.social.random.uniform', return_value=780):
+        service.cycle()
+        service.change_author(authors[1]['id'], False)
+        service.change_author(authors[2]['id'], delete=True)
+        # Deleting the highest SQLite rowid must not let a new author inherit its queued slot.
+        service.add_author('weibo', '14', '新加入')
+        for elapsed, count in ((260, 1), (520, 1), (779, 1), (780, 2), (1169, 2), (1170, 3)):
+            with clock((started + timedelta(seconds=elapsed)).isoformat()):
+                service.cycle()
+            assert len(requested) == count
+    assert requested == [('11', 0), ('11', 780), ('14', 1170)]
+
+
+def test_manual_platform_resume_keeps_other_platform_queue_unchanged(social_client):
+    _, service = social_client
+    for platform, uids in (('weibo', ('11', '12')), ('xueqiu', ('21', '22'))):
+        for uid in uids:
+            service.add_author(platform, uid, uid)
+    enable(service)
+    requested = []
+    started = datetime(2026, 10, 25, 12, tzinfo=CHINA)
+
+    def fetch(source, pages):
+        requested.append((source['platform'], source['uid'], time.time() - started.timestamp()))
+        return []
+
+    with patch('app.services.social.fetch_posts', side_effect=fetch), \
+            patch('app.services.social.random.uniform', return_value=780):
+        service.cycle()
+        with clock('2026-10-25T12:01:40+08:00'):
+            service.pause_platform('weibo', '人工检查')
+            service.resume_platform('weibo')
+            service.cycle()
+        with clock('2026-10-25T12:06:30+08:00'):
+            service.cycle()
+    assert requested == [('weibo', '11', 0), ('xueqiu', '21', 0),
+                         ('weibo', '11', 100), ('xueqiu', '22', 390)]
+
+
+@pytest.mark.parametrize('replacement_uid', ['11', '22'])
+@pytest.mark.parametrize('with_page_callback', [False, True])
+def test_inflight_deleted_author_cannot_update_a_reused_author_id(
+        social_client, replacement_uid, with_page_callback):
+    _, service = social_client
+    service.add_author('weibo', '11', '原监控')
+    original = service.overview()['authors'][0]
+    enable(service)
+    requested = []
+
+    def fetch(source, pages):
+        requested.append(source['uid'])
+        if len(requested) == 1:
+            service.change_author(original['id'], delete=True)
+            service.add_author('weibo', replacement_uid, '新监控')
+            replacement = service.overview()['authors'][0]
+            assert replacement['id'] == original['id']
+            # UID and added_at may both match when the same account is re-added
+            # during I/O. The old queue task must still lose ownership of the row.
+            source['_on_author_name']('旧请求返回的昵称')
+            old_posts = [dict(post('91'), name='旧请求返回的昵称')]
+            if with_page_callback:
+                with pytest.raises(MonitoringDeferred):
+                    source['_on_page'](old_posts, 4, False)
+            return PostBatch(old_posts, complete=True)
+        return [dict(post('92'), name='新请求返回的昵称')]
+
+    with patch('app.services.social.fetch_posts', side_effect=fetch), \
+            patch('app.services.social.random.uniform', return_value=780), \
+            patch.object(service, 'send_part'), \
+            patch.object(service.stop_event, 'wait', return_value=False):
+        service.cycle()
+        replacement = service.overview()['authors'][0]
+        assert replacement['uid'] == replacement_uid
+        assert replacement['name'] == '新监控'
+        for field in ('screen_name', 'name_checked_at', 'scan_since', 'last_check',
+                      'last_error', 'last_success_at'):
+            assert replacement[field] is None
+        assert replacement['scan_page'] == 1 and replacement['initialized'] == 0
+        assert service.posts(None, None, 1, 20)['items'] == []
+        with clock('2026-10-25T12:12:59+08:00'):
+            service.cycle()
+        assert requested == ['11']
+        with clock('2026-10-25T12:13:00+08:00'):
+            service.cycle()
+    assert requested == ['11', replacement_uid]
+    replacement = service.overview()['authors'][0]
+    assert replacement['initialized'] == 1
+    assert replacement['last_success_at'] == '2026-10-25T12:13:00+08:00'
+    assert replacement['screen_name'] == '新请求返回的昵称'
+    assert [item['post_id'] for item in service.posts(None, None, 1, 20)['items']] == ['92']
