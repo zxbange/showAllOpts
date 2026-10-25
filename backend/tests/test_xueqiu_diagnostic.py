@@ -18,7 +18,9 @@ spec.loader.exec_module(diagnostic)
     (200, '<html>欢迎访问雪球<button>登录</button></html>', 'unidentified_html'),
     (200, '<html><script>const msg="access denied";</script>普通页面</html>', 'unidentified_html'),
     (200, '{"statuses":[]}', 'posts_json'),
-    (200, '{"statuses":[{"text":"访问受限，请先登录"}]}', 'posts_json'),
+    (200, '{"statuses":[{"id":1,"text":"访问受限，请先登录"}]}', 'posts_json'),
+    (200, '{"list":[{"id":1,"description":"当前接口正文"}],"page":1,"count":10}', 'posts_json'),
+    (200, '{"list":[{"text":"缺少帖子编号"}]}', 'unexpected_json'),
     (200, '{"error_code":"400016"}', 'login_expired'),
     (403, 'private-body', 'access_denied'),
     (401, 'private-body', 'login_required'),
@@ -32,7 +34,7 @@ def test_classification_never_exposes_body(status, body, expected):
 
 
 def test_redirect_is_not_followed_or_printed():
-    response = httpx.Response(302, headers={'location': 'https://www.xueqiu.com/v4/statuses/user_timeline.json?token=private'})
+    response = httpx.Response(302, headers={'location': diagnostic.ENDPOINT + '?token=private'})
     assert diagnostic.classify(response)[0] == 'api_host_redirect'
     assert 'private' not in str(diagnostic.classify(response))
 

@@ -1,6 +1,8 @@
 # 博主动态监控
 
 页面入口：侧边栏或首页的「博主动态监控」，路径 `/social-monitor`。
+
+雪球采集使用当前网页的 `https://www.xueqiu.com/statuses/original/timeline.json`，每页 10 条，读取响应 `list` 中的原创时间线内容。兼容旧 `statuses` 结构；不再请求旧 `/v4/statuses/user_timeline.json`。该来源的转发覆盖尚未验证，不能保证包含所有转发。页面返回的 `description` 用作正文、`title` 用作标题、`created_at` 用作发布时间；未返回平台昵称时继续使用已有名字或备注。修改接口后需重启后台，原有平台暂停需人工确认恢复；不需重新填写仍有效的 Cookie。
 页面直接打开，不需要账号密码；原监控管理接口不要求身份验证。任何能访问网站的人都可以管理博主、修改通知与平台凭据配置、启停监控。敏感配置仍加密保存，接口不会返回明文密钥或 Cookie。新增的 `/api/v1/social-monitor/browser/*` 服务器浏览器接口单独要求管理密钥，配置与使用见 [服务器扫码登录](social-browser-login.md)。
 
 ## 使用

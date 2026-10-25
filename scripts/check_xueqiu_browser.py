@@ -16,6 +16,7 @@ import httpx
 
 from app.core.config import Settings
 from app.services.social_browser import allowed_url, browser_error
+from app.services.social_sources import XUEQIU_PAGE_SIZE
 from scripts.check_xueqiu_response import ENDPOINT, MAX_BYTES, classify, stored_request
 
 
@@ -61,8 +62,8 @@ def probe(context, uid, cookie):
             responses.append(response)
 
     page.on('response', received)
-    page.goto(ENDPOINT + '?' + urlencode({'user_id': uid, 'page': 1, 'count': 20}),
-              wait_until='domcontentloaded', timeout=30000, referer='https://xueqiu.com/')
+    page.goto(ENDPOINT + '?' + urlencode({'user_id': uid, 'page': 1, 'count': XUEQIU_PAGE_SIZE}),
+              wait_until='domcontentloaded', timeout=30000, referer='https://www.xueqiu.com/')
     page.wait_for_timeout(3000)
     if not responses:
         return {'result': 'no_document_response', 'message': '浏览器未获得主页面响应'}

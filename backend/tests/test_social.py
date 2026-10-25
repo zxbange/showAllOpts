@@ -207,6 +207,31 @@ def test_xueqiu_posts_and_login_challenge():
             fetch_posts({'platform': 'weibo', 'uid': '123', 'cookie': 'own-cookie'}, pages=1)
 
 
+def test_current_xueqiu_timeline_schema_and_pagination():
+    seen = []
+    def handler(request):
+        assert request.url.host == 'www.xueqiu.com'
+        assert request.url.path == '/statuses/original/timeline.json'
+        assert request.url.params['count'] == '10'
+        assert request.headers['cookie'] == 'own-cookie'
+        page = int(request.url.params['page'])
+        seen.append(page)
+        return httpx.Response(200, json={'list': [{
+            'id': 11 - page, 'user_id': 123, 'created_at': 1792890000000,
+            'description': '<p>当前接口正文</p>', 'title': '标题',
+        }] if page == 1 else [], 'page': page, 'count': 10, 'maxPage': 1, 'total': 1})
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    with patch('app.services.social_sources.httpx.Client', return_value=client):
+        result = fetch_posts({'platform': 'xueqiu', 'uid': '123', 'cookie': 'own-cookie',
+                              '_initial': False, 'name': '博主备注'}, pages=3)
+    assert seen == [1, 2]
+    assert result.complete
+    assert len(result) == 1
+    assert result[0]['text'] == '标题\n当前接口正文'
+    assert result[0]['name'] == '博主备注'
+    assert result[0]['time'].startswith('2026-10-25T')
+
+
 def test_daily_retention_boundary_pending_and_unknown_dates(social_client):
     _, service = social_client
     author = add(service)

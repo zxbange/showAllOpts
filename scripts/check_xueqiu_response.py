@@ -14,9 +14,10 @@ import httpx
 from cryptography.fernet import Fernet
 
 from app.core.config import Settings
-from app.services.social_sources import check_payload, PlatformIntervention, RateLimited
+from app.services.social_sources import (check_payload, PlatformIntervention, RateLimited,
+                                         XUEQIU_TIMELINE_URL, XUEQIU_PAGE_SIZE, xueqiu_items)
 
-ENDPOINT = 'https://xueqiu.com/v4/statuses/user_timeline.json'
+ENDPOINT = XUEQIU_TIMELINE_URL
 MAX_BYTES = 512 * 1024
 
 
@@ -85,7 +86,7 @@ def classify(response):
         return error.reason_code, '接口 JSON 明确报告登录、验证或访问问题'
     except RateLimited:
         return 'rate_limited', '接口 JSON 报告请求限流'
-    if status == 200 and isinstance(payload.get('statuses'), list) and not payload.get('error_code'):
+    if status == 200 and xueqiu_items(payload) is not None:
         return 'posts_json', '本次请求返回正常帖子列表；未输出帖子内容'
     return 'unexpected_json', '收到 JSON，但不是正常帖子列表；不输出原文或错误字段'
 
@@ -119,9 +120,9 @@ def main():
     try:
         with httpx.Client(follow_redirects=False, timeout=30) as client:
             # Keep request headers/parameters aligned with the production fetcher.
-            with client.stream('GET', ENDPOINT, params={'user_id': uid, 'page': 1, 'count': 20}, headers={
+            with client.stream('GET', ENDPOINT, params={'user_id': uid, 'page': 1, 'count': XUEQIU_PAGE_SIZE}, headers={
                 'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 Mobile/15E148',
-                'Referer': 'https://xueqiu.com/', 'Cookie': cookie,
+                'Referer': 'https://www.xueqiu.com/', 'Cookie': cookie,
             }) as response:
                 body = bytearray()
                 truncated = False

@@ -9,6 +9,19 @@ from contextlib import closing
 from email.utils import parsedate_to_datetime
 import httpx
 
+XUEQIU_TIMELINE_URL = 'https://www.xueqiu.com/statuses/original/timeline.json'
+XUEQIU_PAGE_SIZE = 10
+
+
+def xueqiu_items(payload):
+    if not isinstance(payload, dict) or payload.get('error_code'):
+        return None
+    rows = payload.get('list', payload.get('statuses'))
+    if not isinstance(rows, list) or any(not isinstance(item, dict) or not str(item.get('id', '')).isdigit()
+                                         for item in rows):
+        return None
+    return rows
+
 
 class PlatformIntervention(RuntimeError):
     """A platform requires the operator to log in/verify manually."""
@@ -200,13 +213,13 @@ def fetch_posts(author, pages):
 
     with httpx.Client(follow_redirects=False, event_hooks={'request': [guard]}) as session:
         session.headers.update({"User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 Mobile/15E148",
-                                "Referer": "https://m.weibo.cn/" if platform == "weibo" else "https://xueqiu.com/"})
+                                "Referer": "https://m.weibo.cn/" if platform == "weibo" else "https://www.xueqiu.com/"})
         cookie = author.get("cookie", "")
         if cookie:
             session.headers["Cookie"] = cookie
         elif platform == "xueqiu":
             # Obtain ordinary visitor cookies; no verification bypass is attempted.
-            with closing(session.get("https://xueqiu.com/", timeout=30)) as response:
+            with closing(session.get("https://www.xueqiu.com/", timeout=30)) as response:
                 check_response(response)
         found = {}
         page_numbers = ([1] if resume > 1 else []) + list(range(resume, resume + pages - int(resume > 1)))
@@ -221,11 +234,11 @@ def fetch_posts(author, pages):
                     raise RuntimeError("微博未返回有效帖子列表，请检查 UID、Cookie 或访问限制")
                 items = list(walk_cards(data["data"]["cards"]))
             else:
-                data = fetch_json(session, "https://xueqiu.com/v4/statuses/user_timeline.json", params={
-                    "user_id": uid, "page": page, "count": 20})
-                if not isinstance(data.get("statuses"), list) or data.get("error_code"):
+                data = fetch_json(session, XUEQIU_TIMELINE_URL, params={
+                    "user_id": uid, "page": page, "count": XUEQIU_PAGE_SIZE})
+                items = xueqiu_items(data)
+                if items is None:
                     raise RuntimeError("雪球未返回有效帖子列表，请检查 UID、Cookie 或访问限制")
-                items = data["statuses"]
             page_posts, boundary = [], False
             for item in items:
                 # Exclude recommendations belonging to a different author.
