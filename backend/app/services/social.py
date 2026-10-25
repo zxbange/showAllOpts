@@ -152,6 +152,7 @@ class SocialMonitor:
             counts = dict(db.execute('SELECT status,count(*) FROM posts GROUP BY status').fetchall())
         return {
             'enabled': config['enabled'], 'interval_min': 180, 'interval_max': 360,
+            'browser_login_available': bool(getattr(self, 'browser_login', None) and self.browser_login.available),
             'night_rest': night_time(datetime.now(CHINA)),
             'platforms': config.get('platforms', {}),
             'last_check': config['last_check'], 'last_error': config['last_error'],
@@ -368,6 +369,8 @@ class SocialMonitor:
         for author in authors:
             if self.stop_event.is_set():
                 return
+            if getattr(self, 'browser_login', None) and self.browser_login.active(author['platform']):
+                continue
             with self.db() as db:
                 current = self.config(db)
                 if not current['enabled']:
@@ -397,6 +400,8 @@ class SocialMonitor:
 
                 def should_stop():
                     if self.stop_event.is_set() or night_time(datetime.now(CHINA)):
+                        return True
+                    if getattr(self, 'browser_login', None) and self.browser_login.active(author['platform']):
                         return True
                     with self.db() as db:
                         row = db.execute('SELECT enabled FROM authors WHERE id=?', (author['id'],)).fetchone()

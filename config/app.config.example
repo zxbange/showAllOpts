@@ -3,6 +3,9 @@
 APP_NAME=ShowAllOpts API
 # Background polling for the social monitor; page access does not require login.
 SOCIAL_WORKER_ENABLED=true
+# Optional server-side QR login; generate your own private key with at least 24 characters.
+SOCIAL_BROWSER_LOGIN_KEY=
+SOCIAL_BROWSER_CHANNEL=
 DB_HOST=127.0.0.1
 DB_PORT=3306
 DB_NAME=your_database

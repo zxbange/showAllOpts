@@ -41,6 +41,8 @@ log/
 secrets.key
 key.lock
 worker.lock
+browser-profiles/
+browser-login/
 
 # Local research checkpoints
 short_term_winrate_cache/

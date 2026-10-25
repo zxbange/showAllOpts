@@ -15,6 +15,7 @@ from app.core.config import Settings
 from app.core.database import build_engine
 from app.core.logging import ensure_logging
 from app.services.social import SocialMonitor
+from app.services.social_browser import BrowserLogin
 
 logger = logging.getLogger(__name__)
 
@@ -30,12 +31,16 @@ def create_app(settings: Settings | None = None, engine: Engine | None = None) -
         ensure_logging(settings)
         social = SocialMonitor(settings)
         application.state.social = social
+        browser_login = BrowserLogin(settings, social)
+        application.state.social_browser = browser_login
+        social.browser_login = browser_login
         cache.start()
         social.start()
         logger.info('Application ready cache_enabled=%s', settings.cache_enabled)
         try:
             yield
         finally:
+            await asyncio.to_thread(browser_login.stop)
             await asyncio.to_thread(social.stop)
             await asyncio.to_thread(cache.stop)
             database.dispose()
@@ -45,7 +50,7 @@ def create_app(settings: Settings | None = None, engine: Engine | None = None) -
     application.state.cache = cache
     application.state.session_factory = sessionmaker(bind=database, autoflush=False)
     application.add_middleware(CORSMiddleware, allow_origins=settings.cors_origins,
-                               allow_methods=['GET', 'POST'], allow_headers=['Content-Type', 'Authorization'])
+                               allow_methods=['GET', 'POST'], allow_headers=['Content-Type', 'Authorization', 'X-Browser-Login-Key'])
 
     @application.exception_handler(CacheUnavailable)
     async def cache_unavailable(request: Request, exc: CacheUnavailable):

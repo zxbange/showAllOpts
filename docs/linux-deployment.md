@@ -322,4 +322,6 @@ npm run build
 
 ## ETF 份额模块升级
 
+微博、雪球的服务器扫码登录需要额外安装 Chromium，设置独立管理密钥。见 [服务器扫码登录部署与操作](social-browser-login.md)。
+
 已有部署接入 ETF 仪表盘时，先在聚宽创建并填充 `etf_share_daily`，给网页账号授予该表 SELECT 权限，再更新代码、构建并发布 `frontend/dist/`、重启 `showallopts-api`。无需更换 Nginx 端口、systemd 服务或真实数据库配置。完整命令与字段口径见 [ETF 份额仪表盘](etf-shares.md#已有部署升级)。

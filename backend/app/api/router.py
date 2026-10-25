@@ -1,5 +1,6 @@
 from app.api.routes.sentiment import router as sentiment_router
 from app.api.routes.social import router as social_router
+from app.api.routes.social_browser import router as social_browser_router
 from app.api.routes.short_term import router as short_term_router
 from app.api.routes.ownership import router as ownership_router
 from fastapi import APIRouter
@@ -17,6 +18,7 @@ from app.api.routes.momentum import router as momentum_router
 
 router = APIRouter(prefix='/api/v1')
 router.include_router(social_router)
+router.include_router(social_browser_router)
 router.include_router(short_term_router)
 router.include_router(ownership_router)
 router.include_router(momentum_router)

@@ -57,6 +57,8 @@ class Settings(BaseSettings):
 
     app_name: str = 'ShowAllOpts API'
     social_worker_enabled: bool = True
+    social_browser_login_key: SecretStr = SecretStr('')
+    social_browser_channel: str = ''
     db_host: str = '127.0.0.1'
     db_port: int = Field(default=3306, ge=1, le=65535)
     db_name: str = 'showallopts'

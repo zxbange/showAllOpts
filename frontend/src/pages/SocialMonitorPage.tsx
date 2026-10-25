@@ -12,6 +12,7 @@ import {
   Clock3,
 } from 'lucide-react'
 import '../styles/social.css'
+import { SocialBrowserLogin } from '../components/SocialBrowserLogin'
 
 type Platform = 'weibo' | 'xueqiu'
 type View = 'feed' | 'authors' | 'settings'
@@ -41,6 +42,7 @@ type PlatformState = {
   http_status?: number | null
 }
 type Status = {
+  browser_login_available?: boolean
   enabled: boolean
   interval_min: number
   interval_max: number
@@ -558,6 +560,15 @@ export function SocialMonitorPage() {
             </div>
             <Settings2 size={20} />
           </div>
+          {view === 'settings' && (
+            <SocialBrowserLogin
+              available={!!status.browser_login_available}
+              onSaved={() => {
+                void refresh().catch((err: Error) => setError(err.message))
+              }}
+            />
+          )}
+          <h3>通知配置与手动凭据</h3>
           <p className="social-muted">凭据加密保存在服务端。留空保留原值，输入新内容可替换。</p>
           <form
             className="social-form"
