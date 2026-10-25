@@ -491,6 +491,15 @@
   gap: 24px;
   max-width: 900px;
 }
+
+.social-credential-field {
+  display: grid;
+  align-content: start;
+  gap: 8px;
+}
+.social-credential-field > button {
+  justify-self: start;
+}
 .social-label-row {
   display: flex;
   justify-content: space-between;

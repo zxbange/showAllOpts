@@ -86,6 +86,21 @@ def test_configuration_encrypted_and_never_echoed(social_client):
         assert restarted.decode(restarted.config(db)['token']) == 'secret-bot-token'
 
 
+def test_clear_one_platform_cookie_preserves_other_settings(social_client):
+    client, service = social_client
+    service.update_config({'token': 'test-token', 'chat_id': '123',
+                           'weibo_cookie': 'weibo-secret', 'xueqiu_cookie': 'xueqiu-secret'})
+    response = client.post('/api/v1/social-monitor/config', json={'xueqiu_cookie': ''})
+    assert response.status_code == 200
+    status = response.json()
+    assert not status['xueqiu_cookie_configured']
+    assert status['weibo_cookie_configured'] and status['token_configured'] and status['chat_id_configured']
+    with service.db() as db:
+        config = service.config(db)
+    assert service.decode(config['xueqiu_cookie']) == ''
+    assert service.decode(config['weibo_cookie']) == 'weibo-secret'
+
+
 def test_author_management_and_feed(social_client):
     client, service = social_client
     endpoint = '/api/v1/social-monitor'

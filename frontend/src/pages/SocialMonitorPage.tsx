@@ -570,6 +570,10 @@ export function SocialMonitorPage() {
           )}
           <h3>通知配置与手动凭据</h3>
           <p className="social-muted">凭据加密保存在服务端。留空保留原值，输入新内容可替换。</p>
+          <p className="social-muted">
+            改用扫码登录可直接操作，成功后会覆盖对应
+            Cookie。若要清空，请先暂停对应平台的博主；清空不会删除浏览器会话。
+          </p>
           <form
             className="social-form"
             onSubmit={(event) => {
@@ -593,22 +597,41 @@ export function SocialMonitorPage() {
                   ['xueqiu_cookie', '雪球登录凭据', status.xueqiu_cookie_configured],
                 ] as const
               ).map(([key, title, configured]) => (
-                <label key={key}>
-                  <span className="social-label-row">
-                    {title}
-                    <span className={`social-config-state ${configured ? 'configured' : ''}`}>
-                      {configured ? '已配置' : '未配置'}
+                <div className="social-credential-field" key={key}>
+                  <label>
+                    <span className="social-label-row">
+                      {title}
+                      <span className={`social-config-state ${configured ? 'configured' : ''}`}>
+                        {configured ? '已配置' : '未配置'}
+                      </span>
                     </span>
-                  </span>
-                  <input
-                    type="password"
-                    autoComplete="off"
-                    value={secrets[key]}
-                    onChange={(e) => setSecrets({ ...secrets, [key]: e.target.value })}
-                    placeholder={configured ? '已保存，输入以替换' : `填写 ${title}`}
-                    maxLength={key.includes('cookie') ? 20000 : key === 'token' ? 300 : 100}
-                  />
-                </label>
+                    <input
+                      type="password"
+                      aria-label={title}
+                      autoComplete="off"
+                      value={secrets[key]}
+                      onChange={(e) => setSecrets({ ...secrets, [key]: e.target.value })}
+                      placeholder={configured ? '已保存，输入以替换' : `填写 ${title}`}
+                      maxLength={key.includes('cookie') ? 20000 : key === 'token' ? 300 : 100}
+                    />
+                  </label>
+                  {(key === 'weibo_cookie' || key === 'xueqiu_cookie') && (
+                    <button
+                      type="button"
+                      className="button"
+                      disabled={busy || !configured}
+                      onClick={() =>
+                        void action(async () => {
+                          setStatus(await api<Status>('/config', { [key]: '' }))
+                          setSecrets((current) => ({ ...current, [key]: '' }))
+                          setNotice(`已清空${title}，可使用扫码登录重新保存。`)
+                        })
+                      }
+                    >
+                      清空已保存的{title}
+                    </button>
+                  )}
+                </div>
               ))}
             </div>
             <div className="social-actions">

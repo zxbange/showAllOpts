@@ -111,6 +111,8 @@ test('open the monitor directly, configure users, notifications and inspect post
       const body = request.postDataJSON()
       if (body.token) status.token_configured = true
       if (body.chat_id) status.chat_id_configured = true
+      if ('weibo_cookie' in body) status.weibo_cookie_configured = !!body.weibo_cookie
+      if ('xueqiu_cookie' in body) status.xueqiu_cookie_configured = !!body.xueqiu_cookie
       if (typeof body.enabled === 'boolean') status.enabled = body.enabled
     }
     if (path.endsWith('/platforms/weibo/resume')) status.platforms.weibo.paused = false
@@ -146,9 +148,19 @@ test('open the monitor directly, configure users, notifications and inspect post
   await page.getByRole('tab', { name: '通知设置' }).click()
   await page.getByLabel('机器人密钥').fill('fake-token')
   await page.getByLabel('接收会话编号').fill('123')
+  await page.getByLabel('微博登录凭据', { exact: true }).fill('test-weibo-cookie')
+  await page.getByLabel('雪球登录凭据', { exact: true }).fill('test-xueqiu-cookie')
   await page.getByRole('button', { name: '保存配置' }).click()
   await expect(page.getByRole('status')).toContainText('配置已保存')
   await expect(page.getByLabel('机器人密钥')).toHaveValue('')
+  await page.getByRole('button', { name: '清空已保存的雪球登录凭据', exact: true }).click()
+  await expect(page.getByRole('status')).toContainText('已清空雪球登录凭据')
+  await expect(
+    page.getByRole('button', { name: '清空已保存的雪球登录凭据', exact: true }),
+  ).toBeDisabled()
+  await expect(
+    page.getByRole('button', { name: '清空已保存的微博登录凭据', exact: true }),
+  ).toBeEnabled()
   await page.getByRole('button', { name: '发送测试消息' }).click()
   await expect(page.getByRole('status')).toContainText('测试消息已发送')
   await page.getByRole('button', { name: '启动监控', exact: true }).click()
