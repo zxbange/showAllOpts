@@ -18,6 +18,7 @@ backend/.venv/bin/python -c 'import secrets; print(secrets.token_urlsafe(32))'
 ```dotenv
 SOCIAL_BROWSER_LOGIN_KEY=此处填写刚生成的随机密钥
 SOCIAL_BROWSER_CHANNEL=
+SOCIAL_BROWSER_HEADLESS=true
 ```
 
 安装脚本默认把浏览器放在项目 `.runtime/playwright/`，避免 systemd 的 `ProtectHome` 阻止读取用户缓存。由部署账号安装，确保服务账号有读取和执行权限。若自定义 `PLAYWRIGHT_BROWSERS_PATH`，安装和运行服务时必须使用同一个目录。升级 Playwright 版本后需重新运行安装脚本。
@@ -27,6 +28,53 @@ Linux 浏览器启用 Chromium 沙箱，要求操作系统允许服务账号使�
 更新、构建发布前端并重启 `showallopts-api`。现有 `deploy.sh` 不自动安装 Chromium 及其系统库，上述步骤需要额外执行一次。Docker 镜像已加入 Chromium 和系统库安装，重新构建镜像即可；私有管理密钥仍需通过容器环境注入，持久化原有 `log` 挂载。
 
 ## 网页操作
+
+### 本机 Windows 的浏览器显示模式
+
+如果无界面扫码窗口被平台拒绝，但普通显示窗口测试正常，可在本机私有配置中设置：
+
+```dotenv
+SOCIAL_BROWSER_CHANNEL=chrome
+SOCIAL_BROWSER_HEADLESS=false
+```
+
+重启本机项目后，点击「打开扫码登录」会弹出独立 Chrome 窗口，也会继续向网页提供画面。可以直接在 Chrome 的官方登录页操作，切换「扫码登录」并用雪球 App 扫描、手机确认；网页仍使用管理密钥保护。使用独立资料目录，不控制日常 Chrome 的资料。最终必须等到项目显示“登录已验证，凭据已加密保存”才算成功。
+
+Linux 纯命令行服务不能直接使用这个设置。没有图形显示时保持 `SOCIAL_BROWSER_HEADLESS=true`；如需显示窗口模式，管理员可以使用 Xvfb 提供虚拟显示环境，项目网页仍通过截图展示登录画面，无需远程桌面。平台是否放行仍需在实际服务器验证。
+
+### Ubuntu 命令行服务器通过 Xvfb 运行显示模式
+
+以下沿用项目目录 `/home/ubuntu/showAllOpts`、服务名 `showallopts-api`；其他部署必须替换 `ExecStart` 中的路径和启动参数。先更新代码，确认 Chromium 与系统库已按前文安装，AppArmor 用户命名空间规则也已生效。
+
+```bash
+sudo apt update
+sudo apt install -y xvfb xauth
+```
+
+在服务实际读取的私有配置（通常 `config/app.config`）中设置：
+
+```dotenv
+SOCIAL_BROWSER_HEADLESS=false
+SOCIAL_BROWSER_CHANNEL=
+```
+
+Linux 使用已下载的 Chromium，`SOCIAL_BROWSER_CHANNEL` 保持空；不要直接复制 Windows 上的 `chrome` 设置。增加一个排在现有 Ubuntu 覆盖配置之后的 systemd 配置：
+
+```bash
+sudo install -d /etc/systemd/system/showallopts-api.service.d
+sudo tee /etc/systemd/system/showallopts-api.service.d/zz-browser-display.conf >/dev/null <<'EOF'
+[Service]
+ExecStart=
+ExecStart=/usr/bin/xvfb-run -a -s "-screen 0 1280x900x24" /home/ubuntu/showAllOpts/backend/.venv/bin/python /home/ubuntu/showAllOpts/backend/run.py --host 127.0.0.1 --port 8000 --workers 2
+EOF
+sudo systemctl daemon-reload
+sudo systemctl restart showallopts-api
+sudo systemctl status showallopts-api --no-pager
+```
+
+这会给 API 进程和它启动的浏览器提供虚拟显示，不开放新网络端口。仍从电脑访问项目页面、输入管理密钥、打开扫码画面、用手机确认。不需要远程桌面；不关闭 Chromium 沙箱或 AppArmor。直接在普通 SSH 终端运行诊断时，可用 `xvfb-run -a env APP_ENV_FILE=config/app.config backend/.venv/bin/python scripts/check_social_browser.py`；这与 systemd 环境不同，最终仍需在网页完成一次扫码验收。
+
+本次已在 Windows 可见 Chrome 中完成实际扫码、当前账号身份校验和加密保存；Linux/Xvfb 尚未在目标服务器验收。显示模式不是永久放行保证，仍可能收到平台验证或访问拒绝。恢复无界面模式时设置 `SOCIAL_BROWSER_HEADLESS=true`，同时移除本段新增的 `zz-browser-display.conf` 并重载、重启服务。
 
 1. 打开「博主动态监控 → 通知设置 → 扫码登录」，输入管理密钥，点击「查看登录状态」。
 2. 对微博或雪球点击「打开扫码登录」。画面来自服务器上的官方网页，可点击画面里的扫码登录入口；按官方页面提示用微博、雪球或微信应用扫码并在手机确认。
@@ -59,7 +107,7 @@ sudo -u ubuntu env APP_ENV_FILE=config/app.config backend/.venv/bin/python scrip
 
 手动诊断不处于 systemd 的沙箱环境：若脚本通过而网页仍失败，应进一步检查服务实际配置路径、环境变量和 systemd 的目录/权限限制。不要通过关闭 Chromium 沙箱或将服务改为 root 来排除问题。
 
-微博通过移动端官方登录状态接口确认已登录；雪球要求账号 Cookie（包括刷新凭据）与官方页面当前用户信息匹配，访客 Cookie 不算登录成功。如果平台更改网页结构或验证接口，可能需要更新适配器；此时继续显示待确认，不能仅凭二维码消失判断成功。
+微博通过移动端官方登录状态接口确认已登录；雪球通过登录页所在浏览器请求官网当前使用的 `/user/show.json`，要求返回的账号 ID、昵称与 Cookie（包括刷新凭据）匹配。访客 Cookie 不算登录成功，不再依赖旧版 `SNB.data.user` 页面变量。身份校验返回访问拒绝或限流时停止窗口，不反复请求。不能仅凭二维码消失判断成功。
 
 会话持久化不保证 Cookie 永久有效。日常抓取仍沿用现有 HTTP 请求方式，浏览器仅在打开登录窗口时运行；不通过后台循环登录延长平台有效期。平台要求重新认证时仍需人工续登。
 

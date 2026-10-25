@@ -8,7 +8,7 @@ from fastapi.testclient import TestClient
 
 from app.core.config import Settings
 from app.main import create_app
-from app.services.social_browser import BrowserLogin, allowed_url, authenticated_xueqiu, browser_error
+from app.services.social_browser import BrowserLogin, allowed_url, authenticated_xueqiu, browser_error, LoginRestricted
 
 
 @pytest.mark.parametrize('message,code', [
@@ -244,3 +244,46 @@ def test_session_cookie_snapshot_restored_with_original_expiry(browser_client):
     restarted = BrowserLogin(service.settings, service.monitor)
     with restarted.browser_context(playwright, 'weibo'):
         context.add_cookies.assert_called_once_with(cookies)
+
+
+def test_browser_window_mode_is_configurable(browser_client):
+    _, service = browser_client
+    service.settings.social_browser_headless = False
+    playwright = MagicMock()
+    context = playwright.chromium.launch_persistent_context.return_value
+    context.cookies.return_value = []
+    with service.browser_context(playwright, 'xueqiu'):
+        pass
+    assert playwright.chromium.launch_persistent_context.call_args.kwargs['headless'] is False
+
+
+@pytest.mark.parametrize('account_id,expected', [(123, True), (456, False)])
+def test_xueqiu_verifies_current_browser_account_identity(browser_client, account_id, expected):
+    _, service = browser_client
+    context, page = MagicMock(), MagicMock()
+    context.cookies.return_value = [
+        {'name': 'xq_a_token', 'value': 'private-access'},
+        {'name': 'xq_r_token', 'value': 'private-refresh'},
+        {'name': 'u', 'value': '123'},
+    ]
+    page.url = 'https://www.xueqiu.com/'
+    page.evaluate.return_value = {'status': 200, 'user': {'id': account_id, 'screen_name': '测试'}}
+    assert bool(service.verify('xueqiu', context, page)) is expected
+    context.cookies.assert_called_with(['https://www.xueqiu.com/'])
+    context.request.get.assert_not_called()
+
+
+def test_xueqiu_identity_restriction_stops_instead_of_retrying(browser_client):
+    _, service = browser_client
+    context, page = MagicMock(), MagicMock()
+    context.cookies.return_value = [{'name': 'xq_a_token', 'value': 'access'},
+                                    {'name': 'xq_r_token', 'value': 'refresh'}, {'name': 'u', 'value': '123'}]
+    page.url = 'https://www.xueqiu.com/'
+    page.evaluate.return_value = {'status': 567, 'user': None}
+    with pytest.raises(LoginRestricted):
+        service.verify('xueqiu', context, page)
+
+
+def test_missing_display_is_actionable():
+    code, message = browser_error(RuntimeError('Missing X server or $DISPLAY'))
+    assert code == 'display_unavailable' and 'Xvfb' in message

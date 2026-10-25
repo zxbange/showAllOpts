@@ -22,7 +22,7 @@ def main():
         settings.log_path.mkdir(parents=True, exist_ok=True)
         with tempfile.TemporaryDirectory(prefix='browser-check-', dir=settings.log_path) as profile:
             with sync_playwright() as playwright:
-                options = {'headless': True, 'chromium_sandbox': os.name != 'nt'}
+                options = {'headless': settings.social_browser_headless, 'chromium_sandbox': os.name != 'nt'}
                 if settings.social_browser_channel:
                     options['channel'] = settings.social_browser_channel
                 context = playwright.chromium.launch_persistent_context(profile, **options)

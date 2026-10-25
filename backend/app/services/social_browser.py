@@ -1,8 +1,8 @@
 """Short-lived remote login windows; profiles remain on the application server."""
-import hashlib
 import json
 import logging
 import os
+import re
 import threading
 import time
 from urllib.parse import urlsplit
@@ -14,7 +14,7 @@ import portalocker
 from app.core.config import PROJECT_ROOT
 
 
-PLATFORMS = {'weibo': 'https://weibo.com/login.php', 'xueqiu': 'https://xueqiu.com/'}
+PLATFORMS = {'weibo': 'https://weibo.com/login.php', 'xueqiu': 'https://www.xueqiu.com/'}
 HOSTS = {
     'weibo': ('weibo.com', 'weibo.cn', 'sina.com.cn', 'sina.cn', 'sinaimg.cn', 'sinajs.cn'),
     'xueqiu': ('xueqiu.com', 'imedao.com', 'qq.com', 'qpic.cn', 'gtimg.com', 'geetest.com'),
@@ -25,14 +25,22 @@ WIDTH, HEIGHT = 1100, 800
 logger = logging.getLogger(__name__)
 
 
+class LoginRestricted(RuntimeError):
+    def __init__(self, status):
+        self.status = status
+        super().__init__('Login identity verification was restricted')
+
+
 def browser_error(error):
     """Classify locally; never return exception text containing URLs or credentials."""
     text = str(error).lower()
-    if isinstance(error, ModuleNotFoundError) and getattr(error, 'name', '').startswith('playwright'):
+    if isinstance(error, ModuleNotFoundError) and (getattr(error, 'name', None) or '').startswith('playwright'):
         return 'python_dependency_missing', '服务虚拟环境未安装 Playwright，请使用服务的 Python 安装 backend/requirements.lock.txt'
     if ('executable doesn\'t exist' in text or 'executable not found' in text
             or ('distribution' in text and 'not found' in text)):
         return 'browser_missing', '未找到 Chromium，请用服务对应的虚拟环境运行 scripts/install_social_browser.py，并核对浏览器安装目录'
+    if any(word in text for word in ('missing x server', 'missing xserver', 'without having a xserver', '$display')):
+        return 'display_unavailable', '已选择显示窗口模式，但服务没有可用显示环境；命令行 Linux 需配置 Xvfb，或改回 SOCIAL_BROWSER_HEADLESS=true'
     if any(word in text for word in ('no usable sandbox', 'operation not permitted', 'failed to move to new namespace', 'running as root without --no-sandbox')):
         return 'sandbox_denied', 'Chromium 沙箱启动被系统拒绝，请检查服务运行账号、用户命名空间及 systemd/AppArmor/容器限制'
     if any(word in text for word in ('error while loading shared libraries', 'host system is missing dependencies', 'cannot open shared object file')):
@@ -169,7 +177,7 @@ class BrowserLogin:
         return self.read(self.path(platform, 'image'))
 
     def verify(self, platform, context, page):
-        origin = 'https://m.weibo.cn/' if platform == 'weibo' else 'https://xueqiu.com/'
+        origin = 'https://m.weibo.cn/' if platform == 'weibo' else 'https://www.xueqiu.com/'
         cookies = context.cookies([origin])
         if platform == 'weibo':
             if not any(item['name'] == 'SUB' for item in cookies):
@@ -181,10 +189,28 @@ class BrowserLogin:
             if not data.get('login') or not data.get('uid'):
                 return None
         else:
-            user = page.evaluate('''() => {
-                const s = window.SNB;
-                return s?.data?.user || s?.data?.currentUser || null;
+            values = {item['name']: item['value'] for item in cookies}
+            if not (values.get('xq_a_token') and values.get('xq_r_token')):
+                return None
+            if urlsplit(page.url).hostname not in ('xueqiu.com', 'www.xueqiu.com'):
+                return None
+            # Use the same browser session/network stack as the site's login component.
+            result = page.evaluate('''async () => {
+                try {
+                    const response = await fetch('https://www.xueqiu.com/user/show.json', {
+                        credentials: 'include', redirect: 'error',
+                        headers: {'X-Requested-With': 'XMLHttpRequest'},
+                        signal: AbortSignal.timeout(12000),
+                    });
+                    const data = response.ok ? await response.json() : null;
+                    return {status: response.status, user: data && {
+                        id: data.id, screen_name: data.screen_name,
+                    }};
+                } catch { return {status: 0}; }
             }''')
+            if result.get('status') in (401, 403, 418, 429, 567):
+                raise LoginRestricted(result['status'])
+            user = result.get('user') if result.get('status') == 200 else None
             if not authenticated_xueqiu(cookies, user):
                 return None
         # Re-read after the verification request, which can rotate session cookies.
@@ -194,7 +220,7 @@ class BrowserLogin:
     def browser_context(self, playwright, platform):
         profile = self.profiles / platform
         profile.mkdir(mode=0o700, exist_ok=True)
-        options = {'headless': True, 'chromium_sandbox': os.name != 'nt',
+        options = {'headless': self.settings.social_browser_headless, 'chromium_sandbox': os.name != 'nt',
                    'viewport': {'width': WIDTH, 'height': HEIGHT},
                    'accept_downloads': False, 'service_workers': 'block'}
         if self.settings.social_browser_channel:
@@ -227,16 +253,22 @@ class BrowserLogin:
                 page.on('dialog', lambda dialog: dialog.dismiss())
                 stage = '打开官方登录页'
                 response = page.goto(PLATFORMS[platform], wait_until='domcontentloaded', timeout=45000)
-                if response and response.status in (401, 403, 418, 429):
+                if response and response.status in (401, 403, 418, 429, 567):
                     self.save(platform, state, state='blocked', image=False,
-                              message=f'平台登录页返回 HTTP {response.status}，服务器访问受限，已停止重试')
+                              http_status=response.status, error_code='login_page_restricted',
+                              message=f'平台登录页返回 HTTP {response.status}，当前浏览器会话访问受限，已停止重试；这不表示已确认服务器 IP 被封')
                     return
                 # Select only a visible official login entry; all other interaction is manual.
                 if platform == 'xueqiu':
-                    entry = page.get_by_text('登录', exact=True)
-                    if entry.count() and entry.first.is_visible():
+                    entry = page.get_by_text(re.compile(r'^\s*登录\s*(?:[/／]\s*注册)?\s*$')).filter(visible=True)
+                    # The header is hydrated asynchronously; do not select a hidden duplicate.
+                    try:
+                        entry.first.wait_for(state='visible', timeout=15000)
                         entry.first.click()
-                last_probe, previous, force = 0, None, True
+                    except Exception as error:
+                        if type(error).__name__ != 'TimeoutError':
+                            raise
+                last_probe = 0
                 opened_at = time.time()
                 while time.time() < state['expires_at'] and not self.stopping.is_set():
                     pages = [item for item in context.pages if not item.is_closed()]
@@ -250,11 +282,11 @@ class BrowserLogin:
                             return
                         if command['action'] == 'reload':
                             page.goto(PLATFORMS[platform], wait_until='domcontentloaded', timeout=45000)
-                            force = True
+                            last_probe = 0
                         elif command['action'] == 'click':
                             page.mouse.click(command['x'], command['y'])
                         elif command['action'] == 'check':
-                            force = True
+                            last_probe = 0
                     text = page.locator('body').inner_text(timeout=10000)
                     if (platform == 'weibo' and '/visitor/visitor' in urlsplit(page.url).path
                             and time.time() - opened_at > 25):
@@ -264,10 +296,8 @@ class BrowserLogin:
                     if any(word in text for word in ('安全策略拦截', '访问被拒绝', 'Access Denied')):
                         self.save(platform, state, state='blocked', message='平台拒绝服务器访问。请检查服务器网络或联系平台处理，程序已停止重试', image=False)
                         return
-                    cookies = context.cookies()
-                    fingerprint = hashlib.sha256(json.dumps(cookies, sort_keys=True).encode()).hexdigest()
-                    if time.time() - last_probe >= 10 and (force or fingerprint != previous):
-                        previous, last_probe, force = fingerprint, time.time(), False
+                    if time.time() - last_probe >= 10:
+                        last_probe = time.time()
                         stage = '验证平台登录状态'
                         credential = self.verify(platform, context, page)
                         if credential:
@@ -291,6 +321,11 @@ class BrowserLogin:
                     self.stopping.wait(2)
                 self.save(platform, state, state='expired', image=False, message='登录窗口已结束，请重新打开')
         except Exception as error:
+            if isinstance(error, LoginRestricted):
+                self.save(platform, state, state='blocked', image=False, error_code='login_verification_restricted',
+                          http_status=error.status, stage=stage,
+                          message=f'登录身份校验返回 HTTP {error.status}，已停止重试，请在官方浏览器检查账号状态')
+                return
             # Exception messages/URLs can contain credentials; expose only a safe classification.
             code, reason = browser_error(error)
             logger.warning('Browser login failed platform=%s stage=%s code=%s', platform, stage, code)

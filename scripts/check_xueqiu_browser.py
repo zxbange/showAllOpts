@@ -103,7 +103,7 @@ def main():
         stage = '启动浏览器'
         with tempfile.TemporaryDirectory(prefix='xueqiu-check-', dir=settings.log_path) as profile:
             with sync_playwright() as playwright:
-                options = {'headless': True, 'chromium_sandbox': os.name != 'nt',
+                options = {'headless': settings.social_browser_headless, 'chromium_sandbox': os.name != 'nt',
                            'accept_downloads': False, 'service_workers': 'block'}
                 if settings.social_browser_channel:
                     options['channel'] = settings.social_browser_channel
@@ -111,6 +111,7 @@ def main():
                 try:
                     stage = '打开帖子接口'
                     result = probe(context, uid, cookie)
+                    result['headless'] = settings.social_browser_headless
                 finally:
                     context.close()
         print(json.dumps(result, ensure_ascii=False))

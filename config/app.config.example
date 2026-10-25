@@ -6,6 +6,7 @@ SOCIAL_WORKER_ENABLED=true
 # Optional server-side QR login; generate your own private key with at least 24 characters.
 SOCIAL_BROWSER_LOGIN_KEY=
 SOCIAL_BROWSER_CHANNEL=
+SOCIAL_BROWSER_HEADLESS=true
 DB_HOST=127.0.0.1
 DB_PORT=3306
 DB_NAME=your_database
