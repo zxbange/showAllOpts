@@ -5,6 +5,14 @@
 
 ## 使用
 
+雪球携带 Cookie 后仍返回网页时，可在服务器项目根目录运行一次只读诊断：
+
+```bash
+sudo -u ubuntu env APP_ENV_FILE=config/app.config backend/.venv/bin/python scripts/check_xueqiu_response.py
+```
+
+按实际服务账号和配置路径替换 `ubuntu`、`config/app.config`。脚本读取已有加密 Cookie，优先选择启用的一个雪球博主，只请求一页，不重试、不跟随跳转、不恢复监控，也不修改数据或凭据。输出仅包含 HTTP 状态、响应类型与分类，不输出 Cookie、帖子、网页正文或原始跳转 URL。`security_block_page` 表示网页有明确拦截提示，`login_page` 表示有登录提示，`verification_page` 表示要求人工验证，`unidentified_html` 表示证据不足，`api_host_redirect` 提示需检查域名适配，`posts_json` 表示本次正常返回帖子列表；分类仅描述本次响应，不能单独确定 IP 或账号被封。响应最多读取 512 KiB，超限会标记 `body_truncated`，此时结构判断可能不完整。
+
 1. 打开页面后默认显示「最新动态」。进入「通知设置」，填写机器人密钥（Telegram Bot Token）、接收会话编号（Chat ID）并保存，点击发送测试消息验证。
 2. 在同一分区使用「扫码登录」：输入服务器私有配置的管理密钥，打开对应平台登录窗口，在手机确认后自动保存 Cookie。也可继续手动填写 Cookie：从自己已登录的平台浏览器开发者工具 Network 请求头中复制，微博使用 `m.weibo.cn` 登录态，雪球使用 `xueqiu.com` 登录态。保存后不返回明文，输入框留空保留原配置。
 3. 切换「监控博主」添加用户：选择平台，填写数字 UID 或包含 UID 的主页链接，可填写备注。已预填微博主页 `https://weibo.com/u/3962719063`，点击添加即可。
