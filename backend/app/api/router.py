@@ -1,4 +1,5 @@
 from app.api.routes.sentiment import router as sentiment_router
+from app.api.routes.social import router as social_router
 from app.api.routes.short_term import router as short_term_router
 from app.api.routes.ownership import router as ownership_router
 from fastapi import APIRouter
@@ -15,6 +16,7 @@ from app.api.routes.microcap import router as microcap_router
 from app.api.routes.momentum import router as momentum_router
 
 router = APIRouter(prefix='/api/v1')
+router.include_router(social_router)
 router.include_router(short_term_router)
 router.include_router(ownership_router)
 router.include_router(momentum_router)
@@ -32,7 +34,7 @@ router.include_router(etf_heat_router)
 
 @router.get('/modules', tags=['模块'])
 def modules():
-    return {'modules': [{
+    catalogue = {'modules': [{
         'id': 'industry-momentum', 'name': '行业动量',
         'description': '从行业热力分布到长期动量趋势，捕捉市场的集体方向。',
         'path': '/industry-momentum', 'status': 'available',
@@ -73,6 +75,14 @@ def modules():
         'description': '收盘动量热力排名与基金历史走势。',
         'path': '/etf-momentum', 'status': 'available',
     }, {'id': 'institution-ownership', 'name': '个股机构持仓', 'description': '机构披露持仓、股东户数与社保新进。', 'path': '/institution-ownership', 'status': 'available'}, {'id': 'short-term', 'name': '短线选股', 'description': '补票龙、红悬停龙、蓄力龙与30日K线。', 'path': '/short-term', 'status': 'available'}]}
+
+
+    catalogue['modules'].append({
+        'id': 'social-monitor', 'name': '博主动态监控',
+        'description': '登录管理微博、雪球监控用户，查看新帖并推送 Telegram。',
+        'path': '/social-monitor', 'status': 'available',
+    })
+    return catalogue
 
 
 @router.get('/health', tags=['状态'])

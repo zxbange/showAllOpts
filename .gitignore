@@ -35,5 +35,12 @@ test-results/
 # Application logs, daily archives and inter-process lock files
 log/
 
+# Private social-monitor state and credentials, even outside the default log directory
+*.sqlite3
+*.sqlite3-*
+secrets.key
+key.lock
+worker.lock
+
 # Local research checkpoints
 short_term_winrate_cache/

@@ -37,6 +37,17 @@ export interface ResearchModule {
 
 export const individualModules: ResearchModule[] = [
   {
+    id: 'social-monitor',
+    name: '博主动态监控',
+    path: '/social-monitor',
+    category: '动态观察',
+    description: '监控微博、雪球博主动态，查看内容与发布时间，推送至 Telegram。',
+    tags: ['微博', '雪球', 'Telegram', '登录访问'],
+    icon: Users,
+    tone: 'jade',
+    illustration: 'ownership',
+  },
+  {
     id: 'short-term',
     name: '短线选股',
     path: '/short-term',
@@ -224,5 +235,8 @@ const navigationFirst = [
 ]
 export const navigationModules = [
   ...navigationFirst.flatMap((id) => researchModules.filter((module) => module.id === id)),
-  ...researchModules.filter((module) => !navigationFirst.includes(module.id)),
+  ...researchModules.filter(
+    (module) => !navigationFirst.includes(module.id) && module.id !== 'social-monitor',
+  ),
+  ...researchModules.filter((module) => module.id === 'social-monitor'),
 ]

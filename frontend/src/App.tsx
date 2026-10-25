@@ -8,6 +8,9 @@ import { LoadingState } from './components/States'
 const ShortTermPage = lazy(() =>
   import('./pages/ShortTermPage').then((m) => ({ default: m.ShortTermPage })),
 )
+const SocialMonitorPage = lazy(() =>
+  import('./pages/SocialMonitorPage').then((m) => ({ default: m.SocialMonitorPage })),
+)
 
 const OwnershipPage = lazy(() =>
   import('./pages/OwnershipPage').then((m) => ({ default: m.OwnershipPage })),
@@ -63,6 +66,14 @@ export default function App() {
       <Routes>
         <Route element={<Layout />}>
           <Route index element={<HomePage />} />
+          <Route
+            path="social-monitor"
+            element={
+              <Suspense fallback={<LoadingState />}>
+                <SocialMonitorPage />
+              </Suspense>
+            }
+          />
           <Route
             path="short-term"
             element={

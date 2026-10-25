@@ -1,6 +1,11 @@
 # Local: backend/.env. Production: config/app.config in the project root.
 # Set APP_ENV_FILE in the process environment, NOT inside this file.
 APP_NAME=ShowAllOpts API
+# Set a private password before using the social monitor; no built-in password.
+SOCIAL_ADMIN_USERNAME=admin
+# SOCIAL_ADMIN_PASSWORD=replace_with_a_private_password
+# SOCIAL_ADMIN_PASSWORD_HASH=your_private_sha256_verifier
+SOCIAL_WORKER_ENABLED=true
 DB_HOST=127.0.0.1
 DB_PORT=3306
 DB_NAME=your_database

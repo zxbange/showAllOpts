@@ -14,6 +14,7 @@ from app.core.cache import CacheUnavailable, SnapshotCache
 from app.core.config import Settings
 from app.core.database import build_engine
 from app.core.logging import ensure_logging
+from app.services.social import SocialMonitor
 
 logger = logging.getLogger(__name__)
 
@@ -27,11 +28,15 @@ def create_app(settings: Settings | None = None, engine: Engine | None = None) -
     @asynccontextmanager
     async def lifespan(application: FastAPI):
         ensure_logging(settings)
+        social = SocialMonitor(settings)
+        application.state.social = social
         cache.start()
+        social.start()
         logger.info('Application ready cache_enabled=%s', settings.cache_enabled)
         try:
             yield
         finally:
+            await asyncio.to_thread(social.stop)
             await asyncio.to_thread(cache.stop)
             database.dispose()
             logger.info('Application shutdown complete')

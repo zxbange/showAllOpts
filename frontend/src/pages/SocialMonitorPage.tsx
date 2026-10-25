@@ -1,0 +1,744 @@
+import { useCallback, useEffect, useState } from 'react'
+import type { FormEvent } from 'react'
+import {
+  Bell,
+  ExternalLink,
+  LockKeyhole,
+  LogOut,
+  Plus,
+  RefreshCw,
+  Send,
+  MessageSquare,
+  Users,
+  Settings2,
+  Search,
+  Clock3,
+} from 'lucide-react'
+import '../styles/social.css'
+
+type Platform = 'weibo' | 'xueqiu'
+type View = 'feed' | 'authors' | 'settings'
+const views = [
+  { id: 'feed', label: '最新动态', icon: MessageSquare },
+  { id: 'authors', label: '监控博主', icon: Users },
+  { id: 'settings', label: '通知设置', icon: Settings2 },
+] as const
+type Author = {
+  id: number
+  platform: Platform
+  uid: string
+  name: string
+  screen_name?: string | null
+  enabled: number
+  last_check: string | null
+  last_error: string | null
+  scan_page?: number
+}
+type PlatformState = {
+  paused?: boolean
+  reason?: string | null
+  retry_at?: number
+  alert_sent_at?: string | null
+}
+type Status = {
+  enabled: boolean
+  interval_min: number
+  interval_max: number
+  last_check: string | null
+  next_check: string | null
+  last_error: string | null
+  token_configured: boolean
+  chat_id_configured: boolean
+  weibo_cookie_configured: boolean
+  xueqiu_cookie_configured: boolean
+  authors: Author[]
+  counts: Record<string, number>
+  night_rest?: boolean
+  platforms?: Partial<Record<Platform, PlatformState>>
+}
+type Post = {
+  id: number
+  platform: Platform
+  author_name: string
+  status: string
+  last_error: string | null
+  discovered_at: string
+  sent_at: string | null
+  payload: { name: string; text: string; time: string; url: string }
+}
+type Feed = { total: number; page: number; items: Post[] }
+const label = (platform: Platform) => (platform === 'weibo' ? '微博' : '雪球')
+const authorName = (author: Author) =>
+  author.screen_name || (author.name !== author.uid ? author.name : '') || '待获取博主名称'
+const statusLabels: Record<string, string> = {
+  baseline: '历史记录',
+  pending: '待推送',
+  sent: '已推送',
+}
+function date(value: string | number | null) {
+  if (!value) return '尚未检查'
+  const moment = new Date(value)
+  return Number.isNaN(moment.getTime())
+    ? typeof value === 'string'
+      ? value
+      : '无法显示时间'
+    : moment.toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai', hour12: false })
+}
+
+export function SocialMonitorPage() {
+  const [auth, setAuth] = useState('')
+  const [view, setView] = useState<View>('feed')
+  const [username, setUsername] = useState('admin')
+  const [password, setPassword] = useState('')
+  const [status, setStatus] = useState<Status | null>(null)
+  const [feed, setFeed] = useState<Feed>({ total: 0, page: 1, items: [] })
+  const [page, setPage] = useState(1)
+  const [authorFilter, setAuthorFilter] = useState('')
+  const [platformFilter, setPlatformFilter] = useState('')
+  const [keywordDraft, setKeywordDraft] = useState('')
+  const [keyword, setKeyword] = useState('')
+  const [platform, setPlatform] = useState<Platform>('weibo')
+  const [url, setUrl] = useState('https://weibo.com/u/3962719063')
+  const [name, setName] = useState('')
+  const [secrets, setSecrets] = useState({
+    token: '',
+    chat_id: '',
+    weibo_cookie: '',
+    xueqiu_cookie: '',
+  })
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState('')
+  const [notice, setNotice] = useState('')
+
+  const api = useCallback(
+    async <T,>(path: string, body?: unknown, credentials = auth): Promise<T> => {
+      const response = await fetch(`/api/v1/social-monitor${path}`, {
+        method: body === undefined ? 'GET' : 'POST',
+        headers: { Authorization: `Basic ${credentials}`, 'Content-Type': 'application/json' },
+        ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+      })
+      const result = await response.json().catch(() => null)
+      if (!response.ok) {
+        if (response.status === 401) {
+          setAuth('')
+          setStatus(null)
+          setFeed({ total: 0, page: 1, items: [] })
+        }
+        throw new Error(
+          typeof result?.detail === 'string' ? result.detail : `请求失败（${response.status}）`,
+        )
+      }
+      return result as T
+    },
+    [auth],
+  )
+
+  const refresh = useCallback(async () => {
+    const query = new URLSearchParams({ page: String(page) })
+    if (authorFilter) query.set('author_id', authorFilter)
+    if (platformFilter) query.set('platform', platformFilter)
+    if (keyword) query.set('keyword', keyword)
+    const [nextStatus, nextFeed] = await Promise.all([
+      api<Status>('/status'),
+      api<Feed>(`/posts?${query}`),
+    ])
+    setStatus(nextStatus)
+    setFeed(nextFeed)
+  }, [api, page, authorFilter, platformFilter, keyword])
+
+  useEffect(() => {
+    if (!auth) return
+    let active = true
+    const load = () => {
+      if (active)
+        void refresh().catch((e: Error) => {
+          if (active) setError(e.message)
+        })
+    }
+    load()
+    const timer = window.setInterval(load, 10000)
+    return () => {
+      active = false
+      window.clearInterval(timer)
+    }
+  }, [auth, refresh])
+
+  async function action(work: () => Promise<void>) {
+    setBusy(true)
+    setError('')
+    setNotice('')
+    try {
+      await work()
+    } catch (e) {
+      setError(e instanceof Error ? e.message : '操作失败，请重试')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  function login(event: FormEvent) {
+    event.preventDefault()
+    void action(async () => {
+      const bytes = new TextEncoder().encode(`${username}:${password}`)
+      const credentials = btoa(Array.from(bytes, (byte) => String.fromCharCode(byte)).join(''))
+      const next = await api<Status>('/status', undefined, credentials)
+      setStatus(next)
+      setAuth(credentials)
+      setPassword('')
+    })
+  }
+
+  function logout() {
+    setAuth('')
+    setView('feed')
+    setStatus(null)
+    setFeed({ total: 0, page: 1, items: [] })
+    setSecrets({ token: '', chat_id: '', weibo_cookie: '', xueqiu_cookie: '' })
+    setError('')
+    setNotice('')
+  }
+
+  const activeAuthors = status?.authors.filter((author) => author.enabled) ?? []
+  const allPlatformsPaused =
+    activeAuthors.length > 0 &&
+    activeAuthors.every((author) => status?.platforms?.[author.platform]?.paused)
+
+  if (!auth || !status)
+    return (
+      <section className="social-page">
+        <div className="social-login">
+          <span className="social-lock">
+            <LockKeyhole size={28} />
+          </span>
+          <h1>博主动态监控</h1>
+          <p className="social-muted">登录后查看博主动态，管理监控与消息推送。</p>
+          <form onSubmit={login} className="social-form">
+            <label>
+              账号
+              <input
+                autoComplete="username"
+                value={username}
+                onChange={(e) => setUsername(e.target.value)}
+                required
+              />
+            </label>
+            <label>
+              密码
+              <input
+                type="password"
+                autoComplete="current-password"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                required
+              />
+            </label>
+            {error && (
+              <div role="alert" className="social-error">
+                {error}
+              </div>
+            )}
+            <button disabled={busy} className="button button-primary" type="submit">
+              {busy ? '验证中…' : '登录监控台'}
+            </button>
+          </form>
+        </div>
+      </section>
+    )
+
+  return (
+    <section className="social-page">
+      <header className="social-heading">
+        <div>
+          <h1>博主动态监控</h1>
+          <p className="social-muted">关注微博与雪球博主，让新动态及时抵达。</p>
+        </div>
+        <button className="button" onClick={logout}>
+          <LogOut size={16} />
+          退出登录
+        </button>
+      </header>
+      {error && (
+        <div role="alert" className="social-error">
+          {error}
+        </div>
+      )}
+      {notice && (
+        <div role="status" className="social-notice">
+          {notice}
+        </div>
+      )}
+      <div className="social-overview">
+        <div className="social-summary">
+          <div>
+            <span>监控状态</span>
+            <strong className={status.enabled ? 'social-live' : ''}>
+              {status.enabled
+                ? allPlatformsPaused
+                  ? '等待人工处理'
+                  : status.night_rest
+                    ? '夜间休息中'
+                    : '后台监控中'
+                : '已暂停'}
+            </strong>
+          </div>
+          <div>
+            <span>已启用博主 / 全部</span>
+            <strong>
+              {status.authors.filter((a) => a.enabled).length}{' '}
+              <small>/ {status.authors.length}</small>
+            </strong>
+          </div>
+          <div>
+            <span>已推送 / 待推送</span>
+            <strong>
+              {status.counts.sent || 0} <small>/ {status.counts.pending || 0}</small>
+            </strong>
+          </div>
+          <div>
+            <span>随机检查间隔</span>
+            <strong>
+              3–6 <small>分钟</small>
+            </strong>
+          </div>
+        </div>
+        <div className="social-schedule">
+          <span>最近检查：{date(status.last_check)}</span>
+          <span>
+            下次检查：
+            {status.enabled ? (status.next_check ? date(status.next_check) : '即将开始') : '已暂停'}
+          </span>
+          <button
+            disabled={busy}
+            className="button button-primary"
+            onClick={() =>
+              void action(async () => {
+                setStatus(await api<Status>('/config', { enabled: !status.enabled }))
+              })
+            }
+          >
+            <Bell size={16} />
+            {status.enabled ? '暂停全部监控' : '启动监控'}
+          </button>
+        </div>
+        <p className="social-rule">
+          <Clock3 size={14} />
+          北京时间 00:00～07:00 休息，早上自动补抓；帖子保留最近一年。
+        </p>
+      </div>
+      {status.last_error && (
+        <div className="social-error" role="alert">
+          {status.last_error}
+        </div>
+      )}
+      {(['weibo', 'xueqiu'] as Platform[]).map((platform) => {
+        const state = status.platforms?.[platform]
+        if (!state?.paused && !(state?.retry_at && state.retry_at * 1000 > Date.now())) return null
+        return (
+          <div key={platform} className="social-panel social-intervention">
+            <h2>
+              {label(platform)}：{state.paused ? '已自动暂停，等待人工处理' : '退避等待中'}
+            </h2>
+            <p className="social-muted">
+              {state.reason || '平台请求暂缓'}
+              {!state.paused && state.retry_at ? ` · 最早重试：${date(state.retry_at * 1000)}` : ''}
+            </p>
+            {state.paused && (
+              <>
+                <p className="social-muted">
+                  {state.alert_sent_at
+                    ? '提醒已发送，本次暂停不再重复提醒。'
+                    : '提醒待发送，失败将自动重试。'}
+                  请先处理浏览器登录或验证，在通知设置中更新登录凭据后恢复。
+                </p>
+                <button
+                  disabled={busy}
+                  className="button"
+                  onClick={() =>
+                    void action(async () => {
+                      setStatus(await api<Status>(`/platforms/${platform}/resume`, {}))
+                      setNotice(`${label(platform)}已人工恢复；夜间将在 07:00 开始检查。`)
+                    })
+                  }
+                >
+                  人工处理完成，恢复{label(platform)}
+                </button>
+              </>
+            )}
+          </div>
+        )
+      })}
+      <div
+        className="social-tabs"
+        role="tablist"
+        aria-label="博主监控分区"
+        onKeyDown={(event) => {
+          const index = views.findIndex((item) => item.id === view)
+          const next =
+            event.key === 'ArrowRight'
+              ? (index + 1) % views.length
+              : event.key === 'ArrowLeft'
+                ? (index + views.length - 1) % views.length
+                : event.key === 'Home'
+                  ? 0
+                  : event.key === 'End'
+                    ? views.length - 1
+                    : -1
+          if (next < 0) return
+          event.preventDefault()
+          setView(views[next].id)
+          document.getElementById(`social-tab-${views[next].id}`)?.focus()
+        }}
+      >
+        {views.map((item) => (
+          <button
+            key={item.id}
+            id={`social-tab-${item.id}`}
+            role="tab"
+            aria-selected={view === item.id}
+            aria-controls={`social-panel-${item.id}`}
+            tabIndex={view === item.id ? 0 : -1}
+            onClick={() => setView(item.id)}
+          >
+            <item.icon size={17} />
+            <span>{item.label}</span>
+            {item.id === 'authors' && <small>{status.authors.length}</small>}
+          </button>
+        ))}
+      </div>
+      <div className="social-management" hidden={view === 'feed'}>
+        <section
+          className="social-panel"
+          hidden={view !== 'authors'}
+          role="tabpanel"
+          id="social-panel-authors"
+          aria-labelledby="social-tab-authors"
+        >
+          <div className="social-panel-heading">
+            <div>
+              <h2>监控用户</h2>
+              <p className="social-muted">添加关注的博主，统一管理监控状态。</p>
+            </div>
+            <span className="social-count">共 {status.authors.length} 位</span>
+          </div>
+          <form
+            className="social-author-form"
+            onSubmit={(event) => {
+              event.preventDefault()
+              void action(async () => {
+                setStatus(await api<Status>('/authors', { platform, url, name }))
+                setUrl('')
+                setName('')
+                setNotice('已添加，下一轮检查开始采集；首次历史帖子仅展示。')
+              })
+            }}
+          >
+            <label>
+              平台
+              <select value={platform} onChange={(e) => setPlatform(e.target.value as Platform)}>
+                <option value="weibo">微博</option>
+                <option value="xueqiu">雪球</option>
+              </select>
+            </label>
+            <label>
+              博主主页或用户编号
+              <input
+                value={url}
+                onChange={(e) => setUrl(e.target.value)}
+                placeholder="粘贴主页链接或输入用户编号"
+                required
+                maxLength={500}
+              />
+            </label>
+            <label>
+              备注名称
+              <input
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+                placeholder="可选"
+                maxLength={100}
+              />
+            </label>
+            <button className="button button-primary" disabled={busy}>
+              <Plus size={16} />
+              添加用户
+            </button>
+          </form>
+          <div className="social-authors">
+            {!status.authors.length && (
+              <p className="social-muted">还没有监控用户，先添加一个主页。</p>
+            )}
+            {status.authors.map((author) => (
+              <article className="social-author" key={author.id}>
+                <div>
+                  <span className={`social-platform ${author.platform}`}>
+                    {label(author.platform)}
+                  </span>
+                  <strong title={authorName(author)}>{authorName(author)}</strong>
+                </div>
+                <p className="social-muted">
+                  {author.enabled ? '已启用' : '已暂停'} · 最近检查 {date(author.last_check)}
+                  {author.scan_page && author.scan_page > 1
+                    ? ` · 待继续补抓第 ${author.scan_page} 页`
+                    : ''}
+                </p>
+                {author.last_error && <p className="social-error">{author.last_error}</p>}
+                <div className="social-actions">
+                  <button
+                    disabled={busy}
+                    className="button"
+                    onClick={() =>
+                      void action(async () => {
+                        setStatus(
+                          await api<Status>(`/authors/${author.id}`, { enabled: !author.enabled }),
+                        )
+                      })
+                    }
+                  >
+                    {author.enabled ? '暂停' : '恢复'}
+                  </button>
+                  <button
+                    disabled={busy}
+                    className="button"
+                    onClick={() => {
+                      if (window.confirm(`删除 ${authorName(author)} 的监控及已采集帖子？`))
+                        void action(async () => {
+                          setStatus(await api<Status>(`/authors/${author.id}/delete`, {}))
+                          setAuthorFilter('')
+                          setPage(1)
+                          await refresh()
+                        })
+                    }}
+                  >
+                    删除
+                  </button>
+                </div>
+              </article>
+            ))}
+          </div>
+        </section>
+        <section
+          className="social-panel"
+          hidden={view !== 'settings'}
+          role="tabpanel"
+          id="social-panel-settings"
+          aria-labelledby="social-tab-settings"
+        >
+          <div className="social-panel-heading">
+            <div>
+              <h2>通知与平台登录</h2>
+              <p className="social-muted">配置一次，所有监控博主共用。</p>
+            </div>
+            <Settings2 size={20} />
+          </div>
+          <p className="social-muted">凭据加密保存在服务端。留空保留原值，输入新内容可替换。</p>
+          <form
+            className="social-form"
+            onSubmit={(event) => {
+              event.preventDefault()
+              void action(async () => {
+                const changes = Object.fromEntries(
+                  Object.entries(secrets).filter(([, value]) => value.trim()),
+                )
+                setStatus(await api<Status>('/config', changes))
+                setSecrets({ token: '', chat_id: '', weibo_cookie: '', xueqiu_cookie: '' })
+                setNotice('配置已保存。')
+              })
+            }}
+          >
+            <div className="social-field-grid">
+              {(
+                [
+                  ['token', '机器人密钥', status.token_configured],
+                  ['chat_id', '接收会话编号', status.chat_id_configured],
+                  ['weibo_cookie', '微博登录凭据', status.weibo_cookie_configured],
+                  ['xueqiu_cookie', '雪球登录凭据', status.xueqiu_cookie_configured],
+                ] as const
+              ).map(([key, title, configured]) => (
+                <label key={key}>
+                  <span className="social-label-row">
+                    {title}
+                    <span className={`social-config-state ${configured ? 'configured' : ''}`}>
+                      {configured ? '已配置' : '未配置'}
+                    </span>
+                  </span>
+                  <input
+                    type="password"
+                    autoComplete="off"
+                    value={secrets[key]}
+                    onChange={(e) => setSecrets({ ...secrets, [key]: e.target.value })}
+                    placeholder={configured ? '已保存，输入以替换' : `填写 ${title}`}
+                    maxLength={key.includes('cookie') ? 20000 : key === 'token' ? 300 : 100}
+                  />
+                </label>
+              ))}
+            </div>
+            <div className="social-actions">
+              <button disabled={busy} className="button button-primary">
+                保存配置
+              </button>
+              <button
+                type="button"
+                disabled={busy || !status.token_configured || !status.chat_id_configured}
+                className="button"
+                onClick={() =>
+                  void action(async () => {
+                    const result = await api<{ message: string }>('/telegram-test', {})
+                    setNotice(result.message)
+                  })
+                }
+              >
+                <Send size={15} />
+                发送测试消息
+              </button>
+            </div>
+          </form>
+          <details className="social-help">
+            <summary>如何获取平台登录凭据？</summary>
+            <p>
+              在浏览器登录微博移动网页版或雪球，打开开发者工具的「网络」面板，选择平台请求，复制请求标头中的完整登录凭据（Cookie）。过期或平台要求验证时，请重新登录并更新，不要向他人分享凭据。
+            </p>
+          </details>
+          <p className="social-muted">
+            消息通过 Telegram 推送。遇到平台验证会暂停对应平台，处理后需手动恢复。
+          </p>
+        </section>
+      </div>
+      <section
+        className="social-panel social-feed"
+        hidden={view !== 'feed'}
+        role="tabpanel"
+        id="social-panel-feed"
+        aria-labelledby="social-tab-feed"
+      >
+        <div className="social-feed-heading">
+          <div>
+            <h2>最新动态</h2>
+            <p className="social-muted">共 {feed.total} 条动态 · 北京时间 · 自动更新</p>
+          </div>
+          <div className="social-actions">
+            <select
+              aria-label="按平台筛选"
+              value={platformFilter}
+              onChange={(e) => {
+                setPlatformFilter(e.target.value)
+                setPage(1)
+              }}
+            >
+              <option value="">全部平台</option>
+              <option value="weibo">微博</option>
+              <option value="xueqiu">雪球</option>
+            </select>
+            <select
+              aria-label="按用户筛选"
+              value={authorFilter}
+              onChange={(e) => {
+                setAuthorFilter(e.target.value)
+                setPage(1)
+              }}
+            >
+              <option value="">全部用户</option>
+              {status.authors.map((a) => (
+                <option key={a.id} value={a.id}>
+                  {authorName(a)}
+                </option>
+              ))}
+            </select>
+            <button disabled={busy} className="button" onClick={() => void action(refresh)}>
+              <RefreshCw size={15} />
+              刷新列表
+            </button>
+          </div>
+        </div>
+        <form
+          className="social-search social-actions"
+          onSubmit={(event) => {
+            event.preventDefault()
+            setKeyword(keywordDraft.trim())
+            setPage(1)
+          }}
+        >
+          <div className="social-search-field">
+            <Search size={17} />
+            <input
+              aria-label="搜索帖子内容"
+              placeholder="输入关键词检索全部已抓取帖子"
+              value={keywordDraft}
+              onChange={(event) => setKeywordDraft(event.target.value)}
+              maxLength={200}
+            />
+          </div>
+          <button className="button button-primary" disabled={busy}>
+            搜索
+          </button>
+          {keyword && (
+            <button
+              type="button"
+              className="button"
+              onClick={() => {
+                setKeyword('')
+                setKeywordDraft('')
+                setPage(1)
+              }}
+            >
+              清除搜索
+            </button>
+          )}
+        </form>
+        {!feed.items.length && (
+          <div className="social-empty">
+            <Bell size={28} />
+            <h3>{keyword ? '没有匹配的帖子' : '等待博主动态'}</h3>
+            <p>
+              {keyword
+                ? '请更换关键词，或调整平台、用户筛选条件。'
+                : '配置 Telegram、添加用户并启动监控后，采集内容会显示在这里。'}
+            </p>
+            {!keyword && !status.authors.length && (
+              <button className="button button-primary" onClick={() => setView('authors')}>
+                添加第一位博主
+              </button>
+            )}
+          </div>
+        )}
+        {feed.items.map((post) => (
+          <article className="social-post" key={post.id}>
+            <header>
+              <span className={`social-post-avatar ${post.platform}`}>
+                {post.author_name.slice(0, 1)}
+              </span>
+              <span className={`social-platform ${post.platform}`}>{label(post.platform)}</span>
+              <strong>{post.author_name}</strong>
+              <span className={`social-post-status ${post.status}`}>
+                {statusLabels[post.status] || post.status}
+              </span>
+            </header>
+            <p className="social-muted">
+              <time>发布时间：{date(post.payload.time)}</time>
+              {post.sent_at && <> · 推送时间：{date(post.sent_at)}</>}
+            </p>
+            <div className="social-post-text">{post.payload.text}</div>
+            {post.last_error && <p className="social-error">{post.last_error}</p>}
+            <a className="social-original" href={post.payload.url} target="_blank" rel="noreferrer">
+              查看原文 <ExternalLink size={14} />
+            </a>
+          </article>
+        ))}
+        <div className="social-pagination">
+          <button disabled={busy || page <= 1} className="button" onClick={() => setPage(page - 1)}>
+            上一页
+          </button>
+          <span>
+            第 {page} / {Math.max(1, Math.ceil(feed.total / 20))} 页
+          </span>
+          <button
+            disabled={busy || page * 20 >= feed.total}
+            className="button"
+            onClick={() => setPage(page + 1)}
+          >
+            下一页
+          </button>
+        </div>
+      </section>
+    </section>
+  )
+}

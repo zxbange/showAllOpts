@@ -56,6 +56,10 @@ class Settings(BaseSettings):
             raise ConfigurationError('Cannot read the selected configuration file. Check permissions and UTF-8 encoding.') from None
 
     app_name: str = 'ShowAllOpts API'
+    social_admin_username: str = 'admin'
+    social_admin_password: SecretStr = SecretStr('')
+    social_admin_password_hash: SecretStr = SecretStr('')
+    social_worker_enabled: bool = True
     db_host: str = '127.0.0.1'
     db_port: int = Field(default=3306, ge=1, le=65535)
     db_name: str = 'showallopts'
