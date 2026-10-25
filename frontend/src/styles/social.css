@@ -311,8 +311,9 @@
   font-size: 20px;
 }
 .social-schedule {
+  align-items: flex-end;
   gap: 12px 28px;
-  padding: 14px 22px;
+  padding: 14px 22px 6px;
   border-top: 1px solid var(--border);
   background: #fdfbf8;
 }
@@ -703,7 +704,7 @@
   .social-schedule {
     align-items: stretch;
     gap: 10px;
-    padding: 14px 16px;
+    padding: 14px 16px 8px;
   }
   .social-schedule > span {
     width: 100%;

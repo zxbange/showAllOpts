@@ -259,7 +259,6 @@ export function SocialMonitorPage() {
       <header className="social-heading">
         <div>
           <h1>博主动态监控</h1>
-          <p className="social-muted">关注微博与雪球博主，让新动态及时抵达。</p>
         </div>
       </header>
       {error && (
