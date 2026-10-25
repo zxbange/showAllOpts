@@ -79,7 +79,7 @@ def modules():
 
     catalogue['modules'].append({
         'id': 'social-monitor', 'name': '博主动态监控',
-        'description': '登录管理微博、雪球监控用户，查看新帖并推送 Telegram。',
+        'description': '管理微博、雪球监控用户，查看新帖并推送 Telegram。',
         'path': '/social-monitor', 'status': 'available',
     })
     return catalogue

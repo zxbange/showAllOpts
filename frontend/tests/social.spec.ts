@@ -1,6 +1,37 @@
 import { expect, test } from '@playwright/test'
 
-test('login protects the monitor, then configure users, notifications and inspect posts', async ({
+test('initial loading failures can be retried without a login page', async ({ page }) => {
+  let ready = false
+  await page.route('**/api/v1/**', (route) => {
+    const path = new URL(route.request().url()).pathname
+    if (!path.includes('/social-monitor') || !ready)
+      return route.fulfill({ status: 503, json: { detail: '加载失败测试' } })
+    expect(route.request().headers().authorization).toBeUndefined()
+    return route.fulfill({
+      json: path.endsWith('/posts')
+        ? { total: 0, page: 1, items: [] }
+        : {
+            enabled: false,
+            authors: [],
+            counts: {},
+            token_configured: false,
+            chat_id_configured: false,
+            weibo_cookie_configured: false,
+            xueqiu_cookie_configured: false,
+            last_check: null,
+            next_check: null,
+          },
+    })
+  })
+  await page.goto('/social-monitor')
+  await expect(page.getByRole('alert')).toContainText('加载失败测试')
+  await expect(page.getByRole('button', { name: '登录监控台' })).toHaveCount(0)
+  ready = true
+  await page.getByRole('button', { name: '重新加载' }).click()
+  await expect(page.getByRole('heading', { name: '最新动态', exact: true })).toBeVisible()
+})
+
+test('open the monitor directly, configure users, notifications and inspect posts', async ({
   page,
 }, testInfo) => {
   const errors: string[] = []
@@ -39,12 +70,7 @@ test('login protects the monitor, then configure users, notifications and inspec
     const path = new URL(request.url()).pathname
     if (!path.includes('/social-monitor'))
       return route.fulfill({ status: 503, json: { detail: '模拟市场数据不可用' } })
-    if (
-      request.headers().authorization !==
-      'Basic ' + Buffer.from('admin:test-password').toString('base64')
-    ) {
-      return route.fulfill({ status: 401, json: { detail: '账号或密码错误，请重新登录' } })
-    }
+    expect(request.headers().authorization).toBeUndefined()
     if (path.endsWith('/posts')) {
       postRequests++
       const keyword = new URL(request.url()).searchParams.get('keyword') || ''
@@ -101,12 +127,7 @@ test('login protects the monitor, then configure users, notifications and inspec
   await page.goto('/social-monitor')
   await expect(page.getByRole('heading', { name: '博主动态监控', exact: true })).toBeVisible()
   await expect(page.getByRole('heading', { name: '监控用户', exact: true })).toHaveCount(0)
-  expect(postRequests).toBe(0)
-  await page.getByLabel('密码', { exact: true }).fill('wrong')
-  await page.getByRole('button', { name: '登录监控台' }).click()
-  await expect(page.getByRole('alert')).toContainText('账号或密码错误')
-  await page.getByLabel('密码', { exact: true }).fill('test-password')
-  await page.getByRole('button', { name: '登录监控台' }).click()
+  await expect(page.getByRole('button', { name: '登录监控台' })).toHaveCount(0)
   await expect(page.getByRole('heading', { name: '最新动态', exact: true })).toBeVisible()
   await expect(page.getByText('SOCIAL MONITOR', { exact: true })).toHaveCount(0)
   await page.getByRole('tab', { name: /监控博主/ }).click()
@@ -163,8 +184,10 @@ test('login protects the monitor, then configure users, notifications and inspec
   await page.screenshot({ path: testInfo.outputPath('social-authors.png'), fullPage: true })
   await page.getByRole('tab', { name: '最新动态' }).click()
   await page.screenshot({ path: testInfo.outputPath('social-monitor.png'), fullPage: true })
-  await page.getByRole('button', { name: '退出登录' }).click()
-  await expect(page.getByRole('button', { name: '登录监控台' })).toBeVisible()
-  await expect(page.getByText('今天发布的测试正文', { exact: false })).toHaveCount(0)
+  await page.reload()
+  await expect(page.getByRole('heading', { name: '最新动态', exact: true })).toBeVisible()
+  await expect(page.getByRole('button', { name: '登录监控台' })).toHaveCount(0)
+  await expect(page.getByText('今天发布的测试正文', { exact: false })).toBeVisible()
+  expect(postRequests).toBeGreaterThan(0)
   expect(errors).toEqual([])
 })

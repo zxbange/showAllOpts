@@ -1,10 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
-import type { FormEvent } from 'react'
 import {
   Bell,
   ExternalLink,
-  LockKeyhole,
-  LogOut,
   Plus,
   RefreshCw,
   Send,
@@ -86,10 +83,7 @@ function date(value: string | number | null) {
 }
 
 export function SocialMonitorPage() {
-  const [auth, setAuth] = useState('')
   const [view, setView] = useState<View>('feed')
-  const [username, setUsername] = useState('admin')
-  const [password, setPassword] = useState('')
   const [status, setStatus] = useState<Status | null>(null)
   const [feed, setFeed] = useState<Feed>({ total: 0, page: 1, items: [] })
   const [page, setPage] = useState(1)
@@ -110,28 +104,20 @@ export function SocialMonitorPage() {
   const [error, setError] = useState('')
   const [notice, setNotice] = useState('')
 
-  const api = useCallback(
-    async <T,>(path: string, body?: unknown, credentials = auth): Promise<T> => {
-      const response = await fetch(`/api/v1/social-monitor${path}`, {
-        method: body === undefined ? 'GET' : 'POST',
-        headers: { Authorization: `Basic ${credentials}`, 'Content-Type': 'application/json' },
-        ...(body === undefined ? {} : { body: JSON.stringify(body) }),
-      })
-      const result = await response.json().catch(() => null)
-      if (!response.ok) {
-        if (response.status === 401) {
-          setAuth('')
-          setStatus(null)
-          setFeed({ total: 0, page: 1, items: [] })
-        }
-        throw new Error(
-          typeof result?.detail === 'string' ? result.detail : `请求失败（${response.status}）`,
-        )
-      }
-      return result as T
-    },
-    [auth],
-  )
+  const api = useCallback(async <T,>(path: string, body?: unknown): Promise<T> => {
+    const response = await fetch(`/api/v1/social-monitor${path}`, {
+      method: body === undefined ? 'GET' : 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+    })
+    const result = await response.json().catch(() => null)
+    if (!response.ok) {
+      throw new Error(
+        typeof result?.detail === 'string' ? result.detail : `请求失败（${response.status}）`,
+      )
+    }
+    return result as T
+  }, [])
 
   const refresh = useCallback(async () => {
     const query = new URLSearchParams({ page: String(page) })
@@ -147,7 +133,6 @@ export function SocialMonitorPage() {
   }, [api, page, authorFilter, platformFilter, keyword])
 
   useEffect(() => {
-    if (!auth) return
     let active = true
     const load = () => {
       if (active)
@@ -161,7 +146,7 @@ export function SocialMonitorPage() {
       active = false
       window.clearInterval(timer)
     }
-  }, [auth, refresh])
+  }, [refresh])
 
   async function action(work: () => Promise<void>) {
     setBusy(true)
@@ -176,71 +161,36 @@ export function SocialMonitorPage() {
     }
   }
 
-  function login(event: FormEvent) {
-    event.preventDefault()
-    void action(async () => {
-      const bytes = new TextEncoder().encode(`${username}:${password}`)
-      const credentials = btoa(Array.from(bytes, (byte) => String.fromCharCode(byte)).join(''))
-      const next = await api<Status>('/status', undefined, credentials)
-      setStatus(next)
-      setAuth(credentials)
-      setPassword('')
-    })
-  }
-
-  function logout() {
-    setAuth('')
-    setView('feed')
-    setStatus(null)
-    setFeed({ total: 0, page: 1, items: [] })
-    setSecrets({ token: '', chat_id: '', weibo_cookie: '', xueqiu_cookie: '' })
-    setError('')
-    setNotice('')
-  }
-
   const activeAuthors = status?.authors.filter((author) => author.enabled) ?? []
   const allPlatformsPaused =
     activeAuthors.length > 0 &&
     activeAuthors.every((author) => status?.platforms?.[author.platform]?.paused)
 
-  if (!auth || !status)
+  if (!status)
     return (
       <section className="social-page">
-        <div className="social-login">
-          <span className="social-lock">
-            <LockKeyhole size={28} />
-          </span>
+        <header className="social-heading">
           <h1>博主动态监控</h1>
-          <p className="social-muted">登录后查看博主动态，管理监控与消息推送。</p>
-          <form onSubmit={login} className="social-form">
-            <label>
-              账号
-              <input
-                autoComplete="username"
-                value={username}
-                onChange={(e) => setUsername(e.target.value)}
-                required
-              />
-            </label>
-            <label>
-              密码
-              <input
-                type="password"
-                autoComplete="current-password"
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                required
-              />
-            </label>
-            {error && (
-              <div role="alert" className="social-error">
+        </header>
+        <div className="social-panel" aria-busy={!error || busy}>
+          {error ? (
+            <>
+              <p role="alert" className="social-error">
                 {error}
-              </div>
-            )}
-            <button disabled={busy} className="button button-primary" type="submit">
-              {busy ? '验证中…' : '登录监控台'}
-            </button>
-          </form>
+              </p>
+              <button
+                className="button button-primary"
+                disabled={busy}
+                onClick={() => void action(refresh)}
+              >
+                重新加载
+              </button>
+            </>
+          ) : (
+            <p role="status" className="social-muted">
+              正在加载博主动态…
+            </p>
+          )}
         </div>
       </section>
     )
@@ -252,10 +202,6 @@ export function SocialMonitorPage() {
           <h1>博主动态监控</h1>
           <p className="social-muted">关注微博与雪球博主，让新动态及时抵达。</p>
         </div>
-        <button className="button" onClick={logout}>
-          <LogOut size={16} />
-          退出登录
-        </button>
       </header>
       {error && (
         <div role="alert" className="social-error">

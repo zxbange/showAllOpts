@@ -63,7 +63,6 @@ def logging_config(settings: Settings):
     directory = settings.log_path
     # Do not pass a database URL into logs. Also redact known values in driver errors.
     secrets = [settings.db_password.get_secret_value()]
-    secrets.extend([settings.social_admin_password.get_secret_value(), settings.social_admin_password_hash.get_secret_value()])
     secrets.extend(value for value in (settings.db_host, settings.db_user, settings.db_name)
                    if len(value) >= 4)
     return {

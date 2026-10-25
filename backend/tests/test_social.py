@@ -1,5 +1,3 @@
-import base64
-import hashlib
 import time
 from datetime import datetime
 from unittest.mock import patch
@@ -31,16 +29,11 @@ def clock(value):
 
 @pytest.fixture
 def social_client(engine, tmp_path):
-    settings = Settings(_env_file=None, log_dir=tmp_path, cache_enabled=False, social_worker_enabled=False,
-                        social_admin_password='test-admin-password')
+    settings = Settings(_env_file=None, log_dir=tmp_path, cache_enabled=False, social_worker_enabled=False)
     with clock('2026-10-25T12:00:00+08:00'):
         app = create_app(settings, engine)
         with TestClient(app) as client:
             yield client, app.state.social
-
-
-def headers(password='test-admin-password'):
-    return {'Authorization': 'Basic ' + base64.b64encode(('admin:' + password).encode()).decode()}
 
 
 def post(identifier='1', text='测试正文'):
@@ -57,33 +50,31 @@ def enable(service):
     service.update_config({'token': 'test-token', 'chat_id': '1234', 'enabled': True})
 
 
-def test_all_endpoints_require_credentials(social_client):
-    client, _ = social_client
-    for method, path, body in [('get', '/status', None), ('get', '/posts', None),
-                               ('post', '/config', {}), ('post', '/authors', {}),
-                               ('post', '/authors/1', {}), ('post', '/authors/1/delete', {}),
-                               ('post', '/platforms/weibo/resume', {}),
-                               ('post', '/telegram-test', {})]:
-        response = getattr(client, method)('/api/v1/social-monitor' + path, **({'json': body} if body is not None else {}))
-        assert response.status_code == 401
-    assert client.get('/api/v1/social-monitor/status', headers=headers('wrong')).status_code == 401
-    assert client.get('/api/v1/social-monitor/status', headers=headers()).status_code == 200
-
-
-def test_rate_limit_and_config_validation(social_client):
-    client, _ = social_client
-    for _ in range(10):
-        assert client.get('/api/v1/social-monitor/status', headers=headers('wrong')).status_code == 401
-    assert client.get('/api/v1/social-monitor/status', headers=headers()).status_code == 429
+def test_all_management_endpoints_work_without_login(social_client):
+    client, service = social_client
+    endpoint = '/api/v1/social-monitor'
+    assert client.get(endpoint + '/status').status_code == 200
+    assert client.get(endpoint + '/posts').status_code == 200
+    assert client.post(endpoint + '/authors', json={'platform': 'weibo', 'url': '123', 'name': '公开访问测试'}).status_code == 200
+    author_id = service.overview()['authors'][0]['id']
+    assert client.post(endpoint + '/config', json={'token': 'test-token', 'chat_id': '123', 'enabled': True}).status_code == 200
+    assert client.post(endpoint + f'/authors/{author_id}', json={'enabled': False}).status_code == 200
+    assert client.post(endpoint + '/platforms/weibo/resume', json={}).status_code == 200
+    with patch.object(service, 'send_part') as send:
+        assert client.post(endpoint + '/telegram-test', json={}).status_code == 200
+        send.assert_called_once()
+    assert client.post(endpoint + f'/authors/{author_id}/delete', json={}).status_code == 200
+    for _ in range(12):
+        assert client.get(endpoint + '/status').status_code == 200
 
 
 def test_configuration_encrypted_and_never_echoed(social_client):
     client, service = social_client
     endpoint = '/api/v1/social-monitor/config'
-    assert client.post(endpoint, json={'enabled': True}, headers=headers()).status_code == 400
+    assert client.post(endpoint, json={'enabled': True}).status_code == 400
     add(service)
     response = client.post(endpoint, json={'token': 'secret-bot-token', 'chat_id': '123',
-                                          'weibo_cookie': 'secret-cookie', 'enabled': True}, headers=headers())
+                                          'weibo_cookie': 'secret-cookie', 'enabled': True})
     assert response.status_code == 200
     assert response.json()['weibo_cookie_configured']
     assert 'secret-cookie' not in response.text and 'secret-bot-token' not in response.text
@@ -99,18 +90,18 @@ def test_author_management_and_feed(social_client):
     client, service = social_client
     endpoint = '/api/v1/social-monitor'
     payload = {'platform': 'weibo', 'url': 'https://weibo.com/u/3962719063', 'name': '博主'}
-    response = client.post(endpoint + '/authors', json=payload, headers=headers())
+    response = client.post(endpoint + '/authors', json=payload)
     assert response.status_code == 200
     author = response.json()['authors'][0]
-    assert client.post(endpoint + '/authors', json=payload, headers=headers()).status_code == 400
-    assert client.post(endpoint + '/authors', json=dict(payload, url='https://example.com/123'), headers=headers()).status_code == 400
+    assert client.post(endpoint + '/authors', json=payload).status_code == 400
+    assert client.post(endpoint + '/authors', json=dict(payload, url='https://example.com/123')).status_code == 400
     service.collect(author, [post()])
-    feed = client.get(endpoint + '/posts?platform=weibo&author_id=' + str(author['id']), headers=headers()).json()
+    feed = client.get(endpoint + '/posts?platform=weibo&author_id=' + str(author['id'])).json()
     assert feed['total'] == 1 and feed['items'][0]['payload']['text'] == '测试正文'
-    assert client.get(endpoint + '/posts?platform=xueqiu', headers=headers()).json()['total'] == 0
-    assert client.post(endpoint + f"/authors/{author['id']}", json={'enabled': False}, headers=headers()).status_code == 200
-    assert client.post(endpoint + f"/authors/{author['id']}/delete", json={}, headers=headers()).status_code == 200
-    assert client.get(endpoint + '/posts', headers=headers()).json()['total'] == 0
+    assert client.get(endpoint + '/posts?platform=xueqiu').json()['total'] == 0
+    assert client.post(endpoint + f"/authors/{author['id']}", json={'enabled': False}).status_code == 200
+    assert client.post(endpoint + f"/authors/{author['id']}/delete", json={}).status_code == 200
+    assert client.get(endpoint + '/posts').json()['total'] == 0
 
 
 def test_baseline_new_posts_dedup_and_retry(social_client):
@@ -242,14 +233,14 @@ def test_daily_retention_boundary_pending_and_unknown_dates(social_client):
 def test_cannot_start_without_enabled_author(social_client):
     client, service = social_client
     service.update_config({'token': 'test-token', 'chat_id': '123'})
-    response = client.post('/api/v1/social-monitor/config', json={'enabled': True}, headers=headers())
+    response = client.post('/api/v1/social-monitor/config', json={'enabled': True})
     assert response.status_code == 400
     assert '添加用户' in response.json()['detail']
     author = add(service)
     service.change_author(author['id'], False)
-    assert client.post('/api/v1/social-monitor/config', json={'enabled': True}, headers=headers()).status_code == 400
+    assert client.post('/api/v1/social-monitor/config', json={'enabled': True}).status_code == 400
     service.change_author(author['id'], True)
-    assert client.post('/api/v1/social-monitor/config', json={'enabled': True}, headers=headers()).status_code == 200
+    assert client.post('/api/v1/social-monitor/config', json={'enabled': True}).status_code == 200
 
 
 def test_expired_posts_not_reinserted_or_notified(social_client):
@@ -308,7 +299,7 @@ def test_intervention_pauses_platform_and_alerts_once_across_restart(social_clie
         # Cookie updates and master enable must not silently clear a safety pause.
         service.update_config({'weibo_cookie': 'replacement', 'enabled': True})
         assert service.overview()['platforms']['weibo']['paused']
-        assert client.post('/api/v1/social-monitor/platforms/weibo/resume', json={}, headers=headers()).status_code == 200
+        assert client.post('/api/v1/social-monitor/platforms/weibo/resume', json={}).status_code == 200
         assert not service.overview()['platforms']['weibo']['paused']
 
 
@@ -519,15 +510,15 @@ def test_keyword_search_filters_all_saved_posts_with_pagination(social_client):
     author = add(service)
     service.collect(author, [post('1', '新能源 STOCK'), post('2', '新能源第二条'), post('3', '其他行业'), post('4', '收益 10%_增长')])
     endpoint = '/api/v1/social-monitor/posts'
-    first = client.get(endpoint, params={'keyword': '新能源', 'size': 1}, headers=headers()).json()
-    second = client.get(endpoint, params={'keyword': '新能源', 'size': 1, 'page': 2}, headers=headers()).json()
+    first = client.get(endpoint, params={'keyword': '新能源', 'size': 1}).json()
+    second = client.get(endpoint, params={'keyword': '新能源', 'size': 1, 'page': 2}).json()
     assert first['total'] == second['total'] == 2
     assert first['items'][0]['post_id'] != second['items'][0]['post_id']
-    assert client.get(endpoint, params={'keyword': 'stock'}, headers=headers()).json()['total'] == 1
-    assert client.get(endpoint, params={'keyword': '%_'}, headers=headers()).json()['total'] == 1
-    assert client.get(endpoint, params={'keyword': "' OR 1=1 --"}, headers=headers()).json()['total'] == 0
-    assert client.get(endpoint, params={'keyword': '新能源', 'platform': 'xueqiu'}, headers=headers()).json()['total'] == 0
-    assert client.get(endpoint, params={'keyword': '   '}, headers=headers()).json()['total'] == 4
+    assert client.get(endpoint, params={'keyword': 'stock'}).json()['total'] == 1
+    assert client.get(endpoint, params={'keyword': '%_'}).json()['total'] == 1
+    assert client.get(endpoint, params={'keyword': "' OR 1=1 --"}).json()['total'] == 0
+    assert client.get(endpoint, params={'keyword': '新能源', 'platform': 'xueqiu'}).json()['total'] == 0
+    assert client.get(endpoint, params={'keyword': '   '}).json()['total'] == 4
 
 
 def test_author_names_persist_and_existing_post_names_are_backfilled(social_client):
@@ -552,13 +543,3 @@ def test_known_posts_refresh_author_name_without_long_text_request():
     with patch('app.services.social_sources.httpx.Client', return_value=client):
         assert not fetch_posts({'platform': 'weibo', 'uid': '123', '_known_ids': {'1'}, '_on_author_name': names.append}, pages=1)
     assert names == ['最新昵称']
-
-
-def test_no_builtin_admin_password_and_private_hash_authentication(social_client):
-    _, service = social_client
-    service.settings.social_admin_password = type(service.settings.social_admin_password)('')
-    service.settings.social_admin_password_hash = type(service.settings.social_admin_password_hash)('')
-    assert service.authenticate('admin', 'test-admin-password', 'no-default') == (False, False)
-    service.settings.social_admin_password_hash = type(service.settings.social_admin_password_hash)(
-        hashlib.sha256(b'private-test-password').hexdigest())
-    assert service.authenticate('admin', 'private-test-password', 'private-hash') == (True, False)

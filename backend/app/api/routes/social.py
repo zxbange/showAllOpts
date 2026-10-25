@@ -1,27 +1,15 @@
 from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
-from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from pydantic import BaseModel, Field, SecretStr
 
 from app.services.social_sources import author_uid
 
-security = HTTPBasic(auto_error=False)
+def monitor(request: Request):
+    return request.app.state.social
 
 
-def monitor(request: Request, credentials: HTTPBasicCredentials | None = Depends(security)):
-    service = request.app.state.social
-    valid, limited = service.authenticate(
-        credentials.username if credentials else '', credentials.password if credentials else '',
-        request.client.host if request.client else 'unknown')
-    if limited:
-        raise HTTPException(429, '登录失败过多，请一分钟后再试')
-    if not valid:
-        raise HTTPException(401, '账号或密码错误，请重新登录')
-    return service
-
-
-router = APIRouter(prefix='/social-monitor', tags=['博主监控'], dependencies=[Depends(monitor)])
+router = APIRouter(prefix='/social-monitor', tags=['博主监控'])
 
 
 class ConfigUpdate(BaseModel):

@@ -42,7 +42,7 @@ export const individualModules: ResearchModule[] = [
     path: '/social-monitor',
     category: '动态观察',
     description: '监控微博、雪球博主动态，查看内容与发布时间，推送至 Telegram。',
-    tags: ['微博', '雪球', 'Telegram', '登录访问'],
+    tags: ['微博', '雪球', 'Telegram', '动态检索'],
     icon: Users,
     tone: 'jade',
     illustration: 'ownership',

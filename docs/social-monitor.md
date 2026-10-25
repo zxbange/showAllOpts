@@ -1,12 +1,11 @@
 # 博主动态监控
 
 页面入口：侧边栏或首页的「博主动态监控」，路径 `/social-monitor`。
-所有监控接口 `/api/v1/social-monitor/*` 都由后端验证账号密码，页面登录信息仅存在当前页面内存，刷新或退出后重新登录。
-管理员凭据仅从私有配置读取，代码不内置密码或真实密码校验值。生产环境使用 HTTPS；在现有配置文件中设置 `SOCIAL_ADMIN_USERNAME` / `SOCIAL_ADMIN_PASSWORD`。如需保留本机已有校验值，也支持私有 `SOCIAL_ADMIN_PASSWORD_HASH`；同时设置时明文密码配置优先。未设置密码或校验值时登录关闭。
+页面直接打开，不需要账号密码；监控接口 `/api/v1/social-monitor/*` 同样不要求身份验证。任何能访问网站的人都可以管理博主、修改通知与平台凭据配置、启停监控。敏感配置仍加密保存，接口不会返回明文密钥或 Cookie。
 
 ## 使用
 
-1. 登录后默认打开「最新动态」。进入「通知设置」，填写机器人密钥（Telegram Bot Token）、接收会话编号（Chat ID）并保存，点击发送测试消息验证。
+1. 打开页面后默认显示「最新动态」。进入「通知设置」，填写机器人密钥（Telegram Bot Token）、接收会话编号（Chat ID）并保存，点击发送测试消息验证。
 2. 在同一分区填写微博和雪球登录凭据（Cookie）。Cookie 从自己已登录的平台浏览器开发者工具 Network 请求头中复制，微博使用 `m.weibo.cn` 登录态，雪球使用 `xueqiu.com` 登录态。保存后不返回明文，输入框留空保留原配置。
 3. 切换「监控博主」添加用户：选择平台，填写数字 UID 或包含 UID 的主页链接，可填写备注。已预填微博主页 `https://weibo.com/u/3962719063`，点击添加即可。
 4. 点击「启动监控」。后台每轮完成后重新随机等待 **3～6 分钟**，页面显示最近和下次检查时间。按北京时间 **00:00（含）～07:00（不含）不请求微博/雪球，也不推送帖子**。07:00 恢复抓取，补抓夜间新帖并推送；服务须保持运行，停机时在启动后的允许时段补抓。关闭网页不影响后台。
@@ -46,7 +45,7 @@
 ## Linux 更新与配置迁移
 
 1. 拉取代码并执行现有部署流程：在项目根目录运行 `bash deploy.sh`。它会安装锁定依赖、构建前端、重启 `showallopts-api` 并发布静态资源。本模块需要的 `httpx`、`cryptography`、`portalocker` 已在依赖锁定文件中。
-2. 在服务实际选中的私有配置（通常为 `config/app.config`）设置 `SOCIAL_ADMIN_USERNAME`、`SOCIAL_ADMIN_PASSWORD`，以及 `SOCIAL_WORKER_ENABLED=true`。不要覆盖现有数据库配置；修改私有配置后重启服务。不要把真实密码写进 `.example` 文件或提交到 Git。
+2. 在服务实际选中的私有配置（通常为 `config/app.config`）确保 `SOCIAL_WORKER_ENABLED=true`。无需配置管理员账号密码，旧的 `SOCIAL_ADMIN_USERNAME`、`SOCIAL_ADMIN_PASSWORD`、`SOCIAL_ADMIN_PASSWORD_HASH` 已不使用，可删除。不要覆盖现有数据库配置；修改私有配置后重启服务。网站若已有 Nginx 等部署层认证，此修改不会调整部署层认证。
 3. 不迁移本地状态时，在 Linux 页面重新添加博主、填写机器人密钥、接收会话编号、微博/雪球登录凭据，然后启动监控。Git 不携带这些私有数据。
 4. 要保留博主、帖子、去重进度和推送配置，先停止源端与目标端后端，再通过私有渠道复制完整的 `${LOG_DIR}/social/`，至少包含 `monitor.sqlite3` 和与之配对的 `secrets.key`，放到目标配置对应的同一路径下。密钥和数据库不可分开替换。已有 Linux 数据需要先备份，不要盲目覆盖。
 5. 确保目录和文件由实际 systemd 服务账号拥有：目录建议权限 `700`，数据库和密钥 `600`。仓库 service 示例账号为 `showallopts`；现有机器如果使用覆盖配置运行于 `ubuntu`，以 `systemctl show showallopts-api -p User -p Group` 的结果为准。`LOG_DIR` 必须位于服务的 `ReadWritePaths` 许可范围，默认 `log/` 已在许可范围内。

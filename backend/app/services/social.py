@@ -1,8 +1,6 @@
 """Persistent social monitoring, independent of the market snapshot database."""
 from contextlib import contextmanager
 from datetime import datetime, timezone, timedelta
-import hashlib
-import hmac
 import json
 import logging
 import os
@@ -76,8 +74,6 @@ class SocialMonitor:
             self.cipher = Fernet(key_path.read_bytes())
         self.stop_event = threading.Event()
         self.thread = None
-        self.auth_lock = threading.Lock()
-        self.failures = {}
         with self.db() as db:
             db.executescript('''
                 CREATE TABLE IF NOT EXISTS config (id INTEGER PRIMARY KEY CHECK(id=1), payload TEXT NOT NULL);
@@ -148,24 +144,6 @@ class SocialMonitor:
                     if not was_enabled:
                         config['enabled_since'] = now()
             self.write_config(db, config)
-
-    def authenticate(self, username, password, remote):
-        stamp = time.monotonic()
-        with self.auth_lock:
-            self.failures = {key: value for key, value in self.failures.items() if stamp - value[0] < 60}
-            first, count = self.failures.get(remote, (stamp, 0))
-            if count >= 10:
-                return False, True
-            expected = (hashlib.sha256(self.settings.social_admin_password.get_secret_value().encode()).hexdigest()
-                        if self.settings.social_admin_password.get_secret_value()
-                        else self.settings.social_admin_password_hash.get_secret_value())
-            valid_user = hmac.compare_digest(username.encode(), self.settings.social_admin_username.encode())
-            valid_password = hmac.compare_digest(hashlib.sha256(password.encode()).hexdigest(), expected)
-            if expected and valid_user and valid_password:
-                self.failures.pop(remote, None)
-                return True, False
-            self.failures[remote] = (first, count + 1)
-            return False, False
 
     def overview(self):
         with self.db() as db:
