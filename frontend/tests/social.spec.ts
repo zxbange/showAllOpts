@@ -142,6 +142,46 @@ test('open the monitor directly, configure users, notifications and inspect post
   await expect(page.getByRole('button', { name: '登录监控台' })).toHaveCount(0)
   await expect(page.getByRole('heading', { name: '最新动态', exact: true })).toBeVisible()
   await expect(page.getByText('SOCIAL MONITOR', { exact: true })).toHaveCount(0)
+  const layout = await page.evaluate(() => {
+    const bounds = (selector: string) => document.querySelector(selector)!.getBoundingClientRect()
+    const summary = bounds('.social-summary')
+    const checks = bounds('.social-check-times')
+    const firstCheck = bounds('.social-check-times > span')
+    const rule = bounds('.social-rule')
+    const button = bounds('.social-schedule > .button')
+    const overview = bounds('.social-overview')
+    const tabs = bounds('.social-tabs')
+    const panel = bounds('#social-panel-feed')
+    return {
+      checkGap: firstCheck.top - summary.bottom,
+      ruleGap: rule.top - checks.bottom,
+      buttonGap: button.top - rule.bottom,
+      sectionGaps: [tabs.top - overview.bottom, panel.top - tabs.bottom],
+      mobile: innerWidth <= 620,
+      overflow: document.documentElement.scrollWidth > innerWidth,
+    }
+  })
+  expect(
+    layout.checkGap,
+    'check times stay close to the overview statistics',
+  ).toBeGreaterThanOrEqual(8)
+  expect(layout.checkGap).toBeLessThanOrEqual(20)
+  expect(layout.ruleGap, 'the schedule text stays together').toBeGreaterThanOrEqual(0)
+  expect(layout.ruleGap).toBeLessThanOrEqual(10)
+  if (layout.mobile) {
+    expect(
+      layout.buttonGap,
+      'the mobile action follows the complete schedule text',
+    ).toBeGreaterThanOrEqual(6)
+    expect(layout.buttonGap).toBeLessThanOrEqual(20)
+  }
+  for (const gap of layout.sectionGaps) {
+    expect(gap, 'overview, tabs and active panel remain visually separated').toBeGreaterThanOrEqual(
+      12,
+    )
+    expect(gap).toBeLessThanOrEqual(28)
+  }
+  expect(layout.overflow).toBe(false)
   await page.getByRole('tab', { name: /监控博主/ }).click()
   await page.getByLabel('备注名称').fill('测试博主')
   await page.getByRole('button', { name: '添加用户' }).click()

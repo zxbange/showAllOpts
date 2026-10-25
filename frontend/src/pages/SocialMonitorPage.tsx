@@ -306,11 +306,23 @@ export function SocialMonitorPage() {
           </div>
         </div>
         <div className="social-schedule">
-          <span>最近检查：{date(status.last_check)}</span>
-          <span>
-            下次检查：
-            {status.enabled ? (status.next_check ? date(status.next_check) : '即将开始') : '已暂停'}
-          </span>
+          <div className="social-schedule-details">
+            <div className="social-check-times">
+              <span>最近检查：{date(status.last_check)}</span>
+              <span>
+                下次检查：
+                {status.enabled
+                  ? status.next_check
+                    ? date(status.next_check)
+                    : '即将开始'
+                  : '已暂停'}
+              </span>
+            </div>
+            <p className="social-rule">
+              <Clock3 size={14} />
+              北京时间 00:00～07:00 休息，早上自动补抓；帖子保留最近一年。
+            </p>
+          </div>
           <button
             disabled={busy}
             className="button button-primary"
@@ -324,10 +336,6 @@ export function SocialMonitorPage() {
             {status.enabled ? '暂停全部监控' : '启动监控'}
           </button>
         </div>
-        <p className="social-rule">
-          <Clock3 size={14} />
-          北京时间 00:00～07:00 休息，早上自动补抓；帖子保留最近一年。
-        </p>
         {!status.enabled && (
           <p className="social-state-note">
             <strong>暂停原因：</strong>总监控开关已关闭，点击“启动监控”开始采集。
