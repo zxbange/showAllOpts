@@ -13,6 +13,11 @@ import httpx
 class PlatformIntervention(RuntimeError):
     """A platform requires the operator to log in/verify manually."""
 
+    def __init__(self, message, reason_code='platform_restricted', http_status=None):
+        super().__init__(message)
+        self.reason_code = reason_code
+        self.http_status = http_status
+
 
 class RateLimited(RuntimeError):
     def __init__(self, retry_after=1800):
@@ -42,10 +47,12 @@ def check_response(response):
             except (ValueError, TypeError, OverflowError):
                 seconds = 1800
         raise RateLimited(seconds)
-    if response.status_code in (401, 403, 418):
-        raise PlatformIntervention(f'平台拒绝访问（HTTP {response.status_code}），请人工检查登录和验证状态')
+    if response.status_code == 401:
+        raise PlatformIntervention('登录凭据失效或未登录（HTTP 401），请重新登录平台并更新登录凭据', 'login_expired', 401)
+    if response.status_code in (403, 418):
+        raise PlatformIntervention(f'平台拒绝访问（HTTP {response.status_code}），请在浏览器检查访问权限或完成安全验证', 'access_denied', response.status_code)
     if response.is_redirect:
-        raise PlatformIntervention('平台跳转至登录或验证页面，请人工登录检查')
+        raise PlatformIntervention(f'平台跳转至登录或验证页面（HTTP {response.status_code}），请在浏览器检查登录状态', 'login_redirect', response.status_code)
     if response.status_code != 200:
         try:
             payload = response.json()
@@ -61,13 +68,16 @@ def check_payload(payload):
     # Inspect error fields only: a post mentioning login/captcha is normal content.
     fields = ('msg', 'message', 'error', 'error_description', 'errmsg', 'description')
     message = ' '.join(str(payload.get(key, '')) for key in fields).lower()
-    if any(word in message for word in ('验证码', '安全验证', '人机验证', '请先登录', '请登录', '重新登录', '登录失效',
-                                        '登录过期', '登录超时', '登陆失效', '登陆过期', '未登录', '访问拒绝', '访问受限', '禁止访问',
-                                        'captcha', 'login required', 'login expired', 'not logged',
-                                        'unauthorized', 'access denied', 'forbidden', 'invalid cookie', 'session expired', 'token expired')):
-        raise PlatformIntervention('平台要求登录、验证码或拒绝访问，请人工处理后恢复监控')
+    if any(word in message for word in ('验证码', '安全验证', '人机验证', 'captcha')):
+        raise PlatformIntervention('平台要求验证码或安全验证，请在浏览器完成人工验证后恢复监控', 'captcha_required')
+    if any(word in message for word in ('请先登录', '请登录', '重新登录', '登录失效', '登录过期', '登录超时',
+                                        '登陆失效', '登陆过期', '未登录', 'login required', 'login expired',
+                                        'not logged', 'unauthorized', 'invalid cookie', 'session expired', 'token expired')):
+        raise PlatformIntervention('平台登录已失效或未登录，请重新登录并更新登录凭据后恢复监控', 'login_expired')
+    if any(word in message for word in ('访问拒绝', '访问受限', '禁止访问', 'access denied', 'forbidden')):
+        raise PlatformIntervention('平台拒绝访问或限制当前账号，请在浏览器检查账号权限及安全提示', 'access_denied')
     if str(payload.get('error_code', '')) in ('21301', '21314', '21315', '21327', '400016'):
-        raise PlatformIntervention('平台登录凭据失效，请重新登录并更新 Cookie')
+        raise PlatformIntervention(f"平台登录凭据失效（错误码 {payload['error_code']}），请重新登录并更新登录凭据", 'login_expired')
     if any(word in message for word in ('频繁', '请求过多', 'too many requests', 'rate limit')):
         raise RateLimited()
 
@@ -121,7 +131,7 @@ def fetch_json(session, url, **kwargs):
         except ValueError:
             check_payload({'message': plain_text(response.text)[:4000]})
             if '<html' in response.text[:1000].lower() or '<!doctype' in response.text[:1000].lower():
-                raise PlatformIntervention('平台返回登录或验证网页，请人工处理') from None
+                raise PlatformIntervention('接口返回网页而非帖子数据，可能被引导至登录或验证页面，请在浏览器人工检查', 'unexpected_html') from None
             raise RuntimeError("平台返回非 JSON 内容，可能需要登录或人工验证") from None
     if not isinstance(payload, dict):
         raise RuntimeError("平台响应结构异常")

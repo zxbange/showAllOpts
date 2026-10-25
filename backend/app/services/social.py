@@ -237,19 +237,19 @@ class SocialMonitor:
             self.write_config(db, config)
             return dict(state)
 
-    def pause_platform(self, platform, reason):
+    def pause_platform(self, platform, reason, reason_code='platform_restricted', http_status=None):
         with self.db() as db:
             db.execute('BEGIN IMMEDIATE')
             config = self.config(db)
             state = config.setdefault('platforms', {}).setdefault(platform, {})
             if not state.get('paused'):
                 state.update(paused=True, reason=reason, paused_at=now(), incident_id=uuid.uuid4().hex,
-                             alert_sent_at=None, alert_next_try=0)
+                             alert_sent_at=None, alert_next_try=0, reason_code=reason_code, http_status=http_status)
             self.write_config(db, config)
 
     def resume_platform(self, platform):
         self.platform_state(platform, paused=False, reason=None, retry_at=0, failures=0,
-                            incident_id=None, alert_sent_at=None, alert_next_try=0)
+                            incident_id=None, alert_sent_at=None, alert_next_try=0, reason_code=None, http_status=None)
         with self.db() as db:
             db.execute('BEGIN IMMEDIATE')
             config = self.config(db)
@@ -424,14 +424,14 @@ class SocialMonitor:
                     with self.db() as db:
                         db.execute('UPDATE authors SET last_success_at=?,scan_since=NULL,scan_page=1 WHERE id=?',
                                    (scan_started, author['id']))
-                self.platform_state(author['platform'], failures=0, retry_at=0)
+                self.platform_state(author['platform'], failures=0, retry_at=0, reason=None, reason_code=None, http_status=None)
             except PlatformIntervention as error:
-                self.pause_platform(author['platform'], str(error))
+                self.pause_platform(author['platform'], str(error), error.reason_code, error.http_status)
                 with self.db() as db:
                     db.execute('UPDATE authors SET last_check=?,last_error=? WHERE id=?', (now(), str(error), author['id']))
                 error_message = '平台监控已暂停，需要人工处理；详情见平台状态'
             except RateLimited as error:
-                self.platform_state(author['platform'], retry_at=time.time() + error.retry_after, reason=str(error))
+                self.platform_state(author['platform'], retry_at=time.time() + error.retry_after, reason=str(error), reason_code='rate_limited', http_status=None)
                 with self.db() as db:
                     db.execute('UPDATE authors SET last_check=?,last_error=? WHERE id=?', (now(), str(error), author['id']))
                 error_message = '平台已限流，已遵守等待时间暂缓请求'
@@ -440,11 +440,18 @@ class SocialMonitor:
             except Exception as error:
                 # Only controlled RuntimeError strings are safe for UI/logs.
                 message = str(error) if type(error) is RuntimeError else '抓取失败，请检查网络、UID、Cookie 或平台访问限制'
+                if isinstance(error, httpx.TimeoutException):
+                    message = '平台请求超时，已暂缓抓取；请检查服务器网络，系统会自动退避重试'
+                elif isinstance(error, httpx.ConnectError):
+                    message = '无法连接平台，已暂缓抓取；请检查服务器网络、域名解析或代理设置'
+                elif isinstance(error, httpx.HTTPError):
+                    message = '平台网络传输异常，已暂缓抓取，系统会自动退避重试'
                 with self.db() as db:
                     db.execute('UPDATE authors SET last_check=?,last_error=? WHERE id=?', (now(), message, author['id']))
                 error_message = '部分用户抓取失败，请查看用户列表'
                 failures = state.get('failures', 0) + 1
                 self.platform_state(author['platform'], failures=failures,
+                                    reason=message, reason_code='fetch_failed', http_status=None,
                                     retry_at=time.time() + min(21600, random.uniform(180, 360) * 2 ** min(failures - 1, 6)))
                 LOG.warning('Social fetch failed platform=%s uid=%s type=%s', author['platform'], author['uid'], type(error).__name__)
         try:

@@ -43,7 +43,13 @@ test('open the monitor directly, configure users, notifications and inspect post
     night_rest: false,
     platforms: {} as Record<
       string,
-      { paused: boolean; reason: string; alert_sent_at: string | null }
+      {
+        paused: boolean
+        reason: string
+        alert_sent_at: string | null
+        http_status?: number
+        paused_at?: string
+      }
     >,
     last_check: null,
     next_check: null,
@@ -108,6 +114,8 @@ test('open the monitor directly, configure users, notifications and inspect post
       if (typeof body.enabled === 'boolean') status.enabled = body.enabled
     }
     if (path.endsWith('/platforms/weibo/resume')) status.platforms.weibo.paused = false
+    if (path.endsWith('/authors/1') && request.method() === 'POST')
+      status.authors[0].enabled = Number(request.postDataJSON().enabled)
     if (path.endsWith('/authors') && request.method() === 'POST') {
       const body = request.postDataJSON()
       status.authors.push({
@@ -133,7 +141,7 @@ test('open the monitor directly, configure users, notifications and inspect post
   await page.getByRole('tab', { name: /监控博主/ }).click()
   await page.getByLabel('备注名称').fill('测试博主')
   await page.getByRole('button', { name: '添加用户' }).click()
-  await expect(page.locator('.social-author strong')).toHaveText('测试博主')
+  await expect(page.locator('.social-author strong[title]')).toHaveText('测试博主')
   await expect(page.getByText('UID 3962719063')).toHaveCount(0)
   await page.getByRole('tab', { name: '通知设置' }).click()
   await page.getByLabel('机器人密钥').fill('fake-token')
@@ -146,14 +154,27 @@ test('open the monitor directly, configure users, notifications and inspect post
   await page.getByRole('button', { name: '启动监控', exact: true }).click()
   await expect(page.getByText('后台监控中', { exact: true })).toBeVisible()
   await expect(page.getByText('3–6', { exact: false }).first()).toBeVisible()
+  await page.getByRole('tab', { name: /监控博主/ }).click()
+  await page.locator('.social-author').getByRole('button', { name: '暂停', exact: true }).click()
+  await expect(page.locator('.social-author-reason')).toContainText('该博主已手动暂停')
+  await page.locator('.social-author').getByRole('button', { name: '恢复', exact: true }).click()
   await page.getByRole('tab', { name: '最新动态' }).click()
   status.platforms.weibo = {
     paused: true,
     reason: '平台要求验证码',
+    http_status: 403,
+    paused_at: '2026-10-25T12:00:00+08:00',
     alert_sent_at: '2026-10-25T12:00:00+08:00',
   }
   await page.getByRole('button', { name: '刷新列表' }).click()
   await expect(page.getByRole('heading', { name: '微博：已自动暂停，等待人工处理' })).toBeVisible()
+  await expect(page.locator('.social-pause-details')).toContainText('暂停原因')
+  await expect(page.locator('.social-pause-details')).toContainText('平台要求验证码')
+  await expect(page.locator('.social-pause-details')).toContainText('HTTP 403')
+  await expect(page.locator('.social-pause-details')).toContainText('暂停时间')
+  await page.getByRole('tab', { name: /监控博主/ }).click()
+  await expect(page.locator('.social-author-reason')).toContainText('平台要求验证码')
+  await page.getByRole('tab', { name: '最新动态' }).click()
   await page.getByRole('button', { name: '人工处理完成，恢复微博' }).click()
   await expect(page.getByRole('heading', { name: '微博：已自动暂停，等待人工处理' })).toHaveCount(0)
   showFeed = true
@@ -179,7 +200,7 @@ test('open the monitor directly, configure users, notifications and inspect post
   await expect(page.getByLabel('机器人密钥')).toBeVisible()
   await page.screenshot({ path: testInfo.outputPath('social-settings.png'), fullPage: true })
   await page.getByRole('tab', { name: /监控博主/ }).click()
-  await expect(page.locator('.social-author strong')).toBeVisible()
+  await expect(page.locator('.social-author strong[title]')).toBeVisible()
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
   await page.screenshot({ path: testInfo.outputPath('social-authors.png'), fullPage: true })
   await page.getByRole('tab', { name: '最新动态' }).click()

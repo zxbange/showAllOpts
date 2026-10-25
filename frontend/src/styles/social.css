@@ -222,6 +222,49 @@
   }
 }
 /* Monitoring workspace: overview, focused sections and readable activity feed. */
+.social-state-note {
+  margin: 0;
+  padding: 12px 22px;
+  border-top: 1px solid var(--border);
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.8;
+}
+.social-pause-details {
+  display: grid;
+  gap: 10px;
+  margin: 16px 0;
+  font-size: 13px;
+}
+.social-pause-details > div {
+  display: grid;
+  grid-template-columns: 76px minmax(0, 1fr);
+  gap: 12px;
+}
+.social-pause-details dt {
+  color: var(--muted);
+}
+.social-pause-details dd {
+  margin: 0;
+  color: var(--text);
+  overflow-wrap: anywhere;
+  line-height: 1.7;
+}
+.social-pause-details > div:first-child dd {
+  color: #975414;
+  font-weight: 550;
+}
+.social-author-reason {
+  grid-column: 1 / -1;
+  margin: 14px 0 0;
+  padding: 10px 12px;
+  border-left: 2px solid var(--gold);
+  background: #fffcf5;
+  border-radius: 4px;
+  font-size: 12px;
+  line-height: 1.8;
+  overflow-wrap: anywhere;
+}
 .social-page {
   gap: 20px;
   max-width: 1280px;

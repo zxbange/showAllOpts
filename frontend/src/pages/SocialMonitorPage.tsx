@@ -36,6 +36,9 @@ type PlatformState = {
   reason?: string | null
   retry_at?: number
   alert_sent_at?: string | null
+  paused_at?: string | null
+  reason_code?: string | null
+  http_status?: number | null
 }
 type Status = {
   enabled: boolean
@@ -80,6 +83,36 @@ function date(value: string | number | null) {
       ? value
       : '无法显示时间'
     : moment.toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai', hour12: false })
+}
+
+function authorState(author: Author, status: Status) {
+  if (!author.enabled)
+    return { label: '已暂停', reason: '该博主已手动暂停，点击“恢复”重新监控。', waiting: false }
+  if (!status.enabled)
+    return { label: '已暂停', reason: '总监控开关已关闭，点击“启动监控”恢复。', waiting: false }
+  const platform = status.platforms?.[author.platform]
+  if (platform?.paused)
+    return {
+      label: '平台已暂停',
+      reason:
+        platform.reason ||
+        author.last_error ||
+        '平台已自动暂停，但旧记录未保存具体原因，请检查平台登录和验证状态。',
+      waiting: false,
+    }
+  if (status.night_rest)
+    return {
+      label: '夜间休息中',
+      reason: '北京时间 00:00～07:00 暂停抓取，07:00 自动恢复并补抓。',
+      waiting: false,
+    }
+  if (platform?.retry_at && platform.retry_at * 1000 > Date.now())
+    return {
+      label: '退避等待中',
+      reason: platform.reason || author.last_error || '平台请求暂时失败，正在等待自动重试。',
+      waiting: true,
+    }
+  return { label: '监控中', reason: '', waiting: false }
 }
 
 export function SocialMonitorPage() {
@@ -270,6 +303,16 @@ export function SocialMonitorPage() {
           <Clock3 size={14} />
           北京时间 00:00～07:00 休息，早上自动补抓；帖子保留最近一年。
         </p>
+        {!status.enabled && (
+          <p className="social-state-note">
+            <strong>暂停原因：</strong>总监控开关已关闭，点击“启动监控”开始采集。
+          </p>
+        )}
+        {status.enabled && status.night_rest && !allPlatformsPaused && (
+          <p className="social-state-note">
+            <strong>休息原因：</strong>当前为北京时间夜间休息时段，07:00 自动恢复，无需手动操作。
+          </p>
+        )}
       </div>
       {status.last_error && (
         <div className="social-error" role="alert">
@@ -284,10 +327,36 @@ export function SocialMonitorPage() {
             <h2>
               {label(platform)}：{state.paused ? '已自动暂停，等待人工处理' : '退避等待中'}
             </h2>
-            <p className="social-muted">
-              {state.reason || '平台请求暂缓'}
-              {!state.paused && state.retry_at ? ` · 最早重试：${date(state.retry_at * 1000)}` : ''}
-            </p>
+            <dl className="social-pause-details">
+              <div>
+                <dt>{state.paused ? '暂停原因' : '暂缓原因'}</dt>
+                <dd>
+                  {state.reason ||
+                    status.authors.find(
+                      (author) => author.platform === platform && author.last_error,
+                    )?.last_error ||
+                    '旧记录未保存具体原因，请在浏览器检查平台登录、访问权限或安全验证提示。'}
+                </dd>
+              </div>
+              {state.http_status && (
+                <div>
+                  <dt>平台状态码</dt>
+                  <dd>HTTP {state.http_status}</dd>
+                </div>
+              )}
+              {state.paused && state.paused_at && (
+                <div>
+                  <dt>暂停时间</dt>
+                  <dd>{date(state.paused_at)}</dd>
+                </div>
+              )}
+              {!state.paused && state.retry_at && (
+                <div>
+                  <dt>最早重试</dt>
+                  <dd>{date(state.retry_at * 1000)}</dd>
+                </div>
+              )}
+            </dl>
             {state.paused && (
               <>
                 <p className="social-muted">
@@ -413,53 +482,66 @@ export function SocialMonitorPage() {
             {!status.authors.length && (
               <p className="social-muted">还没有监控用户，先添加一个主页。</p>
             )}
-            {status.authors.map((author) => (
-              <article className="social-author" key={author.id}>
-                <div>
-                  <span className={`social-platform ${author.platform}`}>
-                    {label(author.platform)}
-                  </span>
-                  <strong title={authorName(author)}>{authorName(author)}</strong>
-                </div>
-                <p className="social-muted">
-                  {author.enabled ? '已启用' : '已暂停'} · 最近检查 {date(author.last_check)}
-                  {author.scan_page && author.scan_page > 1
-                    ? ` · 待继续补抓第 ${author.scan_page} 页`
-                    : ''}
-                </p>
-                {author.last_error && <p className="social-error">{author.last_error}</p>}
-                <div className="social-actions">
-                  <button
-                    disabled={busy}
-                    className="button"
-                    onClick={() =>
-                      void action(async () => {
-                        setStatus(
-                          await api<Status>(`/authors/${author.id}`, { enabled: !author.enabled }),
-                        )
-                      })
-                    }
-                  >
-                    {author.enabled ? '暂停' : '恢复'}
-                  </button>
-                  <button
-                    disabled={busy}
-                    className="button"
-                    onClick={() => {
-                      if (window.confirm(`删除 ${authorName(author)} 的监控及已采集帖子？`))
+            {status.authors.map((author) => {
+              const monitoring = authorState(author, status)
+              return (
+                <article className="social-author" key={author.id}>
+                  <div>
+                    <span className={`social-platform ${author.platform}`}>
+                      {label(author.platform)}
+                    </span>
+                    <strong title={authorName(author)}>{authorName(author)}</strong>
+                  </div>
+                  <p className="social-muted">
+                    {monitoring.label} · 最近检查 {date(author.last_check)}
+                    {author.scan_page && author.scan_page > 1
+                      ? ` · 待继续补抓第 ${author.scan_page} 页`
+                      : ''}
+                  </p>
+                  {monitoring.reason && (
+                    <p className="social-author-reason">
+                      <strong>{monitoring.waiting ? '暂缓原因：' : '暂停原因：'}</strong>
+                      {monitoring.reason}
+                    </p>
+                  )}
+                  {author.last_error && author.last_error !== monitoring.reason && (
+                    <p className="social-error">最近抓取错误：{author.last_error}</p>
+                  )}
+                  <div className="social-actions">
+                    <button
+                      disabled={busy}
+                      className="button"
+                      onClick={() =>
                         void action(async () => {
-                          setStatus(await api<Status>(`/authors/${author.id}/delete`, {}))
-                          setAuthorFilter('')
-                          setPage(1)
-                          await refresh()
+                          setStatus(
+                            await api<Status>(`/authors/${author.id}`, {
+                              enabled: !author.enabled,
+                            }),
+                          )
                         })
-                    }}
-                  >
-                    删除
-                  </button>
-                </div>
-              </article>
-            ))}
+                      }
+                    >
+                      {author.enabled ? '暂停' : '恢复'}
+                    </button>
+                    <button
+                      disabled={busy}
+                      className="button"
+                      onClick={() => {
+                        if (window.confirm(`删除 ${authorName(author)} 的监控及已采集帖子？`))
+                          void action(async () => {
+                            setStatus(await api<Status>(`/authors/${author.id}/delete`, {}))
+                            setAuthorFilter('')
+                            setPage(1)
+                            await refresh()
+                          })
+                      }}
+                    >
+                      删除
+                    </button>
+                  </div>
+                </article>
+              )
+            })}
           </div>
         </section>
         <section

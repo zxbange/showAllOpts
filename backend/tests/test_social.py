@@ -11,7 +11,7 @@ from app.core.config import Settings
 from app.main import create_app
 from app.services.social import SocialMonitor, CHINA, retention_cutoff, next_check_time
 from app.services.social_sources import (normalize_post, message_parts, fetch_posts,
-                                         PlatformIntervention, RateLimited, PostBatch)
+                                         PlatformIntervention, RateLimited, PostBatch, check_payload)
 
 
 @contextmanager
@@ -543,3 +543,52 @@ def test_known_posts_refresh_author_name_without_long_text_request():
     with patch('app.services.social_sources.httpx.Client', return_value=client):
         assert not fetch_posts({'platform': 'weibo', 'uid': '123', '_known_ids': {'1'}, '_on_author_name': names.append}, pages=1)
     assert names == ['最新昵称']
+
+
+@pytest.mark.parametrize('payload,code', [
+    ({'msg': '请输入验证码'}, 'captcha_required'),
+    ({'msg': '请重新登录 token=must-not-be-returned'}, 'login_expired'),
+    ({'error_code': '21327'}, 'login_expired'),
+    ({'error_description': 'access denied'}, 'access_denied'),
+])
+def test_distinct_pause_reasons_do_not_echo_platform_secrets(payload, code):
+    with pytest.raises(PlatformIntervention) as captured:
+        check_payload(payload)
+    assert captured.value.reason_code == code
+    assert 'must-not-be-returned' not in str(captured.value)
+
+
+def test_pause_details_are_exposed_in_status_and_survive_restart(social_client):
+    client, service = social_client
+    add(service)
+    enable(service)
+    failure = PlatformIntervention('平台拒绝访问（HTTP 403），请检查账号权限', 'access_denied', 403)
+    with patch('app.services.social.fetch_posts', side_effect=failure), patch.object(service, 'send_part'):
+        service.cycle()
+    state = client.get('/api/v1/social-monitor/status').json()['platforms']['weibo']
+    assert state['reason'] == str(failure)
+    assert state['reason_code'] == 'access_denied' and state['http_status'] == 403
+    assert state['paused_at']
+    restarted = SocialMonitor(service.settings)
+    assert restarted.overview()['platforms']['weibo']['reason'] == str(failure)
+    restarted.resume_platform('weibo')
+    assert restarted.overview()['platforms']['weibo']['reason'] is None
+
+
+@pytest.mark.parametrize('failure,expected', [
+    (httpx.ConnectError('secret-cookie-value'), '无法连接平台'),
+    (httpx.ReadTimeout('secret-cookie-value'), '平台请求超时'),
+])
+def test_network_backoff_keeps_a_safe_visible_reason(social_client, failure, expected):
+    _, service = social_client
+    add(service)
+    enable(service)
+    with patch('app.services.social.fetch_posts', side_effect=failure):
+        service.cycle()
+    state = service.overview()['platforms']['weibo']
+    assert expected in state['reason'] and 'secret-cookie-value' not in state['reason']
+    assert state['reason_code'] == 'fetch_failed' and state['retry_at']
+    service.platform_state('weibo', retry_at=0)
+    with patch('app.services.social.fetch_posts', return_value=[]):
+        service.cycle()
+    assert service.overview()['platforms']['weibo']['reason'] is None
