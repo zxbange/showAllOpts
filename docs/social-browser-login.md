@@ -49,6 +49,16 @@ Linux 浏览器启用 Chromium 沙箱，要求操作系统允许服务账号使�
 
 ## 验证与限制
 
+浏览器启动失败时，可在项目根目录以 API 服务实际运行账号执行诊断（以下假设为 `ubuntu`）：
+
+```bash
+sudo -u ubuntu env APP_ENV_FILE=config/app.config backend/.venv/bin/python scripts/check_social_browser.py
+```
+
+脚本使用临时资料目录，仅检查浏览器启动、写入和截图，不读取已有登录资料、不请求微博或雪球，也不输出 Cookie 或管理密钥。它会输出安全的分类错误，例如 `browser_missing`（浏览器未安装或路径不匹配）、`system_dependencies_missing`（缺少系统库）、`permission_denied`（权限）、`sandbox_denied`（沙箱受限）。网页错误会显示失败阶段和分类代码，服务日志仅记录阶段与代码，不输出原始异常中的敏感 URL。
+
+手动诊断不处于 systemd 的沙箱环境：若脚本通过而网页仍失败，应进一步检查服务实际配置路径、环境变量和 systemd 的目录/权限限制。不要通过关闭 Chromium 沙箱或将服务改为 root 来排除问题。
+
 微博通过移动端官方登录状态接口确认已登录；雪球要求账号 Cookie（包括刷新凭据）与官方页面当前用户信息匹配，访客 Cookie 不算登录成功。如果平台更改网页结构或验证接口，可能需要更新适配器；此时继续显示待确认，不能仅凭二维码消失判断成功。
 
 会话持久化不保证 Cookie 永久有效。日常抓取仍沿用现有 HTTP 请求方式，浏览器仅在打开登录窗口时运行；不通过后台循环登录延长平台有效期。平台要求重新认证时仍需人工续登。

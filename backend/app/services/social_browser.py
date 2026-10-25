@@ -1,6 +1,7 @@
 """Short-lived remote login windows; profiles remain on the application server."""
 import hashlib
 import json
+import logging
 import os
 import threading
 import time
@@ -21,6 +22,32 @@ HOSTS = {
 ACTIVE = {'starting', 'waiting', 'verification'}
 LIFETIME = 360
 WIDTH, HEIGHT = 1100, 800
+logger = logging.getLogger(__name__)
+
+
+def browser_error(error):
+    """Classify locally; never return exception text containing URLs or credentials."""
+    text = str(error).lower()
+    if isinstance(error, ModuleNotFoundError) and getattr(error, 'name', '').startswith('playwright'):
+        return 'python_dependency_missing', '服务虚拟环境未安装 Playwright，请使用服务的 Python 安装 backend/requirements.lock.txt'
+    if ('executable doesn\'t exist' in text or 'executable not found' in text
+            or ('distribution' in text and 'not found' in text)):
+        return 'browser_missing', '未找到 Chromium，请用服务对应的虚拟环境运行 scripts/install_social_browser.py，并核对浏览器安装目录'
+    if any(word in text for word in ('no usable sandbox', 'operation not permitted', 'failed to move to new namespace', 'running as root without --no-sandbox')):
+        return 'sandbox_denied', 'Chromium 沙箱启动被系统拒绝，请检查服务运行账号、用户命名空间及 systemd/AppArmor/容器限制'
+    if any(word in text for word in ('error while loading shared libraries', 'host system is missing dependencies', 'cannot open shared object file')):
+        return 'system_dependencies_missing', 'Chromium 缺少系统库，请运行虚拟环境中的 python -m playwright install-deps chromium'
+    if isinstance(error, PermissionError) or any(word in text for word in ('permission denied', 'eacces', 'read-only file system')):
+        return 'permission_denied', '服务账号无法读取浏览器或写入会话目录，请检查 .runtime/playwright 和 LOG_DIR 的权限及 systemd 路径限制'
+    if any(word in text for word in ('processsingleton', 'singletonlock', 'profile appears to be in use')):
+        return 'profile_busy', '浏览器资料目录被其他进程占用，请检查是否存在残留浏览器；不要在浏览器运行时删除资料目录'
+    if 'net::err_' in text:
+        return 'network_failed', '服务器访问官方登录页失败，请检查 DNS、代理、TLS 和出口网络'
+    if type(error).__name__ == 'TimeoutError':
+        return 'timeout', '官方登录页加载或操作超时，请检查服务器网络后重试'
+    if isinstance(error, (json.JSONDecodeError, UnicodeDecodeError)):
+        return 'invalid_response', '登录验证未得到预期数据，可能为平台验证页或接口变化，请检查官方登录画面'
+    return 'browser_failed', '浏览器进程或登录操作失败，请运行 scripts/check_social_browser.py 检查启动环境；若检查通过，请反馈本页失败阶段'
 
 
 def allowed_url(platform, url):
@@ -187,6 +214,7 @@ class BrowserLogin:
                 context.close()
 
     def run(self, platform, state, lease):
+        stage = '启动浏览器'
         try:
             from playwright.sync_api import sync_playwright
             os.environ.setdefault('PLAYWRIGHT_BROWSERS_PATH', str(PROJECT_ROOT / '.runtime' / 'playwright'))
@@ -197,6 +225,7 @@ class BrowserLogin:
                 page = context.pages[0] if context.pages else context.new_page()
                 page.set_default_timeout(10000)
                 page.on('dialog', lambda dialog: dialog.dismiss())
+                stage = '打开官方登录页'
                 response = page.goto(PLATFORMS[platform], wait_until='domcontentloaded', timeout=45000)
                 if response and response.status in (401, 403, 418, 429):
                     self.save(platform, state, state='blocked', image=False,
@@ -214,6 +243,7 @@ class BrowserLogin:
                     if pages:
                         page = pages[-1]
                     command = self.command(platform)
+                    stage = '处理登录画面'
                     if command and command['id'] == state['id']:
                         if command['action'] == 'cancel':
                             self.save(platform, state, state='cancelled', message='登录已取消', image=False)
@@ -238,6 +268,7 @@ class BrowserLogin:
                     fingerprint = hashlib.sha256(json.dumps(cookies, sort_keys=True).encode()).hexdigest()
                     if time.time() - last_probe >= 10 and (force or fingerprint != previous):
                         previous, last_probe, force = fingerprint, time.time(), False
+                        stage = '验证平台登录状态'
                         credential = self.verify(platform, context, page)
                         if credential:
                             # Serialize completion against a concurrent cancellation request.
@@ -251,6 +282,7 @@ class BrowserLogin:
                                     return
                             continue
                     verification = any(word in text for word in ('请输入验证码', '请完成安全验证', '拖动滑块'))
+                    stage = '保存登录画面'
                     self.write(self.path(platform, 'image'), page.screenshot(type='png'))
                     self.save(platform, state, state='verification' if verification else 'waiting', image=True,
                               revision=state['revision'] + 1,
@@ -260,9 +292,10 @@ class BrowserLogin:
                 self.save(platform, state, state='expired', image=False, message='登录窗口已结束，请重新打开')
         except Exception as error:
             # Exception messages/URLs can contain credentials; expose only a safe classification.
-            reason = ('官方登录页加载或操作超时，请检查服务器网络后重试' if type(error).__name__ == 'TimeoutError'
-                      else '浏览器启动或登录验证失败，请检查 Chromium 安装、系统依赖、目录权限和服务器网络')
-            self.save(platform, state, state='error', image=False, message=reason)
+            code, reason = browser_error(error)
+            logger.warning('Browser login failed platform=%s stage=%s code=%s', platform, stage, code)
+            self.save(platform, state, state='error', image=False, error_code=code, stage=stage,
+                      message=f'{stage}：{reason}（{code}）')
         finally:
             # sync_playwright closes the driver/context even on early returns or failures.
             self.path(platform, 'image').unlink(missing_ok=True)

@@ -8,7 +8,22 @@ from fastapi.testclient import TestClient
 
 from app.core.config import Settings
 from app.main import create_app
-from app.services.social_browser import BrowserLogin, allowed_url, authenticated_xueqiu
+from app.services.social_browser import BrowserLogin, allowed_url, authenticated_xueqiu, browser_error
+
+
+@pytest.mark.parametrize('message,code', [
+    ("Executable doesn't exist at /private/path", 'browser_missing'),
+    ('Failed to move to new namespace: Operation not permitted', 'sandbox_denied'),
+    ('error while loading shared libraries: libexample.so', 'system_dependencies_missing'),
+    ('Permission denied', 'permission_denied'),
+    ('ProcessSingleton profile appears to be in use', 'profile_busy'),
+    ('net::ERR_NAME_NOT_RESOLVED https://secret.example/', 'network_failed'),
+])
+def test_browser_error_is_specific_without_raw_exception(message, code):
+    result, reason = browser_error(RuntimeError(message + ' SUB=secret-cookie'))
+    assert result == code
+    assert 'secret-cookie' not in reason
+    assert '/private/path' not in reason
 
 
 KEY = 'unit-test-management-key-123456789'
