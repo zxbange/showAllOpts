@@ -38,8 +38,8 @@ test('open the monitor directly, configure users, notifications and inspect post
   page.on('pageerror', (error) => errors.push(error.message))
   const status = {
     enabled: false,
-    interval_min: 180,
-    interval_max: 360,
+    interval_min: 600,
+    interval_max: 960,
     night_rest: false,
     platforms: {} as Record<
       string,
@@ -153,7 +153,7 @@ test('open the monitor directly, configure users, notifications and inspect post
   await expect(page.getByRole('status')).toContainText('测试消息已发送')
   await page.getByRole('button', { name: '启动监控', exact: true }).click()
   await expect(page.getByText('后台监控中', { exact: true })).toBeVisible()
-  await expect(page.getByText('3–6', { exact: false }).first()).toBeVisible()
+  await expect(page.getByText('10–16', { exact: false }).first()).toBeVisible()
   await page.getByRole('tab', { name: /监控博主/ }).click()
   await page.locator('.social-author').getByRole('button', { name: '暂停', exact: true }).click()
   await expect(page.locator('.social-author-reason')).toContainText('该博主已手动暂停')

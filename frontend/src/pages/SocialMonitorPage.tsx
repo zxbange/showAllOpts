@@ -278,7 +278,7 @@ export function SocialMonitorPage() {
           <div>
             <span>随机检查间隔</span>
             <strong>
-              3–6 <small>分钟</small>
+              {status.interval_min / 60}–{status.interval_max / 60} <small>分钟</small>
             </strong>
           </div>
         </div>

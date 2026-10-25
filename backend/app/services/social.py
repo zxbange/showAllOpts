@@ -22,6 +22,8 @@ LOG = logging.getLogger(__name__)
 logging.getLogger('httpx').setLevel(logging.WARNING)
 logging.getLogger('httpcore').setLevel(logging.WARNING)
 CHINA = timezone(timedelta(hours=8))
+POLL_INTERVAL_MIN = 600
+POLL_INTERVAL_MAX = 960
 
 
 def now():
@@ -151,7 +153,7 @@ class SocialMonitor:
             authors = [dict(row) for row in db.execute('SELECT * FROM authors ORDER BY id')]
             counts = dict(db.execute('SELECT status,count(*) FROM posts GROUP BY status').fetchall())
         return {
-            'enabled': config['enabled'], 'interval_min': 180, 'interval_max': 360,
+            'enabled': config['enabled'], 'interval_min': POLL_INTERVAL_MIN, 'interval_max': POLL_INTERVAL_MAX,
             'browser_login_available': bool(getattr(self, 'browser_login', None) and self.browser_login.available),
             'night_rest': night_time(datetime.now(CHINA)),
             'platforms': config.get('platforms', {}),
@@ -457,7 +459,7 @@ class SocialMonitor:
                 failures = state.get('failures', 0) + 1
                 self.platform_state(author['platform'], failures=failures,
                                     reason=message, reason_code='fetch_failed', http_status=None,
-                                    retry_at=time.time() + min(21600, random.uniform(180, 360) * 2 ** min(failures - 1, 6)))
+                                    retry_at=time.time() + min(21600, random.uniform(POLL_INTERVAL_MIN, POLL_INTERVAL_MAX) * 2 ** min(failures - 1, 6)))
                 LOG.warning('Social fetch failed platform=%s uid=%s type=%s', author['platform'], author['uid'], type(error).__name__)
         try:
             self.send_alerts()
@@ -469,7 +471,7 @@ class SocialMonitor:
             db.execute('BEGIN IMMEDIATE')
             current = self.config(db)
             current.update(last_check=now(), last_error=error_message,
-                           next_check=next_check_time(datetime.now(CHINA), random.uniform(180, 360)))
+                           next_check=next_check_time(datetime.now(CHINA), random.uniform(POLL_INTERVAL_MIN, POLL_INTERVAL_MAX)))
             self.write_config(db, current)
 
     def start(self):

@@ -128,11 +128,13 @@ def test_random_interval_and_fetch_failure_does_not_initialize(social_client):
     author = add(service)
     enable(service)
     with clock('2026-10-25T12:00:00+08:00') as moment:
-        with patch('app.services.social.fetch_posts', return_value=[post()]), patch('app.services.social.random.uniform', return_value=267) as jitter:
+        with patch('app.services.social.fetch_posts', return_value=[post()]), patch('app.services.social.random.uniform', return_value=780) as jitter:
             service.cycle()
-        jitter.assert_called_with(180, 360)
+        jitter.assert_called_with(600, 960)
+        assert service.overview()['interval_min'] == 600
+        assert service.overview()['interval_max'] == 960
         with service.db() as db:
-            assert service.config(db)['next_check'] == moment.timestamp() + 267
+            assert service.config(db)['next_check'] == moment.timestamp() + 780
     service.add_author('xueqiu', '123', '雪球用户')
     with patch('app.services.social.fetch_posts', side_effect=RuntimeError('需要登录')):
         service.cycle()

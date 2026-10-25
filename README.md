@@ -4,7 +4,7 @@
 
 ## 技术栈
 
-新增独立的[博主动态监控](docs/social-monitor.md)页面：直接管理微博、雪球用户，无需页面登录；后台每轮随机间隔 3～6 分钟检查新帖，北京时间 00:00～07:00 休息并在早上补抓；验证码、登录失效或拒绝访问时暂停对应平台并通过 Telegram 提醒。监控数据保存在本地 SQLite，不修改市场数据源库。
+新增独立的[博主动态监控](docs/social-monitor.md)页面：直接管理微博、雪球用户，无需页面登录；后台每轮随机间隔 10～16 分钟检查新帖，北京时间 00:00～07:00 休息并在早上补抓；验证码、登录失效或拒绝访问时暂停对应平台并通过 Telegram 提醒。监控数据保存在本地 SQLite，不修改市场数据源库。
 
 - 后端：Python 3.11+、FastAPI、SQLAlchemy 2、PyMySQL、Pydantic Settings。
 - 前端：Node.js 22.12+、React、TypeScript、Vite、Apache ECharts。
