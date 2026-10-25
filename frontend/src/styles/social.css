@@ -746,6 +746,8 @@
     padding: 12px 16px;
   }
   .social-tabs {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
     width: 100%;
   }
   .social-tabs > button {
@@ -910,4 +912,201 @@
   display: block;
   width: 100%;
   height: auto;
+}
+
+.social-cubes > .social-error,
+.social-cubes > .social-notice {
+  margin-top: 14px;
+}
+.social-cube-window {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  margin-top: 18px;
+  padding: 12px 14px;
+  border: 1px solid #dfebe6;
+  border-radius: 9px;
+  background: #f4f9f6;
+  color: var(--jade);
+}
+.social-cube-window > svg {
+  margin-top: 2px;
+}
+.social-cube-window > div {
+  display: grid;
+  gap: 2px;
+  font-size: 12px;
+}
+.social-cube-window span {
+  color: var(--muted);
+}
+.social-cube-form {
+  display: grid;
+  grid-template-columns: minmax(180px, 1.5fr) minmax(120px, 1fr) auto;
+  align-items: end;
+  gap: 14px;
+  margin-top: 18px;
+  padding: 16px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: #fcfaf7;
+}
+.social-cube-form > .button {
+  min-height: 42px;
+}
+.social-cube-empty {
+  padding: 30px 12px;
+}
+.social-cube-feed-heading {
+  gap: 14px;
+  margin-top: 24px;
+  padding-top: 20px;
+  border-top: 1px solid var(--border);
+}
+.social-cube-feed-heading h3 {
+  font-size: 16px;
+}
+.social-cube-loading {
+  padding: 24px 0;
+}
+.social-rebalance {
+  padding: 20px 0;
+  border-bottom: 1px solid var(--border);
+}
+.social-rebalance header,
+.social-rebalance header > div {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+.social-rebalance header > div {
+  flex-wrap: wrap;
+}
+.social-rebalance header > div > strong {
+  font-size: 14px;
+  overflow-wrap: anywhere;
+}
+.social-cube-symbol {
+  color: var(--muted);
+  font-size: 12px;
+}
+.social-rebalance-time {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 14px;
+  margin-top: 8px;
+  font-size: 12px;
+}
+.social-cube-changes {
+  display: grid;
+  gap: 0;
+  padding: 0;
+  margin: 14px 0 0;
+  list-style: none;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  overflow: hidden;
+}
+.social-cube-changes > li {
+  display: grid;
+  grid-template-columns: minmax(120px, 1fr) auto minmax(170px, auto);
+  align-items: center;
+  gap: 4px 16px;
+  padding: 12px 14px;
+  background: #fcfbf9;
+}
+.social-cube-changes > li + li {
+  border-top: 1px solid var(--border);
+}
+.social-cube-stock {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 4px 8px;
+  min-width: 0;
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+.social-cube-stock > span,
+.social-cube-price {
+  color: var(--muted);
+  font-size: 11px;
+}
+.social-cube-action {
+  color: var(--muted);
+  font-size: 12px;
+}
+.social-cube-weights {
+  text-align: right;
+  white-space: nowrap;
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+}
+.social-cube-weights > span {
+  padding: 0 5px;
+  color: var(--muted);
+  font-weight: 400;
+}
+.social-cube-price {
+  grid-column: 1 / -1;
+}
+.social-cube-comment {
+  margin-top: 12px;
+  padding: 10px 12px;
+  border-left: 2px solid var(--border);
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.8;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.social-cube-no-changes {
+  margin-top: 14px;
+}
+.social-rebalance .social-original {
+  margin: 14px 0 0;
+}
+.social-rebalance > .social-error {
+  margin-top: 12px;
+}
+@media (max-width: 780px) {
+  .social-cube-form {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .social-cube-feed-heading > .social-actions {
+    width: 100%;
+  }
+  .social-cube-feed-heading select {
+    flex: 1;
+    min-width: 0;
+  }
+}
+@media (max-width: 620px) {
+  .social-cube-form {
+    padding: 14px;
+  }
+  .social-cube-changes > li {
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 5px 8px;
+    padding: 12px;
+  }
+  .social-cube-action {
+    text-align: right;
+  }
+  .social-cube-weights {
+    grid-column: 1 / -1;
+    text-align: left;
+  }
+  .social-rebalance header > div {
+    gap: 3px 8px;
+  }
+  .social-rebalance-time {
+    flex-direction: column;
+    gap: 4px;
+  }
+  .social-cube-feed-heading .button {
+    padding: 8px 10px;
+    font-size: 12px;
+  }
 }

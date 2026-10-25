@@ -10,16 +10,19 @@ import {
   Settings2,
   Search,
   Clock3,
+  Layers3,
 } from 'lucide-react'
 import '../styles/social.css'
 import { SocialBrowserLogin } from '../components/SocialBrowserLogin'
+import { SocialCubeMonitor, type MonitoredCube } from '../components/SocialCubeMonitor'
 
 type Platform = 'weibo' | 'xueqiu'
-type View = 'feed' | 'authors' | 'settings'
+type View = 'feed' | 'authors' | 'cubes' | 'settings'
 type TelegramSetting = 'token' | 'chat_id'
 const views = [
   { id: 'feed', label: '最新动态', icon: MessageSquare },
   { id: 'authors', label: '监控博主', icon: Users },
+  { id: 'cubes', label: '组合调仓', icon: Layers3 },
   { id: 'settings', label: '通知设置', icon: Settings2 },
 ] as const
 type Author = {
@@ -55,6 +58,9 @@ type Status = {
   weibo_cookie_configured: boolean
   xueqiu_cookie_configured: boolean
   authors: Author[]
+  cubes?: MonitoredCube[]
+  cube_counts?: Record<string, number>
+  cube_monitoring_active?: boolean
   counts: Record<string, number>
   night_rest?: boolean
   platforms?: Partial<Record<Platform, PlatformState>>
@@ -221,9 +227,14 @@ export function SocialMonitorPage() {
   }
 
   const activeAuthors = status?.authors.filter((author) => author.enabled) ?? []
+  const activeCubes = status?.cubes?.filter((cube) => cube.enabled) ?? []
+  const activePlatforms = [
+    ...activeAuthors.map((author) => author.platform),
+    ...(activeCubes.length ? ['xueqiu' as Platform] : []),
+  ]
   const allPlatformsPaused =
-    activeAuthors.length > 0 &&
-    activeAuthors.every((author) => status?.platforms?.[author.platform]?.paused)
+    activePlatforms.length > 0 &&
+    activePlatforms.every((platform) => status?.platforms?.[platform]?.paused)
 
   if (!status)
     return (
@@ -281,7 +292,9 @@ export function SocialMonitorPage() {
                   ? '等待人工处理'
                   : status.night_rest
                     ? '夜间休息中'
-                    : '后台监控中'
+                    : !activeAuthors.length && activeCubes.length && !status.cube_monitoring_active
+                      ? '组合休息中'
+                      : '后台监控中'
                 : '已暂停'}
             </strong>
           </div>
@@ -295,7 +308,8 @@ export function SocialMonitorPage() {
           <div>
             <span>已推送 / 待推送</span>
             <strong>
-              {status.counts.sent || 0} <small>/ {status.counts.pending || 0}</small>
+              {(status.counts.sent || 0) + (status.cube_counts?.sent || 0)}{' '}
+              <small>/ {(status.counts.pending || 0) + (status.cube_counts?.pending || 0)}</small>
             </strong>
           </div>
           <div>
@@ -320,7 +334,7 @@ export function SocialMonitorPage() {
             </div>
             <p className="social-rule">
               <Clock3 size={14} />
-              北京时间 00:00～07:00 休息，早上自动补抓；帖子保留最近一年。
+              博主 07:00～24:00，组合周一至周五 09:00～15:00（北京时间）；帖子保留一年。
             </p>
           </div>
           <button
@@ -341,11 +355,19 @@ export function SocialMonitorPage() {
             <strong>暂停原因：</strong>总监控开关已关闭，点击“启动监控”开始采集。
           </p>
         )}
-        {status.enabled && status.night_rest && !allPlatformsPaused && (
-          <p className="social-state-note">
-            <strong>休息原因：</strong>当前为北京时间夜间休息时段，07:00 自动恢复，无需手动操作。
-          </p>
-        )}
+        {status.enabled &&
+          !allPlatformsPaused &&
+          (status.night_rest ||
+            (!activeAuthors.length &&
+              activeCubes.length > 0 &&
+              !status.cube_monitoring_active)) && (
+            <p className="social-state-note">
+              <strong>休息原因：</strong>
+              {activeAuthors.length
+                ? '博主监控将在北京时间 07:00 自动恢复；组合在下一个监控窗口开始检查。'
+                : '当前不在组合监控时段，下一个监控窗口按队列补齐新调仓。'}
+            </p>
+          )}
       </div>
       {status.last_error && (
         <div className="social-error" role="alert">
@@ -404,7 +426,7 @@ export function SocialMonitorPage() {
                   onClick={() =>
                     void action(async () => {
                       setStatus(await api<Status>(`/platforms/${platform}/resume`, {}))
-                      setNotice(`${label(platform)}已人工恢复；夜间将在 07:00 开始检查。`)
+                      setNotice(`${label(platform)}已人工恢复，将在各自监控时段按队列检查。`)
                     })
                   }
                 >
@@ -450,10 +472,11 @@ export function SocialMonitorPage() {
             <item.icon size={17} />
             <span>{item.label}</span>
             {item.id === 'authors' && <small>{status.authors.length}</small>}
+            {item.id === 'cubes' && <small>{status.cubes?.length || 0}</small>}
           </button>
         ))}
       </div>
-      <div className="social-management" hidden={view === 'feed'}>
+      <div className="social-management" hidden={view === 'feed' || view === 'cubes'}>
         <section
           className="social-panel"
           hidden={view !== 'authors'}
@@ -718,6 +741,15 @@ export function SocialMonitorPage() {
           </div>
         </section>
       </div>
+      {view === 'cubes' && (
+        <SocialCubeMonitor
+          cubes={status.cubes || []}
+          enabled={status.enabled}
+          monitoringActive={!!status.cube_monitoring_active}
+          platform={status.platforms?.xueqiu}
+          onChanged={refresh}
+        />
+      )}
       <section
         className="social-panel social-feed"
         hidden={view !== 'feed'}

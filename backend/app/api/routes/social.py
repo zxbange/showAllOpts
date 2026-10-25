@@ -3,6 +3,7 @@ from typing import Literal
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, Field, SecretStr
 
+from app.services.social_cube_sources import cube_symbol
 from app.services.social_sources import author_uid
 
 def monitor(request: Request):
@@ -28,6 +29,11 @@ class AuthorInput(BaseModel):
 
 class AuthorUpdate(BaseModel):
     enabled: bool
+
+
+class CubeInput(BaseModel):
+    url: str = Field(min_length=1, max_length=500)
+    name: str = Field(default='', max_length=100)
 
 
 @router.get('/status')
@@ -75,6 +81,37 @@ def posts(author_id: int | None = None, platform: Literal['weibo', 'xueqiu'] | N
           page: int = Query(default=1, ge=1), size: int = Query(default=20, ge=1, le=100),
           keyword: str = Query(default='', max_length=200), service=Depends(monitor)):
     return service.posts(author_id, platform, page, size, keyword)
+
+
+@router.post('/cubes')
+def add_cube(payload: CubeInput, service=Depends(monitor)):
+    try:
+        symbol = cube_symbol(payload.url)
+        service.add_cube(symbol, payload.name.strip())
+    except ValueError as error:
+        raise HTTPException(400, str(error)) from None
+    return service.overview()
+
+
+@router.post('/cubes/{identifier}')
+def update_cube(identifier: int, payload: AuthorUpdate, service=Depends(monitor)):
+    if not service.change_cube(identifier, payload.enabled):
+        raise HTTPException(404, '监控组合不存在')
+    return service.overview()
+
+
+@router.post('/cubes/{identifier}/delete')
+def delete_cube(identifier: int, service=Depends(monitor)):
+    if not service.change_cube(identifier, delete=True):
+        raise HTTPException(404, '监控组合不存在')
+    return service.overview()
+
+
+@router.get('/cube-rebalances')
+def cube_rebalances(cube_id: int | None = None,
+                    page: int = Query(default=1, ge=1), size: int = Query(default=20, ge=1, le=100),
+                    service=Depends(monitor)):
+    return service.cube_rebalances(cube_id, page, size)
 
 
 @router.post('/telegram-test')
