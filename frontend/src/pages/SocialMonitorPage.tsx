@@ -301,8 +301,13 @@ export function SocialMonitorPage() {
           <div>
             <span>已启用博主 / 全部</span>
             <strong>
-              {status.authors.filter((a) => a.enabled).length}{' '}
-              <small>/ {status.authors.length}</small>
+              {activeAuthors.length} <small>/ {status.authors.length}</small>
+            </strong>
+          </div>
+          <div>
+            <span>已启用组合 / 全部</span>
+            <strong>
+              {activeCubes.length} <small>/ {status.cubes?.length || 0}</small>
             </strong>
           </div>
           <div>

@@ -34,7 +34,15 @@ test('manage cube monitoring and inspect rebalances within the configured time w
     chat_id_configured: true,
     weibo_cookie_configured: true,
     xueqiu_cookie_configured: true,
-    authors: [],
+    authors: [] as {
+      id: number
+      platform: 'weibo' | 'xueqiu'
+      uid: string
+      name: string
+      enabled: number
+      last_check: string | null
+      last_error: string | null
+    }[],
     counts: {},
     cubes: [] as Cube[],
     cube_counts: { sent: 1, baseline: 1 },
@@ -140,6 +148,19 @@ test('manage cube monitoring and inspect rebalances within the configured time w
 
   await page.goto('/social-monitor')
   await expect(page.getByRole('tab')).toHaveCount(4)
+  const cubeCount = page
+    .getByText('已启用组合 / 全部', { exact: true })
+    .locator('..')
+    .locator('strong')
+  const authorCount = page
+    .getByText('已启用博主 / 全部', { exact: true })
+    .locator('..')
+    .locator('strong')
+  async function expectCounts(cubes: string, authors = '0 / 0') {
+    await expect(cubeCount).toHaveText(cubes)
+    await expect(authorCount).toHaveText(authors)
+  }
+  await expectCounts('0 / 0')
   expect(reads).toHaveLength(0)
   await page.getByRole('tab', { name: /组合调仓/ }).click()
   const panel = page.getByRole('tabpanel', { name: /组合调仓/ })
@@ -151,6 +172,7 @@ test('manage cube monitoring and inspect rebalances within the configured time w
   await panel.getByLabel('组合备注').fill('火种测试组合')
   await panel.getByRole('button', { name: '添加组合', exact: true }).click()
   await expect(panel.locator('.social-cube-card')).toHaveCount(1)
+  await expectCounts('1 / 1')
   const firstCube = panel.locator('.social-cube-card').first()
   await expect(firstCube.locator('strong')).toHaveText('火种测试组合')
   await expect(firstCube.getByText('主理人：待获取', { exact: true })).toBeVisible()
@@ -165,11 +187,13 @@ test('manage cube monitoring and inspect rebalances within the configured time w
   await page.getByRole('button', { name: '启动监控', exact: true }).click()
   await expect(page.getByText('组合休息中', { exact: true })).toBeVisible()
   await expect(panel.locator('.social-cube-card')).toContainText('非监控时段')
+  await expectCounts('1 / 1')
 
   await panel.getByLabel('组合链接或代码').fill('ZH000002')
   await panel.getByLabel('组合备注').fill('第二组合')
   await panel.getByRole('button', { name: '添加组合', exact: true }).click()
   await expect(panel.locator('.social-cube-card')).toHaveCount(2)
+  await expectCounts('2 / 2')
   await expect(panel.locator('.social-cube-card').last()).toContainText('第二组合')
   await expect(panel.locator('.social-cube-card').last()).toContainText('主理人：待获取')
   await expect(
@@ -203,23 +227,50 @@ test('manage cube monitoring and inspect rebalances within the configured time w
 
   await panel.getByRole('button', { name: '暂停组合 ZH679918', exact: true }).click()
   await expect(panel.locator('.social-cube-card').first()).toContainText('该组合已手动暂停')
+  await expectCounts('1 / 2')
   await panel.getByRole('button', { name: '恢复组合 ZH679918', exact: true }).click()
+  await expectCounts('2 / 2')
   status.platforms.xueqiu = { paused: true, reason: '平台要求人工验证', alert_sent_at: null }
   await panel.getByRole('button', { name: '刷新调仓记录' }).click()
   await expect(panel.locator('.social-cube-card').first()).toContainText('平台要求人工验证')
   await expect(page.getByText('等待人工处理', { exact: true })).toBeVisible()
+  await expectCounts('2 / 2')
   await page.getByRole('button', { name: '人工处理完成，恢复雪球' }).click()
   await expect(panel.locator('.social-cube-card').first()).not.toContainText('平台要求人工验证')
 
   page.once('dialog', (dialog) => void dialog.dismiss())
   await panel.getByRole('button', { name: '删除组合 ZH000002', exact: true }).click()
   expect(deleteRequests).toBe(0)
+  await expectCounts('2 / 2')
   page.once('dialog', (dialog) => void dialog.accept())
   await panel.getByRole('button', { name: '删除组合 ZH000002', exact: true }).click()
   await expect(panel.locator('.social-cube-card')).toHaveCount(1)
   await expect(panel.getByLabel('按组合筛选')).toHaveValue('')
   await expect(panel.locator('.social-rebalance')).toHaveCount(20)
+  await expectCounts('1 / 1')
   expect(deleteRequests).toBe(1)
+  status.authors = [
+    {
+      id: 1,
+      platform: 'weibo',
+      uid: '101',
+      name: '启用博主',
+      enabled: 1,
+      last_check: null,
+      last_error: null,
+    },
+    {
+      id: 2,
+      platform: 'xueqiu',
+      uid: '102',
+      name: '暂停博主',
+      enabled: 0,
+      last_check: null,
+      last_error: null,
+    },
+  ]
+  await panel.getByRole('button', { name: '刷新调仓记录' }).click()
+  await expectCounts('1 / 1', '1 / 2')
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
   await page.getByRole('tab', { name: /组合调仓/ }).focus()
   await page.keyboard.press('End')
@@ -233,5 +284,9 @@ test('manage cube monitoring and inspect rebalances within the configured time w
     window.scrollTo(0, 0)
   })
   await page.screenshot({ path: testInfo.outputPath('social-cubes.png'), fullPage: true })
+  page.once('dialog', (dialog) => void dialog.accept())
+  await panel.getByRole('button', { name: '删除组合 ZH679918', exact: true }).click()
+  await expect(panel.locator('.social-cube-card')).toHaveCount(0)
+  await expectCounts('0 / 0', '1 / 2')
   expect(errors).toEqual([])
 })
