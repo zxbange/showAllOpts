@@ -5,6 +5,8 @@ export type MonitoredCube = {
   id: number
   symbol: string
   name: string
+  cube_name?: string | null
+  owner_name?: string | null
   enabled: number
   initialized: number
   last_check: string | null
@@ -24,6 +26,8 @@ type Rebalance = {
   cube_id: number
   cube_name: string
   cube_symbol: string
+  cube_alias?: string | null
+  owner_name?: string | null
   rebalance_id: string
   status: string
   notify_status: 'baseline' | 'waiting' | 'pending' | 'sent'
@@ -76,6 +80,14 @@ function percent(value: number | null) {
 
 function cubeLink(symbol: string) {
   return /^ZH\d+$/i.test(symbol) ? `https://www.xueqiu.com/P/${symbol.toUpperCase()}` : undefined
+}
+
+function cubeName(cube: MonitoredCube) {
+  return cube.cube_name || (cube.name !== cube.symbol ? cube.name : '') || '待获取组合名称'
+}
+
+function cubeAlias(name: string | null | undefined, title: string, symbol: string) {
+  return name && name !== title && name !== symbol ? name : ''
 }
 
 async function request<T>(path: string, body?: unknown, signal?: AbortSignal): Promise<T> {
@@ -253,13 +265,17 @@ export function SocialCubeMonitor({
       <div className="social-authors social-cube-list">
         {cubes.map((cube) => {
           const state = cubeState(cube, enabled, monitoringActive, platform)
+          const title = cubeName(cube)
+          const alias = cubeAlias(cube.name, title, cube.symbol)
           return (
             <article className="social-author social-cube-card" key={cube.id}>
               <div>
                 <span className="social-platform xueqiu">雪球</span>
-                <strong title={cube.name || cube.symbol}>{cube.name || cube.symbol}</strong>
+                <strong title={title}>{title}</strong>
               </div>
               <p className="social-muted">
+                <span className="social-cube-owner">主理人：{cube.owner_name || '待获取'}</span>
+                {alias && <span className="social-cube-alias">备注：{alias}</span>}
                 {cube.symbol} · {state.label}
                 <br />
                 最近检查：{date(cube.last_check)}
@@ -290,8 +306,7 @@ export function SocialCubeMonitor({
                   disabled={busy}
                   aria-label={`删除组合 ${cube.symbol}`}
                   onClick={() => {
-                    if (!window.confirm(`删除 ${cube.name || cube.symbol} 的监控及本地调仓记录？`))
-                      return
+                    if (!window.confirm(`删除 ${title} 的监控及本地调仓记录？`)) return
                     void action(async () => {
                       await request(`/cubes/${cube.id}/delete`, {})
                       if (filter === String(cube.id)) {
@@ -332,7 +347,7 @@ export function SocialCubeMonitor({
             <option value="">全部组合</option>
             {cubes.map((cube) => (
               <option value={cube.id} key={cube.id}>
-                {cube.name || cube.symbol}
+                {cubeName(cube)}
               </option>
             ))}
           </select>
@@ -366,6 +381,12 @@ export function SocialCubeMonitor({
                 {notifications[record.notify_status] || '状态待确认'}
               </span>
             </header>
+            <p className="social-muted social-cube-record-owner">
+              <span>主理人：{record.owner_name || '待获取'}</span>
+              {cubeAlias(record.cube_alias, record.cube_name, record.cube_symbol) && (
+                <span>备注：{record.cube_alias}</span>
+              )}
+            </p>
             <p className="social-muted social-rebalance-time">
               <span>{statuses[record.status] || '状态待确认'}</span>
               <time>调仓时间：{date(record.occurred_at || record.payload.time)}</time>

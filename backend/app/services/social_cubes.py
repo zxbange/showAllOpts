@@ -3,7 +3,7 @@ from datetime import datetime, timedelta, timezone
 import json
 
 from app.services.social_cube_sources import cube_symbol, cube_message_parts
-from app.services.social_sources import MonitoringDeferred
+from app.services.social_sources import MonitoringDeferred, plain_text
 
 CHINA = timezone(timedelta(hours=8))
 
@@ -53,6 +53,14 @@ class CubeMonitorMixin:
                 sent_at TEXT, last_error TEXT, UNIQUE(cube_id,rebalance_id));
             CREATE INDEX IF NOT EXISTS cube_rebalances_cube ON cube_rebalances(cube_id,id);
         ''')
+        columns = {row[1] for row in db.execute('PRAGMA table_info(cubes)')}
+        for name, declaration in (
+                ('cube_name', "TEXT NOT NULL DEFAULT ''"),
+                ('owner_name', "TEXT NOT NULL DEFAULT ''"),
+                ('owner_id', "TEXT NOT NULL DEFAULT ''"),
+                ('metadata_checked_at', 'TEXT')):
+            if name not in columns:
+                db.execute(f'ALTER TABLE cubes ADD COLUMN {name} {declaration}')
 
     def add_cube(self, symbol, name=''):
         import sqlite3
@@ -90,7 +98,8 @@ class CubeMonitorMixin:
         with self.db() as db:
             total = db.execute(f'SELECT count(*) FROM cube_rebalances r WHERE {condition}', params).fetchone()[0]
             rows = db.execute(
-                f'SELECT r.*,c.name AS cube_name,c.symbol AS cube_symbol FROM cube_rebalances r '
+                f"SELECT r.*,COALESCE(NULLIF(c.cube_name,''),c.name) AS cube_name,c.name AS cube_alias,"
+                f'c.owner_name,c.owner_id,c.symbol AS cube_symbol FROM cube_rebalances r '
                 f'JOIN cubes c ON c.id=r.cube_id WHERE {condition} '
                 'ORDER BY r.occurred_at DESC,r.id DESC LIMIT ? OFFSET ?',
                 (*params, size, (page - 1) * size)).fetchall()
@@ -107,6 +116,23 @@ class CubeMonitorMixin:
                     or -cube['id'] in queue['excluded_ids']):
                 return None
         return row
+
+    def update_cube_metadata(self, cube, metadata):
+        moment = self.current_moment()
+        with self.db() as db:
+            db.execute('BEGIN IMMEDIATE')
+            active = self.active_cube(db, cube)
+            if not active or not cube_monitoring_time(moment):
+                raise MonitoringDeferred('组合已暂停、删除或不在监控时段')
+            name = plain_text(metadata.get('cube_name'))[:100] or active['cube_name']
+            owner_id = str(metadata.get('owner_id') or '')
+            owner_id = owner_id if owner_id.isascii() and owner_id.isdigit() and len(owner_id) <= 20 else ''
+            owner_name = plain_text(metadata.get('owner_name'))[:100]
+            if not owner_name and (not owner_id or owner_id == active['owner_id']):
+                owner_name = active['owner_name']
+            db.execute('UPDATE cubes SET cube_name=?,owner_name=?,owner_id=?,metadata_checked_at=? WHERE id=?',
+                       (name, owner_name, owner_id or active['owner_id'],
+                        moment.isoformat(timespec='seconds'), cube['id']))
 
     def collect_cube(self, cube, events, initial=False):
         moment = self.current_moment()
@@ -180,10 +206,14 @@ class CubeMonitorMixin:
 
         tracking = max(filter(None, (event_time(cube['added_at']),
                                      event_time(config.get('enabled_since')))), default=event_time(started))
+        checked = event_time(cube.get('metadata_checked_at'))
+        metadata_ttl = timedelta(days=1) if cube.get('cube_name') and cube.get('owner_name') else timedelta(hours=1)
         source = dict(cube, cookie=self.decode(config['xueqiu_cookie']), _initial=not cube['initialized'],
                       _notify_since=tracking.isoformat(timespec='seconds') if not cube['initialized'] else None,
                       _known_ids=known, _pending_ids=pending, _scan_page=cube['scan_page'],
-                      _should_stop=should_stop, _wait=self.stop_event.wait, _on_page=save_page)
+                      _should_stop=should_stop, _wait=self.stop_event.wait, _on_page=save_page,
+                      _metadata_lookup_due=not checked or checked <= self.current_moment() - metadata_ttl,
+                      _on_metadata=lambda metadata: self.update_cube_metadata(cube, metadata))
         result = fetcher(source, pages=20)
         self.collect_cube(cube, result, initial=not cube['initialized'])
         with self.db() as db:
@@ -196,14 +226,28 @@ class CubeMonitorMixin:
                 db.execute('UPDATE cubes SET initialized=1,last_success_at=?,scan_page=1,scan_started_at=NULL WHERE id=?',
                            (started, cube['id']))
 
-    def deliver_cubes(self, config):
+    def deliver_cubes(self, config, identifier=None):
         if not cube_monitoring_time(self.current_moment()):
             return
         with self.db() as db:
-            rows = db.execute("SELECT r.*,c.symbol,c.name FROM cube_rebalances r JOIN cubes c ON c.id=r.cube_id "
-                              "WHERE r.notify_status='pending' AND c.enabled=1 ORDER BY r.occurred_at,r.id LIMIT 100").fetchall()
+            rows = db.execute("SELECT r.*,c.symbol,c.name,c.cube_name,c.owner_name,c.owner_id "
+                              "FROM cube_rebalances r JOIN cubes c ON c.id=r.cube_id "
+                              "WHERE r.notify_status='pending' AND c.enabled=1 AND c.scan_started_at IS NULL "
+                              "AND (? IS NULL OR r.id=?) ORDER BY "
+                              "COALESCE(julianday(r.occurred_at),julianday(r.discovered_at),0),r.id LIMIT 100",
+                              (identifier, identifier)).fetchall()
         for row in rows:
-            parts = cube_message_parts(dict(row), json.loads(row['payload']))
+            event = json.loads(row['payload'])
+            message_cube = event.get('_notification_cube')
+            if not isinstance(message_cube, dict):
+                # Metadata may refresh before a multipart retry. Keep its original
+                # heading so saved part numbers still point to the same text.
+                message_cube = {key: row[key] for key in ('symbol', 'name', 'cube_name', 'owner_name')}
+                event['_notification_cube'] = message_cube
+                with self.db() as db:
+                    db.execute("UPDATE cube_rebalances SET payload=? WHERE id=? AND notify_status='pending'",
+                               (json.dumps(event, ensure_ascii=False), row['id']))
+            parts = cube_message_parts(message_cube, event)
             for index in range(row['next_part'], len(parts)):
                 if self.stop_event.is_set() or not cube_monitoring_time(self.current_moment()):
                     return

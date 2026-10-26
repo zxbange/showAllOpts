@@ -480,10 +480,40 @@ class SocialMonitor(CubeMonitorMixin):
             raise ValueError('请先保存 Telegram Bot Token 和 Chat ID')
         self.send_part(self.decode(config['token']), self.decode(config['chat_id']), 'ShowAllOpts 博主监控：Telegram 连接测试成功。')
 
-    def deliver(self, config):
+    def deliver_notifications(self, config):
+        """Send the known backlog by event time, after each source scan completes."""
+        with self.db() as db:
+            current = self.config(db)
+            if not current['enabled']:
+                return
+            platforms = current.get('platforms', {})
+            weibo = not platforms.get('weibo', {}).get('paused')
+            xueqiu = not platforms.get('xueqiu', {}).get('paused')
+            cubes = xueqiu and cube_monitoring_time(self.current_moment())
+            rows = db.execute(
+                "SELECT 'post' AS kind,p.id AS id,COALESCE(julianday(p.published_at),"
+                "julianday(p.discovered_at),0) AS event_time FROM posts p "
+                "JOIN authors a ON a.id=p.author_id WHERE p.status='pending' "
+                "AND a.enabled=1 AND a.scan_since IS NULL "
+                "AND CASE p.platform WHEN 'weibo' THEN ? WHEN 'xueqiu' THEN ? ELSE 0 END "
+                "UNION ALL SELECT 'cube' AS kind,r.id AS id,COALESCE(julianday(r.occurred_at),"
+                "julianday(r.discovered_at),0) AS event_time FROM cube_rebalances r "
+                "JOIN cubes c ON c.id=r.cube_id WHERE r.notify_status='pending' "
+                "AND c.enabled=1 AND c.scan_started_at IS NULL AND ? "
+                "ORDER BY event_time,kind,id LIMIT 100", (weibo, xueqiu, cubes)).fetchall()
+        for row in rows:
+            if row['kind'] == 'cube':
+                self.deliver_cubes(current, identifier=row['id'])
+            else:
+                self.deliver(current, identifier=row['id'])
+
+    def deliver(self, config, identifier=None):
         with self.db() as db:
             rows = db.execute("SELECT p.* FROM posts p JOIN authors a ON a.id=p.author_id "
-                              "WHERE p.status='pending' AND a.enabled=1 ORDER BY p.id LIMIT 100").fetchall()
+                              "WHERE p.status='pending' AND a.enabled=1 AND a.scan_since IS NULL "
+                              "AND (? IS NULL OR p.id=?) ORDER BY "
+                              "COALESCE(julianday(p.published_at),julianday(p.discovered_at),0),p.id LIMIT 100",
+                              (identifier, identifier)).fetchall()
         token, chat_id = self.decode(config['token']), self.decode(config['chat_id'])
         for row in rows:
             parts = message_parts(row['platform'], json.loads(row['payload']))
@@ -652,8 +682,7 @@ class SocialMonitor(CubeMonitorMixin):
             try:
                 # Do not hold one author's new posts until the whole queue finishes.
                 self.send_alerts()
-                self.deliver(current)
-                self.deliver_cubes(current)
+                self.deliver_notifications(current)
             except Exception as error:
                 error_message = str(error) if type(error) is RuntimeError else 'Telegram 发送失败，已保留待发送帖子'
                 LOG.warning('Social delivery failed type=%s', type(error).__name__)

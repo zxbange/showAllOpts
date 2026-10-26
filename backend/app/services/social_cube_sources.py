@@ -1,5 +1,6 @@
 """Read-only Xueqiu portfolio events and plain-text Telegram messages."""
 from datetime import datetime, timedelta, timezone
+from contextlib import closing
 import math
 import random
 import re
@@ -8,12 +9,14 @@ from urllib.parse import urlsplit
 import httpx
 
 from app.services.social_sources import (
-    MonitoringDeferred, PostBatch, fetch_json, plain_text,
+    MonitoringDeferred, PlatformIntervention, PostBatch, RateLimited,
+    check_payload, check_response, fetch_json, fetch_xueqiu_author_name, plain_text,
 )
 
 
 CHINA = timezone(timedelta(hours=8))
 HISTORY_URL = 'https://www.xueqiu.com/cubes/rebalancing/history.json'
+METADATA_URL = 'https://www.xueqiu.com/cubes/show.json'
 PAGE_SIZE = 20
 MAX_PAGES = 20
 
@@ -110,6 +113,40 @@ def normalize_rebalance(symbol, record):
     }
 
 
+def fetch_cube_metadata(session, symbol):
+    """Resolve public names without treating the portfolio description as an error."""
+    symbol = cube_symbol(symbol)
+    with closing(session.get(METADATA_URL, params={'symbol': symbol}, timeout=30)) as response:
+        check_response(response)
+        try:
+            payload = response.json()
+        except ValueError:
+            check_payload({'message': plain_text(response.text)[:4000]})
+            raise PlatformIntervention('组合资料接口返回网页，请检查平台登录和验证状态',
+                                       'unexpected_html', response.status_code) from None
+    if not isinstance(payload, dict):
+        raise RuntimeError('雪球组合资料结构异常，暂时保留原组合名称')
+    name = payload.get('name')
+    if str(payload.get('symbol', '')).upper() != symbol or not isinstance(name, str) or not name.strip():
+        check_payload(payload)
+        raise RuntimeError('雪球未返回对应组合资料，暂时保留原组合名称')
+    owner = payload.get('owner') or payload.get('user') or {}
+    owner = owner if isinstance(owner, dict) else {}
+    owner_id = str(payload.get('owner_id') or owner.get('id') or '')
+    owner_id = owner_id if owner_id.isascii() and owner_id.isdigit() and len(owner_id) <= 20 else ''
+    owner_name = owner.get('screen_name')
+    owner_name = plain_text(owner_name)[:100] if isinstance(owner_name, str) else ''
+    if not owner_name and owner_id:
+        try:
+            owner_name = fetch_xueqiu_author_name(session, owner_id) or ''
+        except (PlatformIntervention, RateLimited, MonitoringDeferred):
+            raise
+        except (RuntimeError, httpx.HTTPError):
+            owner_name = ''
+    return {'cube_name': plain_text(name)[:100], 'owner_id': owner_id,
+            'owner_name': plain_text(owner_name)[:100]}
+
+
 def fetch_cube_rebalances(cube, pages=MAX_PAGES):
     symbol = cube_symbol(cube['symbol'])
     known = {str(value) for value in cube.get('_known_ids', ())}
@@ -144,6 +181,16 @@ def fetch_cube_rebalances(cube, pages=MAX_PAGES):
         })
         if cube.get('cookie'):
             session.headers['Cookie'] = cube['cookie']
+        if cube.get('_metadata_lookup_due'):
+            try:
+                metadata = fetch_cube_metadata(session, symbol)
+            except (PlatformIntervention, RateLimited, MonitoringDeferred):
+                raise
+            except (RuntimeError, httpx.HTTPError):
+                # Missing optional names must not discard otherwise readable rebalances.
+                metadata = {}
+            if cube.get('_on_metadata'):
+                cube['_on_metadata'](metadata)
         for _ in range(1 if baseline_only else limit):
             payload = fetch_json(session, HISTORY_URL, params={
                 'cube_symbol': symbol, 'count': PAGE_SIZE, 'page': page,
@@ -187,12 +234,17 @@ def fetch_cube_rebalances(cube, pages=MAX_PAGES):
 
 def cube_message_parts(cube, event):
     symbol = cube_symbol(cube['symbol'])
-    name = plain_text(cube.get('name') or symbol)
+    name = plain_text(cube.get('cube_name') or cube.get('name') or symbol)
     labels = {'success': '调仓成功', 'pending': '等待完成', 'failed': '调仓失败',
               'canceled': '已撤销', 'cancelled': '已撤销'}
-    lines = [f'【雪球组合调仓】{name} {symbol}',
-             f"调仓时间：{event.get('time') or '未知'}（北京时间）",
-             f"状态：{labels.get(event.get('status'), '待确认')}", '']
+    lines = [f'【雪球组合调仓】{name} {symbol}']
+    if cube.get('owner_name'):
+        lines.append(f"主理人：{plain_text(cube['owner_name'])}")
+    alias = plain_text(cube.get('name'))
+    if alias and alias not in (name, symbol):
+        lines.append(f'备注：{alias}')
+    lines.extend([f"调仓时间：{event.get('time') or '未知'}（北京时间）",
+                  f"状态：{labels.get(event.get('status'), '待确认')}", ''])
     for change in event.get('changes', ()):
         before = '未知' if change.get('before') is None else f"{change['before']:g}%"
         after = '未知' if change.get('after') is None else f"{change['after']:g}%"

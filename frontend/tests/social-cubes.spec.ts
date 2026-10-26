@@ -9,6 +9,8 @@ test('manage cube monitoring and inspect rebalances within the configured time w
     id: number
     symbol: string
     name: string
+    cube_name: string
+    owner_name: string
     enabled: number
     initialized: number
     last_check: string | null
@@ -45,7 +47,9 @@ test('manage cube monitoring and inspect rebalances within the configured time w
     return Array.from({ length: cube.id === 1 ? 21 : 1 }, (_, index) => ({
       id: cube.id * 100 + index,
       cube_id: cube.id,
-      cube_name: cube.name,
+      cube_name: cube.cube_name || cube.name,
+      cube_alias: cube.name,
+      owner_name: cube.owner_name,
       cube_symbol: cube.symbol,
       rebalance_id: String(cube.id * 1000 + index),
       status: 'success',
@@ -108,6 +112,8 @@ test('manage cube monitoring and inspect rebalances within the configured time w
         id: nextId++,
         symbol: body.url,
         name: body.name || body.url,
+        cube_name: '',
+        owner_name: '',
         enabled: 1,
         initialized: 1,
         last_check: '2026-10-25T10:28:00+08:00',
@@ -145,7 +151,16 @@ test('manage cube monitoring and inspect rebalances within the configured time w
   await panel.getByLabel('组合备注').fill('火种测试组合')
   await panel.getByRole('button', { name: '添加组合', exact: true }).click()
   await expect(panel.locator('.social-cube-card')).toHaveCount(1)
+  const firstCube = panel.locator('.social-cube-card').first()
+  await expect(firstCube.locator('strong')).toHaveText('火种测试组合')
+  await expect(firstCube.getByText('主理人：待获取', { exact: true })).toBeVisible()
   await expect(panel.getByRole('status')).toContainText('首次建立历史基线')
+  status.cubes[0].cube_name = '火种燎原-A股'
+  status.cubes[0].owner_name = '火蚁投资'
+  await panel.getByRole('button', { name: '刷新调仓记录' }).click()
+  await expect(firstCube.locator('strong')).toHaveText('火种燎原-A股')
+  await expect(firstCube.getByText('主理人：火蚁投资', { exact: true })).toBeVisible()
+  await expect(firstCube.getByText('备注：火种测试组合', { exact: true })).toBeVisible()
   await expect(panel.getByLabel('组合链接或代码')).toHaveValue('')
   await page.getByRole('button', { name: '启动监控', exact: true }).click()
   await expect(page.getByText('组合休息中', { exact: true })).toBeVisible()
@@ -155,10 +170,18 @@ test('manage cube monitoring and inspect rebalances within the configured time w
   await panel.getByLabel('组合备注').fill('第二组合')
   await panel.getByRole('button', { name: '添加组合', exact: true }).click()
   await expect(panel.locator('.social-cube-card')).toHaveCount(2)
+  await expect(panel.locator('.social-cube-card').last()).toContainText('第二组合')
+  await expect(panel.locator('.social-cube-card').last()).toContainText('主理人：待获取')
+  await expect(
+    panel.getByLabel('按组合筛选').getByRole('option', { name: '火种燎原-A股' }),
+  ).toHaveCount(1)
   await panel.getByLabel('按组合筛选').selectOption('1')
   await expect(panel.getByText('共 21 条 · 北京时间 · 首次历史记录不推送')).toBeVisible()
   await expect(panel.locator('.social-rebalance')).toHaveCount(20)
   const first = panel.locator('.social-rebalance').first()
+  await expect(first.locator('header strong')).toHaveText('火种燎原-A股')
+  await expect(first.getByText('主理人：火蚁投资', { exact: true })).toBeVisible()
+  await expect(first.getByText('备注：火种测试组合', { exact: true })).toBeVisible()
   await expect(first).toContainText('调仓成功')
   await expect(first).toContainText('已推送')
   await expect(first).toContainText('11.40% → 0.00%')

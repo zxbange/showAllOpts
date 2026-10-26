@@ -271,13 +271,14 @@ def test_page_failure_keeps_scan_cursor_and_restart_resumes_without_duplicate_no
     cube = service.overview()['cubes'][0]
     assert cube['scan_page'] == 2 and cube['last_success_at'] == original_success
     assert 'private-platform-response' not in cube['last_error']
-    assert send.call_count == 1
+    assert send.call_count == 0
+    assert rows(service)[0]['notify_status'] == 'pending'
     service.platform_state('xueqiu', retry_at=0)
     restarted = SocialMonitor(service.settings)
 
     def resumed_page(source, pages):
         assert source['_scan_page'] == 2
-        return PostBatch([event('101'), event('102', comment='继续补抓')])
+        return PostBatch([event('101'), event('102', time='2026-10-26T12:00:30+08:00', comment='继续补抓')])
 
     with patch('app.services.social.fetch_cube_rebalances', side_effect=resumed_page), \
             patch.object(restarted, 'send_part') as resumed_send, \
@@ -285,7 +286,9 @@ def test_page_failure_keeps_scan_cursor_and_restart_resumes_without_duplicate_no
         with next_tick(restarted):
             restarted.cycle()
     assert len(rows(restarted)) == 2
-    assert resumed_send.call_count == 1 and '继续补抓' in resumed_send.call_args.args[2]
+    assert resumed_send.call_count == 2
+    assert '继续补抓' in resumed_send.call_args_list[0].args[2]
+    assert '调整持仓' in resumed_send.call_args_list[1].args[2]
     assert restarted.overview()['cubes'][0]['scan_page'] == 1
 
 
@@ -326,7 +329,9 @@ def test_long_cube_notification_resumes_after_the_last_confirmed_part(cube_clien
         with next_tick(service):
             service.cycle()
     assert rows(service)[0]['notify_status'] == 'sent'
-    assert rows(service)[0]['payload'] == long_event
+    saved_event = dict(rows(service)[0]['payload'])
+    assert saved_event.pop('_notification_cube')['symbol'] == 'ZH679918'
+    assert saved_event == long_event
     assert send.call_count >= 1
     assert send.call_args_list[0].args[2] == first_send.call_args_list[1].args[2]
     assert all(call.args[2] != first_send.call_args_list[0].args[2] for call in send.call_args_list)
@@ -454,6 +459,10 @@ def test_first_closed_window_scan_integrates_source_pagination_storage_and_notif
 
     def handler(request):
         assert request.url.host == 'www.xueqiu.com'
+        if request.url.path == '/cubes/show.json':
+            return httpx.Response(200, json={'symbol': 'ZH679918', 'name': '测试组合',
+                                             'owner_id': '123',
+                                             'owner': {'id': '123', 'screen_name': '测试主理人'}})
         assert request.url.path == '/cubes/rebalancing/history.json'
         assert request.url.params['cube_symbol'] == 'ZH679918'
         page = int(request.url.params['page'])

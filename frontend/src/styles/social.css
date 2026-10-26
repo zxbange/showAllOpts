@@ -991,6 +991,20 @@
   color: var(--muted);
   font-size: 12px;
 }
+.social-cube-owner,
+.social-cube-alias {
+  display: block;
+  margin-bottom: 3px;
+  overflow-wrap: anywhere;
+}
+.social-cube-record-owner {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 3px 14px;
+  margin-top: 6px;
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
 .social-rebalance-time {
   display: flex;
   flex-wrap: wrap;
