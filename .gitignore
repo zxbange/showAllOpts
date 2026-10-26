@@ -46,3 +46,6 @@ browser-login/
 
 # Local research checkpoints
 short_term_winrate_cache/
+
+# Private local research exports
+超短线统计结果/

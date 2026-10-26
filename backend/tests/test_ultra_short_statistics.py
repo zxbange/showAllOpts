@@ -1,0 +1,296 @@
+"""合成行情与SQLite验证四策略统计；不连接真实MySQL，不生成真实市场胜率。"""
+import datetime as dt
+import importlib.util
+from pathlib import Path
+
+import numpy as np
+import pandas as pd
+import pytest
+from sqlalchemy import Date, create_engine, event
+
+
+PATH = Path(__file__).resolve().parents[2] / 'scripts/超短线四策略胜率统计_本地版.py'
+spec = importlib.util.spec_from_file_location('ultra_statistics', PATH)
+m = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(m)
+
+
+def prices(closes, calendar=None, volumes=None):
+    closes = np.asarray(closes, dtype=float)
+    calendar = pd.bdate_range('2026-01-05', periods=len(closes)) if calendar is None else calendar
+    frame = pd.DataFrame(index=calendar)
+    for name, values in [('close', closes), ('open', closes-.02),
+                         ('high', closes+.05), ('low', closes-.05)]:
+        frame[name] = values
+        frame['adj_' + name] = values
+    frame['volume'] = 100. if volumes is None else volumes
+    frame['money'], frame['paused'] = 1e8, 0
+    frame['high_limit'] = frame['close'].shift(1).fillna(frame['close'].iloc[0])*1.1
+    frame['low_limit'] = frame['close'].shift(1).fillna(frame['close'].iloc[0])*.9
+    return frame
+
+
+def add_identity(frame, code='000001.XSHE'):
+    frame = frame.copy()
+    frame['trade_date'], frame['code'] = frame.index, code
+    return frame.reset_index(drop=True)
+
+
+def snapshots(calendar, code='000001.XSHE'):
+    return pd.DataFrame(dict(trade_date=calendar, code=code, display_name='测试股票',
+        listed_date=pd.Timestamp('2020-01-01'), eligible=1, is_st=0, market_cap=100.))
+
+
+def signal_details(frame, signal_position=0, method=None):
+    details = m.forward_outcomes(frame).iloc[[signal_position]].copy()
+    details['strategy'] = method or m.STRATEGIES[0]
+    details['code'], details['signal_date'] = '000001.XSHE', frame.index[signal_position]
+    return details
+
+
+def test_exact_close_comparison_and_flat_is_not_a_win():
+    frame = prices([100, 101, 100, 99])
+    result = m.forward_outcomes(frame).iloc[0]
+    assert [result['d{}_win'.format(day)] for day in (1, 2, 3)] == [1, 0, 0]
+    assert [result['d{}_return_pct'.format(day)] for day in (1, 2, 3)] == pytest.approx([1, 0, -1])
+    summary = m.summary_table(signal_details(frame))
+    group = summary[summary['策略'] == m.STRATEGIES[0]]
+    assert group['胜率(%)'].tolist() == [100, 0, 0]
+    assert group['有效样本'].tolist() == [1, 1, 1]
+    assert group['持平次数'].tolist() == [0, 1, 0]
+
+
+def test_horizons_have_independent_pending_denominators():
+    frame = prices([100, 101, 102, 103])
+    details = pd.concat([signal_details(frame, 0), signal_details(frame, 2)], ignore_index=True)
+    group = m.summary_table(details).iloc[:3]
+    assert group['有效样本'].tolist() == [2, 1, 1]
+    assert group['待观察'].tolist() == [0, 1, 1]
+    assert group['胜率(%)'].tolist() == [100, 100, 100]
+
+
+def test_market_days_skip_weekend_but_not_missing_or_paused_stock_day():
+    calendar = pd.to_datetime(['2026-07-03', '2026-07-06', '2026-07-07', '2026-07-08'])
+    frame = prices([100, 101, 102, 103], calendar)
+    frame.loc[calendar[1], :] = np.nan
+    frame.loc[calendar[2], 'paused'] = 1
+    result = m.forward_outcomes(frame).iloc[0]
+    assert result['d1_date'] == calendar[1]
+    assert result['d1_status'] == '缺少行情'
+    assert result['d2_status'] == '停牌'
+    assert result['d3_status'] == '有效'
+    assert result['d3_return_pct'] == pytest.approx(3.)
+    assert pd.isna(result['d1_win']) and pd.isna(result['d2_win'])
+
+
+def test_three_day_any_close_is_distinct_from_third_close():
+    frame = prices([100, 101, 99, 98])
+    details = signal_details(frame)
+    assert m.summary_table(details).iloc[2]['胜率(%)'] == 0
+    assert m.window_summary(details).iloc[0]['三日内任一收盘上涨率(%)'] == 100
+    frame.loc[frame.index[2], 'paused'] = 1
+    window = m.window_summary(signal_details(frame)).iloc[0]
+    assert window['完整三日样本'] == 0
+    assert pd.isna(window['三日内任一收盘上涨率(%)'])
+
+
+def test_return_price_choice_is_explicit_and_adjustment_avoids_false_split_loss(monkeypatch):
+    frame = prices([100, 50, 51, 52])
+    frame['adj_close'] = [100, 100, 102, 104]
+    assert m.forward_outcomes(frame).iloc[0]['d1_return_pct'] == 0
+    monkeypatch.setattr(m, 'RETURN_PRICE_FIELD', 'close')
+    assert m.forward_outcomes(frame).iloc[0]['d1_return_pct'] == -50
+
+
+def strong_pullback():
+    closes = np.linspace(10, 11.6, 90)
+    closes[61:71] = np.linspace(11.7, 13.5, 10)
+    closes[71:] = [13., 13.2, 13.3] + [13.3]*16
+    frame = prices(closes)
+    frame.loc[frame.index[70:73], 'volume'] = [200, 40, 80]
+    return frame
+
+
+def test_strong_stock_first_shrinking_pullback():
+    frame = strong_pullback()
+    result = m.pattern_candidates(frame, m.PARAMS)
+    assert result.iloc[72][m.STRATEGIES[0]]
+    assert not result.iloc[73][m.STRATEGIES[0]]
+    assert result.iloc[72][m.STRATEGIES[0] + '_anchor'] == frame.index[70]
+    frame.loc[frame.index[71], 'volume'] = 250
+    assert not m.pattern_candidates(frame, m.PARAMS).iloc[72][m.STRATEGIES[0]]
+
+
+def test_oversold_rebound_requires_close_above_prior_high():
+    closes = np.repeat(10., 90)
+    closes[68:73] = [9.6, 9.2, 8.9, 9.5, 9.4]
+    frame = prices(closes)
+    frame.loc[frame.index[71], 'volume'] = 120
+    assert m.pattern_candidates(frame, m.PARAMS).iloc[71][m.STRATEGIES[1]]
+    frame.loc[frame.index[70], 'adj_high'] = 9.6
+    assert not m.pattern_candidates(frame, m.PARAMS).iloc[71][m.STRATEGIES[1]]
+
+
+def platform_retest():
+    closes = np.linspace(9.9, 10., 90)
+    closes[70:] = [10.5, 10.12, 10.15] + [10.2]*17
+    frame = prices(closes)
+    frame.loc[frame.index[70:73], 'volume'] = [200, 70, 70]
+    frame.loc[frame.index[71:73], 'adj_low'] = [10.03, 10.04]
+    return frame
+
+
+def test_platform_retest_only_accepts_first_touch():
+    frame = platform_retest()
+    result = m.pattern_candidates(frame, m.PARAMS)
+    assert result.iloc[71][m.STRATEGIES[2]]
+    assert not result.iloc[72][m.STRATEGIES[2]]
+    frame.loc[frame.index[71], 'adj_low'] = 9.
+    result = m.pattern_candidates(frame, m.PARAMS)
+    assert not result.iloc[71][m.STRATEGIES[2]]
+    assert not result.iloc[72][m.STRATEGIES[2]]
+
+
+def first_limit_turn():
+    closes = np.repeat(10., 90)
+    closes[70:] = [11., 10.6, 11., 11.2] + [11.2]*16
+    frame = prices(closes)
+    frame.loc[frame.index[70:73], 'volume'] = [200, 180, 210]
+    frame.loc[frame.index[71], 'adj_high'] = 10.9
+    return frame
+
+
+def test_first_limit_disagreement_turn_and_no_repeat():
+    frame = first_limit_turn()
+    result = m.pattern_candidates(frame, m.PARAMS)
+    assert result.iloc[72][m.STRATEGIES[3]]
+    assert not result.iloc[73][m.STRATEGIES[3]]
+    frame.loc[frame.index[65], 'high_limit'] = frame.iloc[65]['close']
+    assert not m.pattern_candidates(frame, m.PARAMS).iloc[72][m.STRATEGIES[3]]
+
+
+@pytest.mark.parametrize('problem', ['one_tick_below', 'missing_past_limit'])
+def test_first_limit_does_not_infer_board_from_incomplete_or_near_limit_data(problem):
+    frame = first_limit_turn()
+    if problem == 'one_tick_below':
+        frame.loc[frame.index[70], 'close'] -= .01
+    else:
+        frame.loc[frame.index[65], 'high_limit'] = np.nan
+    assert not m.pattern_candidates(frame, m.PARAMS).iloc[72][m.STRATEGIES[3]]
+
+
+@pytest.mark.parametrize('constructor', [strong_pullback, platform_retest, first_limit_turn])
+def test_future_changes_cannot_change_past_strategy_signals(constructor):
+    frame = constructor()
+    before = m.pattern_candidates(frame, m.PARAMS)
+    changed = frame.copy()
+    changed.loc[changed.index[75]:, ['adj_open', 'adj_close', 'adj_high', 'adj_low']] *= .5
+    changed.loc[changed.index[75]:, 'volume'] *= 10
+    after = m.pattern_candidates(changed, m.PARAMS)
+    pd.testing.assert_frame_equal(before.iloc[:75], after.iloc[:75])
+
+
+def test_strength_rank_uses_full_eligible_pool():
+    samples = pd.DataFrame({'signal_date': [pd.Timestamp('2026-07-01')]*10,
+        'code': [str(i) for i in range(10)], 'ret10': np.arange(10)/100})
+    for method in m.STRATEGIES:
+        samples[method] = method == m.STRATEGIES[0]
+        samples[method + '_anchor'] = pd.Timestamp('2026-06-29')
+    details = m.select_signals(samples, m.PARAMS)
+    assert set(details['code']) == {'8', '9'}
+
+
+def test_eligibility_applies_on_signal_day_only():
+    frame = strong_pullback()
+    calendar = frame.index
+    universe = snapshots(calendar)
+    universe.loc[universe.index[73]:, ['eligible', 'is_st', 'market_cap']] = [0, 1, 10]
+    samples, coverage = m.stock_samples('000001.XSHE', add_identity(frame), universe,
+        calendar, calendar[72], calendar[72], m.PARAMS)
+    assert len(samples) == 1
+    assert samples.iloc[0]['d1_status'] == '有效'  # 事后ST/市值变化不会抹掉后续表现。
+    assert samples.iloc[0]['d1_return_pct'] > 0
+    assert coverage['base_samples'] == 1
+    universe.loc[72, 'is_st'] = 1
+    samples, _ = m.stock_samples('000001.XSHE', add_identity(frame), universe,
+        calendar, calendar[72], calendar[72], m.PARAMS)
+    assert samples.empty
+
+
+def test_missing_future_bar_is_not_replaced_by_later_stock_row():
+    frame = strong_pullback()
+    calendar = frame.index
+    bars = add_identity(frame).drop(index=73)
+    samples, quality = m.stock_samples('000001.XSHE', bars, snapshots(calendar),
+        calendar, calendar[72], calendar[72], m.PARAMS)
+    assert samples.iloc[0]['d1_date'] == calendar[73]
+    assert samples.iloc[0]['d1_status'] == '缺少行情'
+    assert samples.iloc[0]['d2_status'] == '有效'
+    assert quality['bars_missing_on_snapshot_days'] == 1
+
+
+@pytest.fixture
+def local_destination(tmp_path):
+    return tmp_path
+
+
+def database(engine, frame):
+    bars = add_identity(frame)
+    bars['trade_date'], bars['asset_type'] = bars['trade_date'].dt.date, 'stock'
+    bars.to_sql('ultra_research_bar', engine, index=False, dtype={'trade_date': Date()})
+    universe = snapshots(frame.index)
+    universe['trade_date'], universe['listed_date'] = universe['trade_date'].dt.date, universe['listed_date'].dt.date
+    universe.to_sql('ultra_research_universe', engine, index=False,
+                   dtype={'trade_date': Date(), 'listed_date': Date()})
+    pd.DataFrame({'trade_date': frame.index.date}).to_sql('ultra_research_calendar', engine,
+        index=False, dtype={'trade_date': Date()})
+
+
+def test_end_to_end_is_read_only_requires_no_index_data_and_exports_all_strategies(local_destination):
+    engine = create_engine('sqlite:///:memory:')
+    calendar = pd.bdate_range('2025-10-01', periods=250)
+    frame = prices(np.linspace(10., 13., len(calendar)), calendar)
+    database(engine, frame)  # 数据库没有指数行情，也没有任务表。
+    statements = []
+    event.listen(engine, 'before_cursor_execute', lambda conn, cursor, sql, *args: statements.append(sql))
+    try:
+        result = m.run(engine=engine, output_dir=local_destination)
+        assert len(result['summary']) == 12
+        assert set(result['summary']['策略']) == set(m.STRATEGIES)
+        assert len(result['windows']) == 4
+        assert result['details'].empty
+        assert result['summary']['胜率(%)'].isna().all()
+        assert all(sql.lstrip().upper().startswith('SELECT') for sql in statements)
+        files = {item.name for item in result['output_dir'].iterdir()}
+        assert files == {'收盘胜率汇总.csv', '三日窗口汇总.csv', '策略信号明细.csv',
+                         '按月收盘胜率.csv', '数据覆盖.csv', '运行参数.json'}
+        assert 'dbpassword' not in (result['output_dir'] / '运行参数.json').read_text(encoding='utf-8')
+    finally:
+        engine.dispose()
+
+
+def test_end_to_end_exports_known_signal_and_exact_horizon_wins(local_destination):
+    engine = create_engine('sqlite:///:memory:')
+    calendar = pd.bdate_range('2025-10-01', periods=250)
+    closes = np.linspace(10., 11.6, len(calendar))
+    peak = int(calendar.get_loc('2026-07-01')) + 2
+    closes[peak-9:peak+1] = np.linspace(11.7, 13.5, 10)
+    closes[peak+1:] = 13.3
+    closes[peak+1:peak+3] = [13., 13.2]
+    frame = prices(closes, calendar)
+    frame.loc[calendar[peak:peak+3], 'volume'] = [200, 40, 80]
+    database(engine, frame)
+    try:
+        result = m.run(engine=engine, output_dir=local_destination)
+        details = result['details']
+        details = details[details['strategy'] == m.STRATEGIES[0]]
+        assert details['signal_date'].tolist() == [calendar[peak+2]]
+        assert details.iloc[0]['signal_close'] == 13.2
+        for horizon in (1, 2, 3):
+            assert details.iloc[0]['d{}_win'.format(horizon)] == 1
+        group = result['summary'][result['summary']['策略'] == m.STRATEGIES[0]]
+        assert group['有效样本'].tolist() == [1, 1, 1]
+        assert group['胜率(%)'].tolist() == [100., 100., 100.]
+        assert len(pd.read_csv(result['output_dir'] / '收盘胜率汇总.csv')) == 12
+    finally:
+        engine.dispose()
