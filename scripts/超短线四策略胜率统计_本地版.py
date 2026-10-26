@@ -7,9 +7,12 @@
 import argparse
 import datetime as dt
 import json
+import shutil
 import ssl
 import sys
+import threading
 import time
+import unicodedata
 from pathlib import Path
 from urllib.parse import quote, quote_plus
 
@@ -27,7 +30,8 @@ DB_CONFIG = {
 }
 DB_TLS_VERIFY = True
 DB_TLS_CA_PEM = ''
-SCRIPT_VERSION = '2026-10-26.1'
+SCRIPT_VERSION = '2026-10-26.2'
+PROGRESS_ENABLED = True
 RETURN_PRICE_FIELD = 'adj_close'  # 同口径后复权收盘价；改为close可统计未复权价格
 START_DATE = '2026-07-01'
 END_DATE = None                 # 信号截止日；None取观察截止日
@@ -61,6 +65,90 @@ RULES = {
 }
 
 
+class StatisticsProgress:
+    """后台定时刷新；数据库等待期间也显示阶段和耗时，不伪造完成数量。"""
+    def __init__(self, enabled=True, stream=None, interval=.5):
+        self.enabled, self.stream, self.interval = enabled, stream or sys.stdout, interval
+        self.started = self.stage_started = time.monotonic()
+        self.label, self.detail, self.done, self.total = '准备', '', 0, 0
+        self.width, self.tick = 0, 0
+        self.lock, self.stopped = threading.RLock(), threading.Event()
+        self.thread = None
+
+    def __enter__(self):
+        if self.enabled:
+            self.thread = threading.Thread(target=self.refresh, daemon=True)
+            self.thread.start()
+        return self
+
+    def phase(self, label, total=0, detail=''):
+        with self.lock:
+            self.label, self.total, self.done, self.detail = label, total, 0, detail
+            self.stage_started = time.monotonic()
+            self.render()
+
+    def update(self, done=None, detail=None):
+        with self.lock:
+            if done is not None:
+                self.done = done
+            if detail is not None:
+                self.detail = detail
+
+    def refresh(self):
+        while not self.stopped.wait(self.interval):
+            with self.lock:
+                self.render()
+
+    def render(self):
+        if not self.enabled:
+            return
+        elapsed = time.monotonic()-self.started
+        if self.total:
+            ratio = min(1., self.done/self.total)
+            filled = int(16*ratio)
+            bar = '[' + '#'*filled + '-'*(16-filled) + ']'
+            count = '{}/{} {:.1f}%'.format(self.done, self.total, ratio*100)
+        else:
+            self.tick += 1
+            bar, count = '[' + ('|/-\\'[self.tick % 4]).center(16) + ']', '处理中'
+        line = '{} {} | {:.0f}s | {} {}'.format(bar, count, elapsed, self.label, self.detail)
+        limit = max(40, shutil.get_terminal_size((120, 24)).columns-1)
+        shown, width = '', 0
+        for char in line:
+            size = 2 if unicodedata.east_asian_width(char) in ('W', 'F') else 1
+            if width+size > limit:
+                break
+            shown, width = shown+char, width+size
+        self.stream.write('\r' + shown + ' '*max(0, self.width-width))
+        self.stream.flush()
+        self.width = width
+
+    def write(self, message):
+        with self.lock:
+            if self.enabled and self.width:
+                self.stream.write('\r' + ' '*self.width + '\r')
+                self.width = 0
+            self.stream.write(str(message)+'\n')
+            self.stream.flush()
+
+    def __exit__(self, exc_type, exc, traceback):
+        self.stopped.set()
+        if self.thread is not None:
+            self.thread.join(timeout=2)
+        with self.lock:
+            if exc_type is None:
+                self.label, self.total = '完成', max(1, self.total)
+                self.done = self.total
+            else:
+                self.label = '失败/中断：' + self.label
+            self.detail = ''
+            self.render()
+            if self.enabled:
+                self.stream.write('\n')
+                self.stream.flush()
+        return False
+
+
 def read_sql(engine, sql, params=None, codes=None):
     statement = text(sql)
     values = dict(params or {})
@@ -71,13 +159,14 @@ def read_sql(engine, sql, params=None, codes=None):
         return pd.read_sql_query(statement, connection, params=values)
 
 
-def make_engine(config):
+def make_engine(config, tls_verify=None):
     kwargs = dict(drivername='mysql+pymysql', username=config['dbuser'],
                   password=config['dbpassword'], host=config['host'],
                   port=int(config.get('port', 3306)), database=config['dbname'], query={'charset': 'utf8mb4'})
     url = URL.create(**kwargs) if hasattr(URL, 'create') else URL(**kwargs)
     context = ssl.create_default_context(cadata=DB_TLS_CA_PEM or None)
-    if not DB_TLS_VERIFY:
+    verify = DB_TLS_VERIFY if tls_verify is None else tls_verify
+    if not verify:
         context.check_hostname = False
         context.verify_mode = ssl.CERT_NONE
     return create_engine(url, pool_pre_ping=True, pool_recycle=3600,
@@ -299,92 +388,120 @@ def load_plan(engine, start, end=None, as_of=None):
     return start, end, observed, calendar
 
 
-def run(start_date=START_DATE, end_date=END_DATE, as_of=AS_OF_DATE, output_dir=OUTPUT_DIR, engine=None, params=None):
+def run(start_date=START_DATE, end_date=END_DATE, as_of=AS_OF_DATE, output_dir=OUTPUT_DIR,
+        engine=None, params=None, tls_verify=None, show_progress=PROGRESS_ENABLED):
     p = dict(PARAMS, **(params or {}))
     owned = engine is None
-    engine = make_engine(DB_CONFIG) if owned else engine
-    started = time.monotonic()
+    print('超短线四策略收盘胜率统计 v' + SCRIPT_VERSION)
     try:
-        start, end, observed, calendar = load_plan(engine, start_date, end_date, as_of)
-        bounds = dict(first=calendar[0].date(), last=observed.date())
-        codes = read_sql(engine, '''SELECT DISTINCT code FROM ultra_research_universe
-            WHERE trade_date BETWEEN :first AND :last AND eligible=1 AND is_st=0
-            AND market_cap>=:cap ORDER BY code''',
-            dict(first=start.date(), last=end.date(), cap=p['min_market_cap']))['code'].tolist()
-        if not codes:
-            raise ValueError('研究区间没有合格股票快照，请检查采集进度和日期')
-        frames, coverage = [], []
-        print('信号区间 {} ~ {}；观察截至 {}；股票{}只。'.format(start.date(), end.date(), observed.date(), len(codes)))
-        for offset in range(0, len(codes), READ_BATCH_SIZE):
-            batch = codes[offset:offset+READ_BATCH_SIZE]
-            bars = dated_frame(read_sql(engine, '''SELECT * FROM ultra_research_bar
-                WHERE asset_type='stock' AND code IN :codes AND trade_date BETWEEN :first AND :last
-                ORDER BY code, trade_date''', bounds, codes=batch), '股票行情')
-            universe = dated_frame(read_sql(engine, '''SELECT * FROM ultra_research_universe
-                WHERE code IN :codes AND trade_date BETWEEN :first AND :last
-                ORDER BY code, trade_date''', bounds, codes=batch), '股票快照')
-            bar_groups = dict(tuple(bars.groupby('code')))
-            universe_groups = dict(tuple(universe.groupby('code')))
-            for code in batch:
-                frame, quality = stock_samples(code, bar_groups.get(code, bars.iloc[:0]),
-                    universe_groups.get(code, universe.iloc[:0]), calendar, start, end, p)
-                frames.append(frame)
-                coverage.append(quality)
-            done = min(offset+READ_BATCH_SIZE, len(codes))
-            filled = int(20*done/len(codes))
-            print('\r[{}{}] {}/{} {:.1f}% | {:.0f}s'.format('#'*filled, '-'*(20-filled), done,
-                len(codes), 100*done/len(codes), time.monotonic()-started), end='', flush=True)
-        print()
-        if not sum(item['base_samples'] for item in coverage):
-            raise ValueError('没有可用基础样本，请检查历史快照、行情完整性、预热长度及筛选参数')
-        samples = pd.concat(frames, ignore_index=True)
-        details = select_signals(samples, p)
-        summary = summary_table(details)
-        windows = window_summary(details)
-        monthly = []
-        for month in pd.period_range(start, end, freq='M'):
-            group = details[details['signal_date'].dt.to_period('M') == month]
-            item = summary_table(group)
-            item.insert(0, '信号月份', str(month))
-            monthly.append(item)
-        destination = Path(output_dir) / (dt.datetime.utcnow()+dt.timedelta(hours=8)).strftime('%Y%m%d_%H%M%S_%f')
-        destination.mkdir(parents=True, exist_ok=False)
-        outputs = {'收盘胜率汇总.csv': summary, '三日窗口汇总.csv': windows,
-            '策略信号明细.csv': details, '按月收盘胜率.csv': pd.concat(monthly, ignore_index=True),
-            '数据覆盖.csv': pd.DataFrame(coverage)}
-        for filename, frame in outputs.items():
-            frame.to_csv(destination / filename, index=False, encoding='utf-8-sig')
-        metadata = dict(version=SCRIPT_VERSION, signal_start=str(start.date()), signal_end=str(end.date()),
-            observed_through=str(observed.date()), warmup_start=str(calendar[0].date()),
-            params=p, default_rules=RULES, return_price_field=RETURN_PRICE_FIELD,
-            main_metric='信号日收盘为基准；严格正收益计胜，持平计入分母；各期限独立有效样本',
-            limitations=['日线触发近似，不能判断盘中先后或成交', '同股不同日和同日不同股可能相关，非独立交易',
-                         '不含行业强弱与公告利空过滤', '缺失/停牌单列且不纳入有效胜率分母，需同时审查数量'])
-        (destination / '运行参数.json').write_text(json.dumps(metadata, ensure_ascii=False, indent=2), encoding='utf-8')
+        with StatisticsProgress(enabled=show_progress) as progress:
+            progress.phase('连接数据库/读取日历')
+            if owned:
+                verify = DB_TLS_VERIFY if tls_verify is None else tls_verify
+                if not verify:
+                    progress.write('TLS：请求加密连接，但不验证服务器身份；仅用于可信目标的临时排查。')
+                engine = make_engine(DB_CONFIG, tls_verify=tls_verify)
+            start, end, observed, calendar = load_plan(engine, start_date, end_date, as_of)
+            bounds = dict(first=calendar[0].date(), last=observed.date())
+            progress.phase('读取股票清单')
+            codes = read_sql(engine, '''SELECT DISTINCT code FROM ultra_research_universe
+                WHERE trade_date BETWEEN :first AND :last AND eligible=1 AND is_st=0
+                AND market_cap>=:cap ORDER BY code''',
+                dict(first=start.date(), last=end.date(), cap=p['min_market_cap']))['code'].tolist()
+            if not codes:
+                raise ValueError('研究区间没有合格股票快照，请检查采集进度和日期')
+            frames, coverage = [], []
+            progress.write('信号区间 {} ~ {}；观察截至 {}；股票{}只。'.format(
+                start.date(), end.date(), observed.date(), len(codes)))
+            progress.phase('读取行情/计算策略', total=len(codes))
+            for offset in range(0, len(codes), READ_BATCH_SIZE):
+                batch = codes[offset:offset+READ_BATCH_SIZE]
+                progress.update(detail='读取行情 批次{}/{}'.format(
+                    offset//READ_BATCH_SIZE+1, (len(codes)+READ_BATCH_SIZE-1)//READ_BATCH_SIZE))
+                bars = dated_frame(read_sql(engine, '''SELECT * FROM ultra_research_bar
+                    WHERE asset_type='stock' AND code IN :codes AND trade_date BETWEEN :first AND :last
+                    ORDER BY code, trade_date''', bounds, codes=batch), '股票行情')
+                progress.update(detail='读取历史快照')
+                universe = dated_frame(read_sql(engine, '''SELECT * FROM ultra_research_universe
+                    WHERE code IN :codes AND trade_date BETWEEN :first AND :last
+                    ORDER BY code, trade_date''', bounds, codes=batch), '股票快照')
+                bar_groups, universe_groups = dict(tuple(bars.groupby('code'))), dict(tuple(universe.groupby('code')))
+                for stock_pos, code in enumerate(batch, 1):
+                    progress.update(detail='计算 ' + code)
+                    frame, quality = stock_samples(code, bar_groups.get(code, bars.iloc[:0]),
+                        universe_groups.get(code, universe.iloc[:0]), calendar, start, end, p)
+                    frames.append(frame)
+                    coverage.append(quality)
+                    progress.update(done=offset+stock_pos)
+            if not sum(item['base_samples'] for item in coverage):
+                raise ValueError('没有可用基础样本，请检查历史快照、行情完整性、预热长度及筛选参数')
+            progress.phase('筛选信号/汇总胜率')
+            details = select_signals(pd.concat(frames, ignore_index=True), p)
+            summary, windows = summary_table(details), window_summary(details)
+            monthly = []
+            for month in pd.period_range(start, end, freq='M'):
+                group = details[details['signal_date'].dt.to_period('M') == month]
+                item = summary_table(group)
+                item.insert(0, '信号月份', str(month))
+                monthly.append(item)
+            destination = Path(output_dir) / (dt.datetime.utcnow()+dt.timedelta(hours=8)).strftime('%Y%m%d_%H%M%S_%f')
+            destination.mkdir(parents=True, exist_ok=False)
+            outputs = {'收盘胜率汇总.csv': summary, '三日窗口汇总.csv': windows,
+                '策略信号明细.csv': details, '按月收盘胜率.csv': pd.concat(monthly, ignore_index=True),
+                '数据覆盖.csv': pd.DataFrame(coverage)}
+            progress.phase('导出本地结果', total=len(outputs)+1)
+            for written, (filename, frame) in enumerate(outputs.items(), 1):
+                progress.update(detail=filename)
+                frame.to_csv(destination / filename, index=False, encoding='utf-8-sig')
+                progress.update(done=written)
+            metadata = dict(version=SCRIPT_VERSION, signal_start=str(start.date()), signal_end=str(end.date()),
+                observed_through=str(observed.date()), warmup_start=str(calendar[0].date()),
+                params=p, default_rules=RULES, return_price_field=RETURN_PRICE_FIELD,
+                main_metric='信号日收盘为基准；严格正收益计胜，持平计入分母；各期限独立有效样本',
+                limitations=['日线触发近似，不能判断盘中先后或成交', '同股不同日和同日不同股可能相关，非独立交易',
+                             '不含行业强弱与公告利空过滤', '缺失/停牌单列且不纳入有效胜率分母，需同时审查数量'])
+            (destination / '运行参数.json').write_text(json.dumps(metadata, ensure_ascii=False, indent=2), encoding='utf-8')
+            progress.update(done=len(outputs)+1, detail='运行参数.json')
         visible = ['策略', '后续交易日', '触发样本', '有效样本', '胜率(%)', '平均收益(%)', '待观察', '停牌样本', '行情缺失']
         print(summary[visible].to_string(index=False, na_rep='--', float_format=lambda value: '{:.2f}'.format(value)))
         print('\n三日窗口统计：\n' + windows.to_string(index=False, na_rep='--', float_format=lambda value: '{:.2f}'.format(value)))
         print('\n结果目录：' + str(destination.resolve()))
         return dict(summary=summary, windows=windows, details=details, output_dir=destination)
     finally:
-        if owned:
+        if owned and engine is not None:
             engine.dispose()
 
 
-if __name__ == '__main__':
+def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--start', default=START_DATE, help='信号开始日期，默认2026-07-01')
     parser.add_argument('--end', default=END_DATE, help='信号截止日，默认数据库最新已收盘日')
     parser.add_argument('--as-of', default=AS_OF_DATE, help='观察截止日，可晚于信号截止日')
     parser.add_argument('--output', default=OUTPUT_DIR, help='本地结果目录')
-    args = parser.parse_args()
+    parser.add_argument('--no-progress', action='store_true', help='关闭动态进度显示')
+    tls = parser.add_mutually_exclusive_group()
+    tls.add_argument('--tls-verify', dest='tls_verify', action='store_true', help='验证服务器证书及身份')
+    tls.add_argument('--no-tls-verify', dest='tls_verify', action='store_false',
+                     help='临时跳过证书验证：无法确认服务器身份，仅用于可信目标排查')
+    parser.set_defaults(tls_verify=None)
+    args = parser.parse_args(argv)
     try:
-        run(args.start, args.end, args.as_of, args.output)
+        run(args.start, args.end, args.as_of, args.output, tls_verify=args.tls_verify,
+            show_progress=PROGRESS_ENABLED and not args.no_progress)
+        return 0
     except Exception as exc:
         message = '{}: {}'.format(type(exc).__name__, exc)
         password = str(DB_CONFIG.get('dbpassword') or '')
         if password:
             for value in {password, quote(password, safe=''), quote_plus(password, safe='')}:
                 message = message.replace(value, '***')
+        if 'certificate verify failed' in message.lower() or 'CERTIFICATE_VERIFY_FAILED' in message:
+            message += ('\n服务器证书验证未通过。请检查证书有效期、host与证书域名是否匹配，'
+                        '私有CA证书可填入DB_TLS_CA_PEM。若仅作临时排查且信任目标，'
+                        '可添加 --no-tls-verify；该选项不验证服务器身份。')
         print('\n统计失败：' + message, file=sys.stderr)
-        sys.exit(1)
+        return 1
+
+
+if __name__ == '__main__':
+    sys.exit(main())

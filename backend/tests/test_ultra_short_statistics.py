@@ -1,7 +1,9 @@
 """合成行情与SQLite验证四策略统计；不连接真实MySQL，不生成真实市场胜率。"""
 import datetime as dt
 import importlib.util
+import io
 from pathlib import Path
+import threading
 
 import numpy as np
 import pandas as pd
@@ -294,3 +296,86 @@ def test_end_to_end_exports_known_signal_and_exact_horizon_wins(local_destinatio
         assert len(pd.read_csv(result['output_dir'] / '收盘胜率汇总.csv')) == 12
     finally:
         engine.dispose()
+
+
+@pytest.mark.parametrize('override,default,required', [(None, True, True), (False, True, False), (True, False, True)])
+def test_tls_flag_overrides_config_without_disabling_tls(monkeypatch, override, default, required):
+    monkeypatch.setattr(m, 'DB_TLS_VERIFY', default)
+    monkeypatch.setattr(m, 'DB_TLS_CA_PEM', '')
+    monkeypatch.setattr(m, 'create_engine', lambda url, **kwargs: kwargs)
+    options = m.make_engine(dict(host='localhost', dbuser='test', dbpassword='test', dbname='test'), tls_verify=override)
+    context = options['connect_args']['ssl']
+    assert context.check_hostname is required
+    assert context.verify_mode == (m.ssl.CERT_REQUIRED if required else m.ssl.CERT_NONE)
+    assert options['connect_args']['connect_timeout'] == 15
+
+
+@pytest.mark.parametrize('flags,expected', [([], None), (['--tls-verify'], True), (['--no-tls-verify'], False)])
+def test_cli_forwards_tls_and_progress_options(monkeypatch, flags, expected):
+    captured = []
+    monkeypatch.setattr(m, 'run', lambda *args, **kwargs: captured.append((args, kwargs)))
+    assert m.main(['--start', '2026-07-01', '--no-progress']+flags) == 0
+    assert captured[0][1]['tls_verify'] is expected
+    assert not captured[0][1]['show_progress']
+    assert captured[0][0][0] == '2026-07-01'
+
+
+def test_certificate_error_explains_ca_and_cli_switch_without_exposing_password(monkeypatch, capsys):
+    secret = 'fake@secret:/word'
+    monkeypatch.setattr(m, 'DB_CONFIG', {'dbpassword': secret})
+    def fail(*args, **kwargs):
+        raise RuntimeError('CERTIFICATE_VERIFY_FAILED certificate verify failed ' + m.quote_plus(secret, safe=''))
+    monkeypatch.setattr(m, 'run', fail)
+    assert m.main([]) == 1
+    output = capsys.readouterr().err
+    assert 'DB_TLS_CA_PEM' in output and '--no-tls-verify' in output
+    assert '不验证服务器身份' in output
+    assert secret not in output and m.quote_plus(secret, safe='') not in output
+
+
+def test_progress_refreshes_while_database_waits_and_stops_cleanly():
+    stream = io.StringIO()
+    with m.StatisticsProgress(stream=stream, interval=.01) as progress:
+        progress.phase('连接数据库/读取日历')
+        threading.Event().wait(.06)
+    assert stream.getvalue().count('\r') >= 3
+    assert '处理中' in stream.getvalue()
+    assert not progress.thread.is_alive()
+    assert stream.getvalue().endswith('\n')
+
+
+def test_progress_count_is_actual_completion_and_failure_does_not_show_full_count():
+    stream = io.StringIO()
+    with pytest.raises(KeyboardInterrupt):
+        with m.StatisticsProgress(stream=stream) as progress:
+            progress.phase('计算策略', total=10)
+            progress.update(done=4, detail='000001.XSHE')
+            raise KeyboardInterrupt()
+    output = stream.getvalue()
+    assert '4/10 40.0%' in output
+    assert '失败/中断' in output
+    assert '10/10' not in output
+    assert not progress.thread.is_alive()
+
+
+def test_disabled_progress_has_no_refresh_thread_or_bar():
+    stream = io.StringIO()
+    with m.StatisticsProgress(enabled=False, stream=stream) as progress:
+        progress.phase('计算策略', total=10)
+        progress.update(done=4)
+    assert progress.thread is None
+    assert stream.getvalue() == ''
+
+
+def test_failed_initial_database_query_disposes_owned_engine(monkeypatch):
+    disposed = []
+    class Engine:
+        def dispose(self):
+            disposed.append(True)
+    monkeypatch.setattr(m, 'make_engine', lambda *a, **kw: Engine())
+    def fail(*args, **kwargs):
+        raise RuntimeError('certificate verify failed')
+    monkeypatch.setattr(m, 'load_plan', fail)
+    with pytest.raises(RuntimeError, match='certificate verify failed'):
+        m.run(show_progress=False)
+    assert disposed == [True]
