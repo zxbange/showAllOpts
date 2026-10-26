@@ -178,7 +178,7 @@ def test_full_collection_repeat_correction_future_filter_and_social(mod,monkeypa
         report = session.query(n.OwnershipReport).filter_by(code=code,report_date=dt.date(2026,9,30)).one()
         assert report.updated_at == stamp
         assert session.query(n.Checkpoint).filter_by(key='report:2026-09-30').one().as_of == dt.date(2026,10,21)
-        assert session.query(n.DisclosureProbe).one().as_of == dt.date(2026,10,22)
+        assert session.query(n.DisclosureProbe).filter_by(key='main').one().as_of == dt.date(2026,10,22)
 
     monkeypatch.setattr(mod,'china_now',lambda:dt.datetime(2026,10,23,15))
     assert run().empty  # Another day without disclosures still skips.
@@ -288,7 +288,7 @@ def test_full_collection_repeat_correction_future_filter_and_social(mod,monkeypa
     # Mixed changes: do not advance the global probe if holder collection fails
     # after the holdings transactions committed; retry must finish both sources.
     with sessionmaker(bind=target)() as session:
-        old_probe = session.query(n.DisclosureProbe).one().payload
+        old_probe = session.query(n.DisclosureProbe).filter_by(key='main').one().payload
     add_float_version(2000, 350)
     source_session.add(Holder(id=2000,code=code,end_date=dt.date(2026,9,30),pub_date=dt.date(2026,10,23),share_holders=60))
     source_session.commit()
@@ -296,13 +296,13 @@ def test_full_collection_repeat_correction_future_filter_and_social(mod,monkeypa
     with pytest.raises(RuntimeError, match='synthetic holder failure'):
         run()
     with sessionmaker(bind=target)() as session:
-        assert session.query(n.DisclosureProbe).one().payload == old_probe
+        assert session.query(n.DisclosureProbe).filter_by(key='main').one().payload == old_probe
         assert session.query(n.OwnershipReport).filter_by(code=code,report_date=dt.date(2026,9,30)).one().payload['social_entry']['new_shares'] == 350
         assert session.query(n.OwnershipHolders).filter_by(code=code,end_date=dt.date(2026,9,30)).one().payload['share_holders'] == 65
     fail_holder[0] = False
     assert len(run()) == 1
     with sessionmaker(bind=target)() as session:
-        assert session.query(n.DisclosureProbe).one().payload != old_probe
+        assert session.query(n.DisclosureProbe).filter_by(key='main').one().payload != old_probe
         assert session.query(n.OwnershipHolders).filter_by(code=code,end_date=dt.date(2026,9,30)).one().payload['share_holders'] == 60
     source_calls.clear()
     assert run().empty and len(source_calls) == 6

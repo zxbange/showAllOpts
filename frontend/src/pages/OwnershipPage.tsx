@@ -108,6 +108,18 @@ function StockView({ code }: { code: string }) {
       <div className="ownership-grid">
         {categories.map(([key, label]) => {
           const available = data.reports.some((p) => p.payload.categories[key] != null)
+          const incomplete = data.reports.some(({ payload }) => {
+            const holding = payload.categories[key]
+            if (holding) return holding.complete === false
+            if (
+              !payload.classification_version ||
+              !payload.float_members?.length ||
+              key === 'public_fund'
+            ) {
+              return false
+            }
+            return (key === 'social' ? payload.social_complete : payload.float_complete) === false
+          })
           return (
             <section className="ownership-panel" key={key}>
               <h3>
@@ -127,6 +139,7 @@ function StockView({ code }: { code: string }) {
               ) : (
                 <p className="ownership-missing">暂无披露记录，不代表持仓为零。</p>
               )}
+              {incomplete && <p className="ownership-note">分类信息不完整，仅统计已识别持仓。</p>}
             </section>
           )
         })}
@@ -165,14 +178,14 @@ function SocialView({ onSelect }: { onSelect: (code: string) => void }) {
           { label: '本季度合计（万股）', width: '15%' },
           { label: '增加股数（万股）', width: '14%' },
           { label: '增幅', width: '10%' },
-          { label: '本季度占流通股比例', width: '16%' },
+          { label: '本季度披露持股比例', width: '16%' },
           { label: '披露日期', width: '10%' },
         ]
       : [
           { label: '股票 / 行业', width: '20%' },
           { label: '新进社保组合', width: '28%' },
           { label: '持股数量（万股）', width: '14%' },
-          { label: '占流通股比例', width: '12%' },
+          { label: '披露持股比例', width: '12%' },
           { label: '估算市值（亿元）', width: '16%' },
           { label: '披露日期', width: '10%' },
         ]
@@ -248,7 +261,7 @@ function SocialView({ onSelect }: { onSelect: (code: string) => void }) {
               }
               aria-hidden={mode !== value}
             >
-              {option.description}
+              {option.description} 比例沿用源表披露口径。
             </p>
           ))}
         </div>

@@ -10,13 +10,26 @@ def latest_quarter(today):
     return date(today.year, ((today.month - 1) // 3) * 3 + 1, 1) - timedelta(days=1)
 
 def social_total(payload, field="shares"):
-    if not payload or not payload.get('float_complete') or not isinstance(payload.get('float_members'), list):
+    if not payload or not isinstance(payload.get('float_members'), list):
+        return None
+    # New snapshots separate social identification from full institution classes.
+    # An explicit unknown/incomplete flag must never fall back to the old flag.
+    complete = payload.get('social_complete', payload.get('float_complete'))
+    if complete is not True:
         return None
     total = Decimal(0)
     for member in payload['float_members']:
-        if member.get('class_id') is None:
+        if not isinstance(member, dict):
             return None
-        if member['class_id'] != 307004:
+        if 'is_social' in member:
+            is_social = member['is_social']
+            if is_social is not True and is_social is not False:
+                return None
+        else:
+            if member.get('class_id') is None:
+                return None
+            is_social = member['class_id'] == 307004
+        if not is_social:
             continue
         try:
             shares = Decimal(str(member.get(field)))

@@ -6,6 +6,7 @@
 import builtins
 import datetime
 import uuid
+import unicodedata
 import math
 import re
 import sys
@@ -633,16 +634,17 @@ def _ownership_strategy(_apis, _config):
         for code in sorted(set(by_stock) | set(fund_groups) | set(old_rows)):
             members, complete, pub = float_snapshot(by_stock.get(code,[]),closes.get(code))
             categories = {'public_fund':fund_groups.get(code)}
-            for category, ids in CATEGORY_IDS.items():
-                categories[category] = aggregate([r for r in members if r['class_id'] in ids],'top10_float','estimated')
             payload = {'schema_version':1, 'categories':categories, 'float_members':members,
                        'float_complete':complete, 'float_pub_date':pub,
                        'public_fund_scope':'full_disclosure' if period.month in (6,12) else 'quarterly_top_holdings',
                        'fund_identity_rule':'statistics_main_code_else_product_code'}
             previous = previous_rows.get(code)
+            payload = classify_payload(payload, [previous.payload] if previous else [])
             payload['social_entry'] = social_entry(payload,previous.payload if previous else None)
             old_payload = old_rows[code].payload if code in old_rows else {}
-            if old_payload.get('float_members') != members or old_payload.get('float_complete') != complete:
+            if (old_payload.get('float_members') != payload['float_members']
+                    or old_payload.get('float_complete') != payload['float_complete']
+                    or old_payload.get('social_complete') != payload['social_complete']):
                 changed_float_codes.add(code)
             if upsert(session,OwnershipReport,{'code':code,'report_date':period},{'payload':payload},
                       existing=old_rows.get(code),loaded=True):
@@ -660,15 +662,9 @@ def _ownership_strategy(_apis, _config):
         session.expunge_all()
 
     def repair_social_batch(session, codes, changed):
-        records = session.query(OwnershipReport).filter(OwnershipReport.code.in_(codes)).all()
-        lookup = {(r.code,r.report_date):r for r in records}
-        for row in records:
-            previous = lookup.get((row.code,previous_quarter(row.report_date)))
-            social = social_entry(row.payload,previous.payload if previous else None)
-            if row.payload.get('social_entry') != social:
-                row.payload = dict(row.payload,social_entry=social)
-                row.updated_at = china_now()
-                changed.add(('持仓',row.code,row.report_date))
+        for row, payload in classification_updates(session, codes):
+            row.payload, row.updated_at = payload, china_now()
+            changed.add(('持仓', row.code, row.report_date))
         session.flush()
         session.expunge_all()
 
@@ -728,18 +724,245 @@ def _ownership_strategy(_apis, _config):
         complete = complete and builtins.all(r['class_id'] is not None and r['name'] for r in result)
         return result, bool(complete), latest.isoformat()
 
+    CLASSIFICATION_VERSION = 1
+
+    def holder_name(value):
+        value = re.sub(r'\s+', '', unicodedata.normalize('NFKC', text_value(value)))
+        return re.sub(r'[‐‑‒–—―−﹣－]', '-', value).replace('（', '(').replace('）', ')')
+
+    def social_flag(member):
+        if 'is_social' in member:
+            return member['is_social'] if isinstance(member['is_social'], bool) else None
+        kind = member.get('class_id')
+        return None if kind is None else kind == 307004
+
+    def social_ready(payload):
+        return bool(payload) and payload.get('social_complete', payload.get('float_complete')) is True
+
+    def classify_member(member, history):
+        result = dict(member)
+        raw = member.get('raw_class_id', member.get('class_id'))
+        # Current source classifications take precedence over inferred evidence.
+        if raw is not None:
+            return result
+        name = holder_name(member.get('name'))
+        identity = text_value(member.get('id'))
+        evidence = set()
+        for old_payload in history:
+            for old in old_payload.get('float_members', []):
+                old_raw = old.get('raw_class_id', old.get('class_id'))
+                same = (identity and identity == text_value(old.get('id'))) or (name and name == holder_name(old.get('name')))
+                if same and old_raw is not None:
+                    evidence.add(old_raw)
+        hint = None
+        if re.search(r'(?:^|-)(?:全国)?(?:社保基金|社会保障基金)[零〇○一二三四五六七八九十百千万0-9]+组合$', name):
+            hint = 307004
+        elif (not re.search(r'社保|养老|私募', name)
+              and re.search(r'(?:交易型开放式指数|混合型|股票型|债券型|灵活配置|联接|货币市场|开放式).*证券投资基金$', name)):
+            hint = 307003
+        kind, source = None, 'unknown'
+        if evidence:
+            if len(evidence) == 1 and (hint is None or hint in evidence):
+                kind, source = next(iter(evidence)), 'history'
+            else:
+                source = 'conflict'
+        elif hint is not None:
+            kind, source = hint, 'name'
+        result.update(raw_class_id=None, class_id=kind, class_source=source,
+                      is_social=None if kind is None else kind == 307004)
+        return result
+
+    def classify_payload(payload, history=()):
+        result = dict(payload)
+        members = [classify_member(m, history) for m in payload.get('float_members', [])]
+        ranks = [m.get('rank') for m in members]
+        structural = (len(members) == 10 and set(ranks) == set(range(1, 11))
+                      and builtins.all(text_value(m.get('name')) for m in members))
+        classified = structural and builtins.all(m.get('class_id') is not None for m in members)
+        social_complete = structural and builtins.all(social_flag(m) is not None for m in members)
+        categories = dict(payload.get('categories', {}))
+        for category, ids in CATEGORY_IDS.items():
+            items = [m for m in members if (social_flag(m) is True if category == 'social' else m.get('class_id') in ids)]
+            total = aggregate(items, 'top10_float', 'estimated')
+            if total is not None:
+                total['complete'] = bool(social_complete if category == 'social' else classified)
+            categories[category] = total
+        result.update(float_members=members, categories=categories, float_list_complete=bool(structural),
+                      float_complete=bool(classified), social_complete=bool(social_complete),
+                      classification_version=CLASSIFICATION_VERSION,
+                      classification_pending=builtins.any(m.get('raw_class_id', m.get('class_id')) is None for m in members))
+        return result
+
+    def classification_updates(session, codes, as_of=None):
+        query_rows = session.query(OwnershipReport).filter(OwnershipReport.code.in_(codes))
+        if as_of is not None:
+            query_rows = query_rows.filter(OwnershipReport.report_date <= as_of)
+        rows = query_rows.order_by(OwnershipReport.code, OwnershipReport.report_date).all()
+        history, lookup, updates = {}, {}, []
+        for row in rows:
+            original = row.payload
+            prior = history.setdefault(row.code, [])
+            members = original.get('float_members', [])
+            needs_repair = builtins.any(m.get('raw_class_id', m.get('class_id')) is None for m in members)
+            payload = classify_payload(original, prior) if needs_repair else dict(original)
+            previous = lookup.get((row.code, previous_quarter(row.report_date)))
+            payload['social_entry'] = social_entry(payload, previous)
+            if payload != original:
+                updates.append((row, payload))
+            lookup[(row.code, row.report_date)] = payload
+            # Only original source IDs are evidence; never promote an inference.
+            prior.append(original)
+        return updates
+
+    def json_boolean(session, key, value):
+        # JoinQuant may ship SQLAlchemy older than the JSON .as_boolean API.
+        expression = func.json_extract(OwnershipReport.payload, '$.' + key)
+        if session.get_bind().dialect.name == 'mysql':
+            return func.json_unquote(expression) == ('true' if value else 'false')
+        return expression == int(value)
+
+    def repair_classifications(Session, as_of, changed=None, codes=None, dry_run=False):
+        """Repair stored JSON only, with resumable batches and the normal sync journal."""
+        changed = changed if changed is not None else set()
+        key, cursor, repaired = 'classify-v1', '', 0
+        if codes is None:
+            with session_scope(Session) as session:
+                checkpoint = session.query(DisclosureProbe).filter_by(key=key).first()
+                if checkpoint is not None:
+                    if checkpoint.payload.get('complete'):
+                        return 0
+                    cursor = checkpoint.payload.get('last_code', '')
+        pending = sorted(set(codes)) if codes is not None else None
+        while True:
+            with session_scope(Session) as session:
+                if not dry_run:
+                    session.query(SyncHead).filter_by(id='main').with_for_update().one()
+                if pending is None:
+                    batch = [r[0] for r in session.query(OwnershipReport.code).filter(
+                        OwnershipReport.code > cursor, OwnershipReport.report_date <= as_of,
+                        json_boolean(session, 'float_complete', False),
+                        func.json_extract(OwnershipReport.payload, '$.float_members[0].name').isnot(None)
+                    ).distinct().order_by(OwnershipReport.code).limit(settings['stock_batch_size']).all()]
+                else:
+                    batch, pending = pending[:settings['stock_batch_size']], pending[settings['stock_batch_size']:]
+                if not batch:
+                    if codes is None and not dry_run:
+                        checkpoint = session.query(DisclosureProbe).filter_by(key=key).first()
+                        if checkpoint is None:
+                            checkpoint = DisclosureProbe(key=key, as_of=as_of, payload={})
+                            session.add(checkpoint)
+                        checkpoint.payload = {'complete': True, 'last_code': cursor}
+                        checkpoint.as_of = as_of
+                        session.commit()
+                    break
+                updates = classification_updates(session, batch, as_of)
+                for row, payload in updates:
+                    changed.add(('持仓', row.code, row.report_date))
+                    if not dry_run:
+                        row.payload, row.updated_at = payload, china_now()
+                repaired += len(updates)
+                cursor = batch[-1]
+                if not dry_run:
+                    if codes is None:
+                        checkpoint = session.query(DisclosureProbe).filter_by(key=key).first()
+                        if checkpoint is None:
+                            checkpoint = DisclosureProbe(key=key, as_of=as_of, payload={})
+                            session.add(checkpoint)
+                        checkpoint.payload = {'complete': False, 'last_code': cursor}
+                        checkpoint.as_of = as_of
+                    session.commit()
+                _progress_note('修复已有分类：已处理至 {}，变更 {} 份报告'.format(cursor, repaired))
+        if repaired:
+            _progress_message('个股机构持仓：{} {} 份已有报告的分类及社保比较，无需重采历史。'.format(
+                '待修复' if dry_run else '已修复', repaired))
+        return repaired
+
+    def refresh_classification_gaps(Session, as_of, changed):
+        """Bounded, once-daily source metadata retry; never reload public fund holdings."""
+        key = 'classify-retry'
+        with session_scope(Session) as session:
+            state = session.query(DisclosureProbe).filter_by(key=key).first()
+            if state is not None and state.as_of >= as_of:
+                return
+            cursor = state.payload.get('last_code', '') if state else ''
+            cutoff = previous_quarter(as_of + datetime.timedelta(days=1))
+            for _ in range(settings['refresh_quarters'] - 1):
+                cutoff = previous_quarter(cutoff)
+            candidates = session.query(OwnershipReport).filter(
+                OwnershipReport.report_date >= cutoff, OwnershipReport.report_date <= as_of,
+                json_boolean(session, 'classification_pending', True))
+            codes = [r[0] for r in candidates.with_entities(OwnershipReport.code).filter(
+                OwnershipReport.code > cursor).distinct().order_by(OwnershipReport.code)
+                .limit(builtins.min(settings['stock_batch_size'], 50)).all()]
+            if not codes and cursor:
+                codes = [r[0] for r in candidates.with_entities(OwnershipReport.code).distinct()
+                         .order_by(OwnershipReport.code).limit(builtins.min(settings['stock_batch_size'], 50)).all()]
+            if not codes:
+                return
+            originals = {(r.code, r.report_date): deepcopy(r.payload) for r in candidates.filter(OwnershipReport.code.in_(codes)).all()}
+        _progress_message('个股机构持仓：定向检查 {} 只股票待补分类，仅查询十大流通股东。'.format(len(codes)))
+        fresh = {}
+        for period in sorted(set(p for _, p in originals)):
+            scoped = [c for c, p in originals if p == period]
+            for code, rows in batch_floats(scoped, period, as_of).items():
+                old = originals[(code, period)]
+                members, _, pub = float_snapshot(rows, None)
+                old_members = old.get('float_members', [])
+                old_ranks = {m.get('rank'): m for m in old_members}
+                # A different document or changing holdings belongs to the normal disclosure flow.
+                if pub != old.get('float_pub_date') or len(members) != len(old_members):
+                    continue
+                if builtins.any(m['rank'] not in old_ranks or
+                    holder_name(m['name']) != holder_name(old_ranks[m['rank']]['name']) or
+                    m.get('shares') != old_ranks[m['rank']].get('shares') or
+                    m.get('ratio') != old_ranks[m['rank']].get('ratio') for m in members):
+                    continue
+                payload = deepcopy(old)
+                by_rank = {m['rank']: m for m in members}
+                updated = False
+                for member in payload['float_members']:
+                    source = by_rank[member['rank']]
+                    if member.get('raw_class_id', member.get('class_id')) is None and source.get('class_id') is not None:
+                        kind = source['class_id']
+                        member.update(raw_class_id=kind, class_id=kind, class_source='source', is_social=kind == 307004)
+                        if source.get('id'):
+                            member['id'] = source['id']
+                        updated = True
+                if updated:
+                    fresh[(code, period)] = payload
+        with session_scope(Session) as session:
+            session.query(SyncHead).filter_by(id='main').with_for_update().one()
+            touched = set()
+            for (code, period), payload in fresh.items():
+                row = session.query(OwnershipReport).filter_by(code=code, report_date=period).first()
+                if row is None or row.payload != originals[(code, period)]:
+                    continue  # Another collector committed newer data while source reads ran.
+                row.payload = classify_payload(payload)
+                row.updated_at = china_now()
+                changed.add(('持仓', code, period))
+                touched.add(code)
+            if touched:
+                session.flush()
+                repair_social_batch(session, sorted(touched), changed)
+            state = session.query(DisclosureProbe).filter_by(key=key).first()
+            if state is None:
+                session.add(DisclosureProbe(key=key, as_of=as_of, payload={'last_code': codes[-1]}))
+            else:
+                state.as_of, state.payload = as_of, {'last_code': codes[-1]}
+            session.commit()
+
     def social_entry(current, previous):
         empty = {'status': 'unknown', 'first_appearance': False, 'new_combinations': [],
                  'new_shares': None, 'new_market_value': None}
-        if not previous or not current.get('float_complete') or not previous.get('float_complete'):
+        if not social_ready(current) or not social_ready(previous):
             return empty
-        current_members = [r for r in current['float_members'] if r['class_id'] == 307004]
+        current_members = [r for r in current['float_members'] if social_flag(r) is True]
         previous_members = previous['float_members']
         def same(a, b):
-            return (a.get('id') and b.get('id') and a['id'] == b['id']) or re.sub(r'\s+', '', a['name']) == re.sub(r'\s+', '', b['name'])
+            return (a.get('id') and b.get('id') and a['id'] == b['id']) or holder_name(a['name']) == holder_name(b['name'])
         # Compare all prior shareholders: reclassification is not a new holding.
         new = [r for r in current_members if not builtins.any(same(r,p) for p in previous_members)]
-        old_social = [r for r in previous_members if r['class_id'] == 307004]
+        old_social = [r for r in previous_members if social_flag(r) is True]
         totals = aggregate(new, 'top10_float', 'estimated') or {}
         return {'status': 'comparable', 'first_appearance': bool(new) and not old_social,
                 'new_combinations': new, 'new_shares': totals.get('shares'),
@@ -807,7 +1030,7 @@ def _ownership_strategy(_apis, _config):
                    for m,d in ((3,31),(6,30),(9,30),(12,31))
                    if start <= datetime.date(y,m,d) <= as_of]
         periods.insert(0, previous_quarter(periods[0]))
-        _progress_message('个股机构持仓 [分来源增量版 v6]：开始检查新增披露。')
+        _progress_message('个股机构持仓 [分类补全版 v7]：开始检查新增披露。')
         signature = disclosure_signature(as_of)
         previous_probe, previous_day = None, None
         with database_scope(Base, _config) as Session:
@@ -817,9 +1040,14 @@ def _ownership_strategy(_apis, _config):
                     previous_probe, previous_day = dict(probe.payload), probe.as_of
                 if probe is not None and probe.as_of > as_of:
                     raise ValueError('已有较新采集结果，拒绝历史运行回退')
-                if not full_refresh and probe is not None and probe.payload == signature:
-                    _progress_message('个股机构持仓：未检测到新增披露，跳过持仓复查、户数采集和社保比较。')
-                    return pd.DataFrame(columns=['kind', 'code', 'date'])
+                unchanged = not full_refresh and probe is not None and probe.payload == signature
+            changed = set()
+            install_change_tracking(Session)
+            repair_classifications(Session, as_of, changed)
+            refresh_classification_gaps(Session, as_of, changed)
+            if unchanged:
+                _progress_message('个股机构持仓：未检测到新增披露，跳过持仓复查、户数采集和社保比较。')
+                return pd.DataFrame(sorted(changed), columns=['kind', 'code', 'date'])
 
             securities = _apis['get_all_securities'](types=['stock'],date=as_of)
             if securities is None or securities.empty:
@@ -859,8 +1087,6 @@ def _ownership_strategy(_apis, _config):
             if fund_map is None and (not targeted or review_codes):
                 fund_map = load_fund_map()
             # Compact keys only: no raw rows or JSON payloads are accumulated for the preview.
-            changed = set()
-            install_change_tracking(Session)
             if codes:
                 with session_scope(Session) as session:
                     for batch in _progress_items(list(batches(codes)),'股票资料',lambda b:b[0]):

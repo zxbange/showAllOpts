@@ -121,7 +121,7 @@ test('social increase shows aggregate quarter comparison', async ({ page }) => {
   await expect(page.getByRole('columnheader', { name: '上季度合计（万股）' })).toBeVisible()
   await expect(page.getByRole('cell', { name: '150', exact: true })).toBeVisible()
   await expect(page.getByRole('cell', { name: '50%', exact: true })).toBeVisible()
-  await expect(page.getByRole('columnheader', { name: '本季度占流通股比例' })).toBeVisible()
+  await expect(page.getByRole('columnheader', { name: '本季度披露持股比例' })).toBeVisible()
   await expect(page.getByRole('cell', { name: '1.9%', exact: true })).toBeVisible()
 })
 

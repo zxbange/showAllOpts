@@ -9,6 +9,7 @@ export interface Holding {
   holder_count: number | null
   scope: string
   value_method: string
+  complete?: boolean
 }
 export interface OwnershipReport {
   date: string
@@ -16,6 +17,9 @@ export interface OwnershipReport {
     categories: Record<string, Holding | null>
     float_pub_date: string | null
     float_complete: boolean
+    social_complete?: boolean
+    classification_version?: number
+    float_members?: SocialMember[]
   }
 }
 export interface HolderPoint {
