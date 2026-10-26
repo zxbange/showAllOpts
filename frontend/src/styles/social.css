@@ -520,6 +520,33 @@
   max-width: 900px;
 }
 
+.social-polling-settings {
+  padding-bottom: 22px;
+  margin-bottom: 22px;
+  border-bottom: 1px solid var(--border);
+}
+.social-polling-settings > h3 {
+  margin: 0;
+  font-size: 15px;
+}
+.social-polling-form {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr)) auto;
+  align-items: end;
+  gap: 14px;
+  max-width: 900px;
+  margin-top: 14px;
+}
+.social-polling-form > label {
+  gap: 6px;
+}
+.social-polling-form > .button {
+  min-height: 42px;
+}
+.social-polling-settings > .social-muted {
+  margin: 9px 0 0;
+}
+
 .social-credential-field {
   display: grid;
   align-content: start;
@@ -725,6 +752,12 @@
   }
   .social-summary {
     grid-template-columns: 1fr 1fr;
+  }
+  .social-polling-form {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .social-polling-form > .button {
+    grid-column: 1 / -1;
   }
   .social-summary > div {
     padding: 16px;

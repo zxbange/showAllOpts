@@ -15,6 +15,8 @@ router = APIRouter(prefix='/social-monitor', tags=['博主监控'])
 
 class ConfigUpdate(BaseModel):
     enabled: bool | None = None
+    interval_min: int | None = Field(default=None, strict=True, ge=60, le=86400, multiple_of=60)
+    interval_max: int | None = Field(default=None, strict=True, ge=60, le=86400, multiple_of=60)
     token: SecretStr | None = Field(default=None, max_length=300)
     chat_id: SecretStr | None = Field(default=None, max_length=100)
     weibo_cookie: SecretStr | None = Field(default=None, max_length=20000)

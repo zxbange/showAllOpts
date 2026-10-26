@@ -141,6 +141,7 @@ export function SocialMonitorPage() {
     chat_id: '',
   })
   const [editingSecrets, setEditingSecrets] = useState({ token: false, chat_id: false })
+  const [pollingDraft, setPollingDraft] = useState<{ min: string; max: string } | null>(null)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const [notice, setNotice] = useState('')
@@ -223,6 +224,37 @@ export function SocialMonitorPage() {
         ...Object.fromEntries(Object.keys(changes).map((field) => [field, false])),
       }))
       setNotice('配置已保存。')
+    })
+  }
+
+  function savePollingConfig() {
+    if (!status) return
+    setNotice('')
+    const minimum = pollingDraft?.min ?? String(status.interval_min / 60)
+    const maximum = pollingDraft?.max ?? String(status.interval_max / 60)
+    const min = Number(minimum)
+    const max = Number(maximum)
+    if (
+      !minimum.trim() ||
+      !maximum.trim() ||
+      !Number.isInteger(min) ||
+      !Number.isInteger(max) ||
+      min < 1 ||
+      max > 1440 ||
+      min > 1440 ||
+      max < 1
+    ) {
+      setError('最短和最长周期须为 1～1440 之间的整数分钟。')
+      return
+    }
+    if (min >= max) {
+      setError('最短周期必须小于最长周期，以保持随机间隔。')
+      return
+    }
+    void action(async () => {
+      setStatus(await api<Status>('/config', { interval_min: min * 60, interval_max: max * 60 }))
+      setPollingDraft(null)
+      setNotice('已保存，下一轮轮询生效。')
     })
   }
 
@@ -626,6 +658,51 @@ export function SocialMonitorPage() {
               }}
             />
           )}
+          <div className="social-polling-settings">
+            <h3>平台轮询设置</h3>
+            <form
+              className="social-polling-form"
+              aria-label="平台轮询设置"
+              noValidate
+              onSubmit={(event) => {
+                event.preventDefault()
+                savePollingConfig()
+              }}
+            >
+              {(
+                [
+                  ['min', '最短周期（分钟）', status.interval_min],
+                  ['max', '最长周期（分钟）', status.interval_max],
+                ] as const
+              ).map(([key, title, seconds]) => (
+                <label key={key}>
+                  {title}
+                  <input
+                    type="number"
+                    min={1}
+                    max={1440}
+                    step={1}
+                    required
+                    disabled={busy}
+                    value={pollingDraft?.[key] ?? String(seconds / 60)}
+                    onChange={(event) =>
+                      setPollingDraft((current) => ({
+                        min: current?.min ?? String(status.interval_min / 60),
+                        max: current?.max ?? String(status.interval_max / 60),
+                        [key]: event.target.value,
+                      }))
+                    }
+                  />
+                </label>
+              ))}
+              <button className="button button-primary" disabled={busy || !pollingDraft}>
+                保存轮询设置
+              </button>
+            </form>
+            <p className="social-muted">
+              每轮在此范围内随机取值，同平台的博主和组合按队列分散检查；当前轮次完成后生效。
+            </p>
+          </div>
           <h3>Telegram 通知配置</h3>
           <div className="social-form">
             <div className="social-field-grid">

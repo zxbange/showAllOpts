@@ -41,7 +41,7 @@ def next_check_time(moment, delay=0):
     if night_time(moment):
         return moment.replace(hour=7, minute=0, second=0, microsecond=0).timestamp()
     candidate = moment + timedelta(seconds=delay)
-    if candidate.date() != moment.date() or night_time(candidate):
+    if night_time(candidate):
         candidate = candidate.replace(hour=7, minute=0, second=0, microsecond=0)
     return candidate.timestamp()
 
@@ -139,6 +139,20 @@ class SocialMonitor(CubeMonitorMixin):
         with self.db() as db:
             db.execute('BEGIN IMMEDIATE')
             config = self.config(db)
+            if any(changes.get(key) is not None for key in ('interval_min', 'interval_max')):
+                intervals = {
+                    'interval_min': config.get('interval_min', POLL_INTERVAL_MIN),
+                    'interval_max': config.get('interval_max', POLL_INTERVAL_MAX),
+                }
+                intervals.update({key: changes[key] for key in intervals if changes.get(key) is not None})
+                if any(type(value) is not int or not 60 <= value <= 86400 or value % 60
+                       for value in intervals.values()):
+                    raise ValueError('轮询间隔须为 1～1440 分钟的整数')
+                if intervals['interval_min'] >= intervals['interval_max']:
+                    raise ValueError('最小轮询间隔必须小于最大轮询间隔')
+                # Keep the current round and in-flight task intact. Each platform
+                # draws from the saved range when it starts its next round.
+                config.update(intervals)
             for key in ('token', 'chat_id', 'weibo_cookie', 'xueqiu_cookie'):
                 if changes.get(key) is not None:
                     config[key] = self.encode(changes[key].strip())
@@ -166,7 +180,9 @@ class SocialMonitor(CubeMonitorMixin):
             cubes = [dict(row) for row in db.execute('SELECT * FROM cubes ORDER BY id')]
             cube_counts = dict(db.execute('SELECT notify_status,count(*) FROM cube_rebalances GROUP BY notify_status').fetchall())
         return {
-            'enabled': config['enabled'], 'interval_min': POLL_INTERVAL_MIN, 'interval_max': POLL_INTERVAL_MAX,
+            'enabled': config['enabled'],
+            'interval_min': config.get('interval_min', POLL_INTERVAL_MIN),
+            'interval_max': config.get('interval_max', POLL_INTERVAL_MAX),
             'browser_login_available': bool(getattr(self, 'browser_login', None) and self.browser_login.available),
             'night_rest': night_time(datetime.now(CHINA)),
             'platforms': config.get('platforms', {}),
@@ -359,7 +375,8 @@ class SocialMonitor(CubeMonitorMixin):
                     or queue.get('window', 'authors') != window):
                 queue = queues[platform] = {
                     'id': uuid.uuid4().hex, 'author_ids': list(authors), 'excluded_ids': [],
-                    'index': 0, 'interval': random.uniform(POLL_INTERVAL_MIN, POLL_INTERVAL_MAX),
+                    'index': 0, 'interval': random.uniform(config.get('interval_min', POLL_INTERVAL_MIN),
+                                                         config.get('interval_max', POLL_INTERVAL_MAX)),
                     'next_check': moment.timestamp(), 'day': today, 'window': window,
                 }
             identifier = queue['author_ids'][queue['index']]
