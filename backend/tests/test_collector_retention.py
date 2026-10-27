@@ -1,5 +1,6 @@
 """Test retention offline; never import jqdata, credentials or connect to MySQL."""
 import ast
+import builtins
 import datetime
 from pathlib import Path
 from types import SimpleNamespace
@@ -13,14 +14,14 @@ from sqlalchemy.orm import declarative_base, sessionmaker
 def collector(tmp_path):
     source = Path(__file__).resolve().parents[2] / 'collectors' / '行业动量计算_数据库版.py'
     tree = ast.parse(source.read_text(encoding='utf-8'))
-    names = {'IndustryMomentum', 'as_date', '_closed_day', 'save_day', 'get_last_saved_date',
+    names = {'IndustryMomentum', 'as_date', '_closed_day', '_checked_trade_days', 'save_day', 'get_last_saved_date',
              'get_retention_start', 'cleanup_old_data', 'run'}
     nodes = [node for node in tree.body if isinstance(node, (ast.ClassDef, ast.FunctionDef)) and node.name in names]
     class FrozenDatetime(datetime.datetime):
         @classmethod
         def utcnow(cls):
             return cls(2026, 10, 17, 2)  # Saturday in Beijing.
-    namespace = dict(Column=Column, Date=Date, DateTime=DateTime, Integer=Integer,
+    namespace = dict(builtins=builtins, Column=Column, Date=Date, DateTime=DateTime, Integer=Integer,
                      Numeric=Numeric, String=String, func=func, sessionmaker=sessionmaker,
                      Base=declarative_base(), START_DATE='2025-01-01', END_DATE=None,
                      INDUSTRY_TYPE='sw_l2', RETENTION_TRADE_DAYS=180, RESULT_COLUMNS=[],

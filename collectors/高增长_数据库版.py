@@ -43,6 +43,38 @@ PROGRESS_INTERVAL_SECONDS = 5.0  # 最多每隔多少秒刷新；等待接口/�
 _PROGRESS_LOCAL = threading.local()
 
 
+def _replace_latest_snapshot(Session, Snapshot, Stock, meta, records,
+                             result_columns, meta_columns, date_field, json_fields=()):
+    """Replace a validated latest snapshot atomically; unchanged results keep their timestamp."""
+    def signature(values):
+        return sorted(tuple(json.dumps(r[c], sort_keys=True, ensure_ascii=False) if c in json_fields else r[c]
+                            for c in result_columns) for r in values)
+
+    with session_scope(Session) as session:
+        head = session.query(Snapshot).filter_by(id=1).with_for_update().first()
+        if head is not None and getattr(head, date_field) > meta[date_field]:
+            raise ValueError('数据库已有更新日期，拒绝旧日期覆盖。')
+        existing = session.query(Stock).all()
+        old = [{c: getattr(r, c) for c in result_columns} for r in existing]
+        if (head is not None and builtins.all(getattr(head, c) == meta[c] for c in meta_columns)
+                and signature(old) == signature(records)):
+            return False
+        if head is None:
+            head = Snapshot(id=1, updated_at=china_now(), **meta)
+            session.add(head)
+            session.flush()  # A concurrent first insertion must fail before deleting existing rows.
+        else:
+            for key, value in meta.items():
+                setattr(head, key, value)
+            head.updated_at = china_now()
+        for previous in existing:
+            session.expunge(previous)
+        session.query(Stock).delete(synchronize_session=False)
+        session.add_all([Stock(**record) for record in records])
+        session.commit()
+        return True
+
+
 def _decimal_number(value):
     try:
         result = Decimal(str(value))
@@ -532,31 +564,8 @@ def _growth_strategy(_apis, _config):
                 or builtins.any(r['as_of_date'] != meta['as_of_date'] for r in records)):
             raise ValueError('股票重复、日期、数量或排名与快照不一致。')
         _progress_note('事务更新最新高增长名单')
-        with session_scope(Session) as session:
-            head = session.query(GrowthSnapshot).filter_by(id=1).with_for_update().first()
-            if head is not None and head.as_of_date > meta['as_of_date']:
-                raise ValueError('数据库已有更新日期，拒绝旧日期覆盖。')
-            existing = session.query(GrowthStock).all()
-            def signature(values):
-                return sorted(tuple(json.dumps(r[c], sort_keys=True, ensure_ascii=False) if c == 'reports' else r[c]
-                                    for c in RESULT_COLUMNS) for r in values)
-            old = [{c: getattr(r, c) for c in RESULT_COLUMNS} for r in existing]
-            if head is not None and builtins.all(getattr(head, c) == meta[c] for c in META_COLUMNS) and signature(old) == signature(records):
-                return False
-            if head is None:
-                head = GrowthSnapshot(id=1, updated_at=china_now(), **meta)
-                session.add(head)
-                session.flush()  # 并发首次创建时唯一键冲突会回滚，避免交叉覆盖。
-            else:
-                for key, value in meta.items():
-                    setattr(head, key, value)
-                head.updated_at = china_now()
-            for previous in existing:
-                session.expunge(previous)
-            session.query(GrowthStock).delete(synchronize_session=False)
-            session.add_all([GrowthStock(**r) for r in records])
-            session.commit()
-            return True
+        return _replace_latest_snapshot(Session, GrowthSnapshot, GrowthStock, meta, records,
+                                        RESULT_COLUMNS, META_COLUMNS, 'as_of_date', json_fields=('reports',))
 
     def run(end_date=END_DATE):
         now = china_now()

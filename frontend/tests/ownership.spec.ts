@@ -8,7 +8,13 @@ const fixture = {
       payload: {
         categories: {
           public_fund: { market_value: 1e9, holder_count: 30 },
-          social: { market_value: 2e8, holder_count: 2 },
+          // Old cached reports still contain estimated values; the chart must use shares.
+          social: { shares: 2000000, market_value: 2e8, holder_count: 2 },
+          qfii: { shares: 1000000, market_value: 9e8, holder_count: 1 },
+          broker: { shares: 3000000, market_value: 9e8, holder_count: 1 },
+          insurance: { shares: 4000000, market_value: 9e8, holder_count: 1 },
+          trust: { shares: 5000000, market_value: 9e8, holder_count: 1 },
+          private: { shares: null, market_value: 9e8, holder_count: 1 },
         },
       },
     },
@@ -17,7 +23,13 @@ const fixture = {
       payload: {
         categories: {
           public_fund: { market_value: 1.2e9, holder_count: 35 },
-          social: { market_value: 3e8, holder_count: 3 },
+          // New reports have no estimated value fields.
+          social: { shares: 3500000, holder_count: 3 },
+          qfii: { shares: 1500000, holder_count: 1 },
+          broker: { shares: 3200000, holder_count: 1 },
+          insurance: { shares: 4500000, holder_count: 1 },
+          trust: { shares: 5100000, holder_count: 1 },
+          private: { shares: 6000000, holder_count: 1 },
         },
       },
     },
@@ -52,7 +64,6 @@ test.beforeEach(async ({ page }) => {
             ...stock,
             new_combinations: [{ id: 'a', name: '全国社保基金一零一组合', ratio: 0.5 }],
             new_shares: 1e6,
-            new_market_value: 2e7,
             pub_date: '2026-10-20',
           },
         ],
@@ -67,9 +78,48 @@ test('ownership search, disclosure charts and social drilldown', async ({ page }
   await page.getByRole('button', { name: '示例科技 600001.XSHG' }).click()
   await expect(page.getByRole('heading', { name: '股东户数', exact: true })).toBeVisible()
   await expect(page.getByText('27,000')).toBeVisible()
-  await expect(page.getByRole('img', { name: '公募基金持仓趋势' })).toBeVisible()
+  await expect(page.getByText('其余六类汇总十大流通股东披露股数', { exact: false })).toBeVisible()
+  await expect(page.getByText('估算', { exact: false })).toHaveCount(0)
+  await expect(page.getByRole('img', { name: '公募基金持仓市值趋势（亿元）' })).toBeVisible()
+  const chartData = await page.evaluate(async () => {
+    // Inspect the live charts through the same ECharts module loaded by Vite.
+    const echartsUrl = performance
+      .getEntriesByType('resource')
+      .map((entry) => entry.name)
+      .find((url) => /\/echarts_core\.js\?/.test(url))
+    if (!echartsUrl) throw new Error('ECharts module was not loaded')
+    const { getInstanceByDom } = await import(echartsUrl)
+    return Array.from(document.querySelectorAll('.ownership-grid .ownership-chart')).map((el) => {
+      const option = getInstanceByDom(el).getOption()
+      return {
+        title: el.getAttribute('aria-label'),
+        unit: option.yAxis[0].name,
+        values: option.series[0].data,
+        counts: option.series[1].data,
+        tooltip: option.series[0].tooltip.valueFormatter(option.series[0].data[1]),
+      }
+    })
+  })
+  expect(chartData.map((chart) => chart.values)).toEqual([
+    [10, 12],
+    [100, 150],
+    [200, 350],
+    [300, 320],
+    [400, 450],
+    [500, 510],
+    [null, 600],
+  ])
+  expect(chartData[0].unit).toContain('亿元')
+  expect(chartData.slice(1).every((chart) => chart.unit.includes('万股'))).toBe(true)
+  expect(chartData[2].counts).toEqual([2, 3])
+  expect(chartData[2].tooltip).toBe('350 万股')
+  expect(chartData[0].tooltip).toBe('12 亿元')
   await page.getByRole('button', { name: '社保新进', exact: true }).click()
   await expect(page.getByText('全国社保基金一零一组合')).toBeVisible()
+  await expect(page.getByRole('columnheader', { name: '合计持股数（万股）' })).toBeVisible()
+  await expect(page.getByRole('cell', { name: '100', exact: true })).toBeVisible()
+  await expect(page.getByRole('columnheader', { name: /市值/ })).toHaveCount(0)
+  await expect(page.locator('.ownership-rule')).toContainText('按新进组合合计持股数降序')
   await page.getByLabel('社保筛选口径').selectOption('combination')
   await expect(page.getByText('全国社保基金一零一组合')).toBeVisible()
   await page.getByRole('button', { name: '示例科技', exact: true }).click()
@@ -161,7 +211,6 @@ test('social modes use their own response and explanation when switching', async
             name: mode === 'first' ? '首次样本' : '新增样本',
             new_combinations: [{ id: 'new', name: '全国社保基金一零一组合', ratio: 0.5 }],
             new_shares: 1000000,
-            new_market_value: 20000000,
           }
     await route.fulfill({
       json: {
@@ -254,7 +303,6 @@ test('social filters reserve layout during loading, mode switches, errors and em
               },
             ],
             new_shares: 1000000,
-            new_market_value: 20000000,
           }),
       pub_date: '2026-10-20',
     })),

@@ -41,6 +41,36 @@ STRATEGY_CONFIG = {
 }
 
 
+def _save_record_set(Session, model, records, filters, key_fields, skip_existing=True):
+    """在调用方限定的范围内新增或替换；一次提交，不覆盖范围外记录。"""
+    if not records:
+        return []
+    with session_scope(Session) as session:
+        rows = session.query(model).filter(*filters)
+        if skip_existing:
+            keys = {tuple(row) for row in rows.with_entities(*(getattr(model, key) for key in key_fields)).all()}
+            records = [r for r in records if tuple(r[key] for key in key_fields) not in keys]
+            if not records:
+                return []
+        else:
+            rows.delete(synchronize_session=False)
+        session.add_all([model(**record) for record in records])
+        session.commit()
+        return records
+
+def _checked_trade_days(raw, start=None, end=None, count=None,
+                        error='交易日历缺失、重复、乱序或越界。', missing_error=None):
+    """Normalize and validate an exchange calendar before calculating or writing."""
+    if raw is None:
+        raise ValueError(missing_error or error)
+    days = [as_date(value) for value in raw]
+    if (days != sorted(set(days)) or (count is not None and len(days) != count)
+            or builtins.any((start is not None and day < start) or
+                            (end is not None and day > end) for day in days)):
+        raise ValueError(error)
+    return days
+
+
 def strategy_settings(name):
     """每次运行取得配置快照，先检查控制分页/窗口的参数以免出现空循环。"""
     settings = deepcopy(STRATEGY_CONFIG[name])
@@ -186,14 +216,8 @@ def _breadth_strategy(_apis, _config):
             args['start_date'] = start
         else:
             args['count'] = count
-        raw = get_trade_days(**args)
-        if raw is None:
-            raise ValueError('交易日历返回空对象。')
-        days = [as_date(d) for d in raw]
-        if (days != sorted(set(days)) or builtins.any(d > end or (start and d < start) for d in days)
-                or (count is not None and len(days) != count)):
-            raise ValueError('交易日历缺失、重复或越界。')
-        return days
+        return _checked_trade_days(get_trade_days(**args), start, end, count,
+            error='交易日历缺失、重复或越界。', missing_error='交易日历返回空对象。')
 
     def choose_stocks(day, micro_num):
         securities = get_all_securities(types=['stock'], date=day)
@@ -310,13 +334,9 @@ def _breadth_strategy(_apis, _config):
                     raise ValueError('新高新低数量超出范围。')
                 if period > 5 and value > record['{}_5'.format(side)]:
                     raise ValueError('长期新高新低数量不能超过 5 日数量。')
-        with session_scope(Session) as session:
-            if session.query(MicrocapBreadth).filter_by(
-                    series_id=record['series_id'], trade_date=record['trade_date']).first() is not None:
-                return False
-            session.add(MicrocapBreadth(**record))
-            session.commit()
-            return True
+        return bool(_save_record_set(Session, MicrocapBreadth, [record],
+            (MicrocapBreadth.series_id == record['series_id'], MicrocapBreadth.trade_date == record['trade_date']),
+            ('series_id', 'trade_date')))
 
     def run(start_date=START_DATE, end_date=END_DATE, micro_num=MICRO_NUM, skip_existing=True):
         if skip_existing is not True:

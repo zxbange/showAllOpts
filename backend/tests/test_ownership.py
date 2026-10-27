@@ -2,6 +2,7 @@ from test_cache import cached
 from datetime import date, datetime
 from app.models.ownership import OwnershipStock, OwnershipReport, OwnershipHolders
 from app.services.ownership import latest_quarter
+import pytest
 
 def test_api_search_detail_and_social(client,session):
     stamp=datetime(2026,10,21)
@@ -25,6 +26,76 @@ def test_api_search_detail_and_social(client,session):
 def test_latest_quarter_does_not_fall_back():
     assert latest_quarter(date(2026,10,21))==date(2026,9,30)
     assert latest_quarter(date(2026,1,1))==date(2025,12,31)
+
+
+def test_detail_uses_legacy_disclosed_shares_and_keeps_only_public_fund_value(client, session):
+    from copy import deepcopy
+    stamp = datetime(2026, 10, 21)
+    code = '600001.XSHG'
+    fund = {'shares': 900, 'market_value': 18000, 'holder_count': 2, 'value_method': 'reported'}
+    categories = {key: {'shares': 100 + i, 'market_value': 100000 + i,
+                         'holder_count': 1, 'value_method': 'estimated'}
+                  for i, key in enumerate(('social', 'insurance', 'broker', 'qfii', 'trust', 'private'))}
+    categories['public_fund'] = fund
+    member = {'name': '全国社保基金一零一组合', 'shares': 100, 'ratio': 0.1, 'market_value': 100000}
+    payload = {'categories': categories, 'float_members': [member],
+               'social_entry': {'status': 'comparable', 'first_appearance': True,
+                                'new_combinations': [member], 'new_shares': 100,
+                                'new_market_value': 100000}}
+    original = deepcopy(payload)
+    session.add(OwnershipStock(code=code, name='示例', updated_at=stamp))
+    session.add(OwnershipReport(code=code, report_date=date(2026, 9, 30), payload=payload, updated_at=stamp))
+    session.commit()
+    response = client.get('/api/v1/institution-ownership/stocks/' + code)
+    assert response.status_code == 200
+    result = response.json()['reports'][0]['payload']
+    assert result['categories']['public_fund'] == fund
+    for key in ('social', 'insurance', 'broker', 'qfii', 'trust', 'private'):
+        holding = result['categories'][key]
+        assert holding['shares'] == categories[key]['shares']
+        assert holding['value_method'] == 'reported_shares'
+        assert 'market_value' not in holding
+    assert 'market_value' not in result['float_members'][0]
+    assert 'new_market_value' not in result['social_entry']
+    assert 'market_value' not in result['social_entry']['new_combinations'][0]
+    session.expire_all()
+    assert session.get(OwnershipReport, (code, date(2026, 9, 30))).payload == original
+
+
+@pytest.mark.parametrize('mode', ['first', 'combination'])
+def test_social_entries_rank_by_disclosed_shares_not_legacy_estimate(client, session, mode):
+    stamp = datetime(2026, 10, 21)
+    # Share and price-estimate rankings disagree. A missing quantity must stay last.
+    for i, (shares, value) in enumerate(((100, 100000), (300, 1000), (None, 999999))):
+        code = '60000{}.XSHG'.format(i)
+        session.add(OwnershipStock(code=code, name='示例{}'.format(i), updated_at=stamp))
+        social = {'status': 'comparable', 'first_appearance': True,
+                  'new_combinations': [{'name': '全国社保基金一零一组合', 'shares': shares,
+                                        'ratio': 0.1, 'market_value': value}],
+                  'new_market_value': value}
+        # Exercise both current aggregates and legacy snapshots with only member shares.
+        if i != 1:
+            social['new_shares'] = shares
+        session.add(OwnershipReport(code=code, report_date=date(2026, 9, 30),
+                                    payload={'social_entry': social}, updated_at=stamp))
+    session.commit()
+    response = client.get('/api/v1/institution-ownership/social-entries?period=2026-09-30&mode=' + mode)
+    assert response.status_code == 200
+    items = response.json()['items']
+    assert [item['code'] for item in items] == ['600001.XSHG', '600000.XSHG', '600002.XSHG']
+    assert [item['new_shares'] for item in items] == [300, 100, None]
+    for item in items:
+        assert 'new_market_value' not in item
+        assert 'market_value' not in item['new_combinations'][0]
+
+
+def test_legacy_share_projection_preserves_unknown_and_does_not_infer_from_prices():
+    from app.services.ownership import disclosed_report, disclosed_social_entry
+    assert disclosed_report({'categories': {'social': None}})['categories']['social'] is None
+    for invalid in (None, -1, 'NaN', 'Infinity'):
+        result = disclosed_social_entry({'new_combinations': [
+            {'shares': invalid, 'market_value': 100}, {'shares': 10, 'market_value': 200}]})
+        assert result['new_shares'] is None
 
 def test_json_incremental_cache_updates_and_preserves_null(cached,session):
     from test_cache_incremental import assert_matches

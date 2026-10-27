@@ -32,6 +32,19 @@ SOURCE = 'jqdata.FUND_SHARE_DAILY'
 Base = declarative_base()
 
 
+def _checked_trade_days(raw, start=None, end=None, count=None,
+                        error='交易日历缺失、重复、乱序或越界。', missing_error=None):
+    """Normalize and validate an exchange calendar before calculating or writing."""
+    if raw is None:
+        raise ValueError(missing_error or error)
+    days = [as_date(value) for value in raw]
+    if (days != sorted(set(days)) or (count is not None and len(days) != count)
+            or builtins.any((start is not None and day < start) or
+                            (end is not None and day > end) for day in days)):
+        raise ValueError(error)
+    return days
+
+
 class ETFShare(Base):
     __tablename__ = 'etf_share_daily'
     __table_args__ = {'mysql_engine': 'InnoDB', 'mysql_charset': 'utf8mb4'}
@@ -110,12 +123,8 @@ def share_table():
 
 
 def validate_days(raw, start, end):
-    if raw is None:
-        raise ValueError('交易日历接口返回空对象。')
-    days = [as_date(value) for value in raw]
-    if days != sorted(set(days)) or builtins.any(day < start or day > end for day in days):
-        raise ValueError('交易日历重复、越界或乱序。')
-    return days
+    return _checked_trade_days(raw, start, end,
+        error='交易日历重复、越界或乱序。', missing_error='交易日历接口返回空对象。')
 
 
 def trading_days(start, end):

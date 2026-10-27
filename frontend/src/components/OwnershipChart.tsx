@@ -26,18 +26,25 @@ export function OwnershipChart({
   values,
   counts,
   title,
-  holders = false,
+  metric,
 }: {
   dates: string[]
   values: (number | null)[]
   counts?: (number | null)[]
   title: string
-  holders?: boolean
+  metric: 'holders' | 'shares' | 'market_value'
 }) {
   const ref = useRef<HTMLDivElement>(null)
   useEffect(() => {
     if (!ref.current) return
     const chart = init(ref.current)
+    const holders = metric === 'holders'
+    const unit = holders ? '户' : metric === 'shares' ? '万股' : '亿元'
+    const valueName = holders ? 'A股股东户数' : metric === 'shares' ? '披露持股数' : '披露市值'
+    const formatValue = (value: unknown, valueUnit: string) =>
+      value == null
+        ? '未披露'
+        : `${Number(value).toLocaleString('zh-CN', { maximumFractionDigits: 3 })} ${valueUnit}`
     chart.setOption({
       textStyle: { color: chartColors.text, fontSize: 13 },
       animation: !window.matchMedia('(prefers-reduced-motion: reduce)').matches,
@@ -60,7 +67,7 @@ export function OwnershipChart({
       yAxis: [
         {
           type: 'value',
-          name: holders ? 'A股股东（户）' : '市值（亿元）',
+          name: `${valueName}（${unit}）`,
           scale: holders,
           axisLabel: { color: chartColors.muted },
           nameTextStyle: { color: chartColors.muted },
@@ -80,9 +87,10 @@ export function OwnershipChart({
       dataZoom: [{ type: 'inside' }, { type: 'slider', height: 18, bottom: 8 }],
       series: [
         {
-          name: holders ? 'A股股东户数' : '披露 / 估算市值',
+          name: valueName,
           type: holders ? 'line' : 'bar',
           data: values,
+          tooltip: { valueFormatter: (value: unknown) => formatValue(value, unit) },
           connectNulls: false,
           barMaxWidth: 28,
           itemStyle: { borderRadius: [4, 4, 0, 0] },
@@ -94,6 +102,7 @@ export function OwnershipChart({
                 type: 'line',
                 yAxisIndex: 1,
                 data: counts,
+                tooltip: { valueFormatter: (value: unknown) => formatValue(value, '个') },
                 connectNulls: false,
               },
             ]
@@ -106,6 +115,6 @@ export function OwnershipChart({
       observer.disconnect()
       chart.dispose()
     }
-  }, [dates, values, counts, title, holders])
+  }, [dates, values, counts, title, metric])
   return <div ref={ref} className="ownership-chart" role="img" aria-label={title} />
 }

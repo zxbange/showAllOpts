@@ -9,6 +9,48 @@ def stock_item(stock):
 def latest_quarter(today):
     return date(today.year, ((today.month - 1) // 3) * 3 + 1, 1) - timedelta(days=1)
 
+def disclosed_member(member):
+    """Hide legacy price estimates without changing the stored disclosure."""
+    return {key: value for key, value in member.items() if key != 'market_value'}
+
+
+def disclosed_social_entry(entry):
+    result = {key: value for key, value in entry.items() if key != 'new_market_value'}
+    members = [disclosed_member(member) for member in entry.get('new_combinations', [])]
+    result['new_combinations'] = members
+    # Old snapshots already contain the disclosed shares, even when their
+    # aggregate field is absent. Never recover quantities from a price estimate.
+    if 'new_shares' not in result and members:
+        total = Decimal(0)
+        for member in members:
+            try:
+                shares = Decimal(str(member.get('shares')))
+            except InvalidOperation:
+                total = None
+                break
+            if not shares.is_finite() or shares < 0:
+                total = None
+                break
+            total += shares
+        result['new_shares'] = float(total) if total is not None else None
+    return result
+
+
+def disclosed_report(payload):
+    """Serve old and new snapshots with the same shares-based non-fund units."""
+    result = dict(payload)
+    result['categories'] = {
+        key: dict(disclosed_member(holding), value_method='reported_shares')
+        if holding is not None and key != 'public_fund' else holding
+        for key, holding in payload.get('categories', {}).items()
+    }
+    if 'float_members' in payload:
+        result['float_members'] = [disclosed_member(member) for member in payload['float_members']]
+    if 'social_entry' in payload:
+        result['social_entry'] = disclosed_social_entry(payload['social_entry'])
+    return result
+
+
 def social_total(payload, field="shares"):
     if not payload or not isinstance(payload.get('float_members'), list):
         return None
@@ -71,7 +113,7 @@ class OwnershipService:
                 change = current - previous
                 pct = change / previous * 100 if previous > 0 else None
         return {'stock': stock_item(stock),
-                'reports': [{'date': r.report_date, 'payload': r.payload} for r in reports],
+                'reports': [{'date': r.report_date, 'payload': disclosed_report(r.payload)} for r in reports],
                 'holders': [{'date': h.end_date, 'pub_date': h.pub_date, 'payload': h.payload} for h in holders],
                 'holder_change': change, 'holder_change_pct': pct}
 
@@ -84,7 +126,7 @@ class OwnershipService:
         previous = {r.code: r.payload for r, _ in self.repository.period_rows(latest_quarter(period))} if mode == 'increase' else {}
         items, unknown, eligible = [], 0, 0
         for report, stock in rows:
-            social = social_increase(report.payload, previous.get(report.code)) if mode == 'increase' else report.payload.get('social_entry', {})
+            social = social_increase(report.payload, previous.get(report.code)) if mode == 'increase' else disclosed_social_entry(report.payload.get('social_entry', {}))
             if social.get('status') != 'comparable':
                 unknown += 1
                 continue
@@ -98,7 +140,7 @@ class OwnershipService:
                 continue
             items.append(dict(stock_item(stock), **social, report_date=period,
                               pub_date=report.payload.get('float_pub_date')))
-        sort_key = 'change_shares' if mode == 'increase' else 'new_market_value'
+        sort_key = 'change_shares' if mode == 'increase' else 'new_shares'
         items.sort(key=lambda r: (r.get(sort_key) is None, -(r.get(sort_key) or 0), r['code']))
         periods = sorted(set(self.repository.periods(today) + [latest_quarter(today)]), reverse=True)
         return {'period': period, 'periods': periods, 'items': items,

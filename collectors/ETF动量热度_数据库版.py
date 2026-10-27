@@ -61,6 +61,19 @@ _PREVIEW_COLUMNS = {'ETF动量热度': ('trade_date', 'code', 'name', 'score', '
 _PROGRESS_LOCAL = threading.local()
 
 
+def _checked_trade_days(raw, start=None, end=None, count=None,
+                        error='交易日历缺失、重复、乱序或越界。', missing_error=None):
+    """Normalize and validate an exchange calendar before calculating or writing."""
+    if raw is None:
+        raise ValueError(missing_error or error)
+    days = [as_date(value) for value in raw]
+    if (days != sorted(set(days)) or (count is not None and len(days) != count)
+            or builtins.any((start is not None and day < start) or
+                            (end is not None and day > end) for day in days)):
+        raise ValueError(error)
+    return days
+
+
 def _decimal_number(value):
     try:
         result = Decimal(str(value))
@@ -443,9 +456,7 @@ def _etf_heat_strategy(_apis, _config):
 
     PAGE_SIZE = 2000
 
-    EXPORT_CSV = True
 
-    MIN_SIZE_YI = Decimal('30')
 
     CROSS_BORDER_CODES = {
         '513100.XSHG', '159509.XSHE', '513030.XSHG', '513520.XSHG',
@@ -456,7 +467,6 @@ def _etf_heat_strategy(_apis, _config):
 
     INCLUDE_LOF = True
 
-    EXTRA_LOF_CODES = set()
 
     MAX_LOF_REPORT_AGE_DAYS = 180
 
@@ -774,14 +784,10 @@ def _etf_heat_strategy(_apis, _config):
         if lof is None:
             raise ValueError('LOF 列表查询失败')
         lof = lof.loc[~lof.index.isin(universe.index)] if INCLUDE_LOF else lof.iloc[0:0]
-        print('截止日期：{}；聚宽 ETF 数量：{}'.format(days[-1], len(universe)), flush=True)
-        print('规模门槛：严格大于 {} 亿元；跨境七只白名单；债券仅城投债。'.format(MIN_SIZE_YI))
-        print('ETF 规模 = 同日份额 × 单位净值；LOF = 最新已披露对应份额类别净资产。', flush=True)
-        records, audit = target_catalog(universe, days[-1])
-        daily_records = records
+        _progress_note('截至 {}：筛选 {} 只 ETF、{} 只 LOF'.format(days[-1], len(universe), len(lof)))
+        daily_records, audit = target_catalog(universe, days[-1])
         lof_records, lof_audit = lof_catalog(lof, days[-1]) if not lof.empty else ([], [])
         audit.extend(lof_audit)
-        records = daily_records + lof_records
         sizes = load_sizes([row['code'] for row in daily_records], days)
         selected, issues, candidates = select_largest(daily_records, sizes, days)
         lof_selected, lof_issues, lof_candidates = load_lof_reports(lof_records, days[-1]) if lof_records else ([], [], [])
@@ -792,38 +798,11 @@ def _etf_heat_strategy(_apis, _config):
         for code in FOCUS_CODES:
             if code not in universe.index and code not in lof.index:
                 audit.append(dict(code=code, reason='指定基金不在截止日期的聚宽上市名单中'))
-        for code in FOCUS_CODES:
-            chosen = next((r for r in selected if r['code'] == code), None)
-            record = next((r for r in records if r['code'] == code), None)
-            relevant = [r for r in audit if r.get('code') == code or
-                        (record is not None and r.get('group') == record['group'])]
-            if chosen:
-                status = '入选，规模 {:.4f} 亿元'.format(chosen['size_yi'])
-            elif relevant:
-                status = '; '.join(r['reason'] + ' ' + str(r.get('details', '')) for r in relevant)
-            elif record:
-                status = '同方向已有更大规模基金入选'
-            else:
-                status = '未识别，请检查 audit_df'
-            print('关注基金 {}：{}'.format(code, status))
         result, review, all_candidates = pd.DataFrame(selected), pd.DataFrame(audit), pd.DataFrame(candidates)
-        if not result.empty:
-            cols = ['category', 'target_name', 'code', 'name', 'size_yi', 'size_date', 'group_count', 'size_source']
-            for category in CATEGORIES:
-                section = result[result.category == category]
-                print('\n{}：{} 只'.format(category, len(section)))
-                print(section[cols].to_string(index=False, formatters={'size_yi': lambda v: '{:.2f}'.format(v)}))
-        print('\n选出 {} 只；待核对/排除 {} 条，完整明细见 audit_df。'.format(len(result), len(review)))
-        print('结果仅覆盖聚宽已识别、数据完整的候选，不代表已经核验全市场覆盖。')
-        if not review.empty:
-            print(review.head(30).to_string(index=False))
-        if EXPORT_CSV:
-            for label, frame in [('结果', result), ('待核对', review), ('候选明细', all_candidates)]:
-                frame.to_csv('ETF分类去重_{}_{}.csv'.format(label, days[-1]), index=False, encoding='utf-8-sig')
+        _progress_note('候选池筛选完成：入选 {} 只，待核对/排除 {} 条'.format(len(result), len(review)))
         return result, review, all_candidates
     # Collect and calculate in JoinQuant; MySQL contains final display results.
     settings = strategy_settings('ETF动量热度')
-    EXPORT_CSV = False
     MIN_SIZE_YI = Decimal(str(settings['min_size_yi']))
     RULE_VERSION = 'etf_close_momentum_v3'
     CALCULATION_VERSION = 'weighted-momentum-26-v1'
@@ -922,13 +901,10 @@ def _etf_heat_strategy(_apis, _config):
 
     def get_retention_start(reference_date):
         """Validate the complete calendar before allowing any database deletion."""
-        count = settings['retention_trade_days']
-        reference = as_date(reference_date)
-        raw = api('get_trade_days')(end_date=reference, count=count)
-        days = [] if raw is None else [as_date(day) for day in raw]
-        if len(days) != count or days != sorted(set(days)) or days[-1] > reference:
-            raise ValueError('保留范围交易日历不足、重复、乱序或含未来日期，未清理数据库')
-        return days[0]
+        count, reference = settings['retention_trade_days'], as_date(reference_date)
+        return _checked_trade_days(api('get_trade_days')(end_date=reference, count=count),
+            end=reference, count=count,
+            error='保留范围交易日历不足、重复、乱序或含未来日期，未清理数据库')[0]
 
     def cleanup_old_data(Session, retention_start):
         """Remove expired results for all funds, including funds outside the current pool."""

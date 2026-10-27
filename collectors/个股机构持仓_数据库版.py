@@ -19,7 +19,7 @@ from urllib.parse import quote, quote_plus
 
 import jqdata as jq
 import pandas as pd
-from sqlalchemy import BigInteger, Column, Date, DateTime, Integer, JSON, String, or_, create_engine, event, tuple_, func
+from sqlalchemy import BigInteger, Column, Date, DateTime, Integer, JSON, String, and_, or_, create_engine, event, tuple_, func
 from sqlalchemy.engine.url import URL
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
@@ -40,7 +40,7 @@ DB_OPTIONS = {'connect_timeout': 10, 'retry_count': 5, 'retry_interval': 10, 'po
 STRATEGY_CONFIG = {'个股机构持仓': {'end_date': None, 'history_years': 5, 'refresh_quarters': 4, 'page_size': 1000, 'stock_batch_size': 50}}
 PROGRESS_ENABLED = True
 PROGRESS_INTERVAL_SECONDS = 5.0
-_API_NAMES = ('finance', 'query', 'get_all_securities', 'get_industry', 'get_price', 'get_trade_days')
+_API_NAMES = ('finance', 'query', 'get_all_securities', 'get_industry')
 
 _PROGRESS_LOCAL = threading.local()
 
@@ -304,7 +304,6 @@ def _ownership_strategy(_apis, _config):
     """披露持仓、股东户数与社保新进；仅公开披露口径，无交易操作。"""
     settings = strategy_settings('个股机构持仓')
     finance, query = _apis.get('finance'), _apis.get('query')
-    price_universes = {}  # Report-date stock membership, reused across stock batches.
     Base = declarative_base()
 
     class OwnershipStock(Base):
@@ -477,33 +476,40 @@ def _ownership_strategy(_apis, _config):
         for offset in range(0, len(items), settings['stock_batch_size']):
             yield items[offset:offset+settings['stock_batch_size']]
 
+    def index_batches(items):
+        # These queries only return scalar indexes, not holdings/JSON payloads.
+        for offset in range(0, len(items), 300):
+            yield items[offset:offset+300]
+
     def fund_document(row, fund_map):
-        fund = text_value(row['code']).split('.')[0]
+        source_code = text_value(row['code'])
+        fund = source_code.split('.')[0]
         canonical = fund_map.get(fund, fund)
         full = text_value(row.get('report_type')) in ('年度','年度报告','年报','半年度','半年度报告')
         priority = (int(full), day(row['pub_date']), int(fund == canonical), fund)
-        document = (fund, day(row['pub_date']), int(row['report_type_id']))
+        # Preserve the physical identifier for exact source-side filtering.
+        document = (source_code, day(row['pub_date']), int(row['report_type_id']))
         return canonical, priority, document
 
     def select_documents(period, as_of, fund_map, codes):
-        # Discover only funds that have held the requested stocks in this quarter.
-        # Then inspect all share classes of those funds, including documents where
-        # the requested stock disappeared. Never scan the whole market's documents.
+        # A stock can disappear in a later report or in the preferred share class.
+        # Discover its related funds first, then select their complete documents.
         t = finance.FUND_PORTFOLIO_STOCK
         canonical_funds, observed_funds = set(), set()
-        for batch in batches(sorted(set(codes))):
+        for batch in index_batches(sorted(set(codes))):
             symbols = sorted(set(batch) | {c.split('.')[0] for c in batch})
             for row in grouped_pages(t, [t.code], t.period_end == period, t.pub_date <= as_of,
                                      t.symbol.in_(symbols), label='关联基金'):
-                fund = text_value(row['code']).split('.')[0]
-                observed_funds.add(fund)
+                source_code = text_value(row['code'])
+                fund = source_code.split('.')[0]
+                observed_funds.update((source_code, fund))
                 canonical_funds.add(fund_map.get(fund, fund))
         related = sorted(observed_funds | canonical_funds |
                          {f for f, c in fund_map.items() if c in canonical_funds})
-        _progress_message('{}：发现 {} 个相关基金代码（含关联份额），仅查询去重报告版本。'.format(period, len(related)))
+        _progress_message('{}：发现 {} 个相关基金代码（含关联份额），每批最多 300 个核对报告版本。'.format(period, len(related)))
         selected = {}
         columns = [t.code, t.pub_date, t.report_type_id, t.report_type]
-        for batch in _progress_items(list(batches(related)), '相关基金报告版本', lambda b: b[0]):
+        for batch in _progress_items(list(index_batches(related)), '相关基金报告版本', lambda b: b[0]):
             for row in grouped_pages(t, columns, t.period_end == period, t.pub_date <= as_of,
                                      t.code.in_(batch), label='相关基金报告版本'):
                 canonical, priority, document = fund_document(row, fund_map)
@@ -525,7 +531,8 @@ def _ownership_strategy(_apis, _config):
         """Find affected stocks from newly inserted/published source rows, not all A shares."""
         affected = {name: set() for name in ('fund', 'float', 'holders')}
         row_counts = {name: 0 for name in affected}
-        changed_funds, ignored = set(), set()
+        changed_funds, observed_funds, fund_periods, ignored = {}, {}, {}, set()
+        allowed_periods = set(periods)
         known_codes = set(known_codes)
         code_map = {c.split('.')[0]: c for c in known_codes}
         def stock_code(value):
@@ -551,29 +558,38 @@ def _ownership_strategy(_apis, _config):
                 filters += [table.change_reason_id == 306019, table.sharesnature_id == 308007]
             columns = [table.id, table.code]
             if name == 'fund':
-                columns.append(table.symbol)
+                columns.extend([table.symbol, table.period_end])
             for row in pages(table, *filters, columns=columns):
                 row_counts[name] += 1
                 if name == 'fund':
+                    period = day(row['period_end'])
+                    if period not in allowed_periods:
+                        continue
                     fund = text_value(row['code']).split('.')[0]
-                    changed_funds.add(fund_map.get(fund, fund))
+                    changed_funds.setdefault(period, set()).add(fund_map.get(fund, fund))
+                    observed_funds.setdefault(period, set()).add(text_value(row['code']))
                     code = stock_code(row['symbol'])
+                    if code:
+                        fund_periods.setdefault(period, set()).add(code)
                 else:
                     code = stock_code(row['code'])
                     if code is None:
                         ignored.add(text_value(row['code']))
                 if code:
                     affected[name].add(code)
-        # Include old constituents: a new fund report may remove a stock entirely.
-        if changed_funds:
+        # Exits belong to the changed fund/report period, not its other quarters.
+        for period, canonical_funds in sorted(changed_funds.items()):
             table = finance.FUND_PORTFOLIO_STOCK
-            funds = sorted(set(changed_funds) | {f for f, c in fund_map.items() if c in changed_funds})
-            for batch in batches(funds):
-                for row in grouped_pages(table, [table.symbol], table.code.in_(batch), table.period_end.in_(periods),
+            funds = sorted(canonical_funds | observed_funds[period] |
+                           {f for f, c in fund_map.items() if c in canonical_funds})
+            scope = fund_periods.setdefault(period, set())
+            for batch in index_batches(funds):
+                for row in grouped_pages(table, [table.symbol], table.code.in_(batch), table.period_end == period,
                                          table.pub_date <= as_of, label='新旧报告关联股票'):
                     code = stock_code(row['symbol'])
                     if code:
                         affected['fund'].add(code)
+                        scope.add(code)
         if ignored:
             _progress_message('个股机构持仓：忽略 {} 个不在股票范围内的披露代码（如 {}）。'.format(
                 len(ignored), '、'.join(sorted(ignored)[:5])))
@@ -581,24 +597,51 @@ def _ownership_strategy(_apis, _config):
             if previous.get(name) != current.get(name):
                 _progress_message('个股机构持仓：{}增量源记录 {} 条，影响 {} 只股票。'.format(
                     label, row_counts[name], len(affected[name])))
-        return {name: sorted(codes) for name, codes in affected.items()}
+        result = {name: sorted(codes) for name, codes in affected.items()}
+        result['fund_periods'] = {period: sorted(codes) for period, codes in fund_periods.items() if codes}
+        return result
+
+    def fund_document_conditions(table, selected):
+        # Group exact document keys into IN predicates. Avoid one request per fund
+        # or small fund batches multiplied by every stock batch. Bound unusually
+        # large predicates by both code count and OR groups, without dropping keys.
+        groups = {}
+        for _, document in selected.values():
+            fund, pub, report_type = document
+            groups.setdefault((pub, report_type), set()).add(fund)
+        conditions, count = [], 0
+        for (pub, report_type), funds in sorted(groups.items()):
+            funds, offset = sorted(funds), 0
+            while offset < len(funds):
+                size = builtins.min(8000-count, len(funds)-offset)
+                conditions.append(and_(table.pub_date == pub, table.report_type_id == report_type,
+                                       table.code.in_(funds[offset:offset+size])))
+                offset += size
+                count += size
+                if count == 8000 or len(conditions) == 128:
+                    yield or_(*conditions)
+                    conditions, count = [], 0
+        if conditions:
+            yield or_(*conditions)
 
     def batch_funds(codes, period, as_of, fund_map, selected):
-        # Compare all documents of related funds, including other share classes;
-        # otherwise stock filtering could resurrect an older position.
+        if not codes or not selected:
+            return {}
         t = finance.FUND_PORTFOLIO_STOCK
         code_map = {c.split('.')[0]:c for c in codes}
         candidates = {}
         columns = [t.id,t.code,t.symbol,t.pub_date,t.report_type_id,t.report_type,t.shares,t.market_cap]
-        for row in pages(t, t.period_end == period, t.pub_date <= as_of,
-                         t.symbol.in_(list(code_map)+list(codes)), columns=columns):
-            canonical, _, document = fund_document(row, fund_map)
-            if canonical not in selected or document != selected[canonical][1]:
-                continue
-            code = code_map.get(text_value(row['symbol']).split('.')[0])
-            if code:
-                # IDs are ascending, so the last occurrence wins within a document.
-                candidates[(code,canonical)] = (number(row['shares']),number(row['market_cap']))
+        for document_filter in fund_document_conditions(t, selected):
+            for row in pages(t, t.period_end == period, t.pub_date <= as_of,
+                             t.symbol.in_(list(code_map)+list(codes)), document_filter, columns=columns):
+                canonical, _, document = fund_document(row, fund_map)
+                if canonical not in selected or document != selected[canonical][1]:
+                    raise ValueError('基金明细与已选报告版本不一致，停止写入')
+                code = code_map.get(text_value(row['symbol']).split('.')[0])
+                if code:
+                    # Each document is in exactly one predicate; ascending IDs
+                    # retain the last row for duplicate positions in that document.
+                    candidates[(code,canonical)] = (number(row['shares']),number(row['market_cap']))
         totals = {}
         for (code,_),(shares,value) in candidates.items():
             if code not in totals:
@@ -622,30 +665,38 @@ def _ownership_strategy(_apis, _config):
                 latest[code][1][int(row['shareholder_rank'])] = row
         return {code:list(ranks.values()) for code,(_,ranks) in latest.items()}
 
-    def save_report_batch(session, codes, period, as_of, fund_map, selected, changed):
-        fund_groups = batch_funds(codes,period,as_of,fund_map,selected)
-        by_stock = batch_floats(codes,period,as_of)
-        closes = prices(sorted(by_stock),period)
+    def save_report_batch(session, codes, period, as_of, fund_map, selected, changed,
+                          fund_codes=None, float_codes=None):
+        fund_codes = set(codes) if fund_codes is None else set(codes).intersection(fund_codes)
+        float_codes = set(codes) if float_codes is None else set(codes).intersection(float_codes)
+        fund_groups = batch_funds(sorted(fund_codes),period,as_of,fund_map,selected) if fund_codes else {}
+        by_stock = batch_floats(sorted(float_codes),period,as_of) if float_codes else {}
         old_rows = {r.code:r for r in session.query(OwnershipReport).filter(
             OwnershipReport.report_date == period,OwnershipReport.code.in_(codes)).all()}
         previous_rows = {r.code:r for r in session.query(OwnershipReport).filter(
-            OwnershipReport.report_date == previous_quarter(period),OwnershipReport.code.in_(codes)).all()}
+            OwnershipReport.report_date == previous_quarter(period),OwnershipReport.code.in_(float_codes)).all()} if float_codes else {}
         changed_float_codes = set()
         for code in sorted(set(by_stock) | set(fund_groups) | set(old_rows)):
-            members, complete, pub = float_snapshot(by_stock.get(code,[]),closes.get(code))
-            categories = {'public_fund':fund_groups.get(code)}
-            payload = {'schema_version':1, 'categories':categories, 'float_members':members,
-                       'float_complete':complete, 'float_pub_date':pub,
-                       'public_fund_scope':'full_disclosure' if period.month in (6,12) else 'quarterly_top_holdings',
-                       'fund_identity_rule':'statistics_main_code_else_product_code'}
-            previous = previous_rows.get(code)
-            payload = classify_payload(payload, [previous.payload] if previous else [])
-            payload['social_entry'] = social_entry(payload,previous.payload if previous else None)
             old_payload = old_rows[code].payload if code in old_rows else {}
-            if (old_payload.get('float_members') != payload['float_members']
-                    or old_payload.get('float_complete') != payload['float_complete']
-                    or old_payload.get('social_complete') != payload['social_complete']):
-                changed_float_codes.add(code)
+            payload = deepcopy(old_payload) if old_payload else {
+                'schema_version':1, 'categories':{'public_fund':None}, 'float_members':[],
+                'float_complete':False, 'float_pub_date':None,
+                'public_fund_scope':'full_disclosure' if period.month in (6,12) else 'quarterly_top_holdings',
+                'fund_identity_rule':'statistics_main_code_else_product_code'}
+            if code in fund_codes:
+                # Recompute the stock's entire public-fund sum, including unchanged funds.
+                payload['categories']['public_fund'] = fund_groups.get(code)
+            if code in float_codes or not old_payload:
+                members, complete, pub = float_snapshot(by_stock.get(code,[]))
+                payload.update(float_members=members, float_complete=complete, float_pub_date=pub)
+                previous = previous_rows.get(code)
+                payload = classify_payload(payload, [previous.payload] if previous else [])
+                payload['social_entry'] = social_entry(payload,previous.payload if previous else None)
+                if code in float_codes and (old_payload.get('float_members') != payload['float_members']
+                        or old_payload.get('float_complete') != payload['float_complete']
+                        or old_payload.get('social_complete') != payload['social_complete']):
+                    changed_float_codes.add(code)
+            payload = shares_payload(payload)
             if upsert(session,OwnershipReport,{'code':code,'report_date':period},{'payload':payload},
                       existing=old_rows.get(code),loaded=True):
                 changed.add(('持仓',code,period))
@@ -690,16 +741,28 @@ def _ownership_strategy(_apis, _config):
         session.flush()
         session.expunge_all()
 
-    def aggregate(items, scope, method, close=None):
+    def aggregate(items, scope, method):
         if not items:
             return None  # absence of disclosure is not zero ownership
         shares = [r.get('shares') for r in items]
-        values = [r.get('market_value') for r in items]
         return {'shares': builtins.sum(shares) if builtins.all(v is not None for v in shares) else None,
-                'market_value': builtins.sum(values) if builtins.all(v is not None for v in values) else None,
                 'holder_count': len(items), 'scope': scope, 'value_method': method}
 
-    def float_snapshot(rows, close):
+    def shares_payload(payload):
+        # Clean only reports already being processed; never scan/reprice history.
+        result = deepcopy(payload)
+        for key in CATEGORY_IDS:
+            holding = result.get('categories', {}).get(key)
+            if holding is not None:
+                holding.pop('market_value', None)
+                holding['value_method'] = 'reported_shares'
+        social = result.get('social_entry', {})
+        social.pop('new_market_value', None)
+        for member in result.get('float_members', []) + social.get('new_combinations', []):
+            member.pop('market_value', None)
+        return result
+
+    def float_snapshot(rows):
         if not rows:
             return [], False, None
         latest = builtins.max(day(r['pub_date']) for r in rows)
@@ -718,8 +781,7 @@ def _ownership_strategy(_apis, _config):
             category = number(r.get('shareholder_class_id'), True)
             result.append({'id': identity or None, 'name': name, 'rank': rank,
                            'class_id': category, 'shares': shares,
-                           'ratio': number(r.get('share_ratio')),
-                           'market_value': shares*close if shares is not None and close is not None else None})
+                           'ratio': number(r.get('share_ratio'))})
         # Unknown classifications or identities make absence/newness unreliable.
         complete = complete and builtins.all(r['class_id'] is not None and r['name'] for r in result)
         return result, bool(complete), latest.isoformat()
@@ -741,6 +803,7 @@ def _ownership_strategy(_apis, _config):
 
     def classify_member(member, history):
         result = dict(member)
+        result.pop('market_value', None)
         raw = member.get('raw_class_id', member.get('class_id'))
         # Current source classifications take precedence over inferred evidence.
         if raw is not None:
@@ -783,7 +846,7 @@ def _ownership_strategy(_apis, _config):
         categories = dict(payload.get('categories', {}))
         for category, ids in CATEGORY_IDS.items():
             items = [m for m in members if (social_flag(m) is True if category == 'social' else m.get('class_id') in ids)]
-            total = aggregate(items, 'top10_float', 'estimated')
+            total = aggregate(items, 'top10_float', 'reported_shares')
             if total is not None:
                 total['complete'] = bool(social_complete if category == 'social' else classified)
             categories[category] = total
@@ -804,7 +867,7 @@ def _ownership_strategy(_apis, _config):
             prior = history.setdefault(row.code, [])
             members = original.get('float_members', [])
             needs_repair = builtins.any(m.get('raw_class_id', m.get('class_id')) is None for m in members)
-            payload = classify_payload(original, prior) if needs_repair else dict(original)
+            payload = classify_payload(original, prior) if needs_repair else shares_payload(original)
             previous = lookup.get((row.code, previous_quarter(row.report_date)))
             payload['social_entry'] = social_entry(payload, previous)
             if payload != original:
@@ -906,7 +969,7 @@ def _ownership_strategy(_apis, _config):
             scoped = [c for c, p in originals if p == period]
             for code, rows in batch_floats(scoped, period, as_of).items():
                 old = originals[(code, period)]
-                members, _, pub = float_snapshot(rows, None)
+                members, _, pub = float_snapshot(rows)
                 old_members = old.get('float_members', [])
                 old_ranks = {m.get('rank'): m for m in old_members}
                 # A different document or changing holdings belongs to the normal disclosure flow.
@@ -953,7 +1016,7 @@ def _ownership_strategy(_apis, _config):
 
     def social_entry(current, previous):
         empty = {'status': 'unknown', 'first_appearance': False, 'new_combinations': [],
-                 'new_shares': None, 'new_market_value': None}
+                 'new_shares': None}
         if not social_ready(current) or not social_ready(previous):
             return empty
         current_members = [r for r in current['float_members'] if social_flag(r) is True]
@@ -961,12 +1024,12 @@ def _ownership_strategy(_apis, _config):
         def same(a, b):
             return (a.get('id') and b.get('id') and a['id'] == b['id']) or holder_name(a['name']) == holder_name(b['name'])
         # Compare all prior shareholders: reclassification is not a new holding.
-        new = [r for r in current_members if not builtins.any(same(r,p) for p in previous_members)]
+        new = [{k:v for k,v in r.items() if k != 'market_value'} for r in current_members
+               if not builtins.any(same(r,p) for p in previous_members)]
         old_social = [r for r in previous_members if social_flag(r) is True]
-        totals = aggregate(new, 'top10_float', 'estimated') or {}
+        totals = aggregate(new, 'top10_float', 'reported_shares') or {}
         return {'status': 'comparable', 'first_appearance': bool(new) and not old_social,
-                'new_combinations': new, 'new_shares': totals.get('shares'),
-                'new_market_value': totals.get('market_value')}
+                'new_combinations': new, 'new_shares': totals.get('shares')}
 
     def upsert(session, model, keys, values, existing=None, loaded=False):
         row = existing if loaded else session.query(model).filter_by(**keys).first()
@@ -980,40 +1043,7 @@ def _ownership_strategy(_apis, _config):
             row.updated_at = china_now()
         return True
 
-    def prices(codes, period):
-        if not codes:
-            return {}
-        trade_days = _apis['get_trade_days'](end_date=period, count=1)
-        if trade_days is None or len(trade_days) != 1:
-            raise ValueError('报告期末交易日不可用')
-        price_date = as_date(trade_days[0])
-        if price_date not in price_universes:
-            _progress_note('核对 {} 报告期末股票清单'.format(price_date))
-            securities = _apis['get_all_securities'](types=['stock'], date=price_date)
-            if securities is None or len(securities.index) == 0:
-                raise ValueError('报告期末股票清单为空，停止估值与写入')
-            price_universes[price_date] = set(str(code) for code in securities.index)
-        available = [code for code in codes if code in price_universes[price_date]]
-        if len(available) != len(codes):
-            _progress_message('{}：{} 只股票无当期上市行情，持仓数量保留，估算市值留空。'.format(
-                price_date, len(codes)-len(available)))
-        result = {}
-        for offset in range(0,len(available),300):
-            batch = available[offset:offset+300]
-            _progress_note('获取 {} 报告期末行情（{} 只）'.format(price_date, len(batch)))
-            frame = _apis['get_price'](batch, start_date=price_date,
-                end_date=price_date, frequency='daily', fields=['close'], fq=None, panel=False)
-            if frame is None:
-                raise ValueError('报告期末行情获取失败')
-            if not frame.empty:
-                for r in frame.to_dict('records'):
-                    v = number(r['close'])
-                    if v and v > 0:
-                        result[r['code']] = v
-        return result
-
     def run(end_date=None, full_refresh=False, skip_existing=True):
-        price_universes.clear()
         as_of = as_date(end_date or settings.get('end_date') or china_now().date())
         if as_of > china_now().date():
             raise ValueError('结束日期不能晚于今天')
@@ -1030,7 +1060,7 @@ def _ownership_strategy(_apis, _config):
                    for m,d in ((3,31),(6,30),(9,30),(12,31))
                    if start <= datetime.date(y,m,d) <= as_of]
         periods.insert(0, previous_quarter(periods[0]))
-        _progress_message('个股机构持仓 [分类补全版 v7]：开始检查新增披露。')
+        _progress_message('个股机构持仓 [分源分期增量版 v8 · 披露股数口径]：开始检查新增披露。')
         signature = disclosure_signature(as_of)
         previous_probe, previous_day = None, None
         with database_scope(Base, _config) as Session:
@@ -1057,6 +1087,7 @@ def _ownership_strategy(_apis, _config):
                         and previous_probe.get('history_years') == settings['history_years']
                         and previous_probe.get('refresh_quarters') == settings['refresh_quarters'])
             fund_map, review_codes, holder_codes = None, None, None
+            fund_periods, float_codes, float_periods = {}, [], set()
             if targeted:
                 labels = [('fund', '公募持仓'), ('float', '十大流通股东'), ('holders', '股东户数')]
                 sources = [label for name, label in labels if previous_probe.get(name) != signature.get(name)]
@@ -1068,23 +1099,29 @@ def _ownership_strategy(_apis, _config):
                 with session_scope(Session) as session:
                     stored_codes = {r[0] for r in session.query(OwnershipStock.code).all()}
                 affected = affected_stocks(previous_probe, previous_day, signature, as_of,
-                    fund_map or {}, set(codes) | stored_codes, periods[-settings['refresh_quarters']:])
+                    fund_map or {}, set(codes) | stored_codes, periods)
+                fund_periods = affected['fund_periods']
+                float_codes = affected['float']
+                float_periods = set(periods[-settings['refresh_quarters']:]) if float_codes else set()
                 review_codes = sorted(set(affected['fund']) | set(affected['float']))
                 holder_codes = affected['holders']
                 # Keep existing stock metadata on holder-only updates; add new stocks normally.
                 metadata_codes = set(review_codes) | (set(holder_codes) - stored_codes)
                 codes = [c for c in codes if c in metadata_codes]
-                periods = periods[-settings['refresh_quarters']:] if review_codes else []
-                if review_codes:
-                    _progress_message('个股机构持仓：持仓披露影响 {} 只股票，仅复查这些股票最近 {} 个季度。'.format(
-                        len(review_codes), settings['refresh_quarters']))
-                else:
+                periods = sorted(set(fund_periods) | float_periods)
+                if fund_periods:
+                    _progress_message('个股机构持仓：公募仅更新发生披露变化的 {} 个报告期、{} 个股票季度；未变季度沿用原结果。'.format(
+                        len(fund_periods), sum(len(scope) for scope in fund_periods.values())))
+                if float_codes:
+                    _progress_message('个股机构持仓：十大流通股东影响 {} 只股票，仅复查这些股票最近 {} 个季度的名单及社保比较。'.format(
+                        len(float_codes), len(float_periods)))
+                if not periods:
                     _progress_message('个股机构持仓：无持仓新增披露，跳过报告期、持仓明细和社保比较。')
                 _progress_message('个股机构持仓：股东户数更新范围 {} 只股票。'.format(len(holder_codes)))
             else:
                 reason = '手动完整刷新' if full_refresh else ('首次建立基线' if previous_probe is None else '采集范围参数变化')
                 _progress_message('个股机构持仓：{}，按原有断点采集。'.format(reason))
-            if fund_map is None and (not targeted or review_codes):
+            if fund_map is None and not targeted:
                 fund_map = load_fund_map()
             # Compact keys only: no raw rows or JSON payloads are accumulated for the preview.
             if codes:
@@ -1108,16 +1145,24 @@ def _ownership_strategy(_apis, _config):
                     checkpoint = session.query(Checkpoint).get('report:'+str(period))
                     if checkpoint and checkpoint.as_of > as_of:
                         raise ValueError('已有较新采集结果，拒绝历史运行回退')
-                    if checkpoint and not full_refresh and period not in periods[-settings['refresh_quarters']:]:
+                    if checkpoint and not targeted and not full_refresh and period not in periods[-settings['refresh_quarters']:]:
                         continue
                     # Only scalar codes; JSON payloads are loaded by bounded stock batch below.
                     old_codes = [] if targeted else [r[0] for r in session.query(OwnershipReport.code).filter_by(report_date=period).all()]
-                scope_codes = review_codes if targeted else sorted(set(codes)|set(old_codes))
-                _progress_message('{}：复查 {} 只股票，按去重索引核对相关基金报告。'.format(period, len(scope_codes)))
-                selected = select_documents(period,as_of,fund_map,scope_codes)
+                if targeted:
+                    fund_scope = fund_periods.get(period, [])
+                    float_scope = float_codes if period in float_periods else []
+                    scope_codes = sorted(set(fund_scope) | set(float_scope))
+                else:
+                    scope_codes = sorted(set(codes)|set(old_codes))
+                    fund_scope, float_scope = scope_codes, scope_codes
+                _progress_message('{}：公募汇总 {} 只，十大流通股东 {} 只；各自按来源更新。'.format(
+                    period, len(fund_scope), len(float_scope)))
+                selected = select_documents(period,as_of,fund_map,fund_scope) if fund_scope else {}
                 with session_scope(Session) as session:
                     for batch in _progress_items(list(batches(scope_codes)), '持仓分批',lambda b:b[0]):
-                        save_report_batch(session,batch,period,as_of,fund_map,selected,changed)
+                        save_report_batch(session,batch,period,as_of,fund_map,selected,changed,
+                                          fund_codes=fund_scope, float_codes=float_scope)
                     head = session.query(Checkpoint).get('report:'+str(period))
                     if head is None:
                         session.add(Checkpoint(key='report:'+str(period),as_of=as_of))
@@ -1126,9 +1171,9 @@ def _ownership_strategy(_apis, _config):
                     session.commit()
                 del selected, old_codes
             # Include historical/delisted stock codes, but never load every historical JSON at once.
-            if not targeted or review_codes:
+            if not targeted or float_codes:
                 with session_scope(Session) as session:
-                    social_codes = review_codes if targeted else [r[0] for r in session.query(OwnershipReport.code).distinct().all()]
+                    social_codes = float_codes if targeted else [r[0] for r in session.query(OwnershipReport.code).distinct().all()]
                     for batch in _progress_items(list(batches(social_codes)),'社保比较',lambda b:b[0]):
                         repair_social_batch(session,batch,changed)
                     session.commit()

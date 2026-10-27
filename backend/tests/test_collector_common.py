@@ -115,7 +115,8 @@ def test_cutoff_retains_date_vs_announcement_separation(batch, hour, expected):
 def test_shared_helpers_match_standalone_files():
     main = {n.name:n for n in ast.parse(BATCH.read_text(encoding='utf-8'),feature_version=(3,6)).body
             if isinstance(n,ast.FunctionDef)}
-    names = {'_source_pages','_decimal_number','_float_number','_round_decimal','_optional_date','_closed_day','_checked_records'}
+    names = {'_source_pages','_decimal_number','_float_number','_round_decimal','_optional_date','_closed_day','_checked_records',
+             '_save_record_set', '_replace_latest_snapshot', '_checked_trade_days'}
     checked = set()
     for path in (ROOT/'collectors').glob('*数据库版.py'):
         if path == BATCH:

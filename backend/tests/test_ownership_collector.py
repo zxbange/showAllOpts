@@ -38,7 +38,8 @@ def test_social_requires_adjacent_complete_and_matches_identity_or_name(ns):
     assert ns.social_entry(current,payload([],False))['status']=='unknown'
     first=ns.social_entry(current,payload([member('other','其他公司',307099)]))
     assert first['first_appearance'] and len(first['new_combinations'])==1
-    assert first['new_market_value']==200
+    assert first['new_shares'] == 100 and 'new_market_value' not in first
+    assert 'market_value' not in first['new_combinations'][0]
     assert not ns.social_entry(current,payload([member(name='旧名称')]))['new_combinations']
     assert not ns.social_entry(current,payload([member(identity='changed-id')]))['new_combinations']
     assert not ns.social_entry(current,payload([member(kind=307099)]))['new_combinations']
@@ -47,18 +48,19 @@ def test_social_requires_adjacent_complete_and_matches_identity_or_name(ns):
 
 def test_missing_not_zero_and_schema(ns):
     assert ns.aggregate([], 'x','y') is None
-    assert ns.aggregate([dict(shares=10,market_value=None)],'x','y')['market_value'] is None
+    assert ns.aggregate([dict(shares=None)],'x','y')['shares'] is None
+    assert ns.aggregate([dict(shares=10,market_value=100)],'x','y')['shares'] == 10
     for collector,web in [(ns.OwnershipStock,OwnershipStock),(ns.OwnershipReport,OwnershipReport),(ns.OwnershipHolders,OwnershipHolders)]:
         assert [(c.name,str(c.type),c.primary_key) for c in collector.__table__.columns]==[(c.name,str(c.type),c.primary_key) for c in web.__table__.columns]
 
 def test_float_snapshot_requires_all_ten_and_latest_disclosure(ns):
     rows=[dict(id=i,shareholder_rank=i,pub_date=dt.date(2026,10,1),share_number=10,
                shareholder_id=i,shareholder_name='name'+str(i),shareholder_class_id=307099,share_ratio=1) for i in range(1,11)]
-    members,complete,_=ns.float_snapshot(rows,2)
-    assert complete and members[0]['market_value']==20
-    assert not ns.float_snapshot(rows[:-1],2)[1]
+    members,complete,_=ns.float_snapshot(rows)
+    assert complete and members[0]['shares']==10 and 'market_value' not in members[0]
+    assert not ns.float_snapshot(rows[:-1])[1]
     rows.append(dict(rows[0],id=100,pub_date=dt.date(2026,10,2)))
-    assert not ns.float_snapshot(rows,2)[1]  # do not mix revisions
+    assert not ns.float_snapshot(rows)[1]  # do not mix revisions
 
 def test_factories_match_and_python36():
     def factory(path):
@@ -67,8 +69,8 @@ def test_factories_match_and_python36():
     assert ast.dump(factory(SOURCE))==ast.dump(factory(ROOT/'collectors'/'策略批量采集_数据库版.py'))
 
 @pytest.mark.parametrize('batch_size', [1, 50])
-@pytest.mark.parametrize('missing_price', [False, True])
-def test_full_collection_repeat_correction_future_filter_and_social(mod,monkeypatch,tmp_path,capsys,batch_size,missing_price):
+@pytest.mark.parametrize('price_api_available', [False, True])
+def test_full_collection_repeat_correction_future_filter_and_social(mod,monkeypatch,tmp_path,capsys,batch_size,price_api_available):
     base=declarative_base()
     class Fund(base):
         __tablename__='fund'
@@ -122,12 +124,11 @@ def test_full_collection_repeat_correction_future_filter_and_social(mod,monkeypa
             return pd.DataFrame(result.fetchall(),columns=result.keys())
     finance=SimpleNamespace(FUND_MAIN_INFO=Main,FUND_PORTFOLIO_STOCK=Fund,STK_SHAREHOLDER_FLOATING_TOP10=Floats,STK_HOLDER_NUM=Holder,run_query=run_query)
     def get_price(codes, **kwargs):
-        if any(c not in (code, other) for c in codes):
-            raise ValueError('找不到标的K0470.XSHG')
-        return pd.DataFrame({'code': codes, 'close': [2]*len(codes)}) if not missing_price else pd.DataFrame(columns=['code','close'])
+        pytest.fail('披露股数采集不应请求行情或交易日历')
     api=dict(finance=finance,query=source_session.query,get_all_securities=lambda **kw:pd.DataFrame({'display_name':['示例','示例二']},index=[code,other]),
-        get_industry=lambda codes,**kw:{code:{'sw_l2':{'industry_name':'行业'}}},get_trade_days=lambda **kw:[kw['end_date']],
-        get_price=get_price)
+        get_industry=lambda codes,**kw:{code:{'sw_l2':{'industry_name':'行业'}}})
+    if price_api_available:
+        api.update(get_price=get_price, get_trade_days=lambda **kw: get_price([]))
     target=create_engine('sqlite:///'+str(tmp_path/'target.sqlite'))
     scopes = []
     @contextmanager
@@ -156,7 +157,12 @@ def test_full_collection_repeat_correction_future_filter_and_social(mod,monkeypa
         assert report.payload['categories']['public_fund']['holder_count']==1
         assert report.payload['social_entry']['first_appearance']
         assert report.payload['social_entry']['new_shares'] == 100
-        assert report.payload['social_entry']['new_market_value'] == (None if missing_price else 200)
+        assert 'new_market_value' not in report.payload['social_entry']
+        assert 'market_value' not in report.payload['categories']['social']
+        assert report.payload['categories']['social']['shares'] == 100
+        assert report.payload['categories']['social']['value_method'] == 'reported_shares'
+        assert report.payload['categories']['public_fund']['market_value'] == 200
+        assert all('market_value' not in m for m in report.payload['float_members'])
         assert session.query(n.OwnershipHolders).count()==1
         stamp=report.updated_at
     with sessionmaker(bind=target)() as session:
@@ -392,46 +398,21 @@ def test_grouped_index_returns_one_row_per_document_across_capped_pages(mod):
     engine.dispose()
 
 
-def test_prices_use_report_date_universe_and_keep_missing_values(mod):
-    period = dt.date(2025, 12, 31)
-    retired, current, future = '600010.XSHG', '000001.XSHE', '600020.XSHG'
-    universe_calls, price_calls = [], []
-    def securities(**kwargs):
-        universe_calls.append(kwargs)
-        assert kwargs == {'types': ['stock'], 'date': period}
-        return pd.DataFrame(index=[retired, current])
-    def get_price(codes, **kwargs):
-        price_calls.append((codes, kwargs))
-        assert set(codes) <= {retired, current}
-        assert kwargs['start_date'] == kwargs['end_date'] == period
-        assert kwargs['fq'] is None
-        return pd.DataFrame({'code': codes, 'close': [2.0]*len(codes)})
-    n = mod._ownership_strategy(dict(get_all_securities=securities, get_price=get_price,
-        get_trade_days=lambda **kwargs: [period]), mod.DB_CONFIG)
-    assert n.prices([], period) == {} and not universe_calls
-    assert n.prices([retired, future, 'K0470.XSHG'], period) == {retired: 2.0}
-    assert n.prices([current], period) == {current: 2.0}
-    assert len(universe_calls) == 1  # Once per report date, not once per stock batch.
-    assert n.prices([future, 'K0470.XSHG'], period) == {} and len(price_calls) == 2
-
-
-@pytest.mark.parametrize('failure', [None, pd.DataFrame(), RuntimeError('network unavailable')])
-def test_prices_do_not_swallow_universe_failure(mod, failure):
-    def securities(**kwargs):
-        if isinstance(failure, Exception):
-            raise failure
-        return failure
-    n = mod._ownership_strategy(dict(get_all_securities=securities,
-        get_trade_days=lambda **kwargs: [dt.date(2026,9,30)],
-        get_price=lambda *args,**kwargs: pytest.fail('must validate universe first')), mod.DB_CONFIG)
-    with pytest.raises((ValueError, RuntimeError), match='股票清单|network unavailable'):
-        n.prices(['600001.XSHG'], dt.date(2026,9,30))
-
-
-def test_prices_preserve_real_api_errors(mod):
-    def get_price(*args, **kwargs):
-        raise RuntimeError('network unavailable')
-    n = mod._ownership_strategy(dict(get_all_securities=lambda **kwargs: pd.DataFrame(index=['600001.XSHG']),
-        get_trade_days=lambda **kwargs: [dt.date(2026,9,30)], get_price=get_price), mod.DB_CONFIG)
-    with pytest.raises(RuntimeError, match='network unavailable'):
-        n.prices(['600001.XSHG'], dt.date(2026,9,30))
+def test_disclosed_shares_replace_legacy_estimates_without_changing_fund_values(ns):
+    import copy
+    fund = dict(shares=500, market_value=1700, holder_count=2, value_method='reported')
+    original = dict(categories=dict(public_fund=fund), float_members=[member()],
+                    social_entry=dict(new_shares=100, new_market_value=200, new_combinations=[member()]))
+    for key in ns.CATEGORY_IDS:
+        original['categories'][key] = dict(shares=100, market_value=200, holder_count=1, value_method='estimated')
+    before = copy.deepcopy(original)
+    cleaned = ns.shares_payload(original)
+    assert original == before and cleaned['categories']['public_fund'] == fund
+    for key in ns.CATEGORY_IDS:
+        assert cleaned['categories'][key]['shares'] == 100
+        assert cleaned['categories'][key]['value_method'] == 'reported_shares'
+        assert 'market_value' not in cleaned['categories'][key]
+    assert 'new_market_value' not in cleaned['social_entry']
+    assert all('market_value' not in m for m in cleaned['float_members'] + cleaned['social_entry']['new_combinations'])
+    assert ns.shares_payload(cleaned) == cleaned
+    assert not hasattr(ns, 'prices')

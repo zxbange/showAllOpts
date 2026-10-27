@@ -29,6 +29,19 @@ Q = Decimal('0.0000000001')
 Base = declarative_base()
 
 
+def _checked_trade_days(raw, start=None, end=None, count=None,
+                        error='交易日历缺失、重复、乱序或越界。', missing_error=None):
+    """Normalize and validate an exchange calendar before calculating or writing."""
+    if raw is None:
+        raise ValueError(missing_error or error)
+    days = [as_date(value) for value in raw]
+    if (days != sorted(set(days)) or (count is not None and len(days) != count)
+            or builtins.any((start is not None and day < start) or
+                            (end is not None and day > end) for day in days)):
+        raise ValueError(error)
+    return days
+
+
 def _decimal_number(value):
     try:
         result = Decimal(str(value))
@@ -141,16 +154,9 @@ def chunks(codes):
 
 
 def calendar(start, end):
-    raw = get_trade_days(start_date=as_date(start), end_date=as_date(end))
-    if raw is None:
-        raise ValueError('交易日历获取失败。')
-    days = [as_date(day) for day in raw]
-    previous = None
-    for day in days:
-        if day < as_date(start) or day > as_date(end) or (previous is not None and day <= previous):
-            raise ValueError('交易日历越界、重复或乱序。')
-        previous = day
-    return days
+    start, end = as_date(start), as_date(end)
+    return _checked_trade_days(get_trade_days(start_date=start, end_date=end), start, end,
+        error='交易日历越界、重复或乱序。', missing_error='交易日历获取失败。')
 
 
 def fundamental_rows(codes, table, fields, day):

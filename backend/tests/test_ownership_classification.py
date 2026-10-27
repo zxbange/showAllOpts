@@ -60,11 +60,11 @@ def source_rows(period):
 
 
 def stored_payload(ns, period):
-    members, complete, pub = ns.float_snapshot(source_rows(period), 2)
+    members, complete, pub = ns.float_snapshot(source_rows(period))
     categories = {'public_fund': {'shares': 759000, 'market_value': 125143920,
                                  'holder_count': 3, 'scope': 'fund_disclosed', 'value_method': 'reported'}}
     for category, ids in ns.CATEGORY_IDS.items():
-        categories[category] = ns.aggregate([m for m in members if m['class_id'] in ids], 'top10_float', 'estimated')
+        categories[category] = ns.aggregate([m for m in members if m['class_id'] in ids], 'top10_float', 'reported_shares')
     payload = dict(schema_version=1, float_members=members, float_complete=complete,
                    float_pub_date=pub, categories=categories)
     payload['social_entry'] = ns.social_entry(payload, None)
@@ -372,7 +372,7 @@ def filled_rows(period):
 
 
 def rows_payload(ns, rows):
-    members, complete, pub = ns.float_snapshot(rows, 2)
+    members, complete, pub = ns.float_snapshot(rows)
     payload = {'float_members': members, 'float_complete': complete, 'float_pub_date': pub,
                'categories': {'public_fund': {'shares': 100, 'market_value': 200,
                                             'holder_count': 1, 'scope': 'fund_disclosed', 'value_method': 'reported'}}}
@@ -426,7 +426,8 @@ def test_gap_refresh_repairs_source_class_only_and_recalculates_following_report
         assert repaired['categories']['social']['complete'] is True
         assert repaired['categories']['public_fund'] == old['categories']['public_fund']
         assert repaired['float_pub_date'] == old['float_pub_date']
-        assert [m['market_value'] for m in repaired['float_members']] == [m['market_value'] for m in old['float_members']]
+        assert [m['shares'] for m in repaired['float_members']] == [m['shares'] for m in old['float_members']]
+        assert all('market_value' not in m for m in repaired['float_members'])
         assert next_report['social_entry']['status'] == 'comparable'
         assert not next_report['social_entry']['new_combinations']
         assert next_report['categories'] == following['categories']
@@ -524,7 +525,6 @@ def test_gap_refresh_does_not_overwrite_concurrent_new_snapshot(gap_env):
     add_gap_source(env, CODE, SEPTEMBER, filled_rows(SEPTEMBER))
     newer = copy.deepcopy(old)
     newer['float_members'][0]['shares'] += 100
-    newer['float_members'][0]['market_value'] += 200
     published = []
     original_query = env.ns.finance.run_query
     def query_and_publish(q):

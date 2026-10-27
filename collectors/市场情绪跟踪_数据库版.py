@@ -27,6 +27,36 @@ PROGRESS_ENABLED = True
 PROGRESS_INTERVAL_SECONDS = 5.0
 _PROGRESS_LOCAL = threading.local()
 
+def _save_record_set(Session, model, records, filters, key_fields, skip_existing=True):
+    """在调用方限定的范围内新增或替换；一次提交，不覆盖范围外记录。"""
+    if not records:
+        return []
+    with session_scope(Session) as session:
+        rows = session.query(model).filter(*filters)
+        if skip_existing:
+            keys = {tuple(row) for row in rows.with_entities(*(getattr(model, key) for key in key_fields)).all()}
+            records = [r for r in records if tuple(r[key] for key in key_fields) not in keys]
+            if not records:
+                return []
+        else:
+            rows.delete(synchronize_session=False)
+        session.add_all([model(**record) for record in records])
+        session.commit()
+        return records
+
+def _checked_trade_days(raw, start=None, end=None, count=None,
+                        error='交易日历缺失、重复、乱序或越界。', missing_error=None):
+    """Normalize and validate an exchange calendar before calculating or writing."""
+    if raw is None:
+        raise ValueError(missing_error or error)
+    days = [as_date(value) for value in raw]
+    if (days != sorted(set(days)) or (count is not None and len(days) != count)
+            or builtins.any((start is not None and day < start) or
+                            (end is not None and day > end) for day in days)):
+        raise ValueError(error)
+    return days
+
+
 class _ConsoleProgress:
     """仅后台刷新文字；采集与数据库操作始终在主线程串行执行。"""
     def __init__(self, name, index, total, stream, interval):
@@ -273,12 +303,8 @@ def _sentiment_strategy(_apis, _config):
             return day.replace(year=day.year - 3, day=28)
 
     def checked_days(values, start, end):
-        if values is None:
-            raise ValueError('交易日历未返回，取消采集。')
-        days = [as_date(value) for value in values]
-        if days != sorted(set(days)) or builtins.any(day < start or day > end for day in days):
-            raise ValueError('交易日历越界、重复或乱序，取消采集。')
-        return days
+        return _checked_trade_days(values, start, end,
+            error='交易日历越界、重复或乱序，取消采集。', missing_error='交易日历未返回，取消采集。')
 
     def security_dates():
         # date=None 获取含已退市股票的完整资料，再按各历史日期筛选，避免幸存者偏差。
@@ -359,14 +385,9 @@ def _sentiment_strategy(_apis, _config):
         return records
 
     def save_records(Session, records):
-        # 主键 + 入库前复核；已有日期既不覆盖，也不重复插入。
-        with session_scope(Session) as session:
-            dates = [record['trade_date'] for record in records]
-            existing = {row[0] for row in session.query(MarketSentiment.trade_date).filter(MarketSentiment.trade_date.in_(dates)).all()}
-            added = [record for record in records if record['trade_date'] not in existing]
-            session.add_all([MarketSentiment(**record) for record in added])
-            session.commit()
-            return added
+        dates = [record['trade_date'] for record in records]
+        return _save_record_set(Session, MarketSentiment, records,
+            (MarketSentiment.trade_date.in_(dates),), ('trade_date',))
 
     def run(end_date=settings['end_date'], start_date=None, batch_size=settings['batch_size'],
             window_size=settings['window_size'], skip_existing=True):

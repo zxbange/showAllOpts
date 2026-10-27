@@ -49,3 +49,6 @@ short_term_winrate_cache/
 
 # Private local research exports
 超短线统计结果/
+
+# Project collectors and research scripts with local credentials
+/脚本/本地专用/

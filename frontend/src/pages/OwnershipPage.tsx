@@ -14,12 +14,12 @@ const socialModes: Record<SocialMode, { label: string; description: string }> = 
   first: {
     label: '股票首次出现社保持仓',
     description:
-      '上季无社保组合，本季有新进社保组合。比较相邻两季完整的十大流通股东名单，按新进组合估算市值降序；“首次”不代表历史首次买入。',
+      '上季无社保组合，本季有新进社保组合。比较相邻两季完整的十大流通股东名单，按新进组合合计持股数降序；“首次”不代表历史首次买入。',
   },
   combination: {
     label: '新增社保组合',
     description:
-      '本季出现上季名单中没有的社保组合，允许原有社保继续持有。比较相邻两季完整的十大流通股东名单，按新进组合估算市值降序；名单新进不代表首次买入。',
+      '本季出现上季名单中没有的社保组合，允许原有社保继续持有。比较相邻两季完整的十大流通股东名单，按新进组合合计持股数降序；名单新进不代表首次买入。',
   },
   increase: {
     label: '社保组合加仓',
@@ -98,7 +98,7 @@ function StockView({ code }: { code: string }) {
             dates={data.holders.map((p) => p.date)}
             values={data.holders.map((p) => p.payload.a_share_holders)}
             title="A股股东户数历史"
-            holders
+            metric="holders"
           />
         ) : (
           <p>暂无股东户数记录。</p>
@@ -130,11 +130,16 @@ function StockView({ code }: { code: string }) {
                 <OwnershipChart
                   dates={data.reports.map((p) => p.date)}
                   values={data.reports.map((p) => {
-                    const v = p.payload.categories[key]?.market_value
-                    return v == null ? null : v / 1e8
+                    const holding = p.payload.categories[key]
+                    const v = key === 'public_fund' ? holding?.market_value : holding?.shares
+                    return v == null ? null : v / (key === 'public_fund' ? 1e8 : 1e4)
                   })}
                   counts={data.reports.map((p) => p.payload.categories[key]?.holder_count ?? null)}
-                  title={label + '持仓趋势'}
+                  title={
+                    label +
+                    (key === 'public_fund' ? '持仓市值趋势（亿元）' : '持股数量趋势（万股）')
+                  }
+                  metric={key === 'public_fund' ? 'market_value' : 'shares'}
                 />
               ) : (
                 <p className="ownership-missing">暂无披露记录，不代表持仓为零。</p>
@@ -183,11 +188,10 @@ function SocialView({ onSelect }: { onSelect: (code: string) => void }) {
         ]
       : [
           { label: '股票 / 行业', width: '20%' },
-          { label: '新进社保组合', width: '28%' },
-          { label: '持股数量（万股）', width: '14%' },
-          { label: '披露持股比例', width: '12%' },
-          { label: '估算市值（亿元）', width: '16%' },
-          { label: '披露日期', width: '10%' },
+          { label: '新进社保组合', width: '36%' },
+          { label: '合计持股数（万股）', width: '17%' },
+          { label: '披露持股比例', width: '14%' },
+          { label: '披露日期', width: '13%' },
         ]
   const counts = [
     { label: '已采集', value: data?.collected_count },
@@ -347,9 +351,6 @@ function SocialView({ onSelect }: { onSelect: (code: string) => void }) {
                               </div>
                             ))}
                           </td>
-                          <td>
-                            {num(r.new_market_value == null ? null : r.new_market_value / 1e8, 3)}
-                          </td>
                         </>
                       )}
                       <td>{r.pub_date || '未知'}</td>
@@ -421,7 +422,7 @@ export function OwnershipPage() {
       ) : (
         <>
           <p className="ownership-note">
-            公募季报与半年报、年报披露范围不同；非公募市值按期末不复权价格估算，账户数不等于机构家数。
+            公募展示披露市值，季报与半年报、年报范围不同；其余六类汇总十大流通股东披露股数，账户数不等于机构家数。
           </p>
           <section className="ownership-panel">
             <label className="ownership-search">

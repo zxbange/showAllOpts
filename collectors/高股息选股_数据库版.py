@@ -2,6 +2,7 @@
 """聚宽研究：高股息两组选股 Top25；完整单文件，只保留最新结果，不下单。"""
 import builtins
 import datetime
+import json
 import math
 import re
 import sys
@@ -40,6 +41,38 @@ PROGRESS_INTERVAL_SECONDS = 5.0  # 最多每隔多少秒刷新；等待接口/�
 
 
 _PROGRESS_LOCAL = threading.local()
+
+
+def _replace_latest_snapshot(Session, Snapshot, Stock, meta, records,
+                             result_columns, meta_columns, date_field, json_fields=()):
+    """Replace a validated latest snapshot atomically; unchanged results keep their timestamp."""
+    def signature(values):
+        return sorted(tuple(json.dumps(r[c], sort_keys=True, ensure_ascii=False) if c in json_fields else r[c]
+                            for c in result_columns) for r in values)
+
+    with session_scope(Session) as session:
+        head = session.query(Snapshot).filter_by(id=1).with_for_update().first()
+        if head is not None and getattr(head, date_field) > meta[date_field]:
+            raise ValueError('数据库已有更新日期，拒绝旧日期覆盖。')
+        existing = session.query(Stock).all()
+        old = [{c: getattr(r, c) for c in result_columns} for r in existing]
+        if (head is not None and builtins.all(getattr(head, c) == meta[c] for c in meta_columns)
+                and signature(old) == signature(records)):
+            return False
+        if head is None:
+            head = Snapshot(id=1, updated_at=china_now(), **meta)
+            session.add(head)
+            session.flush()  # A concurrent first insertion must fail before deleting existing rows.
+        else:
+            for key, value in meta.items():
+                setattr(head, key, value)
+            head.updated_at = china_now()
+        for previous in existing:
+            session.expunge(previous)
+        session.query(Stock).delete(synchronize_session=False)
+        session.add_all([Stock(**record) for record in records])
+        session.commit()
+        return True
 
 
 def _source_pages(fetch_page, key='id', start=-1, label='数据接口', progress=None, fields=(), page_size=None):
@@ -571,30 +604,8 @@ def _dividend_strategy(_apis, _config):
         if builtins.any(r['method'] not in METHODS or r['trade_date'] != meta['trade_date'] for r in records):
             raise ValueError('方法或日期不一致。')
         _progress_note('事务更新两组最新选股结果')
-        with session_scope(Session) as session:
-            head = session.query(DividendSnapshot).filter_by(id=1).with_for_update().first()
-            if head is not None and head.trade_date > meta['trade_date']:
-                raise ValueError('数据库已有更新日期，拒绝旧日期覆盖。')
-            existing = session.query(DividendStock).all()
-            def signature(values):
-                return sorted(tuple(r[c] for c in RESULT_COLUMNS) for r in values)
-            old_records = [{c: getattr(r, c) for c in RESULT_COLUMNS} for r in existing]
-            if head is not None and all(getattr(head, c) == meta[c] for c in META_COLUMNS) and signature(old_records) == signature(records):
-                return False
-            if head is None:
-                head = DividendSnapshot(id=1, updated_at=china_now(), **meta)
-                session.add(head)
-                session.flush()  # 首次并发创建冲突时整个事务回滚，不覆盖他人结果。
-            else:
-                for key, value in meta.items():
-                    setattr(head, key, value)
-                head.updated_at = china_now()
-            for previous in existing:
-                session.expunge(previous)
-            session.query(DividendStock).delete(synchronize_session=False)
-            session.add_all([DividendStock(**r) for r in records])
-            session.commit()
-            return True
+        return _replace_latest_snapshot(Session, DividendSnapshot, DividendStock, meta, records,
+                                        RESULT_COLUMNS, META_COLUMNS, 'trade_date')
 
     def run(end_date=END_DATE):
         now = china_now()

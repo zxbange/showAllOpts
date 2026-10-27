@@ -10,6 +10,7 @@ from __future__ import print_function, division
 from jqdata import *
 
 # 放在平台通配符导入之后，避免 datetime 等同名对象被覆盖。
+import builtins
 import datetime
 import math
 import time
@@ -32,6 +33,19 @@ RESULT_COLUMNS = [
     'trade_date', 'industry_type', 'industry_code', 'industry_name',
     'momentum', 'momentum_rank', 'front_stock_count', 'industry_stock_count',
 ]
+
+
+def _checked_trade_days(raw, start=None, end=None, count=None,
+                        error='交易日历缺失、重复、乱序或越界。', missing_error=None):
+    """Normalize and validate an exchange calendar before calculating or writing."""
+    if raw is None:
+        raise ValueError(missing_error or error)
+    days = [as_date(value) for value in raw]
+    if (days != sorted(set(days)) or (count is not None and len(days) != count)
+            or builtins.any((start is not None and day < start) or
+                            (end is not None and day > end) for day in days)):
+        raise ValueError(error)
+    return days
 
 
 def _closed_day(end, now):
@@ -238,12 +252,8 @@ def get_retention_start(reference_date, count=RETENTION_TRADE_DAYS):
     days = [as_date(day) for day in raw_days]
     if len(days) != count:
         raise ValueError('交易日历不足 {} 天，未清理数据库。'.format(count))
-    previous = None
-    for day in days:
-        if day > reference or (previous is not None and day <= previous):
-            raise ValueError('交易日历存在未来日期、重复或乱序，未清理数据库。')
-        previous = day
-    return days[0]
+    return _checked_trade_days(days, end=reference,
+        error='交易日历存在未来日期、重复或乱序，未清理数据库。')[0]
 
 
 def cleanup_old_data(Session, retention_start):

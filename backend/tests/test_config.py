@@ -150,6 +150,79 @@ def test_setup_legacy_source_roundtrip(initializer, tmp_path, capsys):
     assert 'fake@pass#word' not in capsys.readouterr().out
 
 
+@pytest.mark.parametrize('production', [False, True])
+def test_setup_default_source_uses_migrated_private_script_without_execution(initializer, tmp_path, capsys, production):
+    root = tmp_path / 'project'
+    source = root / '脚本' / '本地专用' / '聚宽采集' / '全部策略批量采集_数据库版.py'
+    source.parent.mkdir(parents=True)
+    source.write_text(
+        "DB_CONFIG = {\n"
+        "    'host': 'migrated.example',\n"
+        "    'port': 3308,\n"
+        "    'dbname': 'migrated_fixture',\n"
+        "    'dbuser': 'fixture_reader',\n"
+        "    'dbpassword': 'fixture-only@password',\n"
+        "}\n"
+        "class MysqlTrade:\n"
+        "    host = 1 / 0\n"
+        "raise RuntimeError('The source must never be executed')\n",
+        encoding='utf-8-sig',
+    )
+    initializer(root, production=production)
+    target = root / 'config' / 'app.config' if production else root / 'backend' / '.env'
+    settings = Settings(_env_file=target)
+    assert settings.db_host == 'migrated.example'
+    assert settings.db_port == 3308
+    assert settings.db_name == 'migrated_fixture'
+    assert settings.db_user == 'fixture_reader'
+    assert settings.db_password.get_secret_value() == 'fixture-only@password'
+    output = capsys.readouterr().out
+    for value in ('migrated.example', 'migrated_fixture', 'fixture_reader', 'fixture-only@password'):
+        assert value not in output
+
+
+@pytest.mark.parametrize('missing', ['host', 'port', 'dbname', 'dbuser', 'dbpassword'])
+def test_setup_db_config_requires_every_connection_field(initializer, tmp_path, missing):
+    values = {'host': 'fixture.example', 'port': 3307, 'dbname': 'fixture_database',
+              'dbuser': 'fixture_reader', 'dbpassword': 'fixture-only-secret'}
+    del values[missing]
+    source = tmp_path / 'collector.py'
+    source.write_text(f'DB_CONFIG = {values!r}\n', encoding='utf-8')
+    with pytest.raises(ConfigurationError, match='settings are missing'):
+        initializer(tmp_path, source)
+    assert not (tmp_path / 'backend' / '.env').exists()
+
+
+def test_setup_db_config_rejects_expressions_without_execution(initializer, tmp_path, capsys):
+    marker = tmp_path / 'must-not-exist'
+    source = tmp_path / 'collector.py'
+    source.write_text(
+        "DB_CONFIG = {'host': 'fixture.example', 'port': 3306, 'dbname': 'fixture', "
+        "'dbuser': 'reader', 'dbpassword': 'fixture-only-secret', "
+        f"'extra': __import__('pathlib').Path({str(marker)!r}).touch()}}\n",
+        encoding='utf-8',
+    )
+    with pytest.raises(ConfigurationError, match='literal values only') as error:
+        initializer(tmp_path, source)
+    assert not marker.exists()
+    assert not (tmp_path / 'backend' / '.env').exists()
+    assert 'fixture-only-secret' not in str(error.value) + capsys.readouterr().out
+
+
+@pytest.mark.parametrize(('content', 'message'), [
+    ("DB_CONFIG = ['fixture-only-secret']\n", 'literal dictionary'),
+    ("def nested():\n    DB_CONFIG = {}\n", 'was not found'),
+    ("DB_CONFIG = {'dbpassword': 'fixture-only-secret',\n", 'not valid Python'),
+])
+def test_setup_invalid_source_fails_without_exposing_content(initializer, tmp_path, capsys, content, message):
+    source = tmp_path / 'collector.py'
+    source.write_text(content, encoding='utf-8')
+    with pytest.raises(ConfigurationError, match=message) as error:
+        initializer(tmp_path, source)
+    assert not (tmp_path / 'backend' / '.env').exists()
+    assert 'fixture-only-secret' not in str(error.value) + capsys.readouterr().out
+
+
 def test_setup_explicit_missing_source_fails(initializer, tmp_path):
     (tmp_path / 'backend').mkdir()
     with pytest.raises(ConfigurationError, match='source file'):

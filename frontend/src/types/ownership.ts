@@ -5,7 +5,7 @@ export interface OwnershipStock {
 }
 export interface Holding {
   shares: number | null
-  market_value: number | null
+  market_value?: number | null
   holder_count: number | null
   scope: string
   value_method: string
@@ -39,7 +39,6 @@ export interface SocialMember {
   name: string
   shares: number | null
   ratio: number | null
-  market_value: number | null
 }
 export type SocialMode = 'first' | 'combination' | 'increase'
 
@@ -51,7 +50,6 @@ export interface SocialEntry extends OwnershipStock {
   change_pct?: number | null
   new_combinations?: SocialMember[]
   new_shares?: number | null
-  new_market_value?: number | null
   report_date: string
   pub_date: string | null
 }
