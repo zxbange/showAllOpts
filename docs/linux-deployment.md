@@ -212,62 +212,82 @@ sudo systemctl disable --now showallopts-api
 
 ### 自动更新发布
 
-首次安装仍需完成上面的环境、配置、systemd 与 Nginx 设置。后续更新推荐在当前项目目录执行一键脚本，首次获取脚本需先 `git pull --ff-only`：
+首次安装仍需完成环境、配置、systemd 与 Nginx 设置。后续更新以服务账号（默认 ubuntu）执行，不要对整个脚本加 sudo：
 
-```bash
+~~~bash
 cd /home/ubuntu/showAllOpts
-bash deploy.sh
-```
-
-以服务的运行账号（默认 `ubuntu`）执行，不要在命令前加 `sudo`。脚本只在管理服务和复制网页时调用 sudo。需要 Python 3.11+ 的现有 Linux 虚拟环境、Node.js 22.12+、npm、Git、rsync、sudo 和已运行的 Nginx。使用 nvm 的终端先 `source "$HOME/.nvm/nvm.sh"`，再 `nvm use 22`。Ubuntu 与 RHEL 使用同一个脚本，项目目录从脚本位置自动确定。
-
-默认读取 `origin/main`，要求当前在 `main`，工作区干净且没有本地独有提交。不会执行 `git reset --hard`、自动 stash 或清理配置文件。数据库检查使用 systemd 最终 `Environment` 中的 `APP_ENV_FILE` 和环境变量，不受当前终端临时 `DB_*` 覆盖影响。现有服务需要使用本文的 `APP_ENV_FILE` 方式；存在 systemd `EnvironmentFile` 时脚本会停止，需先统一配置方式。
-
-| 参数 | 默认值 / 用法 |
-| --- | --- |
-| `--web-root` | `/var/www/showallopts`，必须与 Nginx 已配置的独立静态目录一致且已存在 |
-| `--service` | `showallopts-api`，其账号、工作目录和启动程序必须指向当前项目 |
-| `--api-url` | `http://127.0.0.1:8000`，直接检查本机 API；自定义端口时修改 |
-| `--web-url` | 可选，如 `http://127.0.0.1:8081` 或实际域名；检查网站 `/api/v1/health` 代理 |
-| `--remote` / `--branch` | `origin` / `main`；其他分支需先手动切换 |
-| `--skip-pull` | 不联网拉代码，发布当前干净分支的代码；适用于已手动拉取的场景 |
-
-例如此前使用 8081 端口的 HTTP 站点：
-
-```bash
 bash deploy.sh --web-url http://127.0.0.1:8081
-```
+~~~
 
-没有 HTTPS 证书的 HTTP 端口不能填写 `https://`。指定域名匹配的站点使用真实域名；指定的 URL 需能够从服务器访问。该选项不改变 Nginx 端口或域名。不指定 `--web-url` 时不验证代理链路；部署后仍应从浏览器确认网页和各模块数据。
+脚本不会安装 SSH 密钥、sudoers、服务覆盖文件或 GitHub 自动化，也不修改安全设置。免交互只是“没有已有权限就失败”，不是授予免密权限；接入自动部署前仍需单独审核和授权服务器侧权限。
 
-脚本按顺序执行以下步骤，并输出 `[1/7]` 到 `[7/7]` 的进度：
+#### 固定版本与免交互执行
 
-1. 检查 Git 工作区、Node.js、服务账号/路径、配置可读性及 Nginx 配置和运行状态。
-2. 拉取指定分支并仅快进更新，记录更新前和目标 Git 提交号。
-3. 使用 `npm ci` 安装锁定依赖并构建前端，此时不停止 API、不切换已发布网页。
-4. 停止 API，再安装后端锁定依赖，避免服务运行期间混用新旧依赖。
-5. 按服务配置执行数据库读取检查，失败时保留当前网页并停止后续步骤。
-6. 重启 API，轮询健康接口，确认返回本项目的服务标识且 systemd 服务仍在运行。
-7. 先复制静态资源（保留旧哈希文件），最后原子替换 `index.html`；可选检查 Nginx 代理链路。启用 SELinux 且存在检测工具时对发布目录执行 `restorecon`，不会更改系统安全策略。
+~~~bash
+cd /home/ubuntu/showAllOpts
+# 非交互 SSH 不会自动加载 nvm；先加载已经安装的 Node 版本。
+export NVM_DIR="$HOME/.nvm"
+. "$NVM_DIR/nvm.sh"
+nvm use 22
+# 用已通过检查的完整 40 位提交号替换 SHA，并填写实际网站 URL。
+bash deploy.sh --non-interactive --commit "$SHA" --web-url http://127.0.0.1:8081
+~~~
 
-脚本使用项目 `.runtime/deploy.lock` 避免同一目录并发发布。控制台输出追加到 `log/deploy-YYYY-MM-DD.log`，以服务器日期分文件；发布日志不会自动清理，可按运维保留周期归档。服务和应用原有日志仍按既有规则轮转。
+自动化应传入已测试的确切 SHA，不仅依赖执行时最新的 main。以上是准备好的调用方式，**不代表已经启用了自动发布**。Node.js 仍需 22.12+；也可在受控启动器中设置明确的 Node/npm PATH。
 
-这不是独立版本目录或零停机部署，不提供自动回滚：
-
-| 失败阶段 | 可能的状态与处理 |
+| 参数 | 默认值 / 约束 |
 | --- | --- |
-| 预检或 Git 更新 | 尚未主动停止 API，处理本地改动、账号/路径、网络或分支问题后重跑 |
-| 前端安装或构建 | Git 代码可能已更新，已发布网页保留；修复依赖/构建问题后重跑 |
-| 后端依赖安装或数据库检查 | API 已停止，依赖可能只安装了一部分；修复后重跑，脚本会重新安装依赖、验证并启动 |
-| API 启动或健康检查 | 新网页尚未切换，检查 `systemctl status`、`journalctl` 和 `log/error.log` 后重跑 |
-| 静态资源发布 | 旧入口在最终替换前保留，部分资源可能已复制；检查目录权限、磁盘空间和 SELinux 后重跑 |
-| 可选网站代理检查 | 新网页已经发布；检查 URL 协议/端口、Nginx 的站点匹配和代理设置，不能据此认为发布未发生 |
+| --web-root | /var/www/showallopts；现有、独立、位于代码目录外的静态目录；不接受内部符号链接或部署保留的临时文件名 |
+| --service | showallopts-api；服务账号、工作目录和启动程序必须指向当前项目 |
+| --api-url | http://127.0.0.1:8000；仅回环；localhost 规范化为 127.0.0.1，IPv6 显式使用 [::1] |
+| --web-url | 可选；验证网站 API 代理、精确 HTML 和其 /assets/ JS/CSS 内容；自动发布应提供 |
+| --remote / --branch | origin / main；工作区必须干净并位于该分支 |
+| --commit | 完整 40 位 SHA；必须在获取的分支历史中，且能从当前提交快进到它 |
+| --skip-pull | 不 fetch，仍完整构建、检查和部署当前干净 HEAD；同时指定 --commit 时必须等于 HEAD |
+| --non-interactive | 所有 sudo 调用使用 -n，Git/SSH/pip 不提示输入；不新增权限 |
 
-Git 拉取会更新原目录文件，仍在运行的旧 API 不保证完全隔离于源码变更。若需要回退，应依据发布日志记录的旧提交，在维护窗口恢复匹配的代码与依赖并重新部署；脚本不会替用户重置代码或回滚数据库。运行中断后也应检查服务状态并完成一次重新发布。
+配置使用 systemd 最终 Environment 中的 APP_ENV_FILE 和环境变量，而不是交互终端临时的 DB_*。真实配置及其父路径不能受 Git 跟踪；目标提交不能包含真实配置、虚拟环境、日志或 .runtime。仍不支持 systemd EnvironmentFile，不自动迁移配置。
 
-普通发布不覆盖 `config/app.config`、systemd 覆盖文件和 Nginx 配置，不自动修改数据库；新增模块依赖的新表仍由聚宽采集程序生成。仓库基础 service 或 Nginx 模板有变动时，按本文对应章节检查并更新本机配置，再执行必要的 `daemon-reload` 或 `nginx -t` / reload。端口和 SELinux 的首次设置仍需手动完成。
+#### 发布顺序
 
-仅前端更新的简化命令、配置变更与排错见 [README：修改配置或更新代码](../README.md#修改配置或更新代码)。本脚本面向原生 systemd + Nginx 部署，Docker 部署继续使用下一节的 Compose 命令。
+1. 验证环境、工作区/分支、服务路径、配置及 Nginx；原服务运行时先验证其健康。
+2. fetch 并验证确切提交和快进关系，**不更新正在运行的源码**。
+3. 在 .runtime/releases/版本标识/source 创建独立 Git worktree，运行 npm ci 和前端构建。
+4. 在版本目录的永久 venv 路径创建新环境，安装锁定依赖，运行 pip check、数据库只读检查和应用导入检查；**不在旧环境内执行 pip**。
+5. 备份全部现有静态文件，再确认 HEAD、分支和服务身份没变化。上述步骤失败时，原服务、源码、依赖及已发布网页不变。
+6. 同步事务记录后停止 API；以不覆盖忽略文件的方式快进，保留原 backend/.venv，改为指向永久新环境的链接，然后重启。
+7. 检查新 MainPID、InvocationID、进程稳定性、健康接口的项目标识，并确认 MainPID 持有对应回环地址/端口的监听 socket。
+8. 复制资源、保留旧哈希文件，原子切换 HTML；提供 --web-url 时验证真实代理、HTML 和静态资源内容，最后再次检查 API。
+
+新虚拟环境安装后不移动，绝对 shebang 保持有效。旧 .venv 只在停服后移开保存，恢复时回到原位置。兼容文档中的固定 backend/.venv/bin/python backend/run.py 服务路径；不写 systemd 配置或 daemon-reload。不支持由其他进程持有监听 socket 的自定义代理/启动器，须另行人工评估。
+
+#### 失败恢复和边界
+
+激活后的可捕获错误、SIGINT 或 SIGTERM 会终止正在执行的命令并尝试恢复：
+
+- 确认新服务停止且工作区没有其他人的改动后，恢复原提交和原虚拟环境。
+- Git 使用受保护的 switch --detach 原SHA，不 hard reset、不 force 改写分支、不自动 stash；目标分支保留新提交。
+- 原服务原本健康运行才重启旧服务；原服务未运行时，失败后保持停止，不能声称“恢复上一版运行服务”。
+- 已开始网页发布时恢复所有被覆盖的旧资源，原子恢复旧 HTML，校验备份内容；提供网站 URL 时再验证恢复后的网页和代理。
+- 额外的新哈希资源保留，不递归删除静态目录；不删除配置、日志、缓存或数据库。
+
+恢复成功仍以非零退出码报告发布失败。**恢复后可能是 detached HEAD，必须在人工维护窗口中协调服务和分支再发布；不要在旧服务运行时直接切回新分支。** 不匹配的分支会被拒绝，因此不能称为“任意失败后完全无人值守恢复并继续发布”。
+
+每个版本的 status.json 记录 previous、target、原服务状态和结果。查看 systemctl status、git status，以及 .runtime/releases/*/status.json 和原 log/ 下日志。activating 或 recovery-failed 状态阻止下一次发布；不要仅删除记录绕过检查，应先人工核对代码、环境、网页备份和服务。
+
+断电、SIGKILL、内核故障不能被捕获；事务记录用于诊断，**不保证自动恢复**。磁盘满、权限变化、外部同时修改或恢复命令失败也可能需要人工介入。不回滚数据库迁移或新版写入的应用数据；准备阶段仅做数据库读取检查，不运行迁移。
+
+.runtime/deploy.lock 只串行化同一 checkout 的发布，不能防止其他目录或人工命令操作同一服务。发布期间不要并行修改服务/站点。每次保留源码 worktree、虚拟环境和静态备份，会占用额外磁盘；不自动清理。切勿删除当前 .venv 指向的版本或仍需恢复的备份。
+
+日志追加到 log/deploy-YYYY-MM-DD.log。未提供 --web-url 会明确记录网站代理和静态内容未检查，不能据此声称网站端到端健康。
+
+部署逻辑测试不需要应用依赖：
+
+~~~bash
+python3 -m unittest discover -s backend/tests -p test_deploy.py -v
+~~~
+
+测试使用模拟命令和临时目录，不代表真实服务器的 systemd、sudo、Nginx、SELinux、网络或数据库已经验收。首次服务器验证仍需另外授权。Docker 部署继续使用下一节。
 
 ## 5. Docker Compose
 
@@ -325,3 +345,4 @@ npm run build
 微博、雪球的服务器扫码登录需要额外安装 Chromium，设置独立管理密钥。见 [服务器扫码登录部署与操作](social-browser-login.md)。
 
 已有部署接入 ETF 仪表盘时，先在聚宽创建并填充 `etf_share_daily`，给网页账号授予该表 SELECT 权限，再更新代码、构建并发布 `frontend/dist/`、重启 `showallopts-api`。无需更换 Nginx 端口、systemd 服务或真实数据库配置。完整命令与字段口径见 [ETF 份额仪表盘](etf-shares.md#已有部署升级)。
+
