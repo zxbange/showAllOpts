@@ -187,6 +187,7 @@ class WorkflowTests(unittest.TestCase):
         self.assertIn("vars.DEPLOY_PREFLIGHT_ENABLED == 'true'", text)
         self.assertIn('cancel-in-progress: false', text)
         self.assertIn('python -m pytest -q', text)
+        self.assertIn('-r backend/requirements.lock.txt -r backend/requirements-dev.txt', text)
         self.assertNotIn('continue-on-error', text)
         self.assertIn('StrictHostKeyChecking=yes', text)
         self.assertNotIn('ssh-keyscan', text)
