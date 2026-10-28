@@ -1,4 +1,5 @@
 import type { SentimentHistory } from '../types/sentiment'
+import type { MarginHistory, MarginStatus } from '../types/margin'
 import type { SocialMode } from '../types/ownership'
 import type { GrowthOverview } from '../types/growth'
 import type { DividendOverview } from '../types/dividend'
@@ -47,6 +48,20 @@ export function getHistory(
 
 export const getSentimentHistory = (days: number, signal?: AbortSignal) =>
   request<SentimentHistory>(`/market-sentiment/history?days=${days}`, signal)
+
+export const getMarginHistory = (signal?: AbortSignal) =>
+  request<MarginHistory>('/margin-guarantee/history', signal)
+export const getMarginStatus = (signal?: AbortSignal) =>
+  request<MarginStatus>('/margin-guarantee/status', signal)
+
+export async function updateMargin(action: 'refresh' | 'cancel') {
+  const response = await fetch(`${API_BASE}/margin-guarantee/${action}`, { method: 'POST' })
+  if (!response.ok) {
+    const body = await response.json().catch(() => null)
+    throw new Error(typeof body?.detail === 'string' ? body.detail : '操作未完成，请稍后重试。')
+  }
+  return response.json() as Promise<{ started?: boolean; cancelled?: boolean }>
+}
 
 export const getCrowdingHistory = (days: number, signal?: AbortSignal) =>
   request<CrowdingHistory>(`/market-crowding/history?days=${days}`, signal)

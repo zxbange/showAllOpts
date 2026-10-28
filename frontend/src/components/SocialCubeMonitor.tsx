@@ -30,7 +30,7 @@ type Rebalance = {
   owner_name?: string | null
   rebalance_id: string
   status: string
-  notify_status: 'baseline' | 'waiting' | 'pending' | 'sent'
+  notify_status: 'baseline' | 'waiting' | 'pending' | 'sent' | 'muted'
   occurred_at: string
   discovered_at: string
   sent_at: string | null
@@ -56,6 +56,7 @@ const notifications = {
   waiting: '待确认',
   pending: '待推送',
   sent: '已推送',
+  muted: '通知已关闭',
 }
 const statuses: Record<string, string> = {
   success: '调仓成功',
@@ -200,7 +201,7 @@ export function SocialCubeMonitor({
       <div className="social-panel-heading">
         <div>
           <h2>组合调仓</h2>
-          <p className="social-muted">跟踪成功调仓，复用雪球登录与 Telegram 通知。</p>
+          <p className="social-muted">跟踪成功调仓，复用雪球登录和已开启的通知渠道。</p>
         </div>
         <span className="social-count">共 {cubes.length} 个</span>
       </div>

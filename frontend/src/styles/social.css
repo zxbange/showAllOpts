@@ -36,6 +36,14 @@
   gap: 20px;
   margin-top: 16px;
 }
+.social-notification-channel {
+  padding-top: 20px;
+  margin-top: 20px;
+  border-top: 1px solid var(--border);
+}
+.social-notification-channel .social-panel-heading h3 {
+  margin: 0;
+}
 .social-page label {
   display: grid;
   font-size: 13px;

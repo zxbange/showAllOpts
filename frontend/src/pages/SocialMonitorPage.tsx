@@ -18,7 +18,26 @@ import { SocialCubeMonitor, type MonitoredCube } from '../components/SocialCubeM
 
 type Platform = 'weibo' | 'xueqiu'
 type View = 'feed' | 'authors' | 'cubes' | 'settings'
-type TelegramSetting = 'token' | 'chat_id'
+type NotificationChannel = 'telegram' | 'feishu'
+type NotificationSetting = 'token' | 'chat_id' | 'feishu_webhook' | 'feishu_secret'
+const notificationChannels = [
+  {
+    id: 'telegram',
+    title: 'Telegram',
+    fields: [
+      ['token', '机器人密钥', 300],
+      ['chat_id', '接收会话编号', 100],
+    ],
+  },
+  {
+    id: 'feishu',
+    title: '飞书',
+    fields: [
+      ['feishu_webhook', '飞书 Webhook', 500],
+      ['feishu_secret', '飞书签名密钥', 300],
+    ],
+  },
+] as const
 const views = [
   { id: 'feed', label: '最新动态', icon: MessageSquare },
   { id: 'authors', label: '监控博主', icon: Users },
@@ -55,6 +74,10 @@ type Status = {
   last_error: string | null
   token_configured: boolean
   chat_id_configured: boolean
+  telegram_enabled?: boolean
+  feishu_enabled?: boolean
+  feishu_webhook_configured?: boolean
+  feishu_secret_configured?: boolean
   weibo_cookie_configured: boolean
   xueqiu_cookie_configured: boolean
   authors: Author[]
@@ -83,6 +106,7 @@ const statusLabels: Record<string, string> = {
   baseline: '历史记录',
   pending: '待推送',
   sent: '已推送',
+  muted: '通知已关闭',
 }
 function date(value: string | number | null) {
   if (!value) return '尚未检查'
@@ -139,8 +163,15 @@ export function SocialMonitorPage() {
   const [secrets, setSecrets] = useState({
     token: '',
     chat_id: '',
+    feishu_webhook: '',
+    feishu_secret: '',
   })
-  const [editingSecrets, setEditingSecrets] = useState({ token: false, chat_id: false })
+  const [editingSecrets, setEditingSecrets] = useState({
+    token: false,
+    chat_id: false,
+    feishu_webhook: false,
+    feishu_secret: false,
+  })
   const [pollingDraft, setPollingDraft] = useState<{ min: string; max: string } | null>(null)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
@@ -203,14 +234,15 @@ export function SocialMonitorPage() {
     }
   }
 
-  function saveTelegramConfig(key?: TelegramSetting) {
+  function saveNotificationConfig(channel: NotificationChannel, key?: NotificationSetting) {
     if (!status) return
+    const fields = notificationChannels.find((item) => item.id === channel)!.fields
     const changes = key
       ? { [key]: secrets[key].trim() }
       : Object.fromEntries(
-          Object.entries(secrets).filter(
-            ([field, value]) => !status[`${field as TelegramSetting}_configured`] && value.trim(),
-          ),
+          fields
+            .filter(([field]) => !status[`${field}_configured`] && secrets[field].trim())
+            .map(([field]) => [field, secrets[field].trim()]),
         )
     if (!Object.values(changes).some(Boolean)) return
     void action(async () => {
@@ -224,6 +256,25 @@ export function SocialMonitorPage() {
         ...Object.fromEntries(Object.keys(changes).map((field) => [field, false])),
       }))
       setNotice('配置已保存。')
+    })
+  }
+
+  function notificationEnabled(channel: NotificationChannel) {
+    return channel === 'telegram' ? status?.telegram_enabled !== false : !!status?.feishu_enabled
+  }
+
+  function toggleNotification(channel: NotificationChannel) {
+    if (!status) return
+    const enabled = !notificationEnabled(channel)
+    const item = notificationChannels.find((entry) => entry.id === channel)!
+    if (enabled && item.fields.some(([field]) => !status[`${field}_configured`])) {
+      setNotice('')
+      setError(`请先保存${item.title}的${item.fields.map(([, title]) => title).join('和')}。`)
+      return
+    }
+    void action(async () => {
+      setStatus(await api<Status>('/config', { [`${channel}_enabled`]: enabled }))
+      setNotice(`${item.title}通知已${enabled ? '开启' : '关闭'}，采集开关保持不变。`)
     })
   }
 
@@ -703,124 +754,165 @@ export function SocialMonitorPage() {
               每轮在此范围内随机取值，同平台的博主和组合按队列分散检查；当前轮次完成后生效。
             </p>
           </div>
-          <h3>Telegram 通知配置</h3>
-          <div className="social-form">
-            <div className="social-field-grid">
-              {(
-                [
-                  ['token', '机器人密钥', status.token_configured],
-                  ['chat_id', '接收会话编号', status.chat_id_configured],
-                ] as const
-              ).map(([key, title, configured]) => (
-                <form
-                  className="social-credential-field"
-                  key={key}
-                  onSubmit={(event) => {
-                    event.preventDefault()
-                    saveTelegramConfig(configured ? key : undefined)
-                  }}
-                >
-                  <div className="social-label-row">
-                    <span>{title}</span>
-                    <span className={`social-config-state ${configured ? 'configured' : ''}`}>
-                      {configured ? '已配置' : '未配置'}
-                    </span>
-                  </div>
-                  {configured && !editingSecrets[key] ? (
-                    <div
-                      className="social-credential-saved"
-                      role="group"
-                      aria-label={`${title}已配置`}
-                    >
-                      <span className="social-secret-mask" aria-hidden="true">
-                        ***
-                      </span>
-                      <button
-                        type="button"
-                        className="button"
-                        aria-label={`修改${title}`}
-                        disabled={busy}
-                        onClick={() => {
-                          setSecrets((current) => ({ ...current, [key]: '' }))
-                          setEditingSecrets((current) => ({ ...current, [key]: true }))
-                        }}
-                      >
-                        修改
-                      </button>
-                    </div>
-                  ) : (
-                    <input
-                      type="password"
-                      aria-label={title}
-                      autoComplete="off"
-                      disabled={busy}
-                      value={secrets[key]}
-                      onChange={(e) =>
-                        setSecrets((current) => ({ ...current, [key]: e.target.value }))
-                      }
-                      placeholder={configured ? `填写新的${title}` : `填写 ${title}`}
-                      maxLength={key === 'token' ? 300 : 100}
-                    />
-                  )}
-                  {configured && editingSecrets[key] && (
-                    <div className="social-actions">
-                      <button
-                        disabled={busy || !secrets[key].trim()}
-                        className="button button-primary"
-                        aria-label={`保存${title}`}
-                      >
-                        保存
-                      </button>
-                      <button
-                        type="button"
-                        disabled={busy}
-                        className="button"
-                        aria-label={`取消修改${title}`}
-                        onClick={() => {
-                          setSecrets((current) => ({ ...current, [key]: '' }))
-                          setEditingSecrets((current) => ({ ...current, [key]: false }))
-                        }}
-                      >
-                        取消
-                      </button>
-                    </div>
-                  )}
-                </form>
-              ))}
-            </div>
-            <div className="social-actions">
-              {(!status.token_configured || !status.chat_id_configured) && (
-                <button
-                  type="button"
-                  disabled={
-                    busy ||
-                    !(
-                      (!status.token_configured && secrets.token.trim()) ||
-                      (!status.chat_id_configured && secrets.chat_id.trim())
-                    )
-                  }
-                  className="button button-primary"
-                  onClick={() => saveTelegramConfig()}
-                >
-                  保存配置
-                </button>
-              )}
-              <button
-                type="button"
-                disabled={busy || !status.token_configured || !status.chat_id_configured}
-                className="button"
-                onClick={() =>
-                  void action(async () => {
-                    const result = await api<{ message: string }>('/telegram-test', {})
-                    setNotice(result.message)
-                  })
-                }
+          <h3>通知渠道</h3>
+          <p className="social-muted">
+            Telegram 和飞书可同时开启。关闭通知不影响采集；重新开启只推送后续新消息。
+          </p>
+          {!notificationEnabled('telegram') && !notificationEnabled('feishu') && (
+            <p className="social-notice">通知渠道均已关闭，监控运行时只采集、不推送。</p>
+          )}
+          {notificationChannels.map((channel) => {
+            const enabled = notificationEnabled(channel.id)
+            const configured = channel.fields.every(([field]) => status[`${field}_configured`])
+            return (
+              <section
+                className="social-notification-channel"
+                key={channel.id}
+                aria-labelledby={`social-channel-${channel.id}`}
               >
-                <Send size={15} />
-                发送测试消息
-              </button>
-            </div>
-          </div>
+                <div className="social-panel-heading">
+                  <h3 id={`social-channel-${channel.id}`}>{channel.title} 通知配置</h3>
+                  <button
+                    type="button"
+                    role="switch"
+                    aria-label={`启用${channel.title}通知`}
+                    aria-checked={enabled}
+                    className={`button ${enabled ? 'button-primary' : ''}`}
+                    disabled={busy}
+                    onClick={() => toggleNotification(channel.id)}
+                  >
+                    {enabled ? '已开启' : '已关闭'}
+                  </button>
+                </div>
+                {channel.id === 'feishu' && (
+                  <p className="social-muted">
+                    在目标飞书群添加自定义机器人，开启签名校验后填写以下两项。
+                    <a
+                      href="https://open.feishu.cn/document/client-docs/bot-v3/add-custom-bot?lang=zh-CN"
+                      target="_blank"
+                      rel="noreferrer"
+                    >
+                      配置方法
+                    </a>
+                  </p>
+                )}
+                <div className="social-form">
+                  <div className="social-field-grid">
+                    {channel.fields.map(([key, title, maxLength]) => {
+                      const saved = !!status[`${key}_configured`]
+                      return (
+                        <form
+                          className="social-credential-field"
+                          key={key}
+                          onSubmit={(event) => {
+                            event.preventDefault()
+                            saveNotificationConfig(channel.id, saved ? key : undefined)
+                          }}
+                        >
+                          <div className="social-label-row">
+                            <span>{title}</span>
+                            <span className={`social-config-state ${saved ? 'configured' : ''}`}>
+                              {saved ? '已配置' : '未配置'}
+                            </span>
+                          </div>
+                          {saved && !editingSecrets[key] ? (
+                            <div
+                              className="social-credential-saved"
+                              role="group"
+                              aria-label={`${title}已配置`}
+                            >
+                              <span className="social-secret-mask" aria-hidden="true">
+                                ***
+                              </span>
+                              <button
+                                type="button"
+                                className="button"
+                                aria-label={`修改${title}`}
+                                disabled={busy}
+                                onClick={() => {
+                                  setSecrets((current) => ({ ...current, [key]: '' }))
+                                  setEditingSecrets((current) => ({ ...current, [key]: true }))
+                                }}
+                              >
+                                修改
+                              </button>
+                            </div>
+                          ) : (
+                            <input
+                              type="password"
+                              aria-label={title}
+                              autoComplete="off"
+                              disabled={busy}
+                              value={secrets[key]}
+                              onChange={(event) =>
+                                setSecrets((current) => ({ ...current, [key]: event.target.value }))
+                              }
+                              placeholder={saved ? `填写新的${title}` : `填写 ${title}`}
+                              maxLength={maxLength}
+                            />
+                          )}
+                          {saved && editingSecrets[key] && (
+                            <div className="social-actions">
+                              <button
+                                disabled={busy || !secrets[key].trim()}
+                                className="button button-primary"
+                                aria-label={`保存${title}`}
+                              >
+                                保存
+                              </button>
+                              <button
+                                type="button"
+                                disabled={busy}
+                                className="button"
+                                aria-label={`取消修改${title}`}
+                                onClick={() => {
+                                  setSecrets((current) => ({ ...current, [key]: '' }))
+                                  setEditingSecrets((current) => ({ ...current, [key]: false }))
+                                }}
+                              >
+                                取消
+                              </button>
+                            </div>
+                          )}
+                        </form>
+                      )
+                    })}
+                  </div>
+                  <div className="social-actions">
+                    {!configured && (
+                      <button
+                        type="button"
+                        disabled={
+                          busy ||
+                          !channel.fields.some(
+                            ([field]) => !status[`${field}_configured`] && secrets[field].trim(),
+                          )
+                        }
+                        className="button button-primary"
+                        onClick={() => saveNotificationConfig(channel.id)}
+                      >
+                        {channel.id === 'telegram' ? '保存配置' : '保存飞书配置'}
+                      </button>
+                    )}
+                    <button
+                      type="button"
+                      disabled={busy || !configured || !enabled}
+                      className="button"
+                      onClick={() =>
+                        void action(async () => {
+                          const result = await api<{ message: string }>(`/${channel.id}-test`, {})
+                          setNotice(result.message)
+                        })
+                      }
+                    >
+                      <Send size={15} />
+                      {channel.id === 'telegram' ? '发送测试消息' : '发送飞书测试消息'}
+                    </button>
+                  </div>
+                </div>
+              </section>
+            )
+          })}
         </section>
       </div>
       {view === 'cubes' && (
@@ -920,7 +1012,7 @@ export function SocialMonitorPage() {
             <p>
               {keyword
                 ? '请更换关键词，或调整平台、用户筛选条件。'
-                : '配置 Telegram、添加用户并启动监控后，采集内容会显示在这里。'}
+                : '添加用户并启动监控后，采集内容会显示在这里。通知渠道可在设置中开启。'}
             </p>
             {!keyword && !status.authors.length && (
               <button className="button button-primary" onClick={() => setView('authors')}>

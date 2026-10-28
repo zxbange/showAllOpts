@@ -1,6 +1,8 @@
 from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi.exceptions import RequestValidationError
+from fastapi.routing import APIRoute
 from pydantic import BaseModel, Field, SecretStr
 
 from app.services.social_cube_sources import cube_symbol
@@ -10,7 +12,23 @@ def monitor(request: Request):
     return request.app.state.social
 
 
-router = APIRouter(prefix='/social-monitor', tags=['博主监控'])
+class SecretSafeRoute(APIRoute):
+    def get_route_handler(self):
+        handler = super().get_route_handler()
+        async def safe_handler(request):
+            try:
+                return await handler(request)
+            except RequestValidationError as error:
+                if request.url.path.endswith('/config'):
+                    # Pydantic's default errors include raw input, even for secrets.
+                    detail = [{key: item[key] for key in ('loc', 'msg', 'type') if key in item}
+                              for item in error.errors()]
+                    raise HTTPException(422, detail=detail) from None
+                raise
+        return safe_handler
+
+
+router = APIRouter(prefix='/social-monitor', tags=['博主监控'], route_class=SecretSafeRoute)
 
 
 class ConfigUpdate(BaseModel):
@@ -19,6 +37,10 @@ class ConfigUpdate(BaseModel):
     interval_max: int | None = Field(default=None, strict=True, ge=60, le=86400, multiple_of=60)
     token: SecretStr | None = Field(default=None, max_length=300)
     chat_id: SecretStr | None = Field(default=None, max_length=100)
+    telegram_enabled: bool | None = None
+    feishu_enabled: bool | None = None
+    feishu_webhook: SecretStr | None = Field(default=None, max_length=2048)
+    feishu_secret: SecretStr | None = Field(default=None, max_length=512)
     weibo_cookie: SecretStr | None = Field(default=None, max_length=20000)
     xueqiu_cookie: SecretStr | None = Field(default=None, max_length=20000)
 
@@ -129,3 +151,12 @@ def telegram_test(service=Depends(monitor)):
 def resume_platform(platform: Literal['weibo', 'xueqiu'], service=Depends(monitor)):
     service.resume_platform(platform)
     return service.overview()
+
+
+@router.post('/feishu-test')
+def feishu_test(service=Depends(monitor)):
+    try:
+        service.test_feishu()
+    except (ValueError, RuntimeError) as error:
+        raise HTTPException(400, str(error)) from None
+    return {'message': '测试消息已发送，请检查飞书群'}

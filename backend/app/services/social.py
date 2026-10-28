@@ -18,6 +18,8 @@ from app.services.social_sources import (fetch_posts, message_parts, PlatformInt
                                          RateLimited, MonitoringDeferred)
 from app.services.social_cube_sources import fetch_cube_rebalances
 from app.services.social_cubes import CubeMonitorMixin, cube_monitoring_time, next_cube_check_time
+from app.services.social_notifications import (NotificationMixin, enabled_channels, initial_delivery, aggregate_status,
+    validate_webhook, NotificationSkipped, NotificationDeferred)
 
 LOG = logging.getLogger(__name__)
 # HTTPX logs request URLs at INFO, which would expose Telegram bot credentials.
@@ -63,7 +65,7 @@ def published_time(value):
         return None
 
 
-class SocialMonitor(CubeMonitorMixin):
+class SocialMonitor(NotificationMixin, CubeMonitorMixin):
     @staticmethod
     def current_moment():
         return datetime.now(CHINA)
@@ -101,6 +103,11 @@ class SocialMonitor(CubeMonitorMixin):
             ''')
             self.init_cube_schema(db)
             db.execute('BEGIN IMMEDIATE')
+            self.init_notification_schema(db)
+            config = self.config(db)
+            self.migrate_notifications(db, config)
+            self.skip_disabled_deliveries(db, config)
+            self.write_config(db, config)
             columns = {row['name'] for row in db.execute('PRAGMA table_info(authors)')}
             for name, definition in {'last_success_at': 'TEXT', 'scan_since': 'TEXT',
                                      'scan_page': 'INTEGER NOT NULL DEFAULT 1', 'added_at': 'TEXT', 'screen_name': 'TEXT',
@@ -130,7 +137,8 @@ class SocialMonitor(CubeMonitorMixin):
         return self.cipher.decrypt(value.encode()).decode() if value else ''
 
     def config(self, db):
-        return json.loads(db.execute('SELECT payload FROM config WHERE id=1').fetchone()[0])
+        return {'telegram_enabled': True, 'feishu_enabled': False, 'feishu_webhook': '', 'feishu_secret': '',
+                **json.loads(db.execute('SELECT payload FROM config WHERE id=1').fetchone()[0])}
 
     def write_config(self, db, value):
         db.execute('UPDATE config SET payload=? WHERE id=1', (json.dumps(value),))
@@ -139,6 +147,7 @@ class SocialMonitor(CubeMonitorMixin):
         with self.db() as db:
             db.execute('BEGIN IMMEDIATE')
             config = self.config(db)
+            self.migrate_notifications(db, config)
             if any(changes.get(key) is not None for key in ('interval_min', 'interval_max')):
                 intervals = {
                     'interval_min': config.get('interval_min', POLL_INTERVAL_MIN),
@@ -153,15 +162,26 @@ class SocialMonitor(CubeMonitorMixin):
                 # Keep the current round and in-flight task intact. Each platform
                 # draws from the saved range when it starts its next round.
                 config.update(intervals)
-            for key in ('token', 'chat_id', 'weibo_cookie', 'xueqiu_cookie'):
+            for channel in ('telegram', 'feishu'):
+                if changes.get(channel + '_enabled') is not None:
+                    config[channel + '_enabled'] = changes[channel + '_enabled']
+            if changes.get('feishu_webhook'):
+                validate_webhook(changes['feishu_webhook'].strip())
+            if changes.get('feishu_secret') is not None and len(changes['feishu_secret']) > 512:
+                raise ValueError('飞书签名密钥不能超过 512 个字符。')
+            for key in ('token', 'chat_id', 'weibo_cookie', 'xueqiu_cookie', 'feishu_webhook', 'feishu_secret'):
                 if changes.get(key) is not None:
                     config[key] = self.encode(changes[key].strip())
+            for channel in enabled_channels(config):
+                if changes.get('enabled', config['enabled']) is True or changes.get(channel + '_enabled') is True:
+                    if channel == 'telegram' and (not config['token'] or not config['chat_id']):
+                        raise ValueError('请先配置 Telegram Bot Token 和 Chat ID，或关闭 Telegram 通知。')
+                    if channel == 'feishu' and (not config['feishu_webhook'] or not config['feishu_secret']):
+                        raise ValueError('请先配置飞书 Webhook 和签名密钥，或关闭飞书通知。')
             if 'enabled' in changes and changes['enabled'] is not None:
                 was_enabled = config['enabled']
                 config['enabled'] = changes['enabled']
                 if config['enabled']:
-                    if not config['token'] or not config['chat_id']:
-                        raise ValueError('请先配置 Telegram Bot Token 和 Chat ID')
                     if not (db.execute('SELECT 1 FROM authors WHERE enabled=1 LIMIT 1').fetchone()
                             or db.execute('SELECT 1 FROM cubes WHERE enabled=1 LIMIT 1').fetchone()):
                         raise ValueError('请先添加至少一个已启用的监控用户或组合；填写后需点击“添加用户”或“添加组合”')
@@ -169,6 +189,7 @@ class SocialMonitor(CubeMonitorMixin):
                     if not was_enabled:
                         config['enabled_since'] = now()
                         config['platform_queues'] = {}
+            self.skip_disabled_deliveries(db, config)
             self.write_config(db, config)
         self.save_next_check()
 
@@ -191,6 +212,9 @@ class SocialMonitor(CubeMonitorMixin):
             'last_cleanup_count': config.get('last_cleanup_count', 0),
             'next_check': datetime.fromtimestamp(config['next_check'], CHINA).isoformat() if config['next_check'] else None,
             'token_configured': bool(config['token']), 'chat_id_configured': bool(config['chat_id']),
+            'telegram_enabled': config['telegram_enabled'], 'feishu_enabled': config['feishu_enabled'],
+            'feishu_webhook_configured': bool(config['feishu_webhook']),
+            'feishu_secret_configured': bool(config['feishu_secret']),
             'weibo_cookie_configured': bool(config['weibo_cookie']),
             'xueqiu_cookie_configured': bool(config['xueqiu_cookie']),
             'authors': authors, 'counts': counts,
@@ -294,6 +318,7 @@ class SocialMonitor(CubeMonitorMixin):
             active = self.active_author(db, author)
             if not active:
                 return False
+            config = self.config(db)
             for post in posts:
                 if post.get('name') and post['name'] != active['uid'] and (post['name'] != active['name'] or not active['screen_name']):
                     db.execute('UPDATE authors SET screen_name=? WHERE id=?', (post['name'], author['id']))
@@ -304,10 +329,11 @@ class SocialMonitor(CubeMonitorMixin):
                 historical = not active['initialized'] if baseline is None else baseline
                 if notify_since is not None and published is not None and published >= notify_since:
                     historical = False
-                db.execute('INSERT OR IGNORE INTO posts(author_id,platform,uid,post_id,payload,published_at,discovered_at,status) '
-                           'VALUES(?,?,?,?,?,?,?,?)',
+                delivery = {} if historical else initial_delivery(config)
+                db.execute('INSERT OR IGNORE INTO posts(author_id,platform,uid,post_id,payload,published_at,discovered_at,status,delivery) '
+                           'VALUES(?,?,?,?,?,?,?,?,?)',
                            (author['id'], author['platform'], author['uid'], post['id'], json.dumps(post, ensure_ascii=False),
-                            post['time'], discovered, 'baseline' if historical else 'pending'))
+                            post['time'], discovered, 'baseline' if historical else aggregate_status(delivery), json.dumps(delivery)))
             if finalize:
                 db.execute('UPDATE authors SET initialized=1,last_check=?,last_error=NULL WHERE id=?', (now(), author['id']))
         return True
@@ -328,7 +354,8 @@ class SocialMonitor(CubeMonitorMixin):
             state = config.setdefault('platforms', {}).setdefault(platform, {})
             if not state.get('paused'):
                 state.update(paused=True, reason=reason, paused_at=now(), incident_id=uuid.uuid4().hex,
-                             alert_sent_at=None, alert_next_try=0, reason_code=reason_code, http_status=http_status)
+                             alert_sent_at=None, alert_next_try=0, reason_code=reason_code, http_status=http_status,
+                             alert_delivery=initial_delivery(config))
             self.write_config(db, config)
 
     def resume_platform(self, platform):
@@ -435,27 +462,52 @@ class SocialMonitor(CubeMonitorMixin):
     def send_alerts(self):
         with self.db() as db:
             config = self.config(db)
-        if not config['token'] or not config['chat_id']:
+        if not config['enabled']:
             return
         for platform, state in config.get('platforms', {}).items():
             if not state.get('paused') or state.get('alert_sent_at') or time.time() < state.get('alert_next_try', 0):
                 continue
-            succeeded = False
-            try:
-                label = '微博' if platform == 'weibo' else '雪球'
-                self.send_part(self.decode(config['token']), self.decode(config['chat_id']),
-                               f'ShowAllOpts：{label}监控已自动暂停。\n{state["reason"]}\n'
-                               '请在浏览器人工处理登录/验证码，更新 Cookie 后，在监控页面点击“人工处理完成，恢复”。')
-                succeeded = True
-            except Exception as error:
-                LOG.warning('Social intervention alert failed platform=%s type=%s', platform, type(error).__name__)
+            routes = state.get('alert_delivery', {})
+            label = '微博' if platform == 'weibo' else '雪球'
+            message = (f'ShowAllOpts：{label}监控已自动暂停。\n{state["reason"]}\n'
+                       '请在浏览器人工处理登录/验证码，更新 Cookie 后，在监控页面点击“人工处理完成，恢复”。')
+            for channel, delivery in routes.items():
+                if delivery['status'] != 'pending':
+                    continue
+                with self.db() as db:
+                    refreshed = self.config(db).get('platforms', {}).get(platform, {})
+                    if not refreshed.get('paused') or refreshed.get('incident_id') != state.get('incident_id'):
+                        break
+                try:
+                    def still_paused(db, current):
+                        active = current.get('platforms', {}).get(platform, {})
+                        return active.get('paused') and active.get('incident_id') == state.get('incident_id')
+                    self.send_channel(channel, message, guard=still_paused)
+                    delivery.update(status='sent', last_error=None)
+                except NotificationSkipped:
+                    delivery.update(status='skipped', last_error=None)
+                except NotificationDeferred:
+                    return
+                except Exception as error:
+                    delivery['last_error'] = '通知发送失败，稍后重试。'
+                    LOG.warning('Social intervention alert failed platform=%s channel=%s type=%s',
+                                platform, channel, type(error).__name__)
+                with self.db() as db:
+                    db.execute('BEGIN IMMEDIATE')
+                    current = self.config(db)
+                    active = current.get('platforms', {}).get(platform, {})
+                    if active.get('incident_id') == state.get('incident_id'):
+                        saved = active.setdefault('alert_delivery', {}).get(channel, {})
+                        if saved.get('status') != 'skipped' or delivery['status'] == 'sent':
+                            active['alert_delivery'][channel] = delivery
+                        self.write_config(db, current)
             with self.db() as db:
                 db.execute('BEGIN IMMEDIATE')
                 current = self.config(db)
                 active = current.get('platforms', {}).get(platform, {})
                 if active.get('incident_id') == state.get('incident_id'):
                     active['alert_next_try'] = time.time() + random.uniform(180, 360)
-                    if succeeded:
+                    if aggregate_status(active.get('alert_delivery', {})) != 'pending':
                         active['alert_sent_at'] = now()
                     self.write_config(db, current)
 
@@ -495,7 +547,24 @@ class SocialMonitor(CubeMonitorMixin):
             config = self.config(db)
         if not config['token'] or not config['chat_id']:
             raise ValueError('请先保存 Telegram Bot Token 和 Chat ID')
-        self.send_part(self.decode(config['token']), self.decode(config['chat_id']), 'ShowAllOpts 博主监控：Telegram 连接测试成功。')
+        if not config['telegram_enabled']:
+            raise ValueError('请先开启 Telegram 通知。')
+        try:
+            self.send_channel('telegram', 'ShowAllOpts 博主监控：Telegram 连接测试成功。', require_enabled=False)
+        except (NotificationSkipped, NotificationDeferred):
+            raise ValueError('Telegram 通知已关闭，本次测试未发送。') from None
+
+    def test_feishu(self):
+        with self.db() as db:
+            config = self.config(db)
+        if not config['feishu_enabled']:
+            raise ValueError('请先开启飞书通知。')
+        if not config['feishu_webhook'] or not config['feishu_secret']:
+            raise ValueError('请先保存飞书 Webhook 和签名密钥。')
+        try:
+            self.send_channel('feishu', 'ShowAllOpts 博主监控：飞书连接测试成功。', require_enabled=False)
+        except (NotificationSkipped, NotificationDeferred):
+            raise ValueError('飞书通知已关闭，本次测试未发送。') from None
 
     def deliver_notifications(self, config):
         """Send the known backlog by event time, after each source scan completes."""
@@ -507,56 +576,52 @@ class SocialMonitor(CubeMonitorMixin):
             weibo = not platforms.get('weibo', {}).get('paused')
             xueqiu = not platforms.get('xueqiu', {}).get('paused')
             cubes = xueqiu and cube_monitoring_time(self.current_moment())
-            rows = db.execute(
+            rows = self.pending_channel_rows(db,
                 "SELECT 'post' AS kind,p.id AS id,COALESCE(julianday(p.published_at),"
                 "julianday(p.discovered_at),0) AS event_time FROM posts p "
                 "JOIN authors a ON a.id=p.author_id WHERE p.status='pending' "
                 "AND a.enabled=1 AND a.scan_since IS NULL "
+                "AND json_extract(p.delivery,'$.{channel}.status')='pending' "
                 "AND CASE p.platform WHEN 'weibo' THEN ? WHEN 'xueqiu' THEN ? ELSE 0 END "
                 "UNION ALL SELECT 'cube' AS kind,r.id AS id,COALESCE(julianday(r.occurred_at),"
                 "julianday(r.discovered_at),0) AS event_time FROM cube_rebalances r "
                 "JOIN cubes c ON c.id=r.cube_id WHERE r.notify_status='pending' "
+                "AND json_extract(r.delivery,'$.{channel}.status')='pending' "
                 "AND c.enabled=1 AND c.scan_started_at IS NULL AND ? "
-                "ORDER BY event_time,kind,id LIMIT 100", (weibo, xueqiu, cubes)).fetchall()
+                "ORDER BY event_time,kind,id LIMIT 100", current, (weibo, xueqiu, cubes))
+        blocked, errors = set(), []
         for row in rows:
-            if row['kind'] == 'cube':
-                self.deliver_cubes(current, identifier=row['id'])
-            else:
-                self.deliver(current, identifier=row['id'])
+            try:
+                if row['kind'] == 'cube':
+                    self.deliver_cubes(current, identifier=row['id'], blocked=blocked)
+                else:
+                    self.deliver(current, identifier=row['id'], blocked=blocked)
+            except RuntimeError as error:
+                errors.append(error)
+        if errors:
+            raise errors[0]
 
-    def deliver(self, config, identifier=None):
+    def deliver(self, config, identifier=None, blocked=None):
+        blocked = set() if blocked is None else blocked
         with self.db() as db:
-            rows = db.execute("SELECT p.* FROM posts p JOIN authors a ON a.id=p.author_id "
+            rows = self.pending_channel_rows(db,
+                              "SELECT p.*,COALESCE(julianday(p.published_at),julianday(p.discovered_at),0) AS event_time "
+                              "FROM posts p JOIN authors a ON a.id=p.author_id "
                               "WHERE p.status='pending' AND a.enabled=1 AND a.scan_since IS NULL "
+                              "AND json_extract(p.delivery,'$.{channel}.status')='pending' "
                               "AND (? IS NULL OR p.id=?) ORDER BY "
                               "COALESCE(julianday(p.published_at),julianday(p.discovered_at),0),p.id LIMIT 100",
-                              (identifier, identifier)).fetchall()
-        token, chat_id = self.decode(config['token']), self.decode(config['chat_id'])
+                              self.config(db), (identifier, identifier), blocked)
+        errors = []
         for row in rows:
             parts = message_parts(row['platform'], json.loads(row['payload']))
-            for index in range(row['next_part'], len(parts)):
-                if self.stop_event.is_set() or night_time(datetime.now(CHINA)):
-                    return
-                with self.db() as db:
-                    current = self.config(db)
-                    author = db.execute('SELECT enabled FROM authors WHERE id=?', (row['author_id'],)).fetchone()
-                if not current['enabled']:
-                    return
-                if current.get('platforms', {}).get(row['platform'], {}).get('paused'):
-                    break
-                if not author or not author['enabled']:
-                    break
-                try:
-                    self.send_part(token, chat_id, parts[index])
-                except RuntimeError as error:
-                    with self.db() as db:
-                        db.execute('UPDATE posts SET last_error=? WHERE id=?', (str(error), row['id']))
-                    raise
-                with self.db() as db:
-                    db.execute('UPDATE posts SET next_part=?,status=?,sent_at=?,last_error=NULL WHERE id=?',
-                               (index + 1, 'sent' if index == len(parts) - 1 else 'pending',
-                                now() if index == len(parts) - 1 else None, row['id']))
-                self.stop_event.wait(1.1)
+            def active(db, current):
+                author = db.execute('SELECT enabled FROM authors WHERE id=?', (row['author_id'],)).fetchone()
+                return (not night_time(datetime.now(CHINA)) and author and author['enabled']
+                        and not current.get('platforms', {}).get(row['platform'], {}).get('paused'))
+            errors.extend(self.deliver_message('posts', 'status', row, parts, active, blocked))
+        if errors:
+            raise errors[0]
 
     def check_author(self, author, current):
         moment = datetime.now(CHINA)
@@ -701,7 +766,7 @@ class SocialMonitor(CubeMonitorMixin):
                 self.send_alerts()
                 self.deliver_notifications(current)
             except Exception as error:
-                error_message = str(error) if type(error) is RuntimeError else 'Telegram 发送失败，已保留待发送帖子'
+                error_message = str(error) if type(error) is RuntimeError else '通知发送失败，已保留对应渠道的待发送进度'
                 LOG.warning('Social delivery failed type=%s', type(error).__name__)
         self.save_next_check(error_message, checked)
 

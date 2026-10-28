@@ -4,6 +4,7 @@ import json
 
 from app.services.social_cube_sources import cube_symbol, cube_message_parts
 from app.services.social_sources import MonitoringDeferred, plain_text
+from app.services.social_notifications import initial_delivery, aggregate_status
 
 CHINA = timezone(timedelta(hours=8))
 
@@ -153,7 +154,7 @@ class CubeMonitorMixin:
                 happened = event_time(event.get('updated_at')) or event_time(event.get('time'))
                 eligible = (event.get('status') == 'success'
                             and event.get('category') == 'user_rebalancing' and bool(event.get('changes')))
-                if previous and previous['notify_status'] in ('pending', 'sent'):
+                if previous and previous['notify_status'] in ('pending', 'sent', 'muted'):
                     notification = previous['notify_status']
                 elif eligible:
                     transitioned = previous is not None and previous['status'] != 'success'
@@ -165,12 +166,19 @@ class CubeMonitorMixin:
                     notification = 'waiting' if event.get('status') in ('pending', 'waiting', 'processing') else 'baseline'
                 payload = (previous['payload'] if previous and previous['notify_status'] in ('pending', 'sent')
                            and notification == previous['notify_status'] else json.dumps(event, ensure_ascii=False))
-                db.execute('INSERT INTO cube_rebalances(cube_id,rebalance_id,status,payload,occurred_at,discovered_at,notify_status) '
-                           'VALUES(?,?,?,?,?,?,?) ON CONFLICT(cube_id,rebalance_id) DO UPDATE SET '
+                if previous and previous['notify_status'] in ('pending', 'sent', 'muted'):
+                    delivery = json.loads(previous['delivery'] or '{}')
+                else:
+                    delivery = initial_delivery(config) if notification == 'pending' else {}
+                if notification == 'pending':
+                    notification = aggregate_status(delivery)
+                db.execute('INSERT INTO cube_rebalances(cube_id,rebalance_id,status,payload,occurred_at,discovered_at,notify_status,delivery) '
+                           'VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(cube_id,rebalance_id) DO UPDATE SET '
                            'status=excluded.status,payload=excluded.payload,occurred_at=excluded.occurred_at,'
-                           'notify_status=excluded.notify_status',
+                           'notify_status=excluded.notify_status,delivery=excluded.delivery',
                            (cube['id'], identifier, event.get('status', 'unknown'), payload,
-                            event.get('time') or event.get('updated_at') or '', moment.isoformat(timespec='seconds'), notification))
+                            event.get('time') or event.get('updated_at') or '', moment.isoformat(timespec='seconds'), notification,
+                            json.dumps(delivery)))
                 max_id = max(max_id, int(identifier))
             if initial:
                 db.execute('UPDATE cubes SET baseline_max_id=?,baseline_at=COALESCE(baseline_at,?) WHERE id=?',
@@ -226,16 +234,21 @@ class CubeMonitorMixin:
                 db.execute('UPDATE cubes SET initialized=1,last_success_at=?,scan_page=1,scan_started_at=NULL WHERE id=?',
                            (started, cube['id']))
 
-    def deliver_cubes(self, config, identifier=None):
+    def deliver_cubes(self, config, identifier=None, blocked=None):
         if not cube_monitoring_time(self.current_moment()):
             return
+        blocked = set() if blocked is None else blocked
         with self.db() as db:
-            rows = db.execute("SELECT r.*,c.symbol,c.name,c.cube_name,c.owner_name,c.owner_id "
+            rows = self.pending_channel_rows(db,
+                              "SELECT r.*,c.symbol,c.name,c.cube_name,c.owner_name,c.owner_id,"
+                              "COALESCE(julianday(r.occurred_at),julianday(r.discovered_at),0) AS event_time "
                               "FROM cube_rebalances r JOIN cubes c ON c.id=r.cube_id "
                               "WHERE r.notify_status='pending' AND c.enabled=1 AND c.scan_started_at IS NULL "
+                              "AND json_extract(r.delivery,'$.{channel}.status')='pending' "
                               "AND (? IS NULL OR r.id=?) ORDER BY "
                               "COALESCE(julianday(r.occurred_at),julianday(r.discovered_at),0),r.id LIMIT 100",
-                              (identifier, identifier)).fetchall()
+                              self.config(db), (identifier, identifier), blocked)
+        errors = []
         for row in rows:
             event = json.loads(row['payload'])
             message_cube = event.get('_notification_cube')
@@ -248,26 +261,12 @@ class CubeMonitorMixin:
                     db.execute("UPDATE cube_rebalances SET payload=? WHERE id=? AND notify_status='pending'",
                                (json.dumps(event, ensure_ascii=False), row['id']))
             parts = cube_message_parts(message_cube, event)
-            for index in range(row['next_part'], len(parts)):
-                if self.stop_event.is_set() or not cube_monitoring_time(self.current_moment()):
-                    return
-                with self.db() as db:
-                    current = self.config(db)
-                    active = db.execute('SELECT 1 FROM cube_rebalances r JOIN cubes c ON c.id=r.cube_id '
-                                        "WHERE r.id=? AND c.symbol=? AND c.enabled=1 AND r.notify_status='pending'",
-                                        (row['id'], row['symbol'])).fetchone()
-                if not current['enabled'] or current.get('platforms', {}).get('xueqiu', {}).get('paused'):
-                    return
-                if not active:
-                    break
-                try:
-                    self.send_part(self.decode(current['token']), self.decode(current['chat_id']), parts[index])
-                except RuntimeError as error:
-                    with self.db() as db:
-                        db.execute('UPDATE cube_rebalances SET last_error=? WHERE id=?', (str(error), row['id']))
-                    raise
-                with self.db() as db:
-                    db.execute('UPDATE cube_rebalances SET next_part=?,notify_status=?,sent_at=?,last_error=NULL WHERE id=?',
-                               (index + 1, 'sent' if index == len(parts) - 1 else 'pending',
-                                self.current_moment().isoformat(timespec='seconds') if index == len(parts) - 1 else None, row['id']))
-                self.stop_event.wait(1.1)
+            def active(db, current):
+                exists = db.execute('SELECT 1 FROM cube_rebalances r JOIN cubes c ON c.id=r.cube_id '
+                                    "WHERE r.id=? AND c.symbol=? AND c.enabled=1 AND r.notify_status='pending'",
+                                    (row['id'], row['symbol'])).fetchone()
+                return (exists and cube_monitoring_time(self.current_moment())
+                        and not current.get('platforms', {}).get('xueqiu', {}).get('paused'))
+            errors.extend(self.deliver_message('cube_rebalances', 'notify_status', row, parts, active, blocked))
+        if errors:
+            raise errors[0]

@@ -16,6 +16,7 @@ from app.core.database import build_engine
 from app.core.logging import ensure_logging
 from app.services.social import SocialMonitor
 from app.services.social_browser import BrowserLogin
+from app.services.margin_guarantee import MarginGuarantee
 
 logger = logging.getLogger(__name__)
 
@@ -34,12 +35,16 @@ def create_app(settings: Settings | None = None, engine: Engine | None = None) -
         browser_login = BrowserLogin(settings, social)
         application.state.social_browser = browser_login
         social.browser_login = browser_login
+        margin_guarantee = MarginGuarantee(settings)
+        application.state.margin_guarantee = margin_guarantee
         cache.start()
         social.start()
+        margin_guarantee.start()
         logger.info('Application ready cache_enabled=%s', settings.cache_enabled)
         try:
             yield
         finally:
+            await asyncio.to_thread(margin_guarantee.stop)
             await asyncio.to_thread(browser_login.stop)
             await asyncio.to_thread(social.stop)
             await asyncio.to_thread(cache.stop)

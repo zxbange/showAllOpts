@@ -41,8 +41,8 @@ export const individualModules: ResearchModule[] = [
     name: '博主动态监控',
     path: '/social-monitor',
     category: '动态观察',
-    description: '监控微博、雪球博主动态，查看内容与发布时间，推送至 Telegram。',
-    tags: ['微博', '雪球', 'Telegram', '动态检索'],
+    description: '监控微博、雪球动态与组合调仓，可推送至 Telegram 和飞书。',
+    tags: ['微博', '雪球', 'Telegram', '飞书'],
     icon: Users,
     tone: 'jade',
     illustration: 'ownership',
@@ -147,6 +147,17 @@ export const individualModules: ResearchModule[] = [
     illustration: 'temperature',
   },
   {
+    id: 'margin-guarantee',
+    name: '两融担保比例',
+    path: '/margin-guarantee',
+    category: '市场结构',
+    description: '中证数据全市场平均维持担保比例及近六年分位。',
+    tags: ['两融担保比例', '每日20:00更新'],
+    icon: ChartNoAxesCombined,
+    tone: 'gold',
+    illustration: 'concentration',
+  },
+  {
     id: 'market-crowding',
     name: '抱团拥挤度',
     path: '/market-crowding',
@@ -184,9 +195,9 @@ export const individualModules: ResearchModule[] = [
 export const moduleGroups = [
   {
     name: '市场情绪',
-    description: '成交集中度与站上20日均线的股票比例。',
-    ids: ['market-crowding', 'market-sentiment'],
-    labels: ['抱团拥挤度', '市场情绪跟踪'],
+    description: '成交集中度、市场情绪与两融担保比例。',
+    ids: ['market-crowding', 'market-sentiment', 'margin-guarantee'],
+    labels: ['抱团拥挤度', '市场情绪跟踪', '两融担保比例'],
   },
   {
     name: '动量观察',

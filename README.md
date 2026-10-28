@@ -4,7 +4,7 @@
 
 ## 技术栈
 
-新增独立的[博主动态监控](docs/social-monitor.md)页面：直接管理微博、雪球用户，无需页面登录；后台每轮随机间隔 10～16 分钟检查新帖，北京时间 00:00～07:00 休息并在早上补抓；验证码、登录失效或拒绝访问时暂停对应平台并通过 Telegram 提醒。监控数据保存在本地 SQLite，不修改市场数据源库。
+新增独立的[博主动态监控](docs/social-monitor.md)页面：直接管理微博、雪球用户，无需页面登录；后台每轮随机间隔 10～16 分钟检查新帖，北京时间 00:00～07:00 休息并在早上补抓；验证码、登录失效或拒绝访问时暂停对应平台并通过已启用的通知渠道提醒。支持 Telegram 和飞书独立开关及双渠道推送，见[飞书通知配置](docs/飞书通知配置.md)。监控数据保存在本地 SQLite，不修改市场数据源库。
 
 - 后端：Python 3.11+、FastAPI、SQLAlchemy 2、PyMySQL、Pydantic Settings。
 - 前端：Node.js 22.12+、React、TypeScript、Vite、Apache ECharts。
@@ -521,9 +521,11 @@ npm run dev
 
 ## 市场情绪
 
-原“抱团拥挤度”入口改为“市场情绪”，包含“抱团拥挤度”和“市场情绪跟踪”两个标签。新指标为全市场收盘站上 MA20 的股票比例，低于 20% 为冰点，高于 80% 为过热，保留最近三年。包含 ST 及各 A 股板块，当日停牌和不足 20 日数据不计入分母。
+原“抱团拥挤度”入口改为“市场情绪”，包含“抱团拥挤度”“市场情绪跟踪”和“两融担保比例”三个标签。市场情绪跟踪为全市场收盘站上 MA20 的股票比例，低于 20% 为冰点，高于 80% 为过热，保留最近三年。包含 ST 及各 A 股板块，当日停牌和不足 20 日数据不计入分母。
 
 运行新脚本 [`collectors/市场情绪跟踪_数据库版.py`](collectors/市场情绪跟踪_数据库版.py) 或新版批量采集，再在页面同步“市场情绪跟踪”。首次分窗口回填，之后只补缺失日期；数据库每天一行汇总，不保存全市场逐股行情。详情见 [市场情绪说明](docs/market-sentiment.md)。
+
+两融担保比例直接读取中证数据官方日报，不依赖聚宽或 MySQL。服务运行时每天北京时间 **20:00** 检查新增披露，首次补采近六年；启动不立即采集，页面“更新数据”可手动触发。已校验记录按日保存到本地 SQLite，中断后跳过已保存日期继续补采。若当天尚未发布，保留旧记录并显示真实数据日期。详情见[两融担保比例说明](docs/margin-guarantee.md)。
 
 ## ETF 份额采集与仪表盘
 
@@ -583,6 +585,10 @@ npm run dev
 | `GET /api/v1/etf-shares/history?group=hs300&days=365` | ETF 最新份额与区间曲线；支持 hs300 / zz500，days=0 查看全部 |
 | `GET /api/v1/microcap-temperature/history?days=365` | 微盘温度计最新指标、历史曲线及区间统计；days=0 查看全部 |
 | `GET /api/v1/market-sentiment/history?days=0` | 站上 MA20 比例、样本数、情绪状态与区间统计；默认近三年 |
+| `GET /api/v1/margin-guarantee/history` | 中证两融平均维持担保比例、近六年历史和采集状态 |
+| `GET /api/v1/margin-guarantee/status` | 中证采集进度、最近检查结果和下次20点任务时间 |
+| `POST /api/v1/margin-guarantee/refresh` | 后台补采或增量更新中证数据 |
+| `POST /api/v1/margin-guarantee/cancel` | 停止当前中证采集，保留已保存记录 |
 | `GET /api/v1/market-crowding/history?days=365` | 抱团拥挤度最新值、历史及区间统计；days=0 查看全部 |
 | `GET /api/v1/industry-momentum/latest` | 最新完整读取的日期快照及前一个有记录日期的差值 |
 | `GET /api/v1/industry-momentum/industries/{code}/history?days=365&end_date=2026-10-16` | 单行业历史及区间统计 |

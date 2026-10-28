@@ -1,4 +1,5 @@
 from app.api.routes.sentiment import router as sentiment_router
+from app.api.routes.margin_guarantee import router as margin_guarantee_router
 from app.api.routes.social import router as social_router
 from app.api.routes.social_browser import router as social_browser_router
 from app.api.routes.short_term import router as short_term_router
@@ -24,6 +25,7 @@ router.include_router(ownership_router)
 router.include_router(momentum_router)
 router.include_router(crowding_router)
 router.include_router(sentiment_router)
+router.include_router(margin_guarantee_router)
 router.include_router(microcap_router)
 router.include_router(etf_router)
 router.include_router(earnings_router)
@@ -42,12 +44,16 @@ def modules():
         'path': '/industry-momentum', 'status': 'available',
     }, {
         'id': 'market-crowding', 'name': '市场情绪',
-        'description': '抱团拥挤度与全市场站上 MA20 的股票比例。',
+        'description': '抱团拥挤度、全市场站上 MA20 比例与两融担保比例。',
         'path': '/market-crowding', 'status': 'available',
     }, {
         'id': 'market-sentiment', 'name': '市场情绪跟踪',
         'description': '站上20日均线股票比例，低于20%为冰点，高于80%为过热。',
         'path': '/market-sentiment', 'status': 'available',
+    }, {
+        'id': 'margin-guarantee', 'name': '两融担保比例',
+        'description': '中证数据披露的平均维持担保比例及近六年历史趋势。',
+        'path': '/margin-guarantee', 'status': 'available',
     }, {
         'id': 'microcap-temperature', 'name': '微盘温度计',
         'description': '从估值与交易拥挤度，观察微盘 1000 的温度与等权指数。',
@@ -81,7 +87,7 @@ def modules():
 
     catalogue['modules'].append({
         'id': 'social-monitor', 'name': '博主动态监控',
-        'description': '管理微博、雪球监控用户，查看新帖并推送 Telegram。',
+        'description': '管理微博、雪球监控用户，通过 Telegram 或飞书接收动态。',
         'path': '/social-monitor', 'status': 'available',
     })
     return catalogue

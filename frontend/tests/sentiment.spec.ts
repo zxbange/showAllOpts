@@ -89,7 +89,7 @@ test('sentiment failure retry and empty state preserve module tabs', async ({ pa
   await expect(page.getByRole('alert')).toContainText('情绪数据暂不可用')
   await expect(
     page.getByRole('navigation', { name: '市场情绪模块切换' }).getByRole('link'),
-  ).toHaveCount(2)
+  ).toHaveCount(3)
   failed = false
   await page.getByRole('button', { name: '重新加载' }).click()
   await expect(page.getByRole('heading', { name: '暂无市场情绪数据' })).toBeVisible()

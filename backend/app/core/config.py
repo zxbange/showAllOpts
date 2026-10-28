@@ -57,6 +57,7 @@ class Settings(BaseSettings):
 
     app_name: str = 'ShowAllOpts API'
     social_worker_enabled: bool = True
+    margin_worker_enabled: bool = True
     social_browser_login_key: SecretStr = SecretStr('')
     social_browser_channel: str = ''
     social_browser_headless: bool = True

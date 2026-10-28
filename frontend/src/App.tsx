@@ -37,6 +37,10 @@ const SentimentPage = lazy(() =>
   import('./pages/SentimentPage').then((module) => ({ default: module.SentimentPage })),
 )
 
+const MarginPage = lazy(() =>
+  import('./pages/MarginPage').then((module) => ({ default: module.MarginPage })),
+)
+
 const CrowdingPage = lazy(() =>
   import('./pages/CrowdingPage').then((module) => ({ default: module.CrowdingPage })),
 )
@@ -168,6 +172,14 @@ export default function App() {
             element={
               <Suspense fallback={<LoadingState />}>
                 <SentimentPage />
+              </Suspense>
+            }
+          />
+          <Route
+            path="margin-guarantee"
+            element={
+              <Suspense fallback={<LoadingState />}>
+                <MarginPage />
               </Suspense>
             }
           />

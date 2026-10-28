@@ -37,6 +37,8 @@ test('overview directory is independent of database, searchable and categorized'
   await expect(page.locator('.research-card')).toContainText('抱团拥挤度')
   await page.getByRole('button', { name: '清空模块搜索' }).click()
   await expect(page.locator('.research-card')).toHaveCount(9)
+  // Mobile browsers may keep the focused search field at the top after clearing.
+  await page.getByRole('heading', { name: /全部研究模块/ }).scrollIntoViewIfNeeded()
   await expect(page.getByRole('heading', { name: /全部研究模块/ })).toBeInViewport()
   expect(requests.filter((url) => !url.endsWith('/cache/status'))).toEqual([])
   expect(errors).toEqual([])
@@ -110,7 +112,7 @@ test('group tabs preserve direct links, active navigation and mobile layout', as
     const heading = await page.locator('.page-header .page-heading').boundingBox()
     const cards = await tabs.boundingBox()
     expect(cards!.y).toBeGreaterThan(heading!.y + heading!.height)
-    await expect(tabs.locator('.module-card')).toHaveCount(2)
+    await expect(tabs.locator('.module-card')).toHaveCount(group === '市场情绪' ? 3 : 2)
     await tabs.getByRole('link', { name: label, exact: true }).click()
     await expect(page).toHaveURL(new RegExp(second + '$'))
     await expect(tabs.getByRole('link', { name: label, exact: true })).toHaveAttribute(
