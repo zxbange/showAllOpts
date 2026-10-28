@@ -286,3 +286,83 @@ def test_api_lifespan_is_local_read_only_until_explicit_refresh(engine, tmp_path
         assert response.status_code == 202 and response.json() == {'started': True}
         assert len(calls['lists']) == 1
     assert service.stop_event.is_set()
+
+
+def test_diagnostics_keep_three_recent_failures_and_reset_on_new_run(monitor, monkeypatch):
+    from app.services.margin_source import MarginSourceError
+    days = [date(2026, 10, day) for day in range(20, 29)]
+    calls = provider(monkeypatch, days)
+    original = m.fetch_point
+    failed_days = {days[0], days[2], days[4], days[6], days[8]}
+    def sometimes_bad(client, item):
+        if item.trade_date in failed_days:
+            raise MarginSourceError('中证返回的文件不是有效 XLS/XLSX 报表。')
+        return original(client, item)
+    monkeypatch.setattr(m, 'fetch_point', sometimes_bad)
+    monitor.refresh(background=False, moment=MOMENT)
+    status = monitor.status(MOMENT)
+    failures = status['recent_failures']
+    assert [entry['date'] for entry in failures] == [str(days[i]) for i in (4, 2, 0)]
+    assert all(entry['scope'] == 'report' and entry['source_url'] == report(date.fromisoformat(entry['date'])).url
+               for entry in failures)
+    assert '不是有效 XLS/XLSX' in status['error'] and str(days[0]) in status['error']
+    assert status['last_failure'] == failures[-1]
+    assert monitor.read_state()['recent_failures'] == failures
+    saved = monitor.history(MOMENT)['points']
+    assert [point['date'] for point in saved] == [str(day) for day in days if day not in failed_days]
+    assert status['pending_reports'] == 5
+    monkeypatch.setattr(m, 'fetch_point', original)
+    monitor.refresh(background=False, moment=MOMENT)
+    assert monitor.status(MOMENT)['recent_failures'] == []
+    assert monitor.status(MOMENT)['last_failure'] is None
+    assert monitor.status(MOMENT)['error'] is None
+    assert all(point in monitor.history(MOMENT)['points'] for point in saved)
+
+
+def test_three_failures_show_last_safe_reason_without_exception_secrets(monitor, monkeypatch, caplog):
+    days = [date(2026, 10, day) for day in range(23, 29)]
+    provider(monkeypatch, days)
+    attempts = []
+    secret = 'SECRET_TOKEN=response-body-password'
+    def bad(client, item):
+        attempts.append(item.trade_date)
+        raise RuntimeError(secret)
+    monkeypatch.setattr(m, 'fetch_point', bad)
+    monitor.refresh(background=False, moment=MOMENT)
+    status = monitor.status(MOMENT)
+    assert attempts == sorted(days, reverse=True)[:3]
+    assert len(status['recent_failures']) == 3
+    assert '连续三份' in status['error'] and str(attempts[-1]) in status['error']
+    assert status['last_failure']['error_type'] == 'RuntimeError'
+    assert secret not in str(status) + str(monitor.read_state()) + caplog.text
+    assert status['pending_reports'] == 6
+
+
+def test_catalog_failure_is_distinct_and_does_not_expose_exception(monitor, monkeypatch, caplog):
+    secret = 'SECRET_TOKEN=headers-cookie'
+    save_points(monitor, [(date(2026, 10, 26), 255)])
+    monitor.write_state({'recent_failures': [{'old': True}], 'last_failure': {'old': True}})
+    def bad(*args, **kwargs):
+        raise ValueError(secret)
+    monkeypatch.setattr(m, 'list_reports', bad)
+    monitor.refresh(background=False, moment=MOMENT)
+    status = monitor.status(MOMENT)
+    assert status['recent_failures'] == []
+    assert status['last_failure']['scope'] == 'catalog'
+    assert '披露目录' in status['error']
+    assert secret not in str(status) + str(monitor.read_state()) + caplog.text
+    assert monitor.history(MOMENT)['latest']['date'] == '2026-10-26'
+
+
+def test_unsafe_report_url_is_not_in_diagnostics(monitor, monkeypatch, caplog):
+    provider(monkeypatch, [])
+    url = 'https://www.csdata.cn/cmsmc/articleFileDir/a.xls?token=SECRET'
+    with monitor.db() as db:
+        db.execute('INSERT INTO reports VALUES (?,?)', ('2026-10-28', url))
+    def bad(*args):
+        raise ValueError(url)
+    monkeypatch.setattr(m, 'fetch_point', bad)
+    monitor.refresh(background=False, moment=MOMENT)
+    status = monitor.status(MOMENT)
+    assert status['last_failure']['source_url'] is None
+    assert url not in str(status) + caplog.text

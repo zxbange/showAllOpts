@@ -30,3 +30,7 @@
 更新代码后安装新版后端依赖（包含XLS/XLSX解析器）、构建前端并重启后端。常规项目部署流程会完成这些操作。服务须能通过HTTPS访问 `www.csdata.cn`，保持证书验证开启。
 
 API：`GET /api/v1/margin-guarantee/history`、`GET /api/v1/margin-guarantee/status`、`POST /api/v1/margin-guarantee/refresh`、`POST /api/v1/margin-guarantee/cancel`。刷新返回202只表示后台请求已处理，最终结果以状态为准；已在采集时返回 `started:false`。
+
+## 失败诊断
+
+任务状态的 `error` 会显示最后一次失败的安全原因和错误码，页面沿用现有错误提示显示；目录失败与单份日报失败分别标记。`last_failure` 提供最后失败详情，`recent_failures` 仅保存本轮最近三份失败日报的日期、经校验的官方文件链接、错误类型、错误码及原因，HTTP 状态错误另带状态码。诊断存放在现有 `state` JSON 中，不新增数据库表；新一轮采集会清空旧诊断，不影响已保存数据及待补清单。日志不记录响应正文、请求头或未知异常原文，未知异常仅显示类型和通用原因。这是诊断增强，不代表已解决上游读取失败。

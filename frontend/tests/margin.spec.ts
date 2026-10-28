@@ -160,7 +160,12 @@ test('empty history starts explicitly and shows progress with stop only while ru
 test('failed source preserves previous chart and a new collection clears failure', async ({
   page,
 }) => {
-  let current: MarginStatus = { ...status, error: '官方报表暂时无法下载', stage: '更新失败' }
+  let current: MarginStatus = {
+    ...status,
+    error:
+      '连续三份日报读取失败，已停止本轮。日报 2026-10-26：中证服务器返回 HTTP 403。 [http_status/HTTPStatusError] 请稍后重试；再次更新会继续补采。',
+    stage: '更新失败',
+  }
   await page.route('**/api/v1/**', (route) =>
     route.fulfill({ status: 503, json: { detail: '离线测试' } }),
   )
@@ -175,7 +180,9 @@ test('failed source preserves previous chart and a new collection clears failure
     })
   })
   await page.goto('/margin-guarantee')
-  await expect(page.getByRole('alert')).toContainText('官方报表暂时无法下载')
+  await expect(page.getByRole('alert')).toContainText(
+    '日报 2026-10-26：中证服务器返回 HTTP 403。 [http_status/HTTPStatusError]',
+  )
   await expect(page.locator('.margin-chart canvas')).toBeVisible()
   await page.getByRole('button', { name: '更新数据', exact: true }).click()
   await expect(page.getByRole('alert')).toHaveCount(0)

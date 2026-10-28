@@ -38,6 +38,73 @@ LIST_TITLES = (TITLE, '融资融券市场历史数据')
 class MarginSourceError(ValueError):
     """The upstream document cannot safely be interpreted as an observation."""
 
+    def __init__(self, message, *, cause_type=None):
+        super().__init__(message)
+        self.cause_type = cause_type
+
+
+# Only these application-authored messages may reach persistent state or logs.
+# Exception strings from HTTP clients, workbook parsers and callers are not safe.
+_SAFE_REASONS = {
+    '中证链接不在允许的 HTTPS 来源范围内。': 'unsafe_url',
+    '中证链接路径无效。': 'unsafe_url',
+    '中证链接不是预期的日报文件或目录。': 'unsafe_url',
+    '中证服务器重定向缺少目标地址。': 'redirect_error',
+    '中证服务器重定向次数过多。': 'redirect_error',
+    '中证响应超过单次读取上限。': 'response_too_large',
+    '中证响应读取超过单次时间上限。': 'response_timeout',
+    '读取中证公开数据失败，请稍后重试。': 'network_error',
+    '中证目录编码异常。': 'catalog_encoding',
+    '中证日报标题缺少有效交易日期。': 'report_title_date',
+    '中证目录分页指向了其他栏目。': 'catalog_pagination',
+    '中证目录未找到日报，可能是网页结构变化；未将结果当作无新增。': 'catalog_empty',
+    '中证目录分页循环或超过读取上限。': 'catalog_pagination',
+    '请求日期范围内存在暂不支持的 PDF 日报，未将结果当作完整目录。': 'unsupported_pdf',
+    '中证报表解压后过大。': 'workbook_too_large',
+    '中证日报的行列范围异常。': 'workbook_dimensions',
+    '中证返回的文件不是有效 XLS/XLSX 报表。': 'invalid_workbook',
+    '中证报表解析失败。': 'workbook_parse',
+    '平均维持担保比例不是有效数字。': 'invalid_ratio',
+    '平均维持担保比例缺少明确的百分比单位，拒绝猜测倍率。': 'missing_percent_unit',
+    '平均维持担保比例为空或不是有效数字。': 'invalid_ratio',
+    '平均维持担保比例超出合理数据范围。': 'invalid_ratio',
+    '平均维持担保比例缺失或同一行出现多个值。': 'ambiguous_ratio',
+    '中证报表统计日期与日报标题不一致或缺失。': 'report_date_mismatch',
+    '中证报表未提供唯一的平均维持担保比例。': 'ambiguous_ratio',
+    '中证日报日期超出请求范围。': 'report_date_range',
+    '中证日报日期与待采日期不一致。': 'report_date_mismatch',
+    '中证日报比例不是有效数字或超出合理范围。': 'invalid_ratio',
+}
+
+
+def safe_error_details(exc):
+    """Return bounded diagnostics without exposing arbitrary exception text."""
+    name = type(exc).__name__
+    error_type = name if re.fullmatch(r'[A-Za-z_][A-Za-z0-9_]{0,79}', name) else 'Exception'
+    details = dict(error_type=error_type, code='unexpected_error', reason='发生未预期错误，请稍后重试。')
+    if type(exc) is MarginSourceError and len(exc.args) == 1 and isinstance(exc.args[0], str):
+        reason = exc.args[0]
+        if reason in _SAFE_REASONS:
+            details.update(code=_SAFE_REASONS[reason], reason=reason)
+        else:
+            match = re.fullmatch(r'中证服务器返回 HTTP ([1-5][0-9]{2})。', reason)
+            if match:
+                details.update(code='http_status', reason=reason, http_status=int(match[1]))
+    if (type(exc) is MarginSourceError and isinstance(exc.cause_type, str)
+            and re.fullmatch(r'[A-Za-z_][A-Za-z0-9_]{0,79}', exc.cause_type)):
+        details['cause_type'] = exc.cause_type
+    return details
+
+
+def safe_report_url(url):
+    """Omit untrusted URLs from diagnostics, including credentials and queries."""
+    if not isinstance(url, str) or len(url) > 2048 or any(ord(c) < 32 or ord(c) == 127 for c in url):
+        return None
+    try:
+        return _safe_url(url, 'report')
+    except (MarginSourceError, ValueError):
+        return None
+
 
 @dataclass(frozen=True)
 class MarginReport:
@@ -92,8 +159,12 @@ def _download(client, url, kind):
                     chunks.append(chunk)
                 return b''.join(chunks)
         raise MarginSourceError('中证服务器重定向次数过多。')
+    except httpx.HTTPStatusError as exc:
+        raise MarginSourceError(f'中证服务器返回 HTTP {exc.response.status_code}。',
+                                cause_type=type(exc).__name__) from None
     except httpx.HTTPError as exc:
-        raise MarginSourceError('读取中证公开数据失败（{}），请稍后重试。'.format(type(exc).__name__)) from None
+        raise MarginSourceError('读取中证公开数据失败，请稍后重试。',
+                                cause_type=type(exc).__name__) from None
 
 
 def _parse_date(value):
@@ -230,7 +301,7 @@ def _workbook_rows(content):
     except MarginSourceError:
         raise
     except Exception as exc:
-        raise MarginSourceError('中证报表解析失败（{}）。'.format(type(exc).__name__)) from None
+        raise MarginSourceError('中证报表解析失败。', cause_type=type(exc).__name__) from None
 
 
 def _ratio(value, number_format, explicit_percent=False):

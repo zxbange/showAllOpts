@@ -12,7 +12,9 @@ import uuid
 import httpx
 import portalocker
 
-from app.services.margin_source import MarginReport, fetch_point, list_reports
+from app.services.margin_source import (
+    MarginReport, MarginSourceError, fetch_point, list_reports, safe_error_details, safe_report_url,
+)
 
 LOG = logging.getLogger(__name__)
 CHINA = timezone(timedelta(hours=8))
@@ -38,6 +40,13 @@ def latest_slot(moment):
 
 class CollectionCancelled(Exception):
     pass
+
+
+def failure_summary(failure):
+    label = {'catalog': '披露目录', 'report': '日报', 'collection': '采集任务'}[failure['scope']]
+    day = ' ' + failure['date'] if failure.get('date') else ''
+    kind = failure.get('cause_type', failure['error_type'])
+    return f"{label}{day}：{failure['reason']} [{failure['code']}/{kind}]"
 
 
 class MarginGuarantee:
@@ -130,6 +139,7 @@ class MarginGuarantee:
                                     (self.root / ('cancel-' + state['run_id'])).exists()),
                     last_attempt_at=state.get('last_attempt_at'), last_success_at=state.get('last_success_at'),
                     error=state.get('error'), pending_reports=pending,
+                    recent_failures=state.get('recent_failures', []), last_failure=state.get('last_failure'),
                     daily_time=DAILY_TIME, timezone='Asia/Shanghai',
                     next_run_at=next_run.isoformat() if self.settings.margin_worker_enabled else None)
 
@@ -169,7 +179,8 @@ class MarginGuarantee:
                 lock.release()
                 return False
             state.update(run_id=uuid.uuid4().hex, active=True, error=None, stage='检查中证官方披露目录',
-                         processed=0, total=None, percent=None, last_attempt_at=moment.isoformat())
+                         processed=0, total=None, percent=None, last_attempt_at=moment.isoformat(),
+                         recent_failures=[], last_failure=None)
             if slot:
                 state['scheduled_slot'] = slot
             self.write_state(state)
@@ -198,6 +209,8 @@ class MarginGuarantee:
         today = moment.astimezone(CHINA).date()
         cutoff = six_years_ago(today)
         failures = consecutive_failures = 0
+        scope = 'catalog'
+        stopped_after_failures = False
         LOG.info('Margin guarantee collection started date=%s', today)
         try:
             with self.db() as db:
@@ -211,7 +224,7 @@ class MarginGuarantee:
                 with self.db() as db:
                     for report in reports:
                         if not start <= report.trade_date <= today:
-                            raise ValueError('Official report date is outside the requested range')
+                            raise MarginSourceError('中证日报日期超出请求范围。')
                         db.execute('INSERT INTO reports(trade_date,source_url) VALUES (?,?) '
                                    'ON CONFLICT(trade_date) DO UPDATE SET source_url=excluded.source_url',
                                    (report.trade_date.isoformat(), report.url))
@@ -220,6 +233,7 @@ class MarginGuarantee:
                     pending = db.execute('SELECT r.trade_date,r.source_url FROM reports r LEFT JOIN points p '
                                          'ON p.trade_date=r.trade_date WHERE p.trade_date IS NULL AND r.trade_date<=? '
                                          'ORDER BY r.trade_date DESC', (today.isoformat(),)).fetchall()
+                scope = 'collection'
                 state.update(catalog_ready=True, total=len(pending), percent=0 if pending else 100)
                 self.write_state(state)
                 for index, row in enumerate(pending):
@@ -230,10 +244,14 @@ class MarginGuarantee:
                         report = MarginReport(date.fromisoformat(row['trade_date']), row['source_url'])
                         point = fetch_point(client, report)
                         check_cancel()
-                        ratio = float(point['ratio'])
-                        if (str(point['date']) != row['trade_date'] or not math.isfinite(ratio)
-                                or not 0 < ratio < 10000):
-                            raise ValueError('Invalid official ratio or date')
+                        if str(point['date']) != row['trade_date']:
+                            raise MarginSourceError('中证日报日期与待采日期不一致。')
+                        try:
+                            ratio = float(point['ratio'])
+                        except (TypeError, ValueError):
+                            raise MarginSourceError('中证日报比例不是有效数字或超出合理范围。') from None
+                        if not math.isfinite(ratio) or not 0 < ratio < 10000:
+                            raise MarginSourceError('中证日报比例不是有效数字或超出合理范围。')
                         # Commit each verified day immediately; a failed later request cannot lose it.
                         with self.db() as db:
                             db.execute('INSERT OR IGNORE INTO points VALUES (?,?,?,?)',
@@ -244,16 +262,22 @@ class MarginGuarantee:
                     except Exception as exc:
                         failures += 1
                         consecutive_failures += 1
-                        LOG.warning('Margin report failed date=%s error_type=%s', row['trade_date'], type(exc).__name__)
+                        failure = dict(scope='report', date=row['trade_date'],
+                                       source_url=safe_report_url(row['source_url']), **safe_error_details(exc))
+                        state['recent_failures'] = (state['recent_failures'] + [failure])[-3:]
+                        state['last_failure'] = failure
+                        LOG.warning('Margin report failed details=%s', failure)
                     state.update(processed=index+1, percent=round(100*(index+1)/len(pending), 1))
                     self.write_state(state)
                     if consecutive_failures >= 3:
+                        stopped_after_failures = True
                         raise RuntimeError('Three consecutive official reports failed')
                     if self.delay:
                         self.stop_event.wait(self.delay)
                 check_cancel()
             if failures:
-                state.update(stage='部分完成，失败日期下次补采', error=f'{failures} 份日报未成功读取，已保存其余数据。')
+                state.update(stage='部分完成，失败日期下次补采', error=f'{failures} 份日报未成功读取，已保存其余数据。最后失败：'
+                                   + failure_summary(state['last_failure']))
             else:
                 state.update(stage='更新完成' if pending else '没有新增披露', error=None,
                              last_success_at=now().isoformat(), percent=100)
@@ -262,9 +286,15 @@ class MarginGuarantee:
             state.update(stage='已停止，已保存数据可继续补采', error=None)
             LOG.info('Margin guarantee collection cancelled processed=%s', state['processed'])
         except Exception as exc:
+            if not stopped_after_failures:
+                state['last_failure'] = dict(scope=scope, **safe_error_details(exc))
+            prefix = ('连续三份日报读取失败，已停止本轮。' if stopped_after_failures
+                      else '中证数据读取或校验失败。')
             state.update(stage='更新失败，已保存的数据保留',
-                         error='中证数据读取或校验失败，请稍后重试；再次更新会继续补采。')
-            LOG.error('Margin guarantee collection failed error_type=%s', type(exc).__name__, exc_info=True)
+                         error=prefix + failure_summary(state['last_failure'])
+                               + ' 请稍后重试；再次更新会继续补采。')
+            # Never log traceback/exception text: upstream errors can contain secrets or bodies.
+            LOG.error('Margin guarantee collection failed details=%s', state['last_failure'])
         finally:
             state['active'] = False
             try:
