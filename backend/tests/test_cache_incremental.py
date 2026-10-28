@@ -11,20 +11,11 @@ from app.models.earnings import EarningsRun, EarningsStock
 from app.models.momentum import IndustryMomentum
 from test_cache import cached
 from test_momentum_api import row as momentum_row
-from test_crowding_api import row as crowding_row
 from test_microcap_api import row as microcap_row
-from test_etf_api import row as etf_row
-from test_breadth_api import row as breadth_row
 from test_earnings_api import seed as earnings_seed
 
 
-HISTORY = [
-    ('industry-momentum', lambda day: momentum_row(day, 'B', 3), 'momentum'),
-    ('market-crowding', lambda day: crowding_row(day, .3), 'ratio'),
-    ('microcap-temperature', lambda day: microcap_row(day, 50), 'score'),
-    ('etf-shares', lambda day: etf_row(day, 1000), 'shares'),
-    ('microcap-breadth', lambda day: breadth_row(day), 'high_5'),
-]
+HISTORY = [('microcap-temperature', lambda day: microcap_row(day, 50), 'score')]
 
 
 def assert_matches(cache, session, module):
@@ -74,7 +65,7 @@ def test_history_incremental_backfill_corrections_deletions_and_no_change(cached
     assert_matches(cache, session, module)
 
 
-def test_many_changed_keys_are_batched_without_duplicate_rows(cached, session, engine):
+def test_many_new_rows_use_one_date_range_without_duplicate_rows(cached, session, engine):
     _, cache = cached
     cache.refresh('industry-momentum', background=False)
     session.add_all([momentum_row(date(2026, 1, 7), str(i), i) for i in range(501)])
@@ -84,8 +75,9 @@ def test_many_changed_keys_are_batched_without_duplicate_rows(cached, session, e
     event.listen(engine, 'before_cursor_execute', capture)
     try: cache.refresh('industry-momentum', background=False)
     finally: event.remove(engine, 'before_cursor_execute', capture)
-    assert len(statements) == 4
-    assert [len(params[:-2]) for _, params in statements[1:]] == [750, 750, 3]
+    assert len(statements) == 2  # Bounds plus one payload page.
+    assert 'GROUP BY' in statements[0][0]
+    assert 'trade_date >' in statements[1][0]
     assert_matches(cache, session, 'industry-momentum')
 
 

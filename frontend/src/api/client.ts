@@ -92,11 +92,11 @@ export const getDividendOverview = (signal?: AbortSignal) =>
 export const getCacheStatus = (signal?: AbortSignal) =>
   request<import('../types/cache').CacheStatus>('/cache/status', signal)
 
-export async function refreshCache(module: string | null) {
+export async function refreshCache(module: string | null, full = false) {
   const response = await fetch(`${API_BASE}/cache/refresh`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ module }),
+    body: JSON.stringify(full ? { module, full: true } : { module }),
   })
   if (!response.ok) {
     const body = await response.json().catch(() => null)

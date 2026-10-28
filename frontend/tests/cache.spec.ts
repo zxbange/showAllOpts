@@ -237,3 +237,53 @@ test('individual row stop targets only that module', async ({ page }) => {
   await expect(page.getByRole('button', { name: '停止行业动量同步', exact: true })).toBeEnabled()
   await expect(page.getByText('已请求停止该模块，保留成功数据和断点；其余模块继续。')).toBeVisible()
 })
+
+test('full history repair is explicit, scoped, and resets to daily sync after acceptance', async ({ page }) => {
+  let running = false
+  const posted: unknown[] = []
+  await page.route('**/api/v1/cache/status', route => route.fulfill({ json: { ...fixture, refreshing: running } }))
+  await page.route('**/api/v1/cache/refresh', async route => {
+    posted.push(route.request().postDataJSON())
+    running = true
+    await route.fulfill({ status: 202, json: { accepted: true } })
+  })
+  await page.goto('/')
+  await page.getByRole('button', { name: '数据同步状态', exact: true }).click()
+  const mode = page.getByLabel('同步方式', { exact: true })
+  await expect(mode).toHaveValue('incremental')
+  await page.getByLabel('同步范围', { exact: true }).selectOption('industry-momentum')
+  await mode.selectOption('full')
+  await expect(page.getByText('将重新下载所选模块的全部保留数据，耗时较长；仅重建本地缓存，不修改源数据库。')).toBeVisible()
+  await page.getByRole('button', { name: '立即同步', exact: true }).click()
+  await expect.poll(() => posted.length).toBe(1)
+  expect(posted[0]).toEqual({ module: 'industry-momentum', full: true })
+  await expect(mode).toBeDisabled()
+  await expect(mode).toHaveValue('incremental')
+  await page.getByRole('button', { name: '关闭数据同步' }).click()
+  await page.getByRole('button', { name: '数据同步状态', exact: true }).click()
+  await expect(mode).toBeDisabled()
+  expect(posted).toHaveLength(1)
+})
+
+test('rejected history repair can retry or return to daily sync without submitting on selection', async ({ page }) => {
+  const posted: unknown[] = []
+  await page.route('**/api/v1/cache/status', route => route.fulfill({ json: fixture }))
+  await page.route('**/api/v1/cache/refresh', route => {
+    posted.push(route.request().postDataJSON())
+    return route.fulfill({ status: 409, json: { detail: '已有同步任务正在执行，请等待完成。' } })
+  })
+  await page.goto('/')
+  await page.getByRole('button', { name: '数据同步状态', exact: true }).click()
+  const mode = page.getByLabel('同步方式', { exact: true })
+  await mode.selectOption('full')
+  expect(posted).toHaveLength(0)
+  const submit = page.getByRole('button', { name: '立即同步', exact: true })
+  await submit.click()
+  await expect(submit).toBeEnabled()
+  await expect(mode).toHaveValue('full')
+  expect(posted[0]).toEqual({ module: null, full: true })
+  await mode.selectOption('incremental')
+  await submit.click()
+  await expect.poll(() => posted.length).toBe(2)
+  expect(posted[1]).toEqual({ module: null })
+})

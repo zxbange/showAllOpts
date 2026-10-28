@@ -16,6 +16,7 @@ export function CacheControl() {
   const [message, setMessage] = useState('')
   const [open, setOpen] = useState(false)
   const [module, setModule] = useState('')
+  const [full, setFull] = useState(false)
   const [stopping, setStopping] = useState<string | null>(null)
   const [submitting, setSubmitting] = useState(false)
   const dialog = useRef<HTMLDialogElement>(null)
@@ -65,8 +66,11 @@ export function CacheControl() {
     setSubmitting(true)
     setMessage('')
     try {
-      await refreshCache(module || null)
-      setMessage('同步已启动，完成后自动更新页面。')
+      await refreshCache(module || null, full)
+      setMessage(
+        full ? '完整重新同步已启动，完成后自动更新页面。' : '同步已启动，完成后自动更新页面。',
+      )
+      setFull(false)
       await load()
     } catch (reason) {
       setMessage(reason instanceof Error ? reason.message : '无法启动同步。')
@@ -209,7 +213,7 @@ export function CacheControl() {
                 <Database size={17} />
                 <strong>从数据库同步</strong>
               </div>
-              <p>可同步全部模块或指定模块。</p>
+              <p>可同步全部模块或指定模块。日常同步按各模块的数据特点增量更新。</p>
               <div className="cache-fields">
                 <label>
                   同步范围
@@ -227,7 +231,25 @@ export function CacheControl() {
                     ))}
                   </select>
                 </label>
+                <label>
+                  同步方式
+                  <select
+                    aria-label="同步方式"
+                    aria-describedby="cache-sync-mode-help"
+                    value={full ? 'full' : 'incremental'}
+                    onChange={(e) => setFull(e.target.value === 'full')}
+                    disabled={busy}
+                  >
+                    <option value="incremental">日常同步（默认）</option>
+                    <option value="full">完整重新同步（修复历史）</option>
+                  </select>
+                </label>
               </div>
+              <p id="cache-sync-mode-help">
+                {full
+                  ? '将重新下载所选模块的全部保留数据，耗时较长；仅重建本地缓存，不修改源数据库。'
+                  : '行业动量、抱团拥挤度、ETF份额和微盘新高新低按分类日期追加。源库历史数据修订或补录后，请选择完整重新同步。'}
+              </p>
               <button type="submit" className="cache-submit" disabled={busy}>
                 <RefreshCw size={15} className={busy ? 'cache-spin' : ''} />
                 {busy ? '同步进行中…' : '立即同步'}

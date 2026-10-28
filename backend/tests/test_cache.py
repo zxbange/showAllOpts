@@ -76,7 +76,7 @@ def test_refresh_keeps_old_request_snapshot_and_new_request_sees_update(cached, 
         assert before.scalar(select(IndustryMomentum.momentum).order_by(IndustryMomentum.trade_date.desc())) == 5
         session.query(IndustryMomentum).filter(IndustryMomentum.industry_code=='A').update({'momentum':9, 'updated_at':datetime(2026,1,7,17)})
         session.commit()
-        cache.refresh('industry-momentum', background=False)
+        cache.refresh('industry-momentum', background=False, full=True)
         assert before.scalar(select(IndustryMomentum.momentum).order_by(IndustryMomentum.trade_date.desc())) == 5
         with cache.session('industry-momentum') as after:
             assert after.scalar(select(IndustryMomentum.momentum).order_by(IndustryMomentum.trade_date.desc())) == 9
@@ -111,7 +111,11 @@ def test_refresh_selects_only_source_columns_and_does_not_write_source(cached, e
     try: cache.refresh(background=False)
     finally: event.remove(engine,'before_cursor_execute',record)
     selects = [s for s in statements if s.lstrip().startswith('SELECT')]
-    assert len(selects) == sum(len(models) for _, models in MODULES.values())
+    # Append modules use bounds plus payload only for nonempty partitions.
+    assert sum('GROUP BY' in sql for sql in selects) == 4
+    for _, models in MODULES.values():
+        for model in models:
+            assert any(model.__tablename__ in sql for sql in selects)
     # Optional ownership journal is detected with read-only SQLite table introspection.
     assert all(s.lstrip().startswith(('SELECT', 'PRAGMA main.table_info(', 'PRAGMA temp.table_info('))
                for s in statements)
@@ -149,7 +153,8 @@ def test_daily_schedule_and_restart_do_not_duplicate_completed_slot(cached, engi
     monkeypatch.setattr('app.core.cache.now', lambda: evening)
     cache.tick(evening)
     second = cache.read_state()['modules']['industry-momentum']['file']
-    assert second != first
+    assert second == first  # Scheduled no-op reuses the immutable snapshot.
+    assert cache.read_state()['scheduled_slot'] == latest_slot(evening, '20:00').isoformat()
     cache.tick(evening+timedelta(seconds=30))
     assert cache.read_state()['modules']['industry-momentum']['file'] == second
     assert latest_slot(morning,'20:00').isoformat() == '2026-10-17T20:00:00+08:00'
@@ -465,3 +470,15 @@ def test_microcap_repair_marker_syncs_when_mysql_timestamps_are_the_same(cached,
     cache.refresh('microcap-temperature',background=False)
     with cache.session('microcap-temperature') as local:
         assert local.get(MicrocapTemperature,(DEFAULT_SERIES,record.trade_date)).sample_count==21
+
+
+def test_api_explicit_full_rebuild_is_forwarded(cached, engine, monkeypatch):
+    settings, _ = cached
+    app = create_app(settings, engine)
+    calls = []
+    with TestClient(app) as client:
+        monkeypatch.setattr(app.state.cache, 'refresh', lambda module, **kwargs: calls.append((module, kwargs)) or True)
+        assert client.post('/api/v1/cache/refresh', json={'module': 'industry-momentum', 'full': True}).status_code == 202
+        assert client.post('/api/v1/cache/refresh', json={'full': True}).status_code == 202
+        assert calls == [('industry-momentum', {'full': True}), (None, {'full': True})]
+        assert client.post('/api/v1/cache/refresh', json={'module': 'unknown', 'full': True}).status_code == 422

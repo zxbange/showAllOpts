@@ -18,6 +18,7 @@ from sqlalchemy.pool import NullPool
 
 from app.core.cache_errors import failure_details, retryable_source_error, SnapshotDataError
 from app.core.cache_sync import sync_tables
+from app.core.append_sync import APPEND_PARTITIONS, copy_append
 from app.core.sync_progress import reporter, report
 from app.core.ownership_sync import copy_ownership
 from app.models.short_term import ShortTermRun, ShortTermStock
@@ -201,8 +202,15 @@ class SnapshotCache:
         models = MODULES[module][1]
         filename = module + '-' + uuid.uuid4().hex + '.sqlite'
         path = self.root / filename
-        destination = create_engine('sqlite:///' + path.as_posix(), poolclass=NullPool)
         previous = self.snapshot_path(module, self.read_state()['modules'].get(module, {}))
+        if module in APPEND_PARTITIONS:
+            try:
+                return copy_append(self, module, path, previous, full)
+            except BaseException:
+                # Also cover source transaction teardown failures after local commit.
+                path.unlink(missing_ok=True)
+                raise
+        destination = create_engine('sqlite:///' + path.as_posix(), poolclass=NullPool)
         incremental = previous is not None and not full
         try:
             report('准备本地快照', percent=5)
