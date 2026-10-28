@@ -90,22 +90,58 @@ def test_listing_uses_title_not_publication_date_and_real_next_link():
     assert next_url == source.ORIGIN + next_path
 
 
-def test_list_reports_stops_at_date_boundary_and_checks_cancellation():
+def test_list_reports_scans_past_old_pages_and_checks_cancellation():
     next_path = source.LIST_PATHS[0]+'d2bb5c19-2.html'
+    third_path = source.LIST_PATHS[0]+'d2bb5c19-3.html'
+    archive_path = source.LIST_PATHS[1]+'archive-2.html'
     visited, cancelled = [], []
+    pages = {
+        source.INDEX_URL: listing([date(2020, 1, 1), DAY], next_path),
+        source.ORIGIN+next_path: listing([date(2019, 1, 1)], third_path),
+        source.ORIGIN+third_path: listing([date(2026, 10, 23)]),
+        source.HISTORY_URL: listing([date(2018, 1, 1)], archive_path),
+        source.ORIGIN+archive_path: listing([date(2026, 10, 22), date(2026, 10, 27)]),
+    }
     def response(request):
         visited.append(str(request.url))
-        if str(request.url) == source.INDEX_URL:
-            return httpx.Response(200, content=listing([DAY], next_path))
-        if str(request.url) == source.ORIGIN+next_path:
-            return httpx.Response(200, content=listing([date(2026, 10, 23)], source.LIST_PATHS[0]+'d2bb5c19-3.html'))
-        if str(request.url) == source.HISTORY_URL:
-            return httpx.Response(200, content=listing([date(2025, 2, 21)], source.LIST_PATHS[1]+'archive-2.html'))
-        pytest.fail('Must not request pages older than the requested start date')
+        return httpx.Response(200, content=pages[str(request.url)])
     with httpx.Client(transport=httpx.MockTransport(response)) as client:
-        reports = source.list_reports(client, date(2026, 10, 24), DAY, lambda: cancelled.append(True))
-    assert [r.trade_date for r in reports] == [DAY]
-    assert len(visited) == len(cancelled) == 3
+        reports = source.list_reports(client, date(2026, 10, 22), DAY, lambda: cancelled.append(True))
+    assert [r.trade_date for r in reports] == [date(2026, 10, 22), date(2026, 10, 23), DAY]
+    assert len(visited) == len(cancelled) == 5
+
+
+def test_page_limit_rejects_partial_results_even_after_old_pages(monkeypatch):
+    monkeypatch.setattr(source, 'MAX_PAGES', 2)
+    next_path = source.LIST_PATHS[0]+'d2bb5c19-2.html'
+    pages = {
+        source.INDEX_URL: listing([DAY], next_path),
+        source.ORIGIN+next_path: listing([date(2019, 1, 1)]),
+    }
+    visited = []
+    def response(request):
+        visited.append(str(request.url))
+        return httpx.Response(200, content=pages[str(request.url)])
+    with httpx.Client(transport=httpx.MockTransport(response)) as client:
+        with pytest.raises(source.MarginSourceError, match='上限'):
+            source.list_reports(client, DAY, DAY)
+    assert len(visited) == 2
+
+
+def test_cancellation_during_catalog_scan_stops_before_next_request():
+    visited, checks = [], []
+    def cancel():
+        checks.append(True)
+        if len(checks) == 2:
+            raise RuntimeError('cancelled')
+    def response(request):
+        visited.append(str(request.url))
+        return httpx.Response(200, content=listing([date(2019, 1, 1)],
+                              source.LIST_PATHS[0]+'d2bb5c19-2.html'))
+    with httpx.Client(transport=httpx.MockTransport(response)) as client:
+        with pytest.raises(RuntimeError, match='cancelled'):
+            source.list_reports(client, DAY, DAY, cancel)
+    assert visited == [source.INDEX_URL]
 
 
 def test_duplicate_archive_day_keeps_current_report():
@@ -125,11 +161,21 @@ def test_cyclic_pagination_is_rejected():
             source.list_reports(client, DAY, DAY)
 
 
-def test_empty_changed_or_unsorted_catalog_does_not_mean_no_new_data():
+def test_empty_changed_catalog_does_not_mean_no_new_data():
     with pytest.raises(source.MarginSourceError, match='目录未找到'):
         source.parse_listing(b'<html>unavailable</html>', source.INDEX_URL)
-    with pytest.raises(source.MarginSourceError, match='日期顺序'):
-        source.parse_listing(listing([date(2026, 10, 23), DAY]), source.INDEX_URL)
+
+
+@pytest.mark.parametrize('dates', [
+    [date(2026, 10, 23), DAY, date(2026, 10, 22)],
+    # Observed current page 15 and archive page 3 on 2026-10-28.
+    [date(2026, 3, 30), date(2026, 3, 26), date(2026, 3, 27)],
+    [date(2024, 12, 3), date(2024, 11, 29), date(2024, 12, 2)],
+])
+def test_listing_accepts_non_monotonic_trade_dates(dates):
+    reports, next_url = source.parse_listing(listing(dates), source.INDEX_URL)
+    assert [r.trade_date for r in reports] == dates
+    assert next_url is None
 
 
 @pytest.mark.parametrize('url', [
@@ -176,3 +222,66 @@ def test_cancellation_happens_before_network_request():
     with httpx.Client(transport=httpx.MockTransport(lambda request: pytest.fail('unexpected request'))) as client:
         with pytest.raises(RuntimeError, match='cancelled'):
             source.list_reports(client, DAY, DAY, cancel)
+
+
+def test_old_pdf_catalog_page_is_traversed_without_downloading_pdf():
+    next_path = source.LIST_PATHS[1]+'archive-2.html'
+    visited = []
+    pages = {
+        source.INDEX_URL: listing([DAY]),
+        source.HISTORY_URL: listing([date(2019, 7, 8)], next_path, extension='pdf'),
+        source.ORIGIN+next_path: listing([date(2026, 10, 23)]),
+    }
+    def response(request):
+        visited.append(str(request.url))
+        return httpx.Response(200, content=pages[str(request.url)])
+    with httpx.Client(transport=httpx.MockTransport(response)) as client:
+        reports = source.list_reports(client, date(2026, 10, 23), DAY)
+    assert [r.trade_date for r in reports] == [date(2026, 10, 23), DAY]
+    assert visited == list(pages)
+
+
+def test_in_range_pdf_is_explicit_error_not_silently_missing():
+    with httpx.Client(transport=httpx.MockTransport(
+            lambda request: httpx.Response(200, content=listing([DAY], extension='pdf')))) as client:
+        with pytest.raises(source.MarginSourceError, match='PDF'):
+            source.list_reports(client, DAY, DAY)
+
+
+def test_pdf_metadata_does_not_expand_download_allowlist():
+    url = source.ORIGIN+'/cmsmc/articleFileDir/old.pdf'
+    with httpx.Client(transport=httpx.MockTransport(lambda request: pytest.fail('unexpected PDF download'))) as client:
+        with pytest.raises(source.MarginSourceError):
+            source.fetch_point(client, source.MarginReport(DAY, url))
+
+
+def test_legacy_pdf_metadata_still_requires_safe_url_and_valid_date():
+    for content in [
+        listing([DAY], extension='pdf').replace(b'/cmsmc/articleFileDir/', b'https://evil.invalid/'),
+        listing([DAY], extension='pdf').replace(b'20261026', b'20261399'),
+    ]:
+        with pytest.raises(source.MarginSourceError):
+            source.parse_listing(content, source.HISTORY_URL)
+
+
+def test_legacy_history_title_is_recognized_without_changing_date_semantics():
+    # Archive page 127 uses this title for 2015 XLS disclosures.
+    day = date(2015, 4, 1)
+    content = listing([day], extension='xls').replace(
+        source.TITLE.encode(), '融资融券市场历史数据'.encode())
+    reports, next_url = source.parse_listing(content, source.HISTORY_URL)
+    assert [r.trade_date for r in reports] == [day]
+    assert next_url is None
+
+
+def test_trading_day_gaps_do_not_create_calendar_day_observations():
+    days = [date(2026, 10, 26), date(2026, 10, 23), date(2026, 10, 9)]
+    with httpx.Client(transport=httpx.MockTransport(
+            lambda request: httpx.Response(200, content=listing(days)))) as client:
+        reports = source.list_reports(client, date(2026, 10, 9), date(2026, 10, 26))
+    assert [r.trade_date for r in reports] == sorted(days)
+
+
+def test_unsupported_catalog_extension_is_not_a_valid_empty_page():
+    with pytest.raises(source.MarginSourceError, match='目录未找到'):
+        source.parse_listing(listing([DAY], extension='zip'), source.HISTORY_URL)

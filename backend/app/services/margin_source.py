@@ -32,6 +32,7 @@ MAX_FILE_BYTES = 4 * 1024 * 1024
 MAX_UNPACKED_BYTES = 16 * 1024 * 1024
 METRIC = '平均维持担保比例'
 TITLE = '融资融券市场每日数据统计'
+LIST_TITLES = (TITLE, '融资融券市场历史数据')
 
 
 class MarginSourceError(ValueError):
@@ -52,8 +53,10 @@ def _safe_url(url, kind):
     path = unquote(parts.path)
     if '\\' in path or '..' in path.split('/'):
         raise MarginSourceError('中证链接路径无效。')
-    if kind == 'report':
-        valid = path.startswith('/cmsmc/articleFileDir/') and path.lower().endswith(('.xlsx', '.xls'))
+    if kind in ('report', 'catalog_report'):
+        # Legacy PDFs are catalog metadata only, never accepted for downloading.
+        extensions = ('.xlsx', '.xls', '.pdf') if kind == 'catalog_report' else ('.xlsx', '.xls')
+        valid = path.startswith('/cmsmc/articleFileDir/') and path.lower().endswith(extensions)
     else:
         valid = any(path.startswith(prefix) and re.fullmatch(r'(?:index|[a-zA-Z0-9]+-\d+)\.html', path[len(prefix):])
                     for prefix in LIST_PATHS)
@@ -140,11 +143,12 @@ def parse_listing(content, url):
     for attrs, text in parser.links:
         title = attrs.get('title') or text
         href = attrs.get('href')
-        if TITLE in title and href and urlsplit(href).path.lower().endswith(('.xls', '.xlsx')):
+        if (any(name in title for name in LIST_TITLES) and href
+                and urlsplit(href).path.lower().endswith(('.xls', '.xlsx', '.pdf'))):
             trade_date = _parse_date(title)
             if trade_date is None:
                 raise MarginSourceError('中证日报标题缺少有效交易日期。')
-            reports.append(MarginReport(trade_date, _safe_url(urljoin(url, href), 'report')))
+            reports.append(MarginReport(trade_date, _safe_url(urljoin(url, href), 'catalog_report')))
         if re.sub(r'\s+', '', text) in ('下页', '下一页'):
             target = href
             if not target:
@@ -156,9 +160,6 @@ def parse_listing(content, url):
                     raise MarginSourceError('中证目录分页指向了其他栏目。')
     if not reports:
         raise MarginSourceError('中证目录未找到日报，可能是网页结构变化；未将结果当作无新增。')
-    dates = [item.trade_date for item in reports]
-    if dates != sorted(dates, reverse=True):
-        raise MarginSourceError('中证日报目录日期顺序异常，无法可靠判断历史分页边界。')
     return reports, next_url
 
 
@@ -176,10 +177,13 @@ def list_reports(client, start: date, end: date, check_cancel=lambda: None) -> l
             reports, next_url = parse_listing(_download(client, url, 'list'), url)
             for item in reports:
                 if start <= item.trade_date <= end:
+                    if urlsplit(item.url).path.lower().endswith('.pdf'):
+                        raise MarginSourceError('请求日期范围内存在暂不支持的 PDF 日报，未将结果当作完整目录。')
                     # Current-column records take precedence over archive duplicates.
                     results.setdefault(item.trade_date, item)
-            if min(item.trade_date for item in reports) < start:
-                break
+            # Publication/maintenance order is not observation-date order. Even
+            # an entirely old page can precede in-range reports on a later page.
+            # Follow the complete bounded catalog rather than silently omit days.
             url = next_url
     return sorted(results.values(), key=lambda item: item.trade_date)
 
