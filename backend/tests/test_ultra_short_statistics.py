@@ -11,10 +11,16 @@ import pytest
 from sqlalchemy import Date, create_engine, event
 
 
-PATH = Path(__file__).resolve().parents[2] / 'scripts/超短线四策略胜率统计_本地版.py'
+PATH = Path(__file__).resolve().parents[2] / '脚本/本地统计/超短线四策略胜率统计_本地版.py'
 spec = importlib.util.spec_from_file_location('ultra_statistics', PATH)
 m = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(m)
+
+
+@pytest.fixture(autouse=True)
+def isolated_local_config(monkeypatch, tmp_path):
+    # CLI tests must never load the user's private database settings.
+    monkeypatch.setattr(m, 'DEFAULT_CONFIG_PATH', tmp_path / 'no-local-config.json')
 
 
 def prices(closes, calendar=None, volumes=None):
@@ -310,7 +316,7 @@ def test_tls_flag_overrides_config_without_disabling_tls(monkeypatch, override, 
     assert options['connect_args']['connect_timeout'] == 15
 
 
-@pytest.mark.parametrize('flags,expected', [([], None), (['--tls-verify'], True), (['--no-tls-verify'], False)])
+@pytest.mark.parametrize('flags,expected', [([], True), (['--tls-verify'], True), (['--no-tls-verify'], False)])
 def test_cli_forwards_tls_and_progress_options(monkeypatch, flags, expected):
     captured = []
     monkeypatch.setattr(m, 'run', lambda *args, **kwargs: captured.append((args, kwargs)))
@@ -379,3 +385,91 @@ def test_failed_initial_database_query_disposes_owned_engine(monkeypatch):
     with pytest.raises(RuntimeError, match='certificate verify failed'):
         m.run(show_progress=False)
     assert disposed == [True]
+
+
+def local_settings():
+    return {'DB_CONFIG': dict(host='example.invalid', port=3306, dbname='research',
+                              dbuser='reader', dbpassword='fake@secret:/word'),
+            'DB_TLS_VERIFY': False, 'DB_TLS_CA_PEM': 'fake-ca'}
+
+
+def test_main_loads_private_config_and_cli_can_override_tls(tmp_path, monkeypatch):
+    settings = local_settings()
+    config = tmp_path / 'settings.json'
+    config.write_text(m.json.dumps(settings), encoding='utf-8')
+    monkeypatch.setattr(m, 'DEFAULT_CONFIG_PATH', config)
+    called = []
+    monkeypatch.setattr(m, 'run', lambda *args, **kwargs: called.append(kwargs))
+    before = dict(m.DB_CONFIG)
+    assert m.main(['--no-progress']) == 0
+    assert called[-1]['db_config'] == settings['DB_CONFIG']
+    assert called[-1]['tls_verify'] is False
+    assert called[-1]['tls_ca_pem'] == 'fake-ca'
+    assert m.main(['--tls-verify', '--config', str(config)]) == 0
+    assert called[-1]['tls_verify'] is True
+    assert m.DB_CONFIG == before and m.DB_TLS_VERIFY is True
+
+
+def test_config_default_fallback_and_explicit_missing_are_distinct():
+    result = m.load_local_config()
+    assert result['DB_CONFIG'] == m.DB_CONFIG and result['DB_CONFIG'] is not m.DB_CONFIG
+    assert result['DB_TLS_VERIFY'] == m.DB_TLS_VERIFY
+    with pytest.raises(ValueError, match='不存在'):
+        m.load_local_config('missing-explicit.json')
+
+
+def test_config_paths_use_script_location_not_working_directory(tmp_path, monkeypatch):
+    location = tmp_path / 'script'
+    location.mkdir()
+    cwd = tmp_path / 'other'
+    cwd.mkdir()
+    config = location / 'settings.json'
+    settings = local_settings()
+    config.write_text(m.json.dumps(settings), encoding='utf-8')
+    monkeypatch.setattr(m, '__file__', str(location / 'statistics.py'))
+    monkeypatch.setattr(m, 'DEFAULT_CONFIG_PATH', config)
+    monkeypatch.chdir(cwd)
+    assert m.load_local_config() == settings
+    assert m.load_local_config('settings.json') == settings
+
+
+@pytest.mark.parametrize('bad_config', [
+    '{"DB_CONFIG":{"dbpassword":"fake-secret"},',
+    '"fake-secret"',
+    '{"DB_CONFIG":{"dbpassword":"fake-secret"}}',
+    '{"unexpected":"fake-secret"}',
+])
+def test_invalid_config_never_exposes_its_content(tmp_path, monkeypatch, capsys, bad_config):
+    config = tmp_path / 'invalid.json'
+    config.write_text(bad_config, encoding='utf-8')
+    monkeypatch.setattr(m, 'run', lambda *args, **kwargs: pytest.fail('Invalid config must not start a query'))
+    assert m.main(['--config', str(config)]) == 1
+    output = capsys.readouterr().err
+    assert '本机配置' in output and 'fake-secret' not in output
+
+
+def test_loaded_config_password_is_redacted_from_connection_errors(tmp_path, monkeypatch, capsys):
+    settings = local_settings()
+    config = tmp_path / 'settings.json'
+    config.write_text(m.json.dumps(settings), encoding='utf-8')
+    password = settings['DB_CONFIG']['dbpassword']
+    def fail(*args, **kwargs):
+        raise RuntimeError(password + ' ' + m.quote_plus(password, safe=''))
+    monkeypatch.setattr(m, 'run', fail)
+    assert m.main(['--config', str(config)]) == 1
+    output = capsys.readouterr().err
+    assert password not in output and m.quote_plus(password, safe='') not in output
+    assert '***' in output
+
+
+def test_import_does_not_read_local_private_configuration(monkeypatch):
+    previous = Path.read_text
+    def guarded_read(path, *args, **kwargs):
+        if path.suffix == '.json':
+            pytest.fail('Import must not read private configuration')
+        return previous(path, *args, **kwargs)
+    monkeypatch.setattr(Path, 'read_text', guarded_read)
+    fresh_spec = importlib.util.spec_from_file_location('ultra_statistics_import_only', PATH)
+    fresh = importlib.util.module_from_spec(fresh_spec)
+    fresh_spec.loader.exec_module(fresh)
+    assert callable(fresh.run)

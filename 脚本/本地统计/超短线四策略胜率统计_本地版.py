@@ -1,7 +1,9 @@
 # -*- coding: utf-8 -*-
 """本地只读MySQL：四种日线策略，自2026-07-01起统计后续1/2/3交易日表现。
 
-单文件运行，不导入聚宽或项目文件；结果写入本地CSV，数据库只执行SELECT。
+在本地 Python 运行本文件；默认读取同项目“本地专用/本地统计”下的私有配置，
+也可用 --config 指定配置。独立复制使用时仍可填写顶部 DB_CONFIG。
+不导入聚宽或其他项目代码；结果写入本地CSV，数据库只执行SELECT。
 依赖：pandas、numpy、SQLAlchemy、PyMySQL。参数是研究假设，未经收益优化。
 """
 import argparse
@@ -30,7 +32,8 @@ DB_CONFIG = {
 }
 DB_TLS_VERIFY = True
 DB_TLS_CA_PEM = ''
-SCRIPT_VERSION = '2026-10-26.2'
+SCRIPT_VERSION = '2026-10-28.1'
+DEFAULT_CONFIG_PATH = Path(__file__).resolve().parent.parent / '本地专用/本地统计/超短线四策略胜率统计配置.json'
 PROGRESS_ENABLED = True
 RETURN_PRICE_FIELD = 'adj_close'  # 同口径后复权收盘价；改为close可统计未复权价格
 START_DATE = '2026-07-01'
@@ -159,12 +162,56 @@ def read_sql(engine, sql, params=None, codes=None):
         return pd.read_sql_query(statement, connection, params=values)
 
 
-def make_engine(config, tls_verify=None):
+def load_local_config(config_path=None):
+    """Only the CLI loads private settings; importing this module does not read them."""
+    settings = dict(DB_CONFIG=dict(DB_CONFIG), DB_TLS_VERIFY=DB_TLS_VERIFY, DB_TLS_CA_PEM=DB_TLS_CA_PEM)
+    path = DEFAULT_CONFIG_PATH if config_path is None else Path(config_path).expanduser()
+    if not path.is_absolute():
+        path = Path(__file__).resolve().parent / path
+    try:
+        content = path.read_text(encoding='utf-8-sig')
+    except FileNotFoundError:
+        if config_path is None:
+            return settings
+        raise ValueError('指定的本机配置文件不存在，请检查 --config 路径。') from None
+    except (OSError, UnicodeError):
+        raise ValueError('无法读取本机配置，请检查文件权限及 UTF-8 编码。') from None
+    try:
+        loaded = json.loads(content)
+    except ValueError:
+        raise ValueError('本机配置不是有效的 JSON，未加载任何连接设置。') from None
+    if not isinstance(loaded, dict) or set(loaded) - set(settings):
+        raise ValueError('本机配置须为 JSON 对象，且只含支持的连接设置。')
+    config = loaded.get('DB_CONFIG')
+    keys = {'host', 'port', 'dbname', 'dbuser', 'dbpassword'}
+    if not isinstance(config, dict) or set(config) != keys:
+        raise ValueError('本机配置 DB_CONFIG 须包含 host、port、dbname、dbuser、dbpassword。')
+    if any(not isinstance(config[key], str) for key in keys - {'port'}):
+        raise ValueError('本机配置的数据库地址、库名、用户名及密码须为字符串。')
+    if not isinstance(config['port'], (int, str)) or isinstance(config['port'], bool):
+        raise ValueError('本机配置的数据库端口须为 1 到 65535 的整数。')
+    try:
+        port = int(config['port'])
+    except ValueError:
+        raise ValueError('本机配置的数据库端口须为 1 到 65535 的整数。') from None
+    if not 1 <= port <= 65535:
+        raise ValueError('本机配置的数据库端口须为 1 到 65535 的整数。')
+    if 'DB_TLS_VERIFY' in loaded and not isinstance(loaded['DB_TLS_VERIFY'], bool):
+        raise ValueError('本机配置 DB_TLS_VERIFY 须为 true 或 false。')
+    if 'DB_TLS_CA_PEM' in loaded and not isinstance(loaded['DB_TLS_CA_PEM'], str):
+        raise ValueError('本机配置 DB_TLS_CA_PEM 须为字符串。')
+    settings.update(loaded)
+    settings['DB_CONFIG'] = dict(config)
+    return settings
+
+
+def make_engine(config, tls_verify=None, tls_ca_pem=None):
     kwargs = dict(drivername='mysql+pymysql', username=config['dbuser'],
                   password=config['dbpassword'], host=config['host'],
                   port=int(config.get('port', 3306)), database=config['dbname'], query={'charset': 'utf8mb4'})
     url = URL.create(**kwargs) if hasattr(URL, 'create') else URL(**kwargs)
-    context = ssl.create_default_context(cadata=DB_TLS_CA_PEM or None)
+    ca_pem = DB_TLS_CA_PEM if tls_ca_pem is None else tls_ca_pem
+    context = ssl.create_default_context(cadata=ca_pem or None)
     verify = DB_TLS_VERIFY if tls_verify is None else tls_verify
     if not verify:
         context.check_hostname = False
@@ -389,7 +436,8 @@ def load_plan(engine, start, end=None, as_of=None):
 
 
 def run(start_date=START_DATE, end_date=END_DATE, as_of=AS_OF_DATE, output_dir=OUTPUT_DIR,
-        engine=None, params=None, tls_verify=None, show_progress=PROGRESS_ENABLED):
+        engine=None, params=None, tls_verify=None, show_progress=PROGRESS_ENABLED,
+        db_config=None, tls_ca_pem=None):
     p = dict(PARAMS, **(params or {}))
     owned = engine is None
     print('超短线四策略收盘胜率统计 v' + SCRIPT_VERSION)
@@ -400,7 +448,8 @@ def run(start_date=START_DATE, end_date=END_DATE, as_of=AS_OF_DATE, output_dir=O
                 verify = DB_TLS_VERIFY if tls_verify is None else tls_verify
                 if not verify:
                     progress.write('TLS：请求加密连接，但不验证服务器身份；仅用于可信目标的临时排查。')
-                engine = make_engine(DB_CONFIG, tls_verify=tls_verify)
+                engine = make_engine(DB_CONFIG if db_config is None else db_config,
+                                     tls_verify=tls_verify, tls_ca_pem=tls_ca_pem)
             start, end, observed, calendar = load_plan(engine, start_date, end_date, as_of)
             bounds = dict(first=calendar[0].date(), last=observed.date())
             progress.phase('读取股票清单')
@@ -478,6 +527,7 @@ def main(argv=None):
     parser.add_argument('--end', default=END_DATE, help='信号截止日，默认数据库最新已收盘日')
     parser.add_argument('--as-of', default=AS_OF_DATE, help='观察截止日，可晚于信号截止日')
     parser.add_argument('--output', default=OUTPUT_DIR, help='本地结果目录')
+    parser.add_argument('--config', help='私有 JSON 配置；相对路径以本脚本所在目录为基准')
     parser.add_argument('--no-progress', action='store_true', help='关闭动态进度显示')
     tls = parser.add_mutually_exclusive_group()
     tls.add_argument('--tls-verify', dest='tls_verify', action='store_true', help='验证服务器证书及身份')
@@ -485,13 +535,17 @@ def main(argv=None):
                      help='临时跳过证书验证：无法确认服务器身份，仅用于可信目标排查')
     parser.set_defaults(tls_verify=None)
     args = parser.parse_args(argv)
+    settings = None
     try:
-        run(args.start, args.end, args.as_of, args.output, tls_verify=args.tls_verify,
-            show_progress=PROGRESS_ENABLED and not args.no_progress)
+        settings = load_local_config(args.config)
+        verify = settings['DB_TLS_VERIFY'] if args.tls_verify is None else args.tls_verify
+        run(args.start, args.end, args.as_of, args.output, tls_verify=verify,
+            show_progress=PROGRESS_ENABLED and not args.no_progress,
+            db_config=settings['DB_CONFIG'], tls_ca_pem=settings['DB_TLS_CA_PEM'])
         return 0
     except Exception as exc:
         message = '{}: {}'.format(type(exc).__name__, exc)
-        password = str(DB_CONFIG.get('dbpassword') or '')
+        password = str((settings['DB_CONFIG'] if settings else DB_CONFIG).get('dbpassword') or '')
         if password:
             for value in {password, quote(password, safe=''), quote_plus(password, safe='')}:
                 message = message.replace(value, '***')
