@@ -285,3 +285,71 @@ def test_trading_day_gaps_do_not_create_calendar_day_observations():
 def test_unsupported_catalog_extension_is_not_a_valid_empty_page():
     with pytest.raises(source.MarginSourceError, match='目录未找到'):
         source.parse_listing(listing([DAY], extension='zip'), source.HISTORY_URL)
+
+
+def numeric_header_workbook(serial, epoch, *, extra_date=None, header='统计指标'):
+    book = openpyxl.load_workbook(BytesIO(workbook()))
+    book.epoch = epoch
+    sheet = book.active
+    sheet['A2'], sheet['C2'] = header, serial
+    sheet['C2'].number_format = 'General'
+    if extra_date is not None:
+        sheet['D2'] = extra_date
+    out = BytesIO()
+    book.save(out)
+    book.close()
+    return out.getvalue()
+
+
+@pytest.mark.parametrize('epoch', [openpyxl.utils.datetime.CALENDAR_WINDOWS_1900,
+                                   openpyxl.utils.datetime.CALENDAR_MAC_1904])
+def test_general_numeric_header_uses_xlsx_epoch(epoch):
+    serial = openpyxl.utils.datetime.to_excel(datetime.combine(DAY, datetime.min.time()), epoch)
+    assert source.parse_report(numeric_header_workbook(serial, epoch), DAY) == 255.6273
+    with pytest.raises(source.MarginSourceError, match='日期'):
+        source.parse_report(numeric_header_workbook(serial + 1, epoch), DAY)
+    with pytest.raises(source.MarginSourceError, match='日期'):
+        source.parse_report(numeric_header_workbook(serial, epoch, extra_date='2026-10-23'), DAY)
+    with pytest.raises(source.MarginSourceError, match='日期'):
+        source.parse_report(numeric_header_workbook(serial, epoch, header='非统计表头'), DAY)
+
+
+@pytest.mark.parametrize('serial', [True, False, float('nan'), float('inf'), -float('inf'),
+                                   -1, 0, 0.5, 45804.5, 2958466, 10**100])
+def test_invalid_numeric_header_dates_are_not_observations(serial):
+    epoch = openpyxl.utils.datetime.CALENDAR_WINDOWS_1900
+    assert source._report_header_date(serial, epoch) is None
+
+
+@pytest.mark.parametrize('datemode', [0, 1])
+@pytest.mark.parametrize('date_ctype', [source.xlrd.XL_CELL_NUMBER, source.xlrd.XL_CELL_DATE])
+def test_xls_numeric_header_uses_workbook_datemode(monkeypatch, datemode, date_ctype):
+    epoch = (openpyxl.utils.datetime.CALENDAR_MAC_1904 if datemode
+             else openpyxl.utils.datetime.CALENDAR_WINDOWS_1900)
+    serial = openpyxl.utils.datetime.to_excel(datetime.combine(DAY, datetime.min.time()), epoch)
+    def cell(value, ctype=source.xlrd.XL_CELL_TEXT):
+        return SimpleNamespace(value=value, ctype=ctype, xf_index=0)
+    rows = [[cell('统计指标'), cell(serial, date_ctype)],
+            [cell(source.METRIC + '（%）'), cell(264.1024, source.xlrd.XL_CELL_NUMBER)]]
+    released = []
+    sheet = SimpleNamespace(nrows=len(rows), ncols=2, row=lambda i: rows[i])
+    book = SimpleNamespace(sheets=lambda: [sheet], xf_list=[SimpleNamespace(format_key=0)],
+                           format_map={0: SimpleNamespace(format_str='General')}, datemode=datemode,
+                           release_resources=lambda: released.append(True))
+    monkeypatch.setattr(source.xlrd, 'open_workbook', lambda **kwargs: book)
+    assert source.parse_report(b'\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1', DAY) == 264.1024
+    assert released == [True]
+
+
+@pytest.mark.parametrize('serial,day,ratio', [(45800, date(2025, 5, 23), 263.6191),
+                                           (45803, date(2025, 5, 26), 264.7351),
+                                           (45804, date(2025, 5, 27), 264.1024)])
+def test_official_may_2025_layout_generated_regression(serial, day, ratio):
+    # Reproduce the public reports' General-formatted C2; no downloaded fixtures.
+    book = openpyxl.load_workbook(BytesIO(numeric_header_workbook(
+        serial, openpyxl.utils.datetime.CALENDAR_WINDOWS_1900)))
+    book.active['C20'] = ratio / 100
+    out = BytesIO()
+    book.save(out)
+    book.close()
+    assert source.parse_report(out.getvalue(), day) == ratio

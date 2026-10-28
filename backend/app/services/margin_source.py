@@ -260,7 +260,7 @@ def list_reports(client, start: date, end: date, check_cancel=lambda: None) -> l
 
 
 def _workbook_rows(content):
-    """Yield nonempty cells with their number format; cap decompression and dimensions."""
+    """Yield (nonempty formatted cells, date epoch); cap size and dimensions."""
     try:
         if content.startswith(b'PK\x03\x04'):
             with zipfile.ZipFile(BytesIO(content)) as archive:
@@ -275,7 +275,7 @@ def _workbook_rows(content):
                     if (sheet.max_row or 0) > 500 or (sheet.max_column or 0) > 30:
                         raise MarginSourceError('中证日报的行列范围异常。')
                     for row in sheet.iter_rows(max_row=sheet.max_row or 500, max_col=sheet.max_column or 30):
-                        yield [(cell.value, cell.number_format) for cell in row if cell.value not in (None, '')]
+                        yield [(cell.value, cell.number_format) for cell in row if cell.value not in (None, '')], book.epoch
             finally:
                 book.close()
         elif content.startswith(b'\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1'):
@@ -293,7 +293,9 @@ def _workbook_rows(content):
                             if value not in (None, ''):
                                 fmt = book.format_map[book.xf_list[cell.xf_index].format_key].format_str
                                 row.append((value, fmt))
-                        yield row
+                        epoch = (openpyxl.utils.datetime.CALENDAR_MAC_1904 if book.datemode == 1
+                                 else openpyxl.utils.datetime.CALENDAR_WINDOWS_1900)
+                        yield row, epoch
             finally:
                 book.release_resources()
         else:
@@ -329,12 +331,26 @@ def _ratio(value, number_format, explicit_percent=False):
     return round(ratio, 6)
 
 
+def _report_header_date(value, epoch):
+    # Some official headers store a whole Excel day serial with General format.
+    # Interpret numbers only in the statistics header, never in metric rows.
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        if not math.isfinite(value) or value < 1 or value != int(value):
+            return None
+        try:
+            converted = openpyxl.utils.datetime.from_excel(value, epoch=epoch)
+        except (OverflowError, ValueError):
+            return None
+        return converted.date() if isinstance(converted, datetime) else None
+    return _parse_date(value)
+
+
 def parse_report(content, expected_date: date):
     dates, values = set(), []
-    for row in _workbook_rows(content):
+    for row, epoch in _workbook_rows(content):
         labels = [re.sub(r'\s+', '', str(value)) for value, _ in row]
         if '统计指标' in labels:
-            dates.update(day for value, _ in row if (day := _parse_date(value)) is not None)
+            dates.update(day for value, _ in row if (day := _report_header_date(value, epoch)) is not None)
         for i, label in enumerate(labels):
             if label not in (METRIC, METRIC + '(%)', METRIC + '（%）', METRIC + '(％)', METRIC + '（％）'):
                 continue
