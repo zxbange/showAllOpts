@@ -1,0 +1,89 @@
+#!/usr/bin/python3 -I
+"""Forced command, run as ubuntu, never root; trust only reviewed installed files."""
+import importlib.util
+import json
+import os
+from pathlib import Path
+import pwd
+import re
+import stat
+import sys
+from urllib.parse import urlsplit
+
+ROOT = Path('/home/ubuntu/showAllOpts')
+CONFIG = Path('/etc/showallopts-deploy.json')
+RUNNER = Path('/usr/local/libexec/showallopts-deploy.py')
+ADMIN = Path('/usr/local/libexec/showallopts-admin')
+
+
+def trusted_file(path):
+    for item in (path, *path.parents):
+        info = item.lstat()
+        if stat.S_ISLNK(info.st_mode) or info.st_uid != 0 or info.st_mode & 0o022:
+            raise ValueError('Installed automation paths must be root-owned and not group/other writable.')
+    if not path.is_file():
+        raise ValueError('Expected an installed regular file.')
+
+
+def parse_command(command):
+    if command == 'check':
+        return None
+    match = re.fullmatch(r'deploy ([0-9a-f]{40})', command)
+    if not match:
+        raise ValueError('Only check or deploy followed by one lowercase full SHA is allowed.')
+    return match.group(1)
+
+
+def load_config():
+    trusted_file(CONFIG)
+    data = json.loads(CONFIG.read_text())
+    if set(data) != {'DEPLOY_WEB_URL', 'NODE_BIN'}:
+        raise ValueError('Configuration must contain only DEPLOY_WEB_URL and NODE_BIN.')
+    url = urlsplit(data['DEPLOY_WEB_URL'])
+    if (url.scheme not in ('http', 'https') or not url.hostname or url.username or url.password
+            or url.path not in ('', '/') or url.query or url.fragment):
+        raise ValueError('DEPLOY_WEB_URL must be the actual site origin without credentials/path/query.')
+    _ = url.port  # Validate malformed/out-of-range ports before any deployment work.
+    node = Path(data['NODE_BIN'])
+    if not node.is_absolute() or ':' in str(node) or not (node/'node').is_file() or not (node/'npm').is_file():
+        raise ValueError('NODE_BIN must be the absolute installed Node.js bin directory.')
+    return data
+
+
+def main():
+    sha = parse_command(os.environ.get('SSH_ORIGINAL_COMMAND', ''))
+    user = pwd.getpwuid(os.getuid())
+    if os.geteuid() == 0 or user.pw_name != 'ubuntu':
+        raise ValueError('Run as ubuntu, never root.')
+    for item in (Path(__file__).absolute(), RUNNER, ADMIN):
+        trusted_file(item)
+    config = load_config()
+    # Do not source .bashrc/nvm scripts or trust SSH client environment variables.
+    os.environ.clear()
+    os.environ.update(HOME='/home/ubuntu', USER='ubuntu', LOGNAME='ubuntu', LANG='C.UTF-8',
+                      PATH=config['NODE_BIN']+':/usr/local/bin:/usr/bin:/bin',
+                      GIT_TERMINAL_PROMPT='0', GIT_SSH_COMMAND='ssh -oBatchMode=yes',
+                      PIP_NO_INPUT='1', CI='true')
+    os.umask(0o077)
+    os.chdir(ROOT)
+    spec = importlib.util.spec_from_file_location('trusted_deployment_runner', RUNNER)
+    deploy = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(deploy)
+    deploy.ROOT = ROOT
+    args = ['--non-interactive', '--restricted-helper', '--web-url', config['DEPLOY_WEB_URL']]
+    if sha is None:
+        # No fetch/build/restart/lock/log file writes. nginx -t can open existing logs.
+        deploy.NON_INTERACTIVE = deploy.RESTRICTED_HELPER = True
+        deploy.preflight(deploy.parse_args(args))
+        print('Authentication and deployment preflight passed; no release was attempted.')
+        return 0
+    return deploy.main([*args, '--commit', sha])
+
+
+if __name__ == '__main__':
+    try:
+        raise SystemExit(main())
+    except Exception as exc:
+        # Do not print configuration, environment or subprocess output.
+        print('Deployment entry refused: '+type(exc).__name__, file=sys.stderr)
+        raise SystemExit(1)

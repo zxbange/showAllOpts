@@ -23,6 +23,9 @@ from urllib.request import ProxyHandler, build_opener
 ROOT = Path(__file__).resolve().parents[1]
 LOG = logging.getLogger('deploy')
 NON_INTERACTIVE = False
+RESTRICTED_HELPER = False
+ADMIN_HELPER = '/usr/local/libexec/showallopts-admin'
+INTERRUPT_SIGNALS = (signal.SIGINT, signal.SIGTERM) + ((signal.SIGHUP,) if hasattr(signal, 'SIGHUP') else ())
 
 
 class DeployError(RuntimeError):
@@ -40,6 +43,8 @@ def parse_args(argv=None):
     parser.add_argument('--web-url', help='Optional actual website URL, including custom HTTP/HTTPS port')
     parser.add_argument('--commit', help='Exact tested 40-character commit SHA')
     parser.add_argument('--non-interactive', action='store_true', help='Never prompt; use existing sudo permissions only')
+    parser.add_argument('--restricted-helper', action='store_true',
+                        help='Ubuntu automation: fixed service helper; static files written as the service user')
     return parser.parse_args(argv)
 
 
@@ -57,7 +62,7 @@ def run(args, *, capture=False, env=None, cwd=None, timeout=900):
         stdout, _ = process.communicate(timeout=timeout)
     except BaseException:
         # Reap the entire command group before recovery can touch its files.
-        handlers = {sig: signal.signal(sig, signal.SIG_IGN) for sig in (signal.SIGINT, signal.SIGTERM)}
+        handlers = {sig: signal.signal(sig, signal.SIG_IGN) for sig in INTERRUPT_SIGNALS}
         try:
             try:
                 if interactive_sudo:
@@ -88,6 +93,15 @@ def run(args, *, capture=False, env=None, cwd=None, timeout=900):
 
 
 def sudo(*args):
+    if RESTRICTED_HELPER:
+        operations = {('-v',): 'check', ('nginx', '-t'): 'nginx-test',
+                      ('systemctl', 'stop', 'showallopts-api'): 'api-stop',
+                      ('systemctl', 'restart', 'showallopts-api'): 'api-restart'}
+        if args in operations:
+            return ['sudo', '-n', ADMIN_HELPER, operations[args]]
+        if args and args[0] in ('rsync', 'install', 'mv', 'rm'):
+            return list(args)  # Dedicated site directory belongs to the deployment user.
+        raise DeployError('Operation is not supported by the restricted Ubuntu helper.')
     return ['sudo'] + (['-n'] if NON_INTERACTIVE else []) + list(args)
 
 
@@ -147,6 +161,15 @@ def preflight(options):
     if options.web_url:
         options.web_url = validate_url(options.web_url)
     web_root = static_root(options.web_root)
+    if RESTRICTED_HELPER:
+        if (not NON_INTERACTIVE or options.service != 'showallopts-api' or not options.web_url
+                or web_root != Path('/var/www/showallopts')):
+            raise DeployError('Restricted helper requires non-interactive mode, the fixed API service/static root and --web-url.')
+        for item in (web_root, *web_root.rglob('*')):
+            if item.is_symlink() or item.stat().st_uid != os.getuid() or not os.access(item, os.W_OK):
+                raise DeployError('Restricted helper requires a symlink-free static tree owned/writable by the service user.')
+        if shutil.which('selinuxenabled') and subprocess.run(['selinuxenabled'], capture_output=True).returncode == 0:
+            raise DeployError('Restricted helper is for Ubuntu without enforcing SELinux; manual policy required.')
     if Path(run(['git', 'rev-parse', '--show-toplevel'], capture=True)).resolve() != ROOT:
         raise DeployError('Project must be its own Git checkout.')
     if run(['git', 'status', '--porcelain', '--untracked-files=normal'], capture=True):
@@ -446,7 +469,7 @@ def deploy(options):
         if not activation_started:
             write_status(stage, 'preparation-failed', **details)
             raise
-        handlers = {sig: signal.signal(sig, signal.SIG_IGN) for sig in (signal.SIGINT, signal.SIGTERM)}
+        handlers = {sig: signal.signal(sig, signal.SIG_IGN) for sig in INTERRUPT_SIGNALS}
         errors = []
         try:
             try:
@@ -498,13 +521,14 @@ def interrupted(signum, frame):
 
 
 def main(argv=None):
-    global NON_INTERACTIVE
+    global NON_INTERACTIVE, RESTRICTED_HELPER
     options = parse_args(argv)
     NON_INTERACTIVE = options.non_interactive
+    RESTRICTED_HELPER = options.restricted_helper
     if not sys.platform.startswith('linux') or os.geteuid() == 0 or sys.version_info < (3, 11):
         print('Run on Linux with Python 3.11+ as the service user, without sudo.', file=sys.stderr)
         return 1
-    handlers = {sig: signal.signal(sig, interrupted) for sig in (signal.SIGTERM, signal.SIGINT)}
+    handlers = {sig: signal.signal(sig, interrupted) for sig in INTERRUPT_SIGNALS}
     try:
         with deployment_lock():
             log_dir = ROOT / 'log'
@@ -524,4 +548,5 @@ def main(argv=None):
 
 if __name__ == '__main__':
     raise SystemExit(main())
+
 

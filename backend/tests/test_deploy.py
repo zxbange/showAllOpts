@@ -444,7 +444,7 @@ class PrimitiveTests(unittest.TestCase):
 
     def test_run_masks_repeated_termination_during_cleanup(self):
         process = Mock(pid=123)
-        handlers = {signal.SIGTERM: deploy.interrupted, signal.SIGINT: deploy.interrupted}
+        handlers = {sig: deploy.interrupted for sig in deploy.INTERRUPT_SIGNALS}
         count = []
         def set_handler(sig, handler):
             previous = handlers[sig]
@@ -456,6 +456,8 @@ class PrimitiveTests(unittest.TestCase):
                 raise KeyboardInterrupt()
             self.assertEqual(handlers[signal.SIGTERM], signal.SIG_IGN)
             self.assertEqual(handlers[signal.SIGINT], signal.SIG_IGN)
+            if hasattr(signal, 'SIGHUP'):
+                self.assertEqual(handlers[signal.SIGHUP], signal.SIG_IGN)
             return '', ''
         process.communicate.side_effect = communicate
         with patch.object(deploy.subprocess,'Popen',return_value=process), patch.object(deploy.signal,'signal',side_effect=set_handler), patch.object(deploy.os,'killpg') as kill:
@@ -485,4 +487,5 @@ class PrimitiveTests(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
 

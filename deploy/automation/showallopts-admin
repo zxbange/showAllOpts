@@ -1,0 +1,33 @@
+#!/usr/bin/python3 -I
+"""Install root:root 0755 outside the repository. No paths or shell accepted."""
+import os
+import subprocess
+import sys
+
+COMMANDS = {
+    'nginx-test': ['/usr/sbin/nginx', '-t'],
+    'api-stop': ['/usr/bin/systemctl', 'stop', 'showallopts-api.service'],
+    'api-restart': ['/usr/bin/systemctl', 'restart', 'showallopts-api.service'],
+}
+SAFE_ENV = {'PATH': '/usr/sbin:/usr/bin:/sbin:/bin', 'LANG': 'C.UTF-8', 'HOME': '/root'}
+
+
+def main(args):
+    if os.geteuid() != 0 or len(args) != 1 or args[0] not in (*COMMANDS, 'check'):
+        print('Denied: expected one fixed deployment operation.', file=sys.stderr)
+        return 2
+    # Unit configuration must separately be root-owned, outside writable source.
+    result = subprocess.run(['/usr/bin/systemctl', 'show', 'showallopts-api.service',
+                             '--property=User', '--value'], env=SAFE_ENV, cwd='/',
+                            stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=30)
+    if result.returncode or result.stdout.strip() != 'ubuntu':
+        print('Denied: API service must run as ubuntu.', file=sys.stderr)
+        return 2
+    if args[0] == 'check':
+        return 0
+    return subprocess.run(COMMANDS[args[0]], env=SAFE_ENV, cwd='/',
+                          stdin=subprocess.DEVNULL, timeout=90).returncode
+
+
+if __name__ == '__main__':
+    raise SystemExit(main(sys.argv[1:]))

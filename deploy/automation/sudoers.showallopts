@@ -1,0 +1,3 @@
+# Install root:root 0440 at /etc/sudoers.d/showallopts-deploy after visudo validation.
+# Four literal invocations only. Existing ubuntu sudo rights are NOT removed here.
+ubuntu ALL=(root) NOPASSWD: /usr/local/libexec/showallopts-admin check, /usr/local/libexec/showallopts-admin nginx-test, /usr/local/libexec/showallopts-admin api-stop, /usr/local/libexec/showallopts-admin api-restart

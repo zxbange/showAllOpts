@@ -1,5 +1,7 @@
 # Linux 运行与部署
 
+GitHub `main` 自动部署的默认关闭工作流、受限 SSH 入口、逐项授权安装与验收步骤见 [GitHub 自动部署](github-auto-deployment.md)。发布代码不等于已配置服务器或启用自动部署。
+
 开发时使用 `start.sh` 同时启动前后端；长期运行使用 systemd 管理 Python API、Nginx 提供前端静态页面。数据库继续使用现有 MySQL，应用读取各功能模块已采集入库的数据。
 
 本文默认沿用现有 `/home/ubuntu/showAllOpts` 项目目录和 `ubuntu` 账号，与 [README systemctl 管理指引](../README.md#linux-后台服务systemctl-管理) 一致。RHEL 或其他账号部署时，请统一替换目录、用户和组，并核对目标系统权限与 SELinux 设置。
@@ -345,4 +347,5 @@ npm run build
 微博、雪球的服务器扫码登录需要额外安装 Chromium，设置独立管理密钥。见 [服务器扫码登录部署与操作](social-browser-login.md)。
 
 已有部署接入 ETF 仪表盘时，先在聚宽创建并填充 `etf_share_daily`，给网页账号授予该表 SELECT 权限，再更新代码、构建并发布 `frontend/dist/`、重启 `showallopts-api`。无需更换 Nginx 端口、systemd 服务或真实数据库配置。完整命令与字段口径见 [ETF 份额仪表盘](etf-shares.md#已有部署升级)。
+
 
