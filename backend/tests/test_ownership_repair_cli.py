@@ -1,14 +1,23 @@
 import datetime as dt
 import importlib.util
+import os
 import sys
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
+from unittest.mock import patch
 
 import pytest
 from sqlalchemy import create_engine, event
 from sqlalchemy.orm import sessionmaker
 
 ROOT = Path(__file__).resolve().parents[2]
+
+
+@pytest.fixture(autouse=True)
+def isolated_cli_environment():
+    # CLI entry points may select APP_ENV_FILE; restore the caller's environment.
+    with patch.dict(os.environ):
+        yield
 
 
 def load_cli():

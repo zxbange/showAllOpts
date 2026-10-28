@@ -91,6 +91,17 @@ test('market mood third tab renders official percentage units and keeps chart du
     page
       .locator('.margin-trend')
       .evaluate((element) => element.getBoundingClientRect().top + window.scrollY)
+  // The bounding rect includes the page's entrance transform; settle it before the reload baseline.
+  await page.locator('.margin-page').evaluate((element) =>
+    Promise.all(
+      element
+        .getAnimations()
+        .filter(
+          (animation) => animation instanceof CSSAnimation && animation.animationName === 'page-in',
+        )
+        .map((animation) => animation.finished),
+    ),
+  )
   const top = await documentTop()
   delay = true
   await page.getByRole('button', { name: '刷新两融展示数据' }).click()

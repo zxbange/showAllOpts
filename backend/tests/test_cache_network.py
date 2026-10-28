@@ -1,8 +1,10 @@
 """Bounded MySQL reads and atomic retry of interrupted snapshot transfers."""
 from datetime import date, datetime
 import importlib.util
+import os
 from pathlib import Path
 import sqlite3
+from unittest.mock import patch
 
 import pytest
 from pydantic import ValidationError
@@ -177,7 +179,9 @@ def test_app_and_cli_select_the_background_timeout(cached, engine, monkeypatch, 
     monkeypatch.setattr(module,'build_engine',build)
     monkeypatch.setattr(module,'Settings',lambda:settings)
     monkeypatch.setattr(module,'configure_logging',lambda config:None)
-    assert module.main(['--status'])==0
+    # The CLI selects APP_ENV_FILE for its process; do not leak it into later tests.
+    with patch.dict(os.environ):
+        assert module.main(['--status'])==0
     assert selected==[True,False,True]
 
 
