@@ -1,0 +1,11 @@
+{
+  "DB_CONFIG": {
+    "host": "your_mysql_host",
+    "port": 3306,
+    "dbname": "your_database",
+    "dbuser": "your_database_user",
+    "dbpassword": "your_password"
+  },
+  "DB_TLS_VERIFY": true,
+  "DB_TLS_CA_PEM": ""
+}

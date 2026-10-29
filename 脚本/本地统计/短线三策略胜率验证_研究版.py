@@ -556,9 +556,9 @@ def forward_outcomes(frame):
     return result
 
 
-def summary_table(details):
+def summary_table(details, strategies=None):
     rows = []
-    for method in STRATEGIES:
+    for method in (STRATEGIES if strategies is None else strategies):
         group = details[details['strategy'] == method]
         for horizon in (1, 2, 3):
             prefix = 'd' + str(horizon)
@@ -581,9 +581,9 @@ def summary_table(details):
     return pd.DataFrame(rows)
 
 
-def window_summary(details):
+def window_summary(details, strategies=None):
     rows = []
-    for method in STRATEGIES:
+    for method in (STRATEGIES if strategies is None else strategies):
         group = details[details['strategy'] == method]
         complete = pd.Series(True, index=group.index)
         for horizon in (1, 2, 3):

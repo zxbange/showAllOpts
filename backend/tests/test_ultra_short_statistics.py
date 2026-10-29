@@ -11,7 +11,7 @@ import pytest
 from sqlalchemy import Date, create_engine, event
 
 
-PATH = Path(__file__).resolve().parents[2] / '脚本/本地统计/超短线四策略胜率统计_本地版.py'
+PATH = Path(__file__).resolve().parents[2] / '脚本/本地统计/七策略胜率统计_本地版.py'
 spec = importlib.util.spec_from_file_location('ultra_statistics', PATH)
 m = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(m)
@@ -262,7 +262,7 @@ def test_end_to_end_is_read_only_requires_no_index_data_and_exports_all_strategi
     statements = []
     event.listen(engine, 'before_cursor_execute', lambda conn, cursor, sql, *args: statements.append(sql))
     try:
-        result = m.run(engine=engine, output_dir=local_destination)
+        result = m.run(start_date='2026-07-01', engine=engine, output_dir=local_destination)
         assert len(result['summary']) == 12
         assert set(result['summary']['策略']) == set(m.STRATEGIES)
         assert len(result['windows']) == 4
@@ -289,7 +289,7 @@ def test_end_to_end_exports_known_signal_and_exact_horizon_wins(local_destinatio
     frame.loc[calendar[peak:peak+3], 'volume'] = [200, 40, 80]
     database(engine, frame)
     try:
-        result = m.run(engine=engine, output_dir=local_destination)
+        result = m.run(start_date='2026-07-01', engine=engine, output_dir=local_destination)
         details = result['details']
         details = details[details['strategy'] == m.STRATEGIES[0]]
         assert details['signal_date'].tolist() == [calendar[peak+2]]
@@ -381,7 +381,7 @@ def test_failed_initial_database_query_disposes_owned_engine(monkeypatch):
     monkeypatch.setattr(m, 'make_engine', lambda *a, **kw: Engine())
     def fail(*args, **kwargs):
         raise RuntimeError('certificate verify failed')
-    monkeypatch.setattr(m, 'load_plan', fail)
+    monkeypatch.setattr(m, 'validate_schema', fail)
     with pytest.raises(RuntimeError, match='certificate verify failed'):
         m.run(show_progress=False)
     assert disposed == [True]
