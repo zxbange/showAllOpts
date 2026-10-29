@@ -51,17 +51,17 @@ def test_cli_list_and_legacy_entry_need_no_config():
     (['脚本/本地统计/七策略胜率统计_本地版.py'],False),
     (['docs/seven-strategy-statistics.md','backend/tests/test_seven_strategy_statistics.py'],False),
     (['脚本/本地统计/七策略胜率统计_本地版.py','backend/app/main.py'],True),
-    (['scripts/deploy.py'],True), (['scripts/sync_oversold_rules.py'],True),
+    (['scripts/deploy.py'],False), (['scripts/sync_oversold_rules.py'],False),
     (['strategy_rules/oversold.py'],True), (['frontend/package-lock.json'],True),
     (['backend/requirements.lock.txt'],True), (['.github/workflows/deploy.yml'],True),
-    (['脚本/本地统计/unknown.py'],True), ([],True),
+    (['脚本/本地统计/unknown.py'],False), ([],True),
     (['脚本/本地统计/七策略胜率统计_本地版.py','renamed_runtime.py'],True),
 ])
 def test_impact_paths(paths, expected):
     assert impact.requires_deployment(paths) is expected
 
 
-def test_impact_invalid_missing_or_nonancestor_defaults_to_deploy(tmp_path):
+def test_impact_invalid_missing_or_nonancestor_blocks_deploy(tmp_path):
     assert impact.compare('', 'a'*40, tmp_path)[0] is None
     assert impact.compare('0'*40, 'a'*40, tmp_path)[0] is None
     assert impact.compare('a'*40, 'b'*40, tmp_path)[0] is None
@@ -286,3 +286,37 @@ def test_manual_deploy_has_no_automatic_comparison_gate():
     assert "inputs.operation == 'deploy' && vars.DEPLOY_ENABLED == 'true'" in deploy
     assert "inputs.operation == 'check'" in deploy
     assert 'continue-on-error' not in workflow
+
+
+@pytest.mark.parametrize('path,expected', [
+    ('scripts/nested/new.py',False),('scripts/deployment_impact.py',False),
+    ('脚本/任意子目录/new.py',False),('scripts-other/tool.py',True),
+    ('scripts_backup/tool.py',True),('脚本备份/tool.py',True),
+    ('others/scripts/tool.py',True),('script/tool.py',True),
+    ('scritps/tool.py',True),('scripts',True),('脚本',True),
+])
+def test_script_directory_boundaries(path,expected):
+    assert impact.requires_deployment([path]) is expected
+
+
+def test_real_git_script_directories_add_modify_rename_delete_and_mixed(tmp_path):
+    def git(*args):
+        return subprocess.check_output(['git',*args],cwd=tmp_path,stderr=subprocess.DEVNULL).decode().strip()
+    git('init','-q');git('config','user.email','test@example.invalid');git('config','user.name','Test')
+    (tmp_path/'README').write_text('base')
+    def commit():
+        git('add','.');git('commit','-qm','test');return git('rev-parse','HEAD')
+    base=commit()
+    a=tmp_path/'scripts/nested/deploy.py';a.parent.mkdir(parents=True);a.write_text('new')
+    added=commit();assert impact.compare(base,added,tmp_path)[0] is False
+    a.write_text('modified');modified=commit();assert impact.compare(added,modified,tmp_path)[0] is False
+    b=tmp_path/'脚本/new.py';b.parent.mkdir();a.rename(b)
+    renamed=commit();assert impact.compare(modified,renamed,tmp_path)[0] is False
+    b.unlink();deleted=commit();assert impact.compare(renamed,deleted,tmp_path)[0] is False
+    # A same-prefix lookalike must not inherit the directory exemption.
+    similar=tmp_path/'scripts-other/new.py';similar.parent.mkdir();similar.write_text('outside')
+    boundary=commit();assert impact.compare(deleted,boundary,tmp_path)[0] is True
+    similar.rename(b);crossing=commit();assert impact.compare(boundary,crossing,tmp_path)[0] is True
+    (tmp_path/'README').write_text('app change');a.write_text('script change')
+    mixed=commit();assert impact.compare(crossing,mixed,tmp_path)[0] is True
+    assert impact.compare(base,mixed,tmp_path)[0] is True

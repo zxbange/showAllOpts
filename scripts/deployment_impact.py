@@ -5,7 +5,8 @@ from pathlib import Path
 import re
 import subprocess
 
-# Exact independent research deliverables only. Never exclude the whole scripts/ tree.
+# User-approved directory scope plus previously approved independent docs/tests.
+NO_DEPLOY_PREFIXES = ('脚本/', 'scripts/')
 NO_DEPLOY_PATHS = frozenset({
     '脚本/本地统计/七策略胜率统计_本地版.py',
     '脚本/本地统计/超短线四策略胜率统计_本地版.py',
@@ -24,7 +25,8 @@ NO_DEPLOY_PATHS = frozenset({
 
 def requires_deployment(paths):
     paths = list(paths)
-    return not paths or any(path not in NO_DEPLOY_PATHS for path in paths)
+    return not paths or any(not path.startswith(NO_DEPLOY_PREFIXES) and path not in NO_DEPLOY_PATHS
+                            for path in paths)
 
 
 def compare(base, head, cwd=None):
@@ -41,7 +43,7 @@ def compare(base, head, cwd=None):
     if not paths:
         return None, 'empty comparison; automatic publication blocked'
     required = requires_deployment(paths)
-    return required, 'runtime/unknown/empty change' if required else 'only independent statistics files'
+    return required, 'change outside approved directories/docs/tests' if required else 'only approved script directories/docs/tests'
 
 
 def main():
