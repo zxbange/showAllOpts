@@ -2,6 +2,7 @@ import html
 import re
 import random
 import math
+import logging
 from html.parser import HTMLParser
 from urllib.parse import urlparse
 from datetime import datetime, timezone, timedelta
@@ -12,6 +13,7 @@ import httpx
 XUEQIU_TIMELINE_URL = 'https://www.xueqiu.com/statuses/original/timeline.json'
 XUEQIU_PAGE_SIZE = 10
 XUEQIU_PROFILE_URL = 'https://www.xueqiu.com/user/show.json'
+LOG = logging.getLogger(__name__)
 
 
 def xueqiu_items(payload):
@@ -120,6 +122,38 @@ def plain_text(value):
     parser = TextParser()
     parser.feed(str(value or ""))
     return re.sub(r"\n{3,}", "\n\n", html.unescape("".join(parser.parts))).strip()
+
+
+class RepostCommentParser(TextParser):
+    """Keep non-text expressions/links even when they have no visible label."""
+
+    def __init__(self):
+        super().__init__()
+        self.has_expression = False
+
+    def handle_starttag(self, tag, attrs):
+        super().handle_starttag(tag, attrs)
+        if tag in ('img', 'video', 'audio', 'iframe', 'svg') or (tag == 'a' and dict(attrs).get('href')):
+            self.has_expression = True
+
+
+def is_uncommented_weibo_repost(item):
+    # Only the outer text is the blogger's comment. Never inspect the combined
+    # normalized body or guess reposts from text; unknown structures are kept.
+    original = item.get('retweeted_status')
+    if not isinstance(original, dict) or not original:
+        return False
+    comment = item.get('text')
+    if not isinstance(comment, str):
+        return False
+    # These fields are also rendered as outer content by normalize_post. Their
+    # semantics are not guaranteed by the mobile feed, so keep ambiguous posts.
+    if any(item.get(key) and plain_text(item[key]) for key in ('description', 'title')):
+        return False
+    parser = RepostCommentParser()
+    parser.feed(comment)
+    text = html.unescape(''.join(parser.parts)).strip()
+    return not parser.has_expression and text in ('', '转发微博')
 
 
 def author_uid(author):
@@ -276,6 +310,7 @@ def fetch_posts(author, pages):
                 if items is None:
                     raise RuntimeError("雪球未返回有效帖子列表，请检查 UID、Cookie 或访问限制")
             page_posts, boundary = [], False
+            skipped_reposts = 0
             for item in items:
                 # Exclude recommendations belonging to a different author.
                 owner = (item.get("user") or {}).get("id") or item.get("user_id")
@@ -304,15 +339,23 @@ def fetch_posts(author, pages):
                     boundary = True
                 if identifier in known:
                     continue
+                if platform == 'weibo' and is_uncommented_weibo_repost(item):
+                    skipped_reposts += 1
+                    continue
                 if platform == 'weibo' and item.get('isLongText'):
                     detail = fetch_json(session, 'https://m.weibo.cn/statuses/extend', params={'id': item['id']})
                     content = detail.get('data', {}).get('longTextContent')
                     if detail.get('ok') != 1 or not content:
                         raise RuntimeError('微博长文读取失败，保留到下轮重试')
                     item['text'] = content
+                    if is_uncommented_weibo_repost(item):
+                        skipped_reposts += 1
+                        continue
                 post = normalize_post(platform, uid, item, fallback_name)
                 found[post["id"]] = post
                 page_posts.append(post)
+            if skipped_reposts:
+                LOG.info('Social weibo skipped uncommented reposts page=%s count=%s', page, skipped_reposts)
             # The newest page is rechecked during a resumed scan, without losing
             # the deeper cursor or mistaking the new checkpoint rows for its end.
             top_recheck = resume > 1 and page == 1
