@@ -135,7 +135,7 @@ test('shared module cards stay available while loading and after failures', asyn
   for (const [path, count] of [
     ['etf-shares', 2],
     ['dividend-selection', 2],
-    ['short-term', 3],
+    ['short-term', 4],
   ] as const) {
     let release!: () => void
     const response = new Promise<void>((resolve) => {
@@ -168,7 +168,7 @@ test('shared module cards stay available while loading and after failures', asyn
         'true',
       )
       await page.keyboard.press('End')
-      await expect(page.getByRole('tab', { name: '蓄力龙', exact: true })).toHaveAttribute(
+      await expect(page.getByRole('tab', { name: '超跌后止跌反弹', exact: true })).toHaveAttribute(
         'aria-selected',
         'true',
       )

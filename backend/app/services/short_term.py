@@ -1,6 +1,6 @@
 from fastapi import HTTPException
 
-METHODS = {'bukou': '补票龙', 'redhover': '红悬停龙', 'xuli': '蓄力龙'}
+METHODS = {'bukou': '补票龙', 'redhover': '红悬停龙', 'xuli': '蓄力龙', 'oversold': '超跌后止跌反弹'}
 
 
 class ShortTermService:

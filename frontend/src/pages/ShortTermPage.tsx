@@ -31,6 +31,13 @@ const methods = [
     icon: Zap,
     note: '阳—阴—阳 · 缩量回撤后放量 · MA10 > MA20 > MA30 > MA60',
   },
+  {
+    id: 'oversold' as ShortMethod,
+    name: '超跌后止跌反弹',
+    subtitle: '超跌后的收盘确认',
+    icon: ArrowUpRight,
+    note: '信号前3日跌幅≥8% · 收盘超过前日最高价且收阳 · 原始量≥此前5日均量 · 沪深A股上市≥365天 · 成交额≥5000万元 · 60日完整价格历史',
+  },
 ]
 const fmt = (n: number | null | undefined, digits = 2) =>
   n == null ? '—' : n.toLocaleString('zh-CN', { maximumFractionDigits: digits })
@@ -61,7 +68,7 @@ export function ShortTermPage() {
               name: m.name,
               description: m.subtitle,
               icon: m.icon,
-              count: data ? (data.counts[m.id] ?? 0) : '—',
+              count: data ? (data.counts[m.id] ?? (m.id === 'oversold' ? '—' : 0)) : '—',
             }))}
           />
         }
@@ -98,7 +105,7 @@ export function ShortTermPage() {
               </button>
             </div>
           </div>
-          <p>按三种形态筛选股票，查看入选时的K线与均线。</p>
+          <p>按四种形态筛选股票，查看入选时的K线与均线。</p>
         </div>
         <CandlestickChart size={32} />
       </PageHeader>
@@ -112,6 +119,11 @@ export function ShortTermPage() {
           <p>{selected.note} · 统一剔除ST · 总市值≥30亿元</p>
         </div>
       </section>
+      {method === 'oversold' && (
+        <p className="short-summary">
+          按所选日期收盘确认候选股；形态使用后复权价格和未复权成交量，K线沿用前复权展示。历史统计比较信号后第1、2、3日收盘涨幅，不代表未来胜率或可成交收益。
+        </p>
+      )}
       {loading ? (
         <LoadingState />
       ) : error ? (
@@ -127,6 +139,11 @@ export function ShortTermPage() {
         <EmptyState
           title="尚未采集短线选股"
           description="请先在聚宽采集入库，再通过“数据同步”更新本模块。"
+        />
+      ) : method === 'oversold' && data.counts.oversold == null ? (
+        <EmptyState
+          title="此快照尚未计算超跌反弹"
+          description="请运行新版短线选股采集脚本，再同步短线选股数据。"
         />
       ) : (
         <>

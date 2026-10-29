@@ -12,6 +12,6 @@ router = APIRouter(prefix='/short-term', tags=['短线选股'])
 
 @router.get('/latest', response_model=ShortTermOverview)
 def latest(session: Annotated[Session, Depends(get_session)], day: date | None = None,
-           method: Literal['bukou', 'redhover', 'xuli'] = 'bukou',
+           method: Literal['bukou', 'redhover', 'xuli', 'oversold'] = 'bukou',
            offset: int = Query(0, ge=0), limit: int = Query(6, ge=1, le=24)):
     return ShortTermService(ShortTermRepository(session)).overview(day, method, offset, limit)

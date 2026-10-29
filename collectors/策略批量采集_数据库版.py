@@ -96,6 +96,37 @@ _API_NAMES = ('get_all_securities', 'get_trade_days', 'get_price', 'get_extras',
 _PROGRESS_LOCAL = threading.local()
 
 
+# BEGIN SHARED OVERSOLD RULES
+OVERSOLD_PARAMS = dict(min_market_cap=30., min_listing_days=365, min_money=50_000_000.,
+                       oversold_3=-.08, rebound_volume=1.)
+
+
+def oversold_pattern(frame, params):
+    drop, multiplier = params['oversold_3'], params['rebound_volume']
+    if not (-1 < drop < 0) or not (0 < multiplier < float('inf')):
+        raise ValueError('超跌阈值须在(-1, 0)之间，量比须为有限正数。')
+    c, o, h, v = [frame[n] for n in ('adj_close', 'adj_open', 'adj_high', 'volume')]
+    return ((c.shift(1) / c.shift(4) - 1 <= drop)
+            & (c > h.shift(1)) & (c > o)
+            & (v >= v.shift(1).rolling(5).mean() * multiplier))
+
+
+def signal_eligibility(bars, universe, params, return_price_field='adj_close'):
+    for key in ('min_market_cap', 'min_listing_days', 'min_money'):
+        if not (0 <= params[key] < float('inf')):
+            raise ValueError(key + '须为有限非负数')
+    c = bars['adj_close']
+    listed = pd.to_datetime(universe['listed_date'], errors='coerce')
+    age = (pd.Series(bars.index, index=bars.index) - listed).dt.days
+    ready = c.where(c > 0).rolling(60, min_periods=60).count() == 60
+    return ((universe['eligible'] == 1) & (universe['is_st'] == 0)
+            & (universe['market_cap'] >= params['min_market_cap'])
+            & (age >= params['min_listing_days']) & ready
+            & (bars['paused'] == 0) & (bars['money'] >= params['min_money'])
+            & (bars['volume'] > 0) & (c > 0) & (bars[return_price_field] > 0))
+# END SHARED OVERSOLD RULES
+
+
 def _save_record_set(Session, model, records, filters, key_fields, skip_existing=True):
     """在调用方限定的范围内新增或替换；一次提交，不覆盖范围外记录。"""
     if not records:
@@ -4303,15 +4334,15 @@ def _ownership_strategy(_apis, _config):
 
 
 def _short_term_strategy(_apis, _config):
-    """原 stock 项目三战法；研究环境筛选、均线计算及近三日快照入库。"""
+    """原 stock 三战法与四策略统计的超跌反弹；近三日快照入库。"""
     settings = strategy_settings('短线选股')
     if settings['batch_size'] > 100:
         raise ValueError('短线选股 batch_size 不得超过100，避免行情请求过大。')
     get_all_securities, get_trade_days, get_price, get_extras, get_industry, get_fundamentals, query, valuation = [
         _apis.get(k) for k in ('get_all_securities', 'get_trade_days', 'get_price', 'get_extras', 'get_industry', 'get_fundamentals', 'query', 'valuation')]
-    METHODS = {'bukou': '补票龙', 'redhover': '红悬停龙', 'xuli': '蓄力龙'}
+    METHODS = {'bukou': '补票龙', 'redhover': '红悬停龙', 'xuli': '蓄力龙', 'oversold': '超跌后止跌反弹'}
     MA_PERIODS = (5, 10, 20, 30, 60)
-    RULE_VERSION = 'stock_three_patterns_v2_nonst_cap30'
+    RULE_VERSION = 'stock_four_patterns_v3_oversold'
     Base = declarative_base()
 
     class ShortTermRun(Base):
@@ -4538,6 +4569,28 @@ def _short_term_strategy(_apis, _config):
             matched.append('xuli')
         return matched
 
+    def rebound_history(raw, adjusted, code, days, listing):
+        # Raw volume/money and post-adjusted prices match the statistics database.
+        frame = clean_history(raw, code, days, listing)
+        post = clean_history(adjusted, code, days, listing)
+        frame = frame.set_index(pd.DatetimeIndex(pd.to_datetime(frame['date'])))
+        for name in ('open', 'high', 'low', 'close'):
+            frame['adj_' + name] = post[name].values
+        for name in ('money', 'paused'):
+            if name not in frame:
+                raise ValueError('超跌反弹行情缺少' + name)
+            frame[name] = pd.to_numeric(frame[name], errors='coerce')
+            valid = frame[name].isin([0, 1]) if name == 'paused' else frame[name].map(lambda x: finite(x) is not None and x >= 0)
+            if not valid.all():
+                raise ValueError('超跌反弹行情无效：' + name)
+        return frame
+
+    def rebound_selected(frame, listing, market_cap):
+        universe = pd.DataFrame(dict(eligible=1, is_st=0, market_cap=market_cap,
+                                    listed_date=pd.Timestamp(listing)), index=frame.index)
+        return bool((oversold_pattern(frame, OVERSOLD_PARAMS)
+                     & signal_eligibility(frame, universe, OVERSOLD_PARAMS)).iloc[-1])
+
     def chart_bars(history):
         frame = history.copy()
         for n in MA_PERIODS:
@@ -4624,6 +4677,18 @@ def _short_term_strategy(_apis, _config):
                 continue
             raw = get_price(batch, start_date=days[0], end_date=day, frequency='daily',
                             fields=['open', 'high', 'low', 'close', 'volume'], fq='pre', skip_paused=False, panel=False)
+            rebound_codes = [c for c in batch
+                if ((c.endswith('.XSHG') and c.startswith(('600', '601', '603', '605', '688')))
+                    or (c.endswith('.XSHE') and c.startswith(('000', '001', '002', '003', '300', '301'))))
+                and (day - as_date(securities.loc[c, 'start_date'])).days >= OVERSOLD_PARAMS['min_listing_days']]
+            rebound_raw = rebound_post = None
+            if rebound_codes:
+                rebound_raw = get_price(rebound_codes, start_date=days[0], end_date=day, frequency='daily',
+                    fields=['open', 'high', 'low', 'close', 'volume', 'money', 'paused'],
+                    fq=None, skip_paused=False, panel=False)
+                rebound_post = get_price(rebound_codes, start_date=days[0], end_date=day, frequency='daily',
+                    fields=['open', 'high', 'low', 'close', 'volume'],
+                    fq='post', skip_paused=False, panel=False)
             batch_selected = []
             for code in batch:
                 listing = as_date(securities.loc[code, 'start_date'])
@@ -4632,6 +4697,10 @@ def _short_term_strategy(_apis, _config):
                     young += 1  # 新股展示实际可用K线，不额外改变原战法的上市天数门槛。
                 evaluated += 1
                 methods = evaluate(frame, code)
+                if code in rebound_codes:
+                    rebound = rebound_history(rebound_raw, rebound_post, code, days, listing)
+                    if rebound_selected(rebound, listing, caps[code]['market_cap']):
+                        methods.append('oversold')
                 if not methods:
                     continue
                 last = frame.iloc[-1]
@@ -4650,7 +4719,8 @@ def _short_term_strategy(_apis, _config):
             r.update(industry=industry.get('industry_name'), market_cap=finite(cap.get('market_cap')),
                      pe=finite(cap.get('pe_ratio')), pb=finite(cap.get('pb_ratio')))
         meta = {'rule_version': RULE_VERSION, 'universe_count': len(codes), 'evaluated_count': evaluated,
-                'short_history_count': young, 'counts': {m: sum(m in r['methods'] for r in selected) for m in METHODS},
+                'oversold_params': dict(OVERSOLD_PARAMS), 'oversold_adjustment': 'post',
+                'oversold_volume': 'raw', 'short_history_count': young, 'counts': {m: sum(m in r['methods'] for r in selected) for m in METHODS},
                 'ma_periods': list(MA_PERIODS), 'chart_days': 30, 'adjustment': 'pre', 'retention_trade_days': 3, 'exclude_st': True, 'min_market_cap': 30}
         return meta, selected
 
