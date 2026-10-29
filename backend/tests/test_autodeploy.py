@@ -142,13 +142,48 @@ class HelperTests(unittest.TestCase):
 class EntryTests(unittest.TestCase):
     def test_strict_command_parser(self):
         sha = 'a'*40
-        self.assertIsNone(entry.parse_command('check'))
-        self.assertEqual(entry.parse_command('deploy '+sha), sha)
-        for command in ('', 'bash', 'deploy main', 'deploy '+'A'*40, ' deploy '+sha,
+        self.assertEqual(entry.parse_command('check '+sha), ('check', sha))
+        self.assertEqual(entry.parse_command('deploy '+sha), ('deploy', sha))
+        for command in ('', 'check', 'bash', 'deploy main', 'deploy '+'A'*40, ' deploy '+sha,
                         'deploy '+sha+'\n', 'deploy '+sha+';id', 'deploy '+sha+' extra',
                         'deploy\t'+sha, 'check\n', 'scp -t /tmp/file', 'sftp'):
             with self.subTest(command=command), self.assertRaises(ValueError):
                 entry.parse_command(command)
+
+    def test_target_validation_precedes_runner_read_without_checkout_mutation(self):
+        sha = 'a'*40
+        calls = []
+        def git(*args):
+            calls.append(args)
+            return {('remote', 'get-url', 'origin'): 'https://github.com/zxbange/showAllOpts.git',
+                    ('branch', '--show-current'): 'main', ('rev-parse', sha+'^{commit}'): sha,
+                    ('show', sha+':scripts/deploy.py'): 'runner'}.get(args, '')
+        with patch.object(entry, 'git', git):
+            self.assertEqual(entry.reviewed_runner(sha), 'runner')
+        self.assertEqual(calls[-3:], [('merge-base', '--is-ancestor', sha, 'FETCH_HEAD'),
+                                     ('merge-base', '--is-ancestor', 'HEAD', sha),
+                                     ('show', sha+':scripts/deploy.py')])
+        self.assertFalse(any(c[0] in ('switch', 'checkout', 'merge', 'reset') for c in calls))
+
+    def test_invalid_target_never_loads_runner(self):
+        sha = 'a'*40
+        for failure in ('remote', 'dirty', 'branch', 'ancestor'):
+            def git(*args):
+                if args[0] == 'show':
+                    self.fail('Unvalidated code was read')
+                if args[0] == 'remote':
+                    return 'wrong' if failure == 'remote' else 'https://github.com/zxbange/showAllOpts.git'
+                if args[0] == 'branch':
+                    return 'other' if failure == 'branch' else 'main'
+                if args[0] == 'status':
+                    return 'dirty' if failure == 'dirty' else ''
+                if args[0] == 'rev-parse':
+                    return sha
+                if args[0] == 'merge-base':
+                    raise ValueError('not ancestor')
+                return ''
+            with self.subTest(failure=failure), patch.object(entry, 'git', git), self.assertRaises(ValueError):
+                entry.reviewed_runner(sha)
 
     def test_untrusted_installed_file_is_rejected(self):
         with tempfile.TemporaryDirectory() as temp:
@@ -184,7 +219,8 @@ class WorkflowTests(unittest.TestCase):
         self.assertIn('branches: [main]', text)
         self.assertIn('needs: [backend, frontend]', text)
         self.assertIn("vars.DEPLOY_ENABLED == 'true'", text)
-        self.assertIn("vars.DEPLOY_PREFLIGHT_ENABLED == 'true'", text)
+        self.assertIn("inputs.operation == 'check'", text)
+        self.assertNotIn("vars.DEPLOY_KNOWN_HOSTS", text)
         self.assertIn('cancel-in-progress: false', text)
         self.assertIn('python -m pytest -q', text)
         self.assertIn('-r backend/requirements.lock.txt -r backend/requirements-dev.txt', text)

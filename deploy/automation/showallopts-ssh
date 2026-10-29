@@ -8,12 +8,12 @@ import pwd
 import re
 import stat
 import sys
+import subprocess
+import tempfile
 from urllib.parse import urlsplit
 
 ROOT = Path('/home/ubuntu/showAllOpts')
 CONFIG = Path('/etc/showallopts-deploy.json')
-RUNNER = Path('/usr/local/libexec/showallopts-deploy.py')
-ADMIN = Path('/usr/local/libexec/showallopts-admin')
 
 
 def trusted_file(path):
@@ -26,12 +26,33 @@ def trusted_file(path):
 
 
 def parse_command(command):
-    if command == 'check':
-        return None
-    match = re.fullmatch(r'deploy ([0-9a-f]{40})', command)
+    match = re.fullmatch(r'(check|deploy) ([0-9a-f]{40})', command)
     if not match:
-        raise ValueError('Only check or deploy followed by one lowercase full SHA is allowed.')
-    return match.group(1)
+        raise ValueError('Only check/deploy followed by one lowercase full SHA is allowed.')
+    return match.group(1), match.group(2)
+
+
+def git(*args):
+    result = subprocess.run(['/usr/bin/git', *args], cwd=ROOT, check=True, text=True,
+                            stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                            timeout=120)
+    return result.stdout.strip()
+
+
+def reviewed_runner(sha):
+    # Validate before importing any target code; never move the live checkout here.
+    if git('remote', 'get-url', 'origin') not in (
+            'https://github.com/zxbange/showAllOpts.git', 'https://github.com/zxbange/showAllOpts',
+            'git@github.com:zxbange/showAllOpts.git'):
+        raise ValueError('Unexpected repository origin.')
+    if git('branch', '--show-current') != 'main' or git('status', '--porcelain'):
+        raise ValueError('Expected a clean main checkout.')
+    git('fetch', 'origin', 'main')
+    if git('rev-parse', sha+'^{commit}') != sha:
+        raise ValueError('Target did not resolve exactly.')
+    git('merge-base', '--is-ancestor', sha, 'FETCH_HEAD')
+    git('merge-base', '--is-ancestor', 'HEAD', sha)
+    return git('show', sha+':scripts/deploy.py')
 
 
 def load_config():
@@ -51,12 +72,11 @@ def load_config():
 
 
 def main():
-    sha = parse_command(os.environ.get('SSH_ORIGINAL_COMMAND', ''))
+    operation, sha = parse_command(os.environ.get('SSH_ORIGINAL_COMMAND', ''))
     user = pwd.getpwuid(os.getuid())
     if os.geteuid() == 0 or user.pw_name != 'ubuntu':
         raise ValueError('Run as ubuntu, never root.')
-    for item in (Path(__file__).absolute(), RUNNER, ADMIN):
-        trusted_file(item)
+    trusted_file(Path(__file__).absolute())
     config = load_config()
     # Do not source .bashrc/nvm scripts or trust SSH client environment variables.
     os.environ.clear()
@@ -66,18 +86,25 @@ def main():
                       PIP_NO_INPUT='1', CI='true')
     os.umask(0o077)
     os.chdir(ROOT)
-    spec = importlib.util.spec_from_file_location('trusted_deployment_runner', RUNNER)
-    deploy = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(deploy)
-    deploy.ROOT = ROOT
-    args = ['--non-interactive', '--restricted-helper', '--web-url', config['DEPLOY_WEB_URL']]
-    if sha is None:
-        # No fetch/build/restart/lock/log file writes. nginx -t can open existing logs.
-        deploy.NON_INTERACTIVE = deploy.RESTRICTED_HELPER = True
-        deploy.preflight(deploy.parse_args(args))
-        print('Authentication and deployment preflight passed; no release was attempted.')
-        return 0
-    return deploy.main([*args, '--commit', sha])
+    source = reviewed_runner(sha)
+    with tempfile.TemporaryDirectory(prefix='showallopts-runner-') as temporary:
+        runner = Path(temporary)/'deploy.py'
+        runner.write_text(source+'\n')
+        spec = importlib.util.spec_from_file_location('tested_deployment_runner', runner)
+        deploy = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(deploy)
+        deploy.ROOT = ROOT
+        args = ['--non-interactive', '--web-url', config['DEPLOY_WEB_URL'], '--commit', sha]
+        if operation == 'check':
+            # Fetch/read only: no live checkout switch, build, restart or release.
+            deploy.NON_INTERACTIVE = True
+            options = deploy.parse_args(args)
+            deploy.preflight(options)
+            deploy.ready(options.service, options.api_url)
+            print('Authentication and deployment preflight passed for '+sha+'; no release attempted.')
+            return 0
+        return deploy.main(args)
+
 
 
 if __name__ == '__main__':

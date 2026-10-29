@@ -72,7 +72,7 @@ jobs:
       github.repository == 'zxbange/showAllOpts' && github.ref == 'refs/heads/main' &&
       ((github.event_name == 'push' && vars.DEPLOY_ENABLED == 'true') ||
        (github.event_name == 'workflow_dispatch' && inputs.operation == 'deploy' && vars.DEPLOY_ENABLED == 'true') ||
-       (github.event_name == 'workflow_dispatch' && inputs.operation == 'check' && vars.DEPLOY_PREFLIGHT_ENABLED == 'true'))
+       (github.event_name == 'workflow_dispatch' && inputs.operation == 'check'))
     runs-on: ubuntu-24.04
     timeout-minutes: 120
     environment: production
@@ -83,7 +83,7 @@ jobs:
         shell: bash
         env:
           DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
-          DEPLOY_KNOWN_HOSTS: ${{ vars.DEPLOY_KNOWN_HOSTS }}
+          DEPLOY_KNOWN_HOSTS: 119.28.106.127 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAINT9qOupWKUwWZw4PlmJdfC+jEkS+kzFLezUqtOg64zJ
           TESTED_SHA: ${{ github.sha }}
           EVENT_NAME: ${{ github.event_name }}
           REQUESTED_OPERATION: ${{ inputs.operation }}
@@ -104,7 +104,7 @@ jobs:
           }
           operation="deploy $TESTED_SHA"
           if [[ "$EVENT_NAME" == workflow_dispatch && "$REQUESTED_OPERATION" == check ]]; then
-            operation=check
+            operation="check $TESTED_SHA"
           fi
           ssh -F /dev/null -T -p 22 -i "$ssh_dir/key" \
             -o BatchMode=yes -o IdentitiesOnly=yes -o IdentityAgent=none \

@@ -25,6 +25,7 @@ LOG = logging.getLogger('deploy')
 NON_INTERACTIVE = False
 RESTRICTED_HELPER = False
 ADMIN_HELPER = '/usr/local/libexec/showallopts-admin'
+PROC = Path('/proc')
 INTERRUPT_SIGNALS = (signal.SIGINT, signal.SIGTERM) + ((signal.SIGHUP,) if hasattr(signal, 'SIGHUP') else ())
 
 
@@ -296,7 +297,7 @@ def owns_listener(pid, base_url):
     host = '127.0.0.1' if url.hostname == 'localhost' else url.hostname
     wanted = ipaddress.ip_address(host)
     port = url.port or (443 if url.scheme == 'https' else 80)
-    proc = Path('/proc') / str(pid)
+    proc = PROC / str(pid)
     inodes = set()
     try:
         for fd in (proc / 'fd').iterdir():
@@ -322,17 +323,60 @@ def owns_listener(pid, base_url):
     return False
 
 
+def process_identity(pid, cgroup):
+    """Read only process metadata, never /proc/*/environ (which can contain secrets)."""
+    proc = PROC / str(pid)
+    try:
+        # comm may contain spaces and ')'; fields after the final ')' start at field 3.
+        fields = (proc / 'stat').read_text().rsplit(')', 1)[1].split()
+        groups = (proc / 'cgroup').read_text().splitlines()
+        if not any(line == '0::'+cgroup or line.startswith('0::'+cgroup+'/') for line in groups):
+            return None
+        return (int(fields[1]), int(fields[19]))  # parent PID, start time in clock ticks
+    except (OSError, ValueError, IndexError):
+        return None
+
+
+def listener_identity(main_pid, cgroup, url):
+    """Require a live listener descended from MainPID in this systemd unit's cgroup."""
+    main = process_identity(main_pid, cgroup)
+    if main is None:
+        raise DeployError('Cannot verify the systemd main process metadata.')
+    for proc in PROC.iterdir():
+        if not proc.name.isdigit():
+            continue
+        pid = proc.name
+        chain = {}
+        current = pid
+        while current not in chain:
+            metadata = process_identity(current, cgroup)
+            if metadata is None:
+                break
+            chain[current] = metadata
+            if current == main_pid:
+                if metadata == main and owns_listener(pid, url) and all(
+                        process_identity(p, cgroup) == value for p, value in chain.items()):
+                    return pid, chain
+                break
+            current = str(metadata[0])
+    raise DeployError('No stable API listener belongs to the current systemd process tree.')
+
+
 def ready(service, url, previous=None):
     health_check(url)
     now = identity(service)
     if now[0] != 'active' or not now[1].isdigit() or int(now[1]) <= 0 or not now[2]:
         raise DeployError('API is not an active systemd process.')
-    if previous and (now[1] == previous[1] or now[2] == previous[2]):
-        raise DeployError('Expected a new process and invocation after restart.')
-    if not owns_listener(now[1], url):
-        raise DeployError('The systemd MainPID does not own the API listening socket.')
+    if previous and now[2] == previous[2]:
+        raise DeployError('Expected a new invocation after restart.')
+    cgroup = property_value(service, 'ControlGroup')
+    if not cgroup or not cgroup.startswith('/') or cgroup == '/':
+        raise DeployError('Cannot verify the systemd unit cgroup.')
+    pid, chain = listener_identity(now[1], cgroup, url)
     health_check(url, attempts=1)
-    if identity(service) != now:
+    if (not owns_listener(pid, url)
+            or any(process_identity(p, cgroup) != value for p, value in chain.items())
+            or identity(service) != now or property_value(service, 'ControlGroup') != cgroup):
         raise DeployError('API process changed during readiness checks.')
 
 

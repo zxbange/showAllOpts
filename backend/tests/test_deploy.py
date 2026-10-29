@@ -43,6 +43,7 @@ class TransactionTests(unittest.TestCase):
             ('run', self.run_command), ('property_value', self.property),
             ('health_check', self.health), ('owns_listener', lambda *a: True),
             ('frontend_check', self.frontend),
+            ('listener_identity', lambda pid, *a: (pid, {})),
         ]:
             p = patch.object(deploy, target, value)
             p.start()
@@ -52,6 +53,8 @@ class TransactionTests(unittest.TestCase):
         self.addCleanup(p.stop)
 
     def property(self, service, name):
+        if name == 'ControlGroup':
+            return '/system.slice/showallopts-api.service'
         if name == 'ActiveState':
             return self.state['active']
         if name == 'MainPID':
@@ -396,18 +399,23 @@ class PrimitiveTests(unittest.TestCase):
         with patch.object(deploy,'run',return_value='config/app.config.example\nbackend/run.py'):
             deploy.protected_target(NEW)
 
-    def test_ready_rejects_old_pid_and_unowned_listener(self):
-        with patch.object(deploy,'health_check'), patch.object(deploy,'identity',return_value=('active','123','new')), patch.object(deploy,'owns_listener',return_value=False):
-            with self.assertRaises(deploy.DeployError):
-                deploy.ready('service','http://127.0.0.1:8000')
-        with patch.object(deploy,'health_check'), patch.object(deploy,'identity',return_value=('active','123','new')):
-            with self.assertRaises(deploy.DeployError):
-                deploy.ready('service','http://127.0.0.1:8000',previous=('active','123','old'))
+    def test_ready_rejects_old_invocation_and_unowned_listener(self):
+        with patch.object(deploy, 'health_check'), patch.object(deploy, 'identity', return_value=('active','123','new')), \
+                patch.object(deploy, 'property_value', return_value='/system.slice/api.service'), \
+                patch.object(deploy, 'listener_identity', side_effect=deploy.DeployError('No listener')):
+            with self.assertRaisesRegex(deploy.DeployError, 'No listener'):
+                deploy.ready('service', 'http://127.0.0.1:8000')
+        with patch.object(deploy, 'health_check'), patch.object(deploy, 'identity', return_value=('active','123','old')):
+            with self.assertRaisesRegex(deploy.DeployError, 'new invocation'):
+                deploy.ready('service', 'http://127.0.0.1:8000', previous=('active','123','old'))
 
     def test_ready_rejects_process_changing_during_check(self):
-        with patch.object(deploy,'health_check'), patch.object(deploy,'identity',side_effect=[('active','123','new'),('active','124','newer')]), patch.object(deploy,'owns_listener',return_value=True):
-            with self.assertRaises(deploy.DeployError):
-                deploy.ready('service','http://127.0.0.1:8000')
+        with patch.object(deploy, 'health_check'), \
+                patch.object(deploy, 'identity', side_effect=[('active','123','new'),('active','124','newer')]), \
+                patch.object(deploy, 'property_value', return_value='/system.slice/api.service'), \
+                patch.object(deploy, 'listener_identity', return_value=('123', {})):
+            with self.assertRaisesRegex(deploy.DeployError, 'changed during'):
+                deploy.ready('service', 'http://127.0.0.1:8000')
 
     def test_lock_rejects_concurrent_deployment(self):
         with tempfile.TemporaryDirectory() as temp, patch.object(deploy,'ROOT',Path(temp)):
