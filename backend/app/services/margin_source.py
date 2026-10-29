@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from datetime import date, datetime
 from html.parser import HTMLParser
 from io import BytesIO, StringIO
+import hashlib
 import math
 import re
 import time
@@ -33,6 +34,15 @@ MAX_UNPACKED_BYTES = 16 * 1024 * 1024
 METRIC = '平均维持担保比例'
 TITLE = '融资融券市场每日数据统计'
 LIST_TITLES = (TITLE, '融资融券市场历史数据')
+
+# Official archive page 5cb2feab-17.html labels this September 28 report
+# 20231006. Pin the original bytes: this is not a general cross-date fallback.
+TITLE_DATE_CORRECTION = dict(
+    report_date='2023-10-06', observation_date='2023-09-28',
+    source_url=ORIGIN + '/cmsmc/articleFileDir/2023-10/09/939046.xls',
+    content_sha256='a32d63dad558961b8adb022cab447372aff613470727137e663ce2a4a97bd451',
+    reason='source_title_date_corrected',
+)
 
 
 class MarginSourceError(ValueError):
@@ -74,6 +84,8 @@ _SAFE_REASONS = {
     '中证日报日期超出请求范围。': 'report_date_range',
     '中证日报日期与待采日期不一致。': 'report_date_mismatch',
     '中证日报比例不是有效数字或超出合理范围。': 'invalid_ratio',
+    '中证更正日报与已保存统计日的比例冲突，未覆盖现有数据。': 'source_data_conflict',
+    '中证更正日报对应统计日的正式日报尚未校验。': 'source_date_unverified',
 }
 
 
@@ -366,5 +378,13 @@ def parse_report(content, expected_date: date):
 
 def fetch_point(client, report: MarginReport):
     content = _download(client, report.url, 'report')
+    correction = TITLE_DATE_CORRECTION
+    if (report.trade_date.isoformat() == correction['report_date']
+            and report.url == correction['source_url']
+            and hashlib.sha256(content).hexdigest() == correction['content_sha256']):
+        day = date.fromisoformat(correction['observation_date'])
+        ratio = parse_report(content, day)
+        return dict(date=day.isoformat(), ratio=ratio, source_url=report.url,
+                    source_correction=dict(correction))
     ratio = parse_report(content, report.trade_date)
     return {'date': report.trade_date.isoformat(), 'ratio': ratio, 'source_url': report.url}

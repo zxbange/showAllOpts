@@ -366,3 +366,122 @@ def test_unsafe_report_url_is_not_in_diagnostics(monitor, monkeypatch, caplog):
     status = monitor.status(MOMENT)
     assert status['last_failure']['source_url'] is None
     assert url not in str(status) + caplog.text
+
+
+def corrected_provider(monkeypatch):
+    correction = m.TITLE_DATE_CORRECTION
+    item = m.MarginReport(date.fromisoformat(correction['report_date']), correction['source_url'])
+    calls = []
+    monkeypatch.setattr(m, 'list_reports', lambda *args, **kwargs: [])
+    def fetch(client, report):
+        calls.append(report)
+        return dict(date=correction['observation_date'], ratio=261.9, source_url=report.url,
+                    source_correction=dict(correction))
+    monkeypatch.setattr(m, 'fetch_point', fetch)
+    return item, calls
+
+
+@pytest.mark.parametrize('existing_ratio', [None, 261.9, 260.5])
+def test_cached_title_anomaly_preserves_actual_day_and_persists_receipt(monitor, monkeypatch, existing_ratio):
+    item, calls = corrected_provider(monkeypatch)
+    actual = date(2023, 9, 28)
+    if existing_ratio is not None:
+        save_points(monitor, [(actual, existing_ratio)])
+    before = monitor.history(MOMENT)['points']
+    with monitor.db() as db:
+        db.execute('INSERT INTO reports VALUES (?,?)', (str(item.trade_date), item.url))
+    monitor.refresh(background=False, moment=MOMENT)
+    history = monitor.history(MOMENT)
+    assert [p['date'] for p in history['points']] == ['2023-09-28']
+    status = history['status']
+    if existing_ratio == 260.5:
+        assert history['points'] == before
+        assert status['pending_reports'] == 1
+        assert status['last_failure']['code'] == 'source_data_conflict'
+        assert status['source_corrections'] == []
+        return
+    assert history['points'][0]['ratio'] == 261.9
+    if before:
+        assert history['points'] == before
+    assert status['pending_reports'] == 0
+    assert status['error'] is None
+    assert status['source_corrections'][0]['report_date'] == '2023-10-06'
+    assert status['source_corrections'][0]['content_sha256'] == m.TITLE_DATE_CORRECTION['content_sha256']
+    restarted = m.MarginGuarantee(monitor.settings, client_factory=lambda: nullcontext(object()), delay=0)
+    restarted.refresh(background=False, moment=MOMENT)
+    assert calls == [item]
+    assert restarted.status(MOMENT)['source_corrections'] == status['source_corrections']
+    if existing_ratio is None:
+        with restarted.db() as db:
+            db.execute('DELETE FROM points WHERE trade_date=?', ('2023-09-28',))
+        assert restarted.status(MOMENT)['pending_reports'] == 1
+        restarted.refresh(background=False, moment=MOMENT)
+        assert calls == [item, item]
+        assert restarted.status(MOMENT)['pending_reports'] == 0
+    with restarted.db() as db:
+        db.execute('UPDATE reports SET source_url=?', (report(item.trade_date).url,))
+    assert restarted.status(MOMENT)['pending_reports'] == 1
+    restarted.refresh(background=False, moment=MOMENT)
+    assert restarted.status(MOMENT)['last_failure']['code'] == 'report_date_mismatch'
+    assert restarted.history(MOMENT)['points'] == history['points']
+
+
+def test_correction_cannot_insert_observation_outside_retention_range(monitor, monkeypatch):
+    item, calls = corrected_provider(monkeypatch)
+    with monitor.db() as db:
+        db.execute('INSERT INTO reports VALUES (?,?)', (str(item.trade_date), item.url))
+    moment = datetime(2029, 10, 1, 20, tzinfo=m.CHINA)
+    monitor.refresh(background=False, moment=moment)
+    assert monitor.history(moment)['points'] == []
+    assert monitor.status(moment)['last_failure']['code'] == 'report_date_range'
+
+
+@pytest.mark.parametrize('normal_ratio', [261.9, 260.5, None])
+def test_formal_actual_day_is_verified_before_correction(monitor, monkeypatch, normal_ratio):
+    item, calls = corrected_provider(monkeypatch)
+    actual = report(date(2023, 9, 28))
+    original_fetch = m.fetch_point
+    def fetch(client, entry):
+        if entry == actual:
+            if normal_ratio is None:
+                raise TimeoutError('official report unavailable')
+            return dict(date=str(actual.trade_date), ratio=normal_ratio, source_url=actual.url)
+        return original_fetch(client, entry)
+    monkeypatch.setattr(m, 'fetch_point', fetch)
+    with monitor.db() as db:
+        db.executemany('INSERT INTO reports VALUES (?,?)',
+                       [(str(r.trade_date), r.url) for r in (item, actual)])
+    for _ in range(2):
+        monitor.refresh(background=False, moment=MOMENT)
+        status = monitor.status(MOMENT)
+        points = monitor.history(MOMENT)['points']
+        if normal_ratio is None:
+            assert points == []
+            assert status['pending_reports'] == 2
+            assert status['source_corrections'] == []
+            assert status['last_failure']['code'] == 'source_date_unverified'
+        else:
+            assert len(points) == 1
+            assert points[0]['ratio'] == normal_ratio
+            assert points[0]['source_url'] == actual.url
+            if normal_ratio == 260.5:
+                assert status['pending_reports'] == 1
+                assert status['last_failure']['code'] == 'source_data_conflict'
+                assert status['source_corrections'] == []
+            else:
+                assert status['pending_reports'] == 0
+                assert status['error'] is None
+
+
+def test_resolution_write_failure_rolls_back_new_observation(monitor, monkeypatch):
+    item, calls = corrected_provider(monkeypatch)
+    with monitor.db() as db:
+        db.execute('INSERT INTO reports VALUES (?,?)', (str(item.trade_date), item.url))
+        db.execute("CREATE TRIGGER reject_resolution BEFORE INSERT ON report_resolutions "
+                   "BEGIN SELECT RAISE(ABORT, 'test write failure'); END")
+    monitor.refresh(background=False, moment=MOMENT)
+    assert monitor.history(MOMENT)['points'] == []
+    status = monitor.status(MOMENT)
+    assert status['pending_reports'] == 1
+    assert status['source_corrections'] == []
+    assert status['error']

@@ -14,6 +14,13 @@ export interface MarginStatus {
   last_attempt_at: string | null
   last_success_at: string | null
   error: string | null
+  source_corrections?: {
+    report_date: string
+    observation_date: string
+    source_url: string
+    content_sha256: string
+    reason: string
+  }[]
   daily_time: string
   timezone: string
   next_run_at: string | null

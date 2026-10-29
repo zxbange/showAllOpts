@@ -353,3 +353,31 @@ def test_official_may_2025_layout_generated_regression(serial, day, ratio):
     book.save(out)
     book.close()
     assert source.parse_report(out.getvalue(), day) == ratio
+
+
+def test_pinned_title_correction_keeps_strict_workbook_validation(monkeypatch):
+    correction = source.TITLE_DATE_CORRECTION
+    actual = date.fromisoformat(correction['observation_date'])
+    report = source.MarginReport(date.fromisoformat(correction['report_date']), correction['source_url'])
+    # Generated layout exercises the gate independently of the downloaded file.
+    content = workbook('261.9%', 'General', actual)
+    real_sha256 = source.hashlib.sha256
+    monkeypatch.setattr(source.hashlib, 'sha256', lambda data: SimpleNamespace(
+        hexdigest=lambda: correction['content_sha256']))
+    with httpx.Client(transport=httpx.MockTransport(lambda req: httpx.Response(200, content=content))) as client:
+        point = source.fetch_point(client, report)
+        assert point == dict(date='2023-09-28', ratio=261.9, source_url=report.url,
+                             source_correction=correction)
+        for other in [source.MarginReport(report.trade_date, REPORT_URL),
+                      source.MarginReport(date(2023, 10, 5), report.url)]:
+            with pytest.raises(source.MarginSourceError, match='日期'):
+                source.fetch_point(client, other)
+    for bad in [workbook(day=report.trade_date), workbook(day=None),
+                workbook(day=actual, label='融资余额'), workbook(261.9, 'General', actual)]:
+        with httpx.Client(transport=httpx.MockTransport(lambda req: httpx.Response(200, content=bad))) as client:
+            with pytest.raises(source.MarginSourceError):
+                source.fetch_point(client, report)
+    monkeypatch.setattr(source.hashlib, 'sha256', real_sha256)
+    with httpx.Client(transport=httpx.MockTransport(lambda req: httpx.Response(200, content=content))) as client:
+        with pytest.raises(source.MarginSourceError, match='日期'):
+            source.fetch_point(client, report)

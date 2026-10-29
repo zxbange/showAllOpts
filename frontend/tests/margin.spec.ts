@@ -243,3 +243,38 @@ test('first saved record appears during backfill and later history reads are thr
   expect(historyReads).toBe(reads)
   expect(peakConcurrent).toBe(1)
 })
+
+test('verified source date correction remains visible after reload without an error', async ({
+  page,
+}) => {
+  const correctedStatus: MarginStatus = {
+    ...status,
+    stage: '更新完成',
+    source_corrections: [
+      {
+        report_date: '2023-10-06',
+        observation_date: '2023-09-28',
+        source_url: 'https://www.csdata.cn/cmsmc/articleFileDir/2023-10/09/939046.xls',
+        content_sha256: 'a32d63dad558961b8adb022cab447372aff613470727137e663ce2a4a97bd451',
+        reason: 'source_title_date_corrected',
+      },
+    ],
+  }
+  await page.route('**/api/v1/**', (route) => route.fulfill({ status: 503, json: {} }))
+  await page.route('**/api/v1/margin-guarantee/**', (route) =>
+    route.fulfill({
+      json: route.request().url().endsWith('/status')
+        ? correctedStatus
+        : { ...history, status: correctedStatus },
+    }),
+  )
+  await page.goto('/margin-guarantee')
+  await expect(page.getByText('已核验原文件并按统计日期保存。', { exact: false })).toBeVisible()
+  await expect(page.getByRole('link', { name: '查看原始日报' })).toHaveAttribute(
+    'href',
+    correctedStatus.source_corrections![0].source_url,
+  )
+  await expect(page.locator('.margin-error')).toHaveCount(0)
+  await page.reload()
+  await expect(page.getByText('已核验原文件并按统计日期保存。', { exact: false })).toBeVisible()
+})

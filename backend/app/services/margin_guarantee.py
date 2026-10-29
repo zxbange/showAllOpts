@@ -14,6 +14,7 @@ import portalocker
 
 from app.services.margin_source import (
     MarginReport, MarginSourceError, fetch_point, list_reports, safe_error_details, safe_report_url,
+    TITLE_DATE_CORRECTION,
 )
 
 LOG = logging.getLogger(__name__)
@@ -69,6 +70,10 @@ class MarginGuarantee:
                     source_url TEXT NOT NULL, updated_at TEXT NOT NULL);
                 CREATE TABLE IF NOT EXISTS reports (
                     trade_date TEXT PRIMARY KEY, source_url TEXT NOT NULL);
+                CREATE TABLE IF NOT EXISTS report_resolutions (
+                    report_date TEXT PRIMARY KEY, source_url TEXT NOT NULL,
+                    content_sha256 TEXT NOT NULL, observation_date TEXT NOT NULL,
+                    ratio REAL NOT NULL, reason TEXT NOT NULL, resolved_at TEXT NOT NULL);
                 CREATE TABLE IF NOT EXISTS state (
                     id INTEGER PRIMARY KEY CHECK(id=1), payload TEXT NOT NULL);
                 INSERT OR IGNORE INTO state VALUES (1, '{}');
@@ -132,16 +137,31 @@ class MarginGuarantee:
         next_run = latest_slot(moment) + timedelta(days=1)
         with self.db() as db:
             pending = db.execute('SELECT count(*) FROM reports r LEFT JOIN points p '
-                                 'ON p.trade_date=r.trade_date WHERE p.trade_date IS NULL').fetchone()[0]
+                                 'ON p.trade_date=r.trade_date WHERE p.trade_date IS NULL '
+                                 + self.unresolved_sql()).fetchone()[0]
+            corrections = [dict(row) for row in db.execute(
+                'SELECT s.* FROM report_resolutions s JOIN reports r '
+                'ON r.trade_date=s.report_date AND r.source_url=s.source_url '
+                'JOIN points p ON p.trade_date=s.observation_date AND p.ratio=s.ratio '
+                'ORDER BY s.report_date')]
         return dict(running=running, stage=stage, processed=state.get('processed', 0),
                     total=state.get('total'), percent=state.get('percent'),
                     cancelling=bool(running and state.get('run_id') and
                                     (self.root / ('cancel-' + state['run_id'])).exists()),
                     last_attempt_at=state.get('last_attempt_at'), last_success_at=state.get('last_success_at'),
                     error=state.get('error'), pending_reports=pending,
+                    source_corrections=corrections,
                     recent_failures=state.get('recent_failures', []), last_failure=state.get('last_failure'),
                     daily_time=DAILY_TIME, timezone='Asia/Shanghai',
                     next_run_at=next_run.isoformat() if self.settings.margin_worker_enabled else None)
+
+    @staticmethod
+    def unresolved_sql():
+        # A receipt only resolves its original URL while the verified observation
+        # still exists. Changed catalog URLs and missing observations are retried.
+        return ('AND NOT EXISTS (SELECT 1 FROM report_resolutions s JOIN points actual '
+                'ON actual.trade_date=s.observation_date AND actual.ratio=s.ratio '
+                'WHERE s.report_date=r.trade_date AND s.source_url=r.source_url) ')
 
     def history(self, moment=None):
         moment = moment or now()
@@ -230,10 +250,17 @@ class MarginGuarantee:
                                    (report.trade_date.isoformat(), report.url))
                     db.execute('DELETE FROM points WHERE trade_date<?', (cutoff.isoformat(),))
                     db.execute('DELETE FROM reports WHERE trade_date<?', (cutoff.isoformat(),))
+                    db.execute('DELETE FROM report_resolutions WHERE observation_date<?', (cutoff.isoformat(),))
                     pending = db.execute('SELECT r.trade_date,r.source_url FROM reports r LEFT JOIN points p '
                                          'ON p.trade_date=r.trade_date WHERE p.trade_date IS NULL AND r.trade_date<=? '
+                                         + self.unresolved_sql() +
                                          'ORDER BY r.trade_date DESC', (today.isoformat(),)).fetchall()
                 scope = 'collection'
+                # If a correctly titled report also exists, verify it first so
+                # an inconsistent correction remains pending and visibly fails.
+                if any(row['trade_date'] == TITLE_DATE_CORRECTION['observation_date'] for row in pending):
+                    pending.sort(key=lambda row: (row['trade_date'] == TITLE_DATE_CORRECTION['report_date']
+                                                  and row['source_url'] == TITLE_DATE_CORRECTION['source_url']))
                 state.update(catalog_ready=True, total=len(pending), percent=0 if pending else 100)
                 self.write_state(state)
                 for index, row in enumerate(pending):
@@ -244,8 +271,18 @@ class MarginGuarantee:
                         report = MarginReport(date.fromisoformat(row['trade_date']), row['source_url'])
                         point = fetch_point(client, report)
                         check_cancel()
-                        if str(point['date']) != row['trade_date']:
+                        correction = point.get('source_correction')
+                        corrected = (correction == TITLE_DATE_CORRECTION
+                                     and row['trade_date'] == TITLE_DATE_CORRECTION['report_date']
+                                     and row['source_url'] == TITLE_DATE_CORRECTION['source_url']
+                                     and point['source_url'] == row['source_url']
+                                     and str(point['date']) == TITLE_DATE_CORRECTION['observation_date'])
+                        if ((correction is not None and not corrected)
+                                or (str(point['date']) != row['trade_date'] and not corrected)):
                             raise MarginSourceError('中证日报日期与待采日期不一致。')
+                        observation_date = date.fromisoformat(str(point['date']))
+                        if not cutoff <= observation_date <= today:
+                            raise MarginSourceError('中证日报日期超出请求范围。')
                         try:
                             ratio = float(point['ratio'])
                         except (TypeError, ValueError):
@@ -254,8 +291,19 @@ class MarginGuarantee:
                             raise MarginSourceError('中证日报比例不是有效数字或超出合理范围。')
                         # Commit each verified day immediately; a failed later request cannot lose it.
                         with self.db() as db:
+                            existing = db.execute('SELECT ratio FROM points WHERE trade_date=?',
+                                                  (point['date'],)).fetchone()
+                            if corrected and existing is None and db.execute(
+                                    'SELECT 1 FROM reports WHERE trade_date=?', (point['date'],)).fetchone():
+                                raise MarginSourceError('中证更正日报对应统计日的正式日报尚未校验。')
+                            if corrected and existing is not None and existing['ratio'] != ratio:
+                                raise MarginSourceError('中证更正日报与已保存统计日的比例冲突，未覆盖现有数据。')
                             db.execute('INSERT OR IGNORE INTO points VALUES (?,?,?,?)',
-                                       (row['trade_date'], ratio, report.url, now().isoformat()))
+                                       (point['date'], ratio, report.url, now().isoformat()))
+                            if corrected:
+                                db.execute('INSERT OR REPLACE INTO report_resolutions VALUES (?,?,?,?,?,?,?)',
+                                           (row['trade_date'], report.url, correction['content_sha256'],
+                                            point['date'], ratio, correction['reason'], now().isoformat()))
                         consecutive_failures = 0
                     except CollectionCancelled:
                         raise

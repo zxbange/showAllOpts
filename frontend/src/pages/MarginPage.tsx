@@ -209,6 +209,15 @@ export function MarginPage() {
             </span>
           )}
         </div>
+        {status?.source_corrections?.map((correction) => (
+          <p className="margin-idle-state" key={correction.report_date}>
+            中证目录将统计日期为 {correction.observation_date} 的日报标为 {correction.report_date}，
+            已核验原文件并按统计日期保存。
+            <a href={correction.source_url} target="_blank" rel="noreferrer">
+              查看原始日报
+            </a>
+          </p>
+        ))}
         {shownError && (
           <div className="margin-error" role="alert">
             <span>
