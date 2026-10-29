@@ -12,7 +12,7 @@ import pandas as pd
 import pytest
 
 ROOT = Path(__file__).resolve().parents[2]
-SOURCE = ROOT / 'collectors/短线三策略胜率验证_研究版.py'
+SOURCE = ROOT / '脚本/本地统计/短线三策略胜率验证_研究版.py'
 ORIGINAL = ROOT / '脚本/本地统计/超短线四策略胜率统计_本地版.py'
 
 
