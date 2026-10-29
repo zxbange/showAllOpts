@@ -332,7 +332,25 @@ def process_identity(pid, cgroup):
         groups = (proc / 'cgroup').read_text().splitlines()
         if not any(line == '0::'+cgroup or line.startswith('0::'+cgroup+'/') for line in groups):
             return None
-        return (int(fields[1]), int(fields[19]))  # parent PID, start time in clock ticks
+        parent, started = int(fields[1]), int(fields[19])
+        boot_ticks = int(time.clock_gettime(time.CLOCK_BOOTTIME) * os.sysconf('SC_CLK_TCK'))
+        if parent < 0 or started <= 0 or started > boot_ticks:
+            return None
+        status = (proc / 'status').read_text().splitlines()
+        uid_lines = [line.split()[1:] for line in status if line.startswith('Uid:')]
+        if len(uid_lines) != 1 or len(uid_lines[0]) != 4:
+            return None
+        uids = tuple(int(value) for value in uid_lines[0])
+        if uids != (os.getuid(),) * 4:
+            return None
+        # HTTP probes run here, whereas /proc/PID/net/tcp describes PID's namespace.
+        # Bind the listener AND every ancestor to this probe's namespace and UID.
+        network = (proc / 'ns/net').stat()
+        probe_network = (PROC / 'self/ns/net').stat()
+        namespace = (network.st_dev, network.st_ino)
+        if namespace != (probe_network.st_dev, probe_network.st_ino):
+            return None
+        return parent, started, namespace, uids
     except (OSError, ValueError, IndexError):
         return None
 

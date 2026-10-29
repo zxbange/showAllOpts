@@ -37,7 +37,7 @@
 - bootstrap 在授权公钥前验证环境和入口。文件以原子 rename 发布；已有内容、属主及权限完全匹配时可重试，不同安装拒绝覆盖。公钥原子追加，完全相同条目不重复添加，同 key 不同权限条目拒绝。旧 authorized_keys 内容保留。固定入口/配置自身若需改变，应单独审核升级，不自动覆盖。
 - 使用现有免密 sudo，不安装 admin helper/sudoers，不改变静态树属主、账号、网络、unit 或 drop-in；保留 xvfb 与截图支持。服务器须已有非交互读取仓库的能力；现有 unit/drop-in/Nginx 由 root 管理。保留用户明确选择的 `NOPASSWD ALL`，main 写入者可以取得 ubuntu/root；入口不声称隔离 main 写入者。
 - SSH key 使用 restrict + forced command。已可信核验的主机公钥固定在 workflow，指纹 `SHA256:BP5xdzMVEFxMOGoF+Sl2HYh0vS9xQqkvgjwbZqeZInw`，开启 StrictHostKeyChecking。主机换钥须可信核验后修改代码。
-- API 就绪要求当前 unit cgroup 内 MainPID 或其合法子进程拥有监听 socket，跨 HTTP 和 socket 检查复核 InvocationID、祖先链及 PID start-time，兼容 xvfb 和多 worker，不读取 `/proc/*/environ`。
+- API 就绪要求当前 unit cgroup 内 MainPID 或其合法子进程拥有监听 socket，要求监听进程与整条祖先链的实际 UID 和网络 namespace 均匹配当前探测进程，跨 HTTP 和 socket 检查复核 InvocationID、祖先链及正数 PID start-time，兼容 xvfb 和多 worker，不读取 `/proc/*/environ`。
 - Actions 串行队列不取消正在发布的任务，服务器也有部署锁；队列最多等待 100 项。旧 SHA 不能覆盖新版本。
 - 保留准备、切换、恢复及备份流程。失败尝试恢复源码、虚拟环境和静态文件；恢复后可能 detached HEAD，需人工协调。数据库/业务数据不回滚；断电/SIGKILL 不保证自动恢复。
 
