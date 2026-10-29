@@ -11,6 +11,8 @@
 
 # Python
 .venv/
+# The deployment runner replaces this directory with a managed release symlink.
+/backend/.venv
 __pycache__/
 *.py[cod]
 .pytest_cache/
