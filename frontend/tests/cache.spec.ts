@@ -15,7 +15,7 @@ const fixture = {
   refreshing: false,
   manual_enabled: true,
   auto_refresh: true,
-  daily_time: '20:00',
+  daily_time: '07:00',
   timezone: 'Asia/Shanghai',
   modules: modules.map((name, i) => ({
     id: [
@@ -63,11 +63,11 @@ test('cache panel shows old snapshot and allows module synchronization without c
   await page.getByRole('button', { name: '数据同步状态', exact: true }).click()
   const panel = page.getByRole('dialog')
   await expect(panel).toBeVisible()
-  await expect(panel).toContainText('每天北京时间 20:00 自动同步')
+  await expect(panel).toContainText('每天北京时间 07:00 自动同步')
   await expect(panel.getByText('保留旧快照', { exact: true })).toBeVisible()
   await expect(panel.locator('.cache-row')).toHaveCount(8)
   await page.getByLabel('同步范围', { exact: true }).selectOption('dividend-selection')
-  await expect(panel.locator('input')).toHaveCount(0)
+  await expect(panel.locator('input[type="password"]')).toHaveCount(0)
   await page.getByRole('button', { name: '立即同步', exact: true }).click()
   await expect(page.getByRole('button', { name: '同步进行中…', exact: true })).toBeDisabled()
   expect(posted).toEqual({ module: 'dividend-selection' })

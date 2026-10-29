@@ -15,14 +15,17 @@ export interface CacheModule {
   }
   error: string | null
 }
-export interface CacheStatus {
+export interface CacheSchedule {
+  daily_time: string
+  timezone: string
+  next_refresh_at?: string | null
+}
+export interface CacheStatus extends CacheSchedule {
   enabled: boolean
   run_id?: string | null
   cancelling?: boolean
   refreshing: boolean
   manual_enabled: boolean
   auto_refresh: boolean
-  daily_time: string
-  timezone: string
   modules: CacheModule[]
 }

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Database, RefreshCw, X } from 'lucide-react'
 import { cancelCache, getCacheStatus, refreshCache } from '../api/client'
+import { CacheScheduleForm } from './CacheScheduleForm'
 import type { CacheStatus } from '../types/cache'
 import '../styles/cache.css'
 
@@ -135,6 +136,14 @@ export function CacheControl() {
         )}
         {status?.enabled && (
           <>
+            <CacheScheduleForm
+              schedule={status}
+              autoRefresh={status.auto_refresh}
+              onSaved={(plan) => {
+                controller.current?.abort()
+                setStatus((previous) => (previous ? { ...previous, ...plan } : previous))
+              }}
+            />
             <div className="cache-list">
               {status.modules.map((item) => (
                 <div key={item.id} className="cache-row">

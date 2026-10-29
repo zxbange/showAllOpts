@@ -9,7 +9,7 @@
   → FastAPI 路由：校验查询参数
   → Service：确定快照日期、计算区间指标、标记行业缺失
   → Repository：参数化 SELECT
-  → 本地 SQLite 模块快照（每日 20:00 / 手动从 MySQL 同步）
+  → 本地 SQLite 模块快照（每日 07:00 / 手动从 MySQL 同步）
 
 聚宽采集 → MySQL 模块数据表 → 后台只读同步 → 本地 SQLite 快照
 ```

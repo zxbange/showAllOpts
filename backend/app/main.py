@@ -12,6 +12,7 @@ from sqlalchemy.orm import sessionmaker
 from app.api.router import router
 from app.core.cache import CacheUnavailable, SnapshotCache
 from app.core.config import Settings
+from app.core.cache_schedule import CacheScheduleError
 from app.core.database import build_engine
 from app.core.logging import ensure_logging
 from app.services.social import SocialMonitor
@@ -57,6 +58,7 @@ def create_app(settings: Settings | None = None, engine: Engine | None = None) -
     application.add_middleware(CORSMiddleware, allow_origins=settings.cors_origins,
                                allow_methods=['GET', 'POST'], allow_headers=['Content-Type', 'Authorization', 'X-Browser-Login-Key'])
 
+    @application.exception_handler(CacheScheduleError)
     @application.exception_handler(CacheUnavailable)
     async def cache_unavailable(request: Request, exc: CacheUnavailable):
         return JSONResponse(status_code=503, content={'detail': str(exc), 'code': 'CACHE_NOT_READY'})

@@ -98,7 +98,7 @@ Compose 在宿主机读取文件，将键值注入后端容器环境。`config/`
 
 ## 本地缓存配置
 
-默认使用磁盘快照，`CACHE_ENABLED=true`、`CACHE_AUTO_REFRESH=true`、`CACHE_REFRESH_TIME=20:00`（北京时间）。快照目录固定为当前 `LOG_DIR` 下的 `cache/`，可复用现有目录权限和持久化挂载。网页可直接选择全部模块或指定模块同步，无需密钥；旧的 `CACHE_REFRESH_TOKEN` 配置已不再使用。CLI 仍须使用与服务相同的配置和运行账号。后台同步读取超时 `CACHE_DB_READ_TIMEOUT=600`（秒），网络失败总尝试次数 `CACHE_SYNC_ATTEMPTS=3`；这两个默认值无需在旧配置中补填即可生效。修改配置后重启后端。
+默认使用磁盘快照，`CACHE_ENABLED=true`、`CACHE_AUTO_REFRESH=true`、`CACHE_REFRESH_TIME=07:00`（北京时间）。快照目录固定为当前 `LOG_DIR` 下的 `cache/`，可复用现有目录权限和持久化挂载。网页可直接选择全部模块或指定模块同步，无需密钥；旧的 `CACHE_REFRESH_TOKEN` 配置已不再使用。CLI 仍须使用与服务相同的配置和运行账号。后台同步读取超时 `CACHE_DB_READ_TIMEOUT=600`（秒），网络失败总尝试次数 `CACHE_SYNC_ATTEMPTS=3`；这两个默认值无需在旧配置中补填即可生效。同步时间可在页面直接保存，无需重启；页面保存优先，旧默认20:00自动迁移为07:00，其他自定义配置保留，详见[本地缓存时间设置](local-cache.md)。其他配置修改后重启后端。
 
 两融担保比例使用独立的中证官方采集任务，`MARGIN_WORKER_ENABLED=true` 为默认值，旧配置无需补填。每天北京时间20:00检查（约30秒调度间隔），不受 `CACHE_REFRESH_TIME` 影响；设为 `false` 只关闭该模块定时任务，仍可手动更新。本地数据与续传清单位于 `LOG_DIR/market-data/margin-guarantee/`，需持久化保留。启动不立即补跑，首次可在“两融担保比例”页面点击“更新数据”。
 

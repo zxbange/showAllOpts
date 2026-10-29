@@ -142,7 +142,8 @@
   font-size: 13px;
   color: var(--muted);
 }
-.cache-fields select {
+.cache-fields select,
+.cache-fields input[type='time'] {
   display: block;
   width: 100%;
   min-width: 0;
@@ -243,4 +244,8 @@
 .cache-row-error,
 .cache-row small {
   overflow-wrap: anywhere;
+}
+
+.cache-schedule {
+  margin: 0 0 18px;
 }

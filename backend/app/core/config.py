@@ -74,7 +74,7 @@ class Settings(BaseSettings):
 
     cache_enabled: bool = True
     cache_auto_refresh: bool = True
-    cache_refresh_time: str = Field(default='20:00', pattern=r'^(?:[01]\d|2[0-3]):[0-5]\d$')
+    cache_refresh_time: str = Field(default='07:00', pattern=r'^(?:[01][0-9]|2[0-3]):[0-5][0-9]$')
 
     cache_db_read_timeout: int = Field(default=600, ge=5, le=3600)
     cache_ownership_compression: bool = True

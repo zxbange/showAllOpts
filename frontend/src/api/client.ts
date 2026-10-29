@@ -150,3 +150,18 @@ export const getShortTerm = (day: string, method: string, offset: number, signal
       new URLSearchParams({ ...(day ? { day } : {}), method, offset: String(offset), limit: '6' }),
     signal,
   )
+
+export async function saveCacheSchedule(dailyTime: string) {
+  const response = await fetch(`${API_BASE}/cache/schedule`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ daily_time: dailyTime }),
+  })
+  if (!response.ok) {
+    const body = await response.json().catch(() => null)
+    throw new Error(
+      typeof body?.detail === 'string' ? body.detail : '无法保存同步时间，请稍后重试。',
+    )
+  }
+  return response.json() as Promise<import('../types/cache').CacheSchedule>
+}

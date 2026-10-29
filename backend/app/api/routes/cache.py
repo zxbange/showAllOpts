@@ -2,6 +2,7 @@
 from fastapi import APIRouter, HTTPException, Request, Response
 from pydantic import BaseModel, Field
 from app.core.cache import MODULES
+from app.core.cache_schedule import TIME_PATTERN
 
 router = APIRouter(prefix='/cache', tags=['数据同步'])
 
@@ -40,3 +41,16 @@ def cancel(body: CancelRequest, request: Request):
     if not request.app.state.cache.cancel(body.run_id, body.module):
         raise HTTPException(status_code=409, detail='该同步任务已结束，请刷新状态。')
     return {'accepted': True}
+
+
+class ScheduleRequest(BaseModel):
+    daily_time: str = Field(pattern=TIME_PATTERN, min_length=5, max_length=5)
+
+
+@router.post('/schedule')
+def save_schedule(body: ScheduleRequest, request: Request, response: Response):
+    cache = request.app.state.cache
+    if not cache.settings.cache_enabled:
+        raise HTTPException(status_code=409, detail='当前未启用本地缓存。')
+    response.headers['Cache-Control'] = 'no-store'
+    return cache.save_schedule(body.daily_time)

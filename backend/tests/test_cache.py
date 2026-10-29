@@ -137,7 +137,7 @@ def test_cross_instance_lock_rejects_duplicate_jobs(cached, engine):
 
 def test_daily_schedule_and_restart_do_not_duplicate_completed_slot(cached, engine, monkeypatch):
     settings, cache = cached
-    morning = datetime(2026,10,18,10,tzinfo=CHINA)
+    morning = datetime(2026,10,18,6,tzinfo=CHINA)
     monkeypatch.setattr('app.core.cache.now', lambda: morning)
     cache.tick(morning)
     assert cache.read_state()['modules'] == {}
@@ -145,19 +145,19 @@ def test_daily_schedule_and_restart_do_not_duplicate_completed_slot(cached, engi
     first = cache.read_state()['modules']['industry-momentum']['file']
     SnapshotCache(settings,engine).tick(morning)
     assert cache.read_state()['modules']['industry-momentum']['file'] == first
-    assert settings.cache_refresh_time == '20:00'
-    cache.tick(morning.replace(hour=18))
-    cache.tick(morning.replace(hour=19, minute=59))
+    assert settings.cache_refresh_time == '07:00'
+    cache.tick(morning.replace(hour=6, minute=30))
+    cache.tick(morning.replace(hour=6, minute=59))
     assert cache.read_state()['modules']['industry-momentum']['file'] == first
-    evening = morning.replace(hour=20)
+    evening = morning.replace(hour=7)
     monkeypatch.setattr('app.core.cache.now', lambda: evening)
     cache.tick(evening)
     second = cache.read_state()['modules']['industry-momentum']['file']
     assert second == first  # Scheduled no-op reuses the immutable snapshot.
-    assert cache.read_state()['scheduled_slot'] == latest_slot(evening, '20:00').isoformat()
+    assert cache.read_state()['scheduled_slot'] == latest_slot(evening, '07:00').isoformat()
     cache.tick(evening+timedelta(seconds=30))
     assert cache.read_state()['modules']['industry-momentum']['file'] == second
-    assert latest_slot(morning,'20:00').isoformat() == '2026-10-17T20:00:00+08:00'
+    assert latest_slot(morning,'07:00').isoformat() == '2026-10-17T07:00:00+08:00'
 
 
 def test_api_missing_cache_never_falls_back_and_sync_needs_no_secret(cached, engine, monkeypatch):
@@ -249,7 +249,7 @@ def test_real_background_refresh_and_lifespan_shutdown(cached, engine):
 
 def test_interrupted_schedule_resumes_pending_modules(cached, monkeypatch):
     _, cache = cached
-    clock=datetime(2026,10,18,18,tzinfo=CHINA)
+    clock=datetime(2026,10,18,6,tzinfo=CHINA)
     monkeypatch.setattr('app.core.cache.now',lambda:clock)
     cache.refresh(background=False)
     state=cache.read_state()
@@ -270,7 +270,7 @@ def test_interrupted_schedule_resumes_pending_modules(cached, monkeypatch):
 
 def test_missing_module_waits_for_manual_or_next_schedule(cached, monkeypatch):
     _, cache = cached
-    clock=datetime(2026,10,18,18,tzinfo=CHINA)
+    clock=datetime(2026,10,18,6,tzinfo=CHINA)
     monkeypatch.setattr('app.core.cache.now',lambda:clock)
     original=cache.copy_module
     calls=[]
@@ -284,9 +284,9 @@ def test_missing_module_waits_for_manual_or_next_schedule(cached, monkeypatch):
     cache.tick(clock+timedelta(minutes=1))
     cache.tick(clock+timedelta(minutes=5))
     assert calls == []
-    cache.tick(clock.replace(hour=20))
+    cache.tick(clock.replace(hour=7))
     assert len(calls) == len(MODULES)
-    cache.tick(clock.replace(hour=20, minute=5))
+    cache.tick(clock.replace(hour=7, minute=5))
     assert len(calls) == len(MODULES)
 
 

@@ -12,6 +12,8 @@ import time
 import uuid
 
 import portalocker
+
+from app.core.cache_schedule import CacheSchedule
 from sqlalchemy import create_engine, text, select
 from sqlalchemy.orm import Session
 from sqlalchemy.pool import NullPool
@@ -89,6 +91,8 @@ class SnapshotCache:
         self.scheduler = None
         self.worker = None
         self.schedule_floor = None
+        self.schedule_revision = None
+        self.schedule = CacheSchedule(settings)
 
     def read_state(self):
         try:
@@ -152,10 +156,35 @@ class SnapshotCache:
         path = self.root / name
         return path if path.is_file() else None
 
+    def schedule_floor_for(self, plan, moment):
+        if self.schedule_floor is None:
+            return latest_slot(moment, plan['daily_time']).isoformat()
+        if self.schedule_revision != plan['revision']:
+            changed = datetime.fromisoformat(plan['changed_at']) if plan['changed_at'] else moment
+            return latest_slot(changed, plan['daily_time']).isoformat()
+        return self.schedule_floor
+
+    def schedule_status(self):
+        plan = self.schedule.read()
+        moment = now()
+        slot = latest_slot(moment, plan['daily_time'])
+        if slot.isoformat() <= self.schedule_floor_for(plan, moment):
+            slot += timedelta(days=1)
+        attempted = self.read_state().get('scheduled_slot', '')
+        while slot.date().isoformat() <= attempted[:10]:
+            slot += timedelta(days=1)
+        return {'daily_time': plan['daily_time'], 'timezone': 'Asia/Shanghai',
+                'next_refresh_at': slot.isoformat() if self.settings.cache_enabled and self.settings.cache_auto_refresh else None}
+
+    def save_schedule(self, daily_time):
+        self.schedule.save(daily_time, now)
+        return self.schedule_status()
+
     def status(self):
+        schedule = self.schedule_status()
         if not self.settings.cache_enabled:
             return {'enabled': False, 'refreshing': False, 'manual_enabled': False,
-                    'daily_time': self.settings.cache_refresh_time, 'timezone': 'Asia/Shanghai',
+                    **schedule,
                     'auto_refresh': False, 'modules': []}
         state = self.read_state()
         running = self.refreshing()
@@ -177,7 +206,7 @@ class SnapshotCache:
                 'run_id': state.get('run_id') if running else None,
                 'cancelling': bool(running and state.get('run_id') and (self.root / ('cancel-' + state['run_id'])).exists()),
                 'manual_enabled': True,
-                'daily_time': self.settings.cache_refresh_time, 'timezone': 'Asia/Shanghai',
+                **schedule,
                 'auto_refresh': self.settings.cache_auto_refresh, 'modules': items}
 
     @contextmanager
@@ -286,7 +315,7 @@ class SnapshotCache:
                 state['modules'].setdefault(module, {})['error'] = None
                 state['modules'][module]['progress'] = {'status': 'waiting', 'stage': '等待同步', 'processed': 0, 'percent': 0}
             if slot:
-                state['scheduled_slot'] = slot
+                state['scheduled_slot'] = max(state.get('scheduled_slot', ''), slot)
             self.write_state(state)
             for module in modules:
                 if self.stop_event.is_set() or marker.exists():
@@ -377,6 +406,7 @@ class SnapshotCache:
             raise CacheUnavailable('本地缓存未启用。')
         if module is not None and module not in MODULES:
             raise ValueError('Unknown cache module')
+        daily_time = self.schedule.read()['daily_time']
         lock = self.acquire()
         if lock is None:
             return False
@@ -386,7 +416,7 @@ class SnapshotCache:
         pending = [m for m in state.get('pending', []) if m in MODULES]
         selected += [m for m in pending if m not in selected]
         full = full or bool(pending and state.get('pending_full'))
-        slot = latest_slot(now(), self.settings.cache_refresh_time).isoformat() if module is None else None
+        slot = latest_slot(now(), daily_time).isoformat() if module is None else None
         if background:
             self.worker = threading.Thread(target=self._run_background, args=(lock, selected, reason, slot, full),
                                            name='cache-refresh', daemon=True)
@@ -418,20 +448,26 @@ class SnapshotCache:
 
     def tick(self, moment=None):
         moment = moment or now()
-        slot = latest_slot(moment, self.settings.cache_refresh_time).isoformat()
-        if self.schedule_floor is None:
-            self.schedule_floor = slot
-        # Read schedule state after acquiring the shared lock: multiple Uvicorn workers run this loop.
+        # Claim a run while holding both locks; saves only take the short schedule lock,
+        # so changing tomorrow's plan never waits for a long database transfer.
         lock = self.acquire()
         if lock is None:
             return
         try:
-            state = self.read_state()
-            if slot <= self.schedule_floor or state.get('scheduled_slot') == slot:
-                lock.release()
-                return
-            selected, reason = list(MODULES), 'scheduled'
-            full = bool(state.get('pending') and state.get('pending_full'))
+            with self.schedule.locked():
+                plan = self.schedule.read()
+                slot = latest_slot(moment, plan['daily_time']).isoformat()
+                self.schedule_floor = self.schedule_floor_for(plan, moment)
+                self.schedule_revision = plan['revision']
+                state = self.read_state()
+                # At most one claimed daily slot, even after changing its clock time.
+                if slot <= self.schedule_floor or state.get('scheduled_slot', '')[:10] >= slot[:10]:
+                    lock.release()
+                    return
+                selected, reason = list(MODULES), 'scheduled'
+                full = bool(state.get('pending') and state.get('pending_full'))
+                state['scheduled_slot'] = slot
+                self.write_state(state)
         except BaseException:
             lock.release()
             raise
