@@ -379,12 +379,12 @@ def stock_samples(code, bars, universe, calendar, start, end, params):
     return result.loc[base & in_window].copy(), coverage
 
 
-def select_signals(samples, params):
+def select_signals(samples, params, strategies=None):
     samples = samples.copy()
     samples['strength_rank'] = samples.groupby('signal_date')['ret10'].rank(pct=True, method='average')
     samples[STRATEGIES[0]] &= samples['strength_rank'] > params['strength_quantile']
     pieces = []
-    for method in STRATEGIES:
+    for method in (STRATEGIES if strategies is None else strategies):
         selected = samples.loc[samples[method]].copy()
         selected['strategy'] = method
         selected['anchor_date'] = selected[method + '_anchor']
@@ -671,9 +671,9 @@ def make_three_selector():
 
 THREE_METHODS = {'redhover': '红悬停龙', 'xuli': '蓄力龙', 'bukou': '补票龙'}
 ALL_STRATEGIES = STRATEGIES + list(THREE_METHODS.values())
-THREE_RULE_VERSION = 'stock_three_patterns_v2_nonst_cap30'
-THREE_SCOPE = 'production_prefix_0_3_4_6_8_9'
-THREE_PRICE_MODE = 'jq_pre_exact_signal_window'
+VALIDATION_NOTICE = ('统一四策略数据口径的验证：七策略共用四策略沪深股票池、基础过滤、后复权价格及收盘表现口径。'
+    '三个短线形态保留原条件和阈值，但复权基准、红悬停价格取整及股票池改变可能使信号不同于原生产选股；'
+    '本结果不是原三策略生产信号的精确复现。')
 
 
 def four_stock(code):
@@ -725,125 +725,46 @@ def validate_schema(engine):
                      'paused', 'high_limit', 'low_limit'])
 
 
-def validate_three_sources(engine, calendar, start, end):
-    """No approximation from post-adjusted/rounded bars and no silent narrower universe."""
-    explanation = ('三策略精确回放需要生产范围的历史股票池及当日前复权90日窗口。'
-        '现有四策略采集仅沪深、只保存未复权/后复权OHLC；factor未记录前复权基准且价格已取整，'
-        '不能保证还原红悬停两位小数阈值。缺少 short_research_coverage / short_research_window '
-        '时仅可运行 --strategies four；不自动联网补采，不静默改用沪深子集。')
-    try:
-        require_columns(engine, 'short_research_coverage', ['signal_date', 'universe_scope',
-            'universe_count', 'eligible_count', 'rule_version', 'price_mode', 'window_days'])
-        require_columns(engine, 'short_research_window',
-            ['signal_date', 'code', 'trade_date', 'open', 'high', 'low', 'close', 'volume'])
-    except ValueError:
-        raise ValueError(explanation) from None
-    expected = calendar[(calendar >= start) & (calendar <= end)]
-    coverage = read_sql(engine, '''SELECT * FROM short_research_coverage
-        WHERE signal_date BETWEEN :start AND :end ORDER BY signal_date''',
-        {'start': start.date(), 'end': end.date()})
-    coverage['signal_date'] = pd.to_datetime(coverage['signal_date']).dt.normalize()
-    if (coverage['signal_date'].duplicated().any()
-            or list(coverage['signal_date']) != list(expected)):
-        raise ValueError('三策略完整性清单缺少信号交易日或有重复，无法证明历史池完整；不输出部分统计。')
-    if (not coverage['universe_scope'].eq(THREE_SCOPE).all()
-            or not coverage['rule_version'].eq(THREE_RULE_VERSION).all()
-            or not coverage['price_mode'].eq(THREE_PRICE_MODE).all()
-            or not coverage['window_days'].eq(90).all()):
-        raise ValueError(explanation + ' 完整性清单的范围、规则或复权来源不匹配。')
-    for col in ('universe_count', 'eligible_count'):
-        values = pd.to_numeric(coverage[col], errors='coerce')
-        if not (np.isfinite(values) & (values >= 0) & (values % 1 == 0)).all():
-            raise ValueError('三策略完整性清单计数无效：' + col)
-    if (coverage['universe_count'].le(0).any()
-            or (coverage['eligible_count'] > coverage['universe_count']).any()):
-        raise ValueError('三策略完整性清单股票池计数无效。')
-    return coverage.set_index('signal_date')
-
-
-def three_samples(engine, calendar, start, end, chosen, progress):
-    manifest = validate_three_sources(engine, calendar, start, end)
-    selector = make_three_selector()
-    rows, quality = [], []
-    signal_days = calendar[(calendar >= start) & (calendar <= end)]
-    progress.phase('读取三策略历史窗口/计算信号', total=len(signal_days))
-    for count, day in enumerate(signal_days, 1):
+def add_three_candidates(code, samples, bars, universe, calendar, start, end, params, selector):
+    """Evaluate unchanged short-term formulas on the same post-adjusted data and base pool."""
+    result = samples.copy()
+    history = dated_frame(bars, '股票行情').set_index('trade_date').reindex(calendar)
+    snapshots = dated_frame(universe, '股票快照').set_index('trade_date').reindex(calendar)
+    for name in THREE_METHODS.values():
+        result[name] = False
+        result[name + '_anchor'] = pd.NaT
+    # Missing data must not masquerade as an untriggered pattern, including gaps
+    # inside the original 60-day readiness filter. Validate the historical pool first.
+    ages = (pd.Series(calendar, index=calendar) - pd.to_datetime(snapshots['listed_date'], errors='coerce')).dt.days
+    potential = ((snapshots['eligible'] == 1) & (snapshots['is_st'] == 0)
+                 & (snapshots['market_cap'] >= params['min_market_cap'])
+                 & (ages >= params['min_listing_days']) & (calendar >= start) & (calendar <= end))
+    for day in calendar[potential]:
         position = calendar.get_loc(day)
-        days = calendar[max(0, position - 89):position + 1]
-        if len(days) != 90:
-            raise ValueError('三策略{}之前不足90日指标窗口。'.format(day.date()))
-        universe = dated_frame(read_sql(engine, '''SELECT * FROM ultra_research_universe
-            WHERE trade_date=:day ORDER BY code''', {'day': day.date()}), '历史股票池')
-        # Validate full historical production pool, including stocks later delisted.
-        codes_ok = universe['code'].map(lambda c: isinstance(c, str) and c.startswith(('0','3','4','6','8','9')))
-        universe = universe.loc[codes_ok].copy()
-        expected = manifest.loc[day]
-        if len(universe) != expected['universe_count']:
-            raise ValueError('{} 三策略历史股票池数量与完整性清单不符；不输出部分统计。'.format(day.date()))
-        universe['listed_date'] = pd.to_datetime(universe['listed_date'], errors='coerce')
-        caps = pd.to_numeric(universe['market_cap'], errors='coerce')
-        if (not universe['is_st'].isin([0, 1]).all() or not (np.isfinite(caps) & (caps > 0)).all()
-                or universe['listed_date'].isna().any() or (universe['listed_date'] > day).any()):
-            raise ValueError('{} 历史股票池ST、市值或上市日期缺失。'.format(day.date()))
-        eligible = universe.loc[(universe['is_st'] == 0) & (caps >= 30)]
-        if len(eligible) != expected['eligible_count']:
-            raise ValueError('{} 三策略合格股票池与清单不符。'.format(day.date()))
-        for offset in range(0, len(eligible), READ_BATCH_SIZE):
-            stocks = eligible.iloc[offset:offset + READ_BATCH_SIZE]
-            codes = stocks['code'].tolist()
-            windows = dated_frame(read_sql(engine, '''SELECT * FROM short_research_window
-                WHERE signal_date=:day AND code IN :codes ORDER BY code, trade_date''',
-                {'day': day.date()}, codes=codes), '当日前复权窗口')
-            picked = []
-            for _, stock in stocks.iterrows():
-                code = stock['code']
-                hist = windows[windows['code'] == code].copy()
-                dates = days[days >= stock['listed_date']]
-                if list(hist['trade_date']) != list(dates):
-                    raise ValueError('{} {} 前复权窗口缺日、越界或预热不足；不输出部分统计。'.format(day.date(), code))
-                for col in ('open', 'high', 'low', 'close', 'volume'):
-                    hist[col] = pd.to_numeric(hist[col], errors='coerce')
-                    valid = np.isfinite(hist[col]) & (hist[col] >= 0 if col == 'volume' else hist[col] > 0)
-                    if not valid.all():
-                        raise ValueError('{} {} 前复权窗口数值无效：{}'.format(day.date(), code, col))
-                hist['date'] = hist['trade_date'].dt.date
-                hist['pre_close'] = hist['close'].shift(1)
-                hist['pct_chg'] = (hist['close'] / hist['pre_close'] - 1) * 100
-                methods = [THREE_METHODS[key] for key in selector.evaluate(hist, code) if THREE_METHODS[key] in chosen]
-                if methods:
-                    picked.append((stock, methods))
-            if not picked:
-                continue
-            future_days = calendar[position:position+4]
-            bars = dated_frame(read_sql(engine, '''SELECT * FROM ultra_research_bar
-                WHERE asset_type='stock' AND code IN :codes AND trade_date BETWEEN :first AND :last
-                ORDER BY code, trade_date''', {'first': day.date(), 'last': future_days[-1].date()},
-                codes=[stock['code'] for stock, methods in picked]), '后续收盘行情')
-            for stock, methods in picked:
-                code = stock['code']
-                frame = bars[bars['code'] == code].set_index('trade_date').reindex(future_days)
-                for col in ('close', 'adj_close', 'paused'):
-                    frame[col] = pd.to_numeric(frame[col], errors='coerce').replace([np.inf, -np.inf], np.nan)
-                frame.loc[~frame['paused'].isin([0, 1]), 'paused'] = np.nan
-                if not (frame['close'].iloc[0] > 0 and frame[RETURN_PRICE_FIELD].iloc[0] > 0):
-                    raise ValueError('{} {} 信号日收益基准价格缺失。'.format(day.date(), code))
-                outcome = forward_outcomes(frame).iloc[0].to_dict()
-                for method in methods:
-                    rows.append(dict(outcome, strategy=method, code=code, signal_date=day,
-                        display_name=stock['display_name'], market_cap=stock['market_cap'], anchor_date=pd.NaT,
-                        signal_close=frame[RETURN_PRICE_FIELD].iloc[0], signal_raw_close=frame['close'].iloc[0],
-                        signal_adj_close=frame['adj_close'].iloc[0]))
-        quality.append(dict(signal_date=str(day.date()), universe_count=len(universe),
-                            evaluated_count=len(eligible), source='three_exact_windows'))
-        progress.update(done=count, detail=str(day.date()))
-    columns = ['strategy', 'code', 'signal_date', 'display_name', 'market_cap', 'anchor_date',
-               'signal_close', 'signal_raw_close', 'signal_adj_close']
-    columns += ['d{}_{}'.format(h, field) for h in (1,2,3) for field in ('date','close','status','return_pct','win')]
-    result = pd.DataFrame(rows, columns=columns)
-    result['signal_date'] = pd.to_datetime(result['signal_date'])
-    for h in (1,2,3):
-        result['d{}_return_pct'.format(h)] = pd.to_numeric(result['d{}_return_pct'.format(h)])
-    return result, quality
+        window = history.iloc[max(0, position-89):position+1].copy()
+        listed = pd.to_datetime(snapshots.loc[day, 'listed_date'])
+        window = window[window.index >= listed]
+        expected = calendar[max(0, position-89):position+1]
+        expected = expected[expected >= listed]
+        if len(expected) < 90 or len(window) != len(expected):
+            raise ValueError('{} {} 缺少三策略90交易日预热窗口。'.format(day.date(), code))
+        frame = pd.DataFrame(index=window.index)
+        for name in ('open', 'high', 'low', 'close'):
+            frame[name] = pd.to_numeric(window['adj_' + name], errors='coerce')
+            if not (np.isfinite(frame[name]) & (frame[name] > 0)).all():
+                raise ValueError('{} {} 三策略预热行情缺失或无效：adj_{}；不输出部分统计。'.format(
+                    day.date(), code, name))
+        frame['volume'] = pd.to_numeric(window['volume'], errors='coerce')
+        if not (np.isfinite(frame['volume']) & (frame['volume'] >= 0)).all():
+            raise ValueError('{} 三策略预热成交量缺失或无效。'.format(day.date()))
+        if day not in result.index:
+            continue  # The remaining four-strategy base filters rejected this signal day.
+        frame['date'] = frame.index.date
+        frame['pre_close'] = frame['close'].shift(1)
+        frame['pct_chg'] = (frame['close']/frame['pre_close']-1)*100
+        for key in selector.evaluate(frame, code):
+            result.loc[day, THREE_METHODS[key]] = True
+    return result
 
 
 def run(start_date=START_DATE, end_date=END_DATE, as_of=AS_OF_DATE, output_dir=OUTPUT_DIR,
@@ -853,6 +774,7 @@ def run(start_date=START_DATE, end_date=END_DATE, as_of=AS_OF_DATE, output_dir=O
     p = dict(PARAMS, **(params or {}))
     owned = engine is None
     print('七策略收盘胜率统计 v' + SCRIPT_VERSION)
+    print(VALIDATION_NOTICE, flush=True)
     try:
         with StatisticsProgress(enabled=show_progress) as progress:
             progress.phase('连接数据库/读取日历')
@@ -863,55 +785,49 @@ def run(start_date=START_DATE, end_date=END_DATE, as_of=AS_OF_DATE, output_dir=O
                 engine = make_engine(DB_CONFIG if db_config is None else db_config,
                                      tls_verify=tls_verify, tls_ca_pem=tls_ca_pem)
             validate_schema(engine)
-            start, end, observed, calendar = load_plan(engine, start_date, end_date, as_of,
-                warmup_days=WARMUP_DAYS if any(name in STRATEGIES for name in chosen) else 89)
-            if any(name in THREE_METHODS.values() for name in chosen):
-                validate_three_sources(engine, calendar, start, end)
+            start, end, observed, calendar = load_plan(engine, start_date, end_date, as_of)
             bounds = dict(first=calendar[0].date(), last=observed.date())
             progress.phase('读取股票清单')
-            coverage, pieces = [], []
-            if any(name in STRATEGIES for name in chosen):
-                codes = read_sql(engine, '''SELECT DISTINCT code FROM ultra_research_universe
-                    WHERE trade_date BETWEEN :first AND :last AND eligible=1 AND is_st=0
-                    AND market_cap>=:cap ORDER BY code''',
-                    dict(first=start.date(), last=end.date(), cap=p['min_market_cap']))['code'].tolist()
-                codes = [code for code in codes if four_stock(code)]
-                if not codes:
-                    raise ValueError('研究区间没有合格股票快照，请检查采集进度和日期')
-                frames, coverage = [], []
-                progress.write('信号区间 {} ~ {}；观察截至 {}；股票{}只。'.format(
-                    start.date(), end.date(), observed.date(), len(codes)))
-                progress.phase('读取行情/计算策略', total=len(codes))
-                for offset in range(0, len(codes), READ_BATCH_SIZE):
-                    batch = codes[offset:offset+READ_BATCH_SIZE]
-                    progress.update(detail='读取行情 批次{}/{}'.format(
-                        offset//READ_BATCH_SIZE+1, (len(codes)+READ_BATCH_SIZE-1)//READ_BATCH_SIZE))
-                    bars = dated_frame(read_sql(engine, '''SELECT * FROM ultra_research_bar
-                        WHERE asset_type='stock' AND code IN :codes AND trade_date BETWEEN :first AND :last
-                        ORDER BY code, trade_date''', bounds, codes=batch), '股票行情')
-                    progress.update(detail='读取历史快照')
-                    universe = dated_frame(read_sql(engine, '''SELECT * FROM ultra_research_universe
-                        WHERE code IN :codes AND trade_date BETWEEN :first AND :last
-                        ORDER BY code, trade_date''', bounds, codes=batch), '股票快照')
-                    bar_groups, universe_groups = dict(tuple(bars.groupby('code'))), dict(tuple(universe.groupby('code')))
-                    for stock_pos, code in enumerate(batch, 1):
-                        progress.update(detail='计算 ' + code)
-                        frame, quality = stock_samples(code, bar_groups.get(code, bars.iloc[:0]),
-                            universe_groups.get(code, universe.iloc[:0]), calendar, start, end, p)
-                        frames.append(frame)
-                        coverage.append(quality)
-                        progress.update(done=offset+stock_pos)
-                if not sum(item['base_samples'] for item in coverage):
-                    raise ValueError('没有可用基础样本，请检查历史快照、行情完整性、预热长度及筛选参数')
-                progress.phase('筛选信号/汇总胜率')
-                details = select_signals(pd.concat(frames, ignore_index=True), p)
-                details = details[details['strategy'].isin(chosen)]
-                pieces.append(details)
-            if any(name in THREE_METHODS.values() for name in chosen):
-                extra, quality = three_samples(engine, calendar, start, end, chosen, progress)
-                pieces.append(extra)
-                coverage.extend(quality)
-            details = pd.concat(pieces, ignore_index=True).sort_values(["signal_date", "strategy", "code"]).reset_index(drop=True)
+            codes = read_sql(engine, '''SELECT DISTINCT code FROM ultra_research_universe
+                WHERE trade_date BETWEEN :first AND :last AND eligible=1 AND is_st=0
+                AND market_cap>=:cap ORDER BY code''',
+                dict(first=start.date(), last=end.date(), cap=p['min_market_cap']))['code'].tolist()
+            codes = [code for code in codes if four_stock(code)]
+            if not codes:
+                raise ValueError('研究区间没有合格股票快照，请检查采集进度和日期')
+            frames, coverage = [], []
+            need_three = any(name in THREE_METHODS.values() for name in chosen)
+            selector = make_three_selector() if need_three else None
+            progress.write('信号区间 {} ~ {}；观察截至 {}；股票{}只。'.format(
+                start.date(), end.date(), observed.date(), len(codes)))
+            progress.phase('读取行情/计算策略', total=len(codes))
+            for offset in range(0, len(codes), READ_BATCH_SIZE):
+                batch = codes[offset:offset+READ_BATCH_SIZE]
+                progress.update(detail='读取行情 批次{}/{}'.format(
+                    offset//READ_BATCH_SIZE+1, (len(codes)+READ_BATCH_SIZE-1)//READ_BATCH_SIZE))
+                bars = dated_frame(read_sql(engine, '''SELECT * FROM ultra_research_bar
+                    WHERE asset_type='stock' AND code IN :codes AND trade_date BETWEEN :first AND :last
+                    ORDER BY code, trade_date''', bounds, codes=batch), '股票行情')
+                progress.update(detail='读取历史快照')
+                universe = dated_frame(read_sql(engine, '''SELECT * FROM ultra_research_universe
+                    WHERE code IN :codes AND trade_date BETWEEN :first AND :last
+                    ORDER BY code, trade_date''', bounds, codes=batch), '股票快照')
+                bar_groups, universe_groups = dict(tuple(bars.groupby('code'))), dict(tuple(universe.groupby('code')))
+                for stock_pos, code in enumerate(batch, 1):
+                    progress.update(detail='计算 ' + code)
+                    frame, quality = stock_samples(code, bar_groups.get(code, bars.iloc[:0]),
+                        universe_groups.get(code, universe.iloc[:0]), calendar, start, end, p)
+                    if need_three:
+                        frame = add_three_candidates(code, frame, bar_groups.get(code, bars.iloc[:0]),
+                            universe_groups.get(code, universe.iloc[:0]), calendar, start, end, p, selector)
+                    frames.append(frame)
+                    coverage.append(quality)
+                    progress.update(done=offset+stock_pos)
+            if not sum(item['base_samples'] for item in coverage):
+                raise ValueError('没有可用基础样本，请检查历史快照、行情完整性、预热长度及筛选参数')
+            progress.phase('筛选信号/汇总胜率')
+            details = select_signals(pd.concat(frames, ignore_index=True), p, chosen)
+            details = details[details['strategy'].isin(chosen)]
             if details.duplicated(["signal_date", "strategy", "code"]).any():
                 raise ValueError("同策略同日同股出现重复样本")
             summary, windows = summary_table(details, chosen), window_summary(details, chosen)
@@ -934,7 +850,13 @@ def run(start_date=START_DATE, end_date=END_DATE, as_of=AS_OF_DATE, output_dir=O
             metadata = dict(version=SCRIPT_VERSION, signal_start=str(start.date()), signal_end=str(end.date()),
                 observed_through=str(observed.date()), warmup_start=str(calendar[0].date()),
                 params=p, default_rules=RULES, return_price_field=RETURN_PRICE_FIELD, strategies=chosen,
-                three_signal_source="已存当日前复权90日窗口，按生产规则重新计算；不是读取既有候选名单",
+                shared_base_samples=sum(item["base_samples"] for item in coverage),
+                shape_history_rows={"红悬停龙": 4, "蓄力龙": 65, "补票龙": 60},
+                validation_notice=VALIDATION_NOTICE,
+                signal_source="ultra_research_*已有行情重算；非历史已存候选信号",
+                short_pattern_price="adj_open/adj_high/adj_low/adj_close（后复权）",
+                short_pattern_volume="volume（未复权查询）",
+                short_window_days=90, universe_scope="原四策略沪深池及signal_eligibility过滤",
                 main_metric='信号日收盘为基准；严格正收益计胜，持平计入分母；各期限独立有效样本',
                 limitations=['日线触发近似，不能判断盘中先后或成交', '同股不同日和同日不同股可能相关，非独立交易',
                              '不含行业强弱与公告利空过滤', '缺失/停牌单列且不纳入有效胜率分母，需同时审查数量'])

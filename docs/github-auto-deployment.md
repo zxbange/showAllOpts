@@ -45,4 +45,4 @@
 
 ## 仅本地研究变更
 
-所有main推送仍跑完整CI。`scripts/deployment_impact.py` 比较推送前后完整差异，仅独立统计脚本及明确关联说明/测试白名单内的变更跳过deploy。未知路径、共享策略、应用、工作流、依赖、部署工具和混合变更仍部署；比较失败保守需要部署，手动deploy/check行为不变。白名单边界及首次发布说明见[七策略统计](seven-strategy-statistics.md#提交是否部署)。
+所有main推送仍跑完整CI。`scripts/deployment_impact.py` 比较推送前后完整差异，仅独立统计脚本及明确关联说明/测试白名单内的变更跳过deploy。未知路径、共享策略、应用、工作流、依赖、部署工具和混合变更仍部署；比较失败、SHA缺失/非祖先或空差异时阻止自动发布；手动deploy/check不执行推送分类，行为不变。白名单边界及首次发布说明见[七策略统计](seven-strategy-statistics.md#提交是否部署)。

@@ -18,100 +18,6 @@ impact = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(impact)
 
 
-def seed_three(engine, calendar, dates, code='000001.XSHE'):
-    manifest, windows = [], []
-    for day in dates:
-        manifest.append(dict(signal_date=day.date(), universe_scope=m.THREE_SCOPE,
-            universe_count=1, eligible_count=1, rule_version=m.THREE_RULE_VERSION,
-            price_mode=m.THREE_PRICE_MODE, window_days=90))
-        frame = prices([10.]*86+[10.,11.,11.2,11.3], calendar[calendar.get_loc(day)-89:calendar.get_loc(day)+1])
-        frame.loc[frame.index[-2:], 'low'] = 11.1
-        for date, row in frame.iterrows():
-            windows.append(dict(signal_date=day.date(), code=code, trade_date=date.date(),
-                                **{key: row[key] for key in ('open','high','low','close','volume')}))
-    pd.DataFrame(manifest).to_sql('short_research_coverage', engine, index=False)
-    pd.DataFrame(windows).to_sql('short_research_window', engine, index=False)
-
-
-@pytest.fixture
-def db():
-    engine = create_engine('sqlite:///:memory:')
-    calendar = pd.bdate_range(end='2023-12-29', periods=160).append(pd.bdate_range('2024-01-02','2024-01-05'))
-    database(engine, prices([10.]*160 + [10.,11.,10.,9.], calendar))
-    seed_three(engine, calendar, calendar[160:])
-    yield engine, calendar
-    engine.dispose()
-
-
-def test_seven_selection_default_and_unknown():
-    assert m.START_DATE == '2024-01-01'
-    assert len(m.resolve_strategies('all')) == 7
-    assert m.resolve_strategies(['红悬停', '红悬停龙', '蓄力龙']) == ['红悬停龙', '蓄力龙']
-    assert m.resolve_strategies(None) == m.STRATEGIES
-    with pytest.raises(ValueError, match='未知策略'):
-        m.resolve_strategies('typo')
-
-
-def test_seven_database_end_to_end_read_only_and_mature_denominators(db, tmp_path):
-    engine, calendar = db
-    statements = []
-    event.listen(engine, 'before_cursor_execute', lambda conn,cursor,sql,*args: statements.append(sql))
-    result = m.run(engine=engine, strategies='all', output_dir=tmp_path, show_progress=False)
-    assert len(result['summary']) == 21
-    group = result['summary'][result['summary']['策略'] == '红悬停龙']
-    assert group['有效样本'].tolist() == [3,2,1]
-    assert group['待观察'].tolist() == [1,2,3]
-    details = result['details'][result['details']['strategy'] == '红悬停龙']
-    assert details['signal_date'].tolist() == list(calendar[160:])
-    assert details.iloc[0]['d1_return_pct'] == pytest.approx(10)
-    assert all(sql.lstrip().upper().startswith('SELECT') for sql in statements)
-    assert len(list(result['output_dir'].glob('*.csv'))) == 5
-    metadata = json.loads((result['output_dir']/'运行参数.json').read_text())
-    assert len(metadata['strategies']) == 7 and 'dbpassword' not in str(metadata)
-
-
-def test_signal_independent_of_future_prices_and_date_filter(db, tmp_path):
-    engine, calendar = db
-    first = m.run(engine=engine, strategies='红悬停', start_date='2024-01-01', end_date='2024-01-02',
-                  as_of='2024-01-03', output_dir=tmp_path, show_progress=False)
-    with engine.begin() as conn:
-        conn.execute(text("UPDATE ultra_research_bar SET adj_close=99999 WHERE trade_date>'2024-01-02'"))
-    second = m.run(engine=engine, strategies='红悬停', start_date='2024-01-01', end_date='2024-01-02',
-                   as_of='2024-01-05', output_dir=tmp_path, show_progress=False)
-    assert first['details']['signal_date'].tolist() == second['details']['signal_date'].tolist() == [calendar[160]]
-    assert first['details'].iloc[0]['d2_status'] == '待观察'
-    assert second['details'].iloc[0]['d2_status'] == '有效'
-
-
-@pytest.mark.parametrize('sql,match', [
-    ('DROP TABLE short_research_window', '前复权90日窗口'),
-    ("UPDATE short_research_coverage SET universe_scope='shsz_only'", '范围'),
-    ("UPDATE short_research_coverage SET universe_count=2", '数量'),
-    ("DELETE FROM short_research_coverage WHERE signal_date='2024-01-02'", '缺少信号交易日'),
-    ("DELETE FROM short_research_window WHERE trade_date='2024-01-02'", '缺日'),
-    ("UPDATE short_research_window SET close=NULL", '数值无效'),
-    ("UPDATE ultra_research_universe SET is_st=NULL WHERE trade_date='2024-01-02'", 'ST'),
-    ('DROP TABLE ultra_research_bar', '缺少表/字段'),
-    ('ALTER TABLE ultra_research_bar DROP COLUMN adj_close', '缺少表/字段'),
-])
-def test_missing_sources_fail_without_partial_reports(db, tmp_path, sql, match):
-    engine, _ = db
-    with engine.begin() as conn:
-        conn.execute(text(sql))
-    with pytest.raises(ValueError, match=match):
-        m.run(engine=engine, strategies='all', output_dir=tmp_path, show_progress=False)
-    assert not list(tmp_path.iterdir())
-
-
-def test_only_four_does_not_require_three_tables(db, tmp_path):
-    engine, _ = db
-    with engine.begin() as conn:
-        conn.execute(text('DROP TABLE short_research_window'))
-        conn.execute(text('DROP TABLE short_research_coverage'))
-    result = m.run(engine=engine, strategies=m.STRATEGIES[1], output_dir=tmp_path, show_progress=False)
-    assert len(result['summary']) == 3
-
-
 def test_three_production_function_ast_parity():
     local = ast.parse((ROOT/'脚本/本地统计/七策略胜率统计_本地版.py').read_text())
     prod = ast.parse((ROOT/'collectors/短线选股_数据库版.py').read_text())
@@ -156,9 +62,9 @@ def test_impact_paths(paths, expected):
 
 
 def test_impact_invalid_missing_or_nonancestor_defaults_to_deploy(tmp_path):
-    assert impact.compare('', 'a'*40, tmp_path)[0]
-    assert impact.compare('0'*40, 'a'*40, tmp_path)[0]
-    assert impact.compare('a'*40, 'b'*40, tmp_path)[0]
+    assert impact.compare('', 'a'*40, tmp_path)[0] is None
+    assert impact.compare('0'*40, 'a'*40, tmp_path)[0] is None
+    assert impact.compare('a'*40, 'b'*40, tmp_path)[0] is None
 
 
 def test_real_git_research_diff_then_mixed_diff(tmp_path):
@@ -178,76 +84,205 @@ def test_real_git_research_diff_then_mixed_diff(tmp_path):
 def test_workflow_keeps_ci_and_manual_deploy():
     workflow=(ROOT/'.github/workflows/deploy.yml').read_text()
     assert 'paths-ignore' not in workflow and 'needs: [backend, frontend]' in workflow
-    assert "needs.backend.outputs.deploy_required != 'false'" in workflow
+    assert "needs.backend.outputs.deploy_required == 'true'" in workflow
     assert "github.event_name == 'workflow_dispatch' && inputs.operation == 'deploy' && vars.DEPLOY_ENABLED == 'true'" in workflow
     assert 'fetch-depth: 0' in workflow
 
 
-def test_bse_pool_not_silently_removed(db, tmp_path):
-    engine, _ = db
+
+
+@pytest.fixture
+def db():
+    engine=create_engine('sqlite:///:memory:')
+    calendar=pd.bdate_range(end='2023-12-29',periods=160).append(pd.bdate_range('2024-01-02','2024-01-08'))
+    frame=prices([10.]*158+[11.,11.2,11.3,11.4,11.3,11.4,11.5],calendar)
+    frame.loc[calendar[159:],'low']=11.1
+    database(engine,frame)
+    yield engine,calendar
+    engine.dispose()
+
+
+def test_existing_three_tables_only_all_seven_and_notice(db,tmp_path,capsys):
+    engine,calendar=db
+    statements=[]
+    event.listen(engine,'before_cursor_execute',lambda conn,cursor,sql,*args: statements.append(sql))
+    result=m.run(engine=engine,strategies='all',output_dir=tmp_path,show_progress=False)
+    assert len(result['summary'])==21
+    details=result['details'][result['details'].strategy=='红悬停龙']
+    assert details.signal_date.tolist()==[calendar[160]]
+    assert details.iloc[0].d1_return_pct==pytest.approx((11.4/11.3-1)*100)
+    assert all(sql.lstrip().upper().startswith('SELECT') for sql in statements)
+    assert all('short_research' not in sql and 'short_term_stock' not in sql for sql in statements)
+    assert '统一四策略数据口径的验证' in capsys.readouterr().out
+    meta=json.loads((result['output_dir']/'运行参数.json').read_text())
+    assert '不是原三策略生产信号的精确复现' in meta['validation_notice']
+    assert 'dbpassword' not in str(meta)
+
+
+@pytest.mark.parametrize('choice,count', [('红悬停',3),(['红悬停','蓄力龙'],6),('three',9),('four',12),('all',21)])
+def test_choose_single_multiple_all(db,tmp_path,choice,count):
+    result=m.run(engine=db[0],strategies=choice,output_dir=tmp_path,show_progress=False)
+    assert len(result['summary'])==count
+    assert set(result['summary']['策略'])==set(m.resolve_strategies(choice))
+
+
+def test_no_future_data_and_maturity(db,tmp_path):
+    engine,calendar=db
+    first=m.run(engine=engine,strategies='three',end_date='2024-01-02',as_of='2024-01-03',output_dir=tmp_path,show_progress=False)
     with engine.begin() as conn:
-        for table in ('ultra_research_universe', 'ultra_research_bar', 'short_research_window'):
-            conn.execute(text("UPDATE {} SET code='830001.XBJ'".format(table)))
-    result = m.run(engine=engine, strategies='红悬停', output_dir=tmp_path, show_progress=False)
-    assert set(result['details']['code']) == {'830001.XBJ'}
+        conn.execute(text("UPDATE ultra_research_bar SET adj_close=999999, adj_open=999999 WHERE trade_date>'2024-01-02'"))
+    second=m.run(engine=engine,strategies='three',end_date='2024-01-02',as_of='2024-01-05',output_dir=tmp_path,show_progress=False)
+    assert first['details'].signal_date.tolist()==second['details'].signal_date.tolist()==[calendar[160]]
+    assert first['details'].iloc[0].d2_status=='待观察'
+    assert second['details'].iloc[0].d2_status=='有效'
 
 
-def test_future_row_in_signal_window_rejected(db, tmp_path):
-    engine, _ = db
+@pytest.mark.parametrize('column,value', [('is_st',1),('market_cap',29),('listed_date','2023-12-01'),('eligible',0)])
+def test_three_uses_four_universe_filters(db,tmp_path,column,value):
+    engine,_=db
     with engine.begin() as conn:
-        conn.execute(text("UPDATE short_research_window SET trade_date='2024-01-03' WHERE signal_date='2024-01-02' AND trade_date='2024-01-02'"))
-    with pytest.raises(ValueError, match='越界'):
-        m.run(engine=engine, strategies='three', output_dir=tmp_path, show_progress=False)
+        conn.execute(text('UPDATE ultra_research_universe SET {}=:value'.format(column)),{'value':value})
+    with pytest.raises(ValueError,match='合格股票快照|基础样本'):
+        m.run(engine=engine,strategies='three',output_dir=tmp_path,show_progress=False)
 
 
-def test_observation_missing_and_paused_excluded(db, tmp_path):
-    engine, _ = db
+@pytest.mark.parametrize('column,value',[('paused',1),('money',49999999),('volume',0)])
+def test_three_uses_four_signal_eligibility(db,tmp_path,column,value):
+    engine,_=db
+    with engine.begin() as conn:
+        conn.execute(text("UPDATE ultra_research_bar SET {}=:value WHERE trade_date='2024-01-02'".format(column)),{'value':value})
+    result=m.run(engine=engine,strategies='three',output_dir=tmp_path,show_progress=False)
+    assert result['details'].empty
+
+
+def test_uses_post_prices_not_unadjusted_prices(db,tmp_path):
+    engine,_=db
+    with engine.begin() as conn:
+        conn.execute(text('UPDATE ultra_research_bar SET open=1,high=1,low=1,close=1'))
+    result=m.run(engine=engine,strategies='红悬停',output_dir=tmp_path,show_progress=False)
+    assert len(result['details'])==1
+    assert result['details'].iloc[0].signal_close==11.3
+    assert result['details'].iloc[0].signal_raw_close==1
+
+
+@pytest.mark.parametrize('sql,match',[
+    ('DROP TABLE ultra_research_bar','缺少表/字段'),
+    ('ALTER TABLE ultra_research_bar DROP COLUMN adj_close','缺少表/字段'),
+    ("DELETE FROM ultra_research_calendar WHERE trade_date<'2023-12-01'",'预热'),
+])
+def test_missing_schema_and_prewarm_fail(db,tmp_path,sql,match):
+    with db[0].begin() as conn:conn.execute(text(sql))
+    with pytest.raises(ValueError,match=match):m.run(engine=db[0],strategies='all',output_dir=tmp_path,show_progress=False)
+    assert not list(tmp_path.iterdir())
+
+
+def test_missing_90_day_context_is_not_silently_shortened(db,tmp_path):
+    engine,calendar=db
+    with engine.begin() as conn:
+        conn.execute(text('DELETE FROM ultra_research_bar WHERE trade_date=:day'),{'day':calendar[80].date()})
+    with pytest.raises(ValueError,match='预热行情缺失'):
+        m.run(engine=engine,strategies='three',output_dir=tmp_path,show_progress=False)
+
+
+def test_four_scope_excludes_outside_market(db,tmp_path):
+    engine,_=db
+    with engine.begin() as conn:
+        conn.execute(text("INSERT INTO ultra_research_universe SELECT trade_date, '830001.XBJ', display_name, listed_date, eligible, is_st, market_cap FROM ultra_research_universe"))
+    result=m.run(engine=engine,strategies='all',output_dir=tmp_path,show_progress=False)
+    assert pd.read_csv(result['output_dir']/'数据覆盖.csv')['code'].tolist()==['000001.XSHE']
+
+
+def test_observation_missing_paused_and_strict_denominators(db,tmp_path):
+    engine,_=db
     with engine.begin() as conn:
         conn.execute(text("UPDATE ultra_research_bar SET paused=1 WHERE trade_date='2024-01-03'"))
         conn.execute(text("DELETE FROM ultra_research_bar WHERE trade_date='2024-01-04'"))
-    result = m.run(engine=engine, strategies='红悬停', end_date='2024-01-02',
-                   output_dir=tmp_path, show_progress=False)
-    assert result['summary']['有效样本'].tolist() == [0,0,1]
-    assert result['details'].iloc[0]['d1_status'] == '停牌'
-    assert result['details'].iloc[0]['d2_status'] == '缺少行情'
+    result=m.run(engine=engine,strategies='红悬停',end_date='2024-01-02',output_dir=tmp_path,show_progress=False)
+    assert result['summary']['有效样本'].tolist()==[0,0,1]
+    assert result['details'].iloc[0].d1_status=='停牌'
+    assert result['details'].iloc[0].d2_status=='缺少行情'
 
 
-def test_only_three_needs_exactly_90_day_window(db, tmp_path):
-    engine, calendar = db
+def test_impact_comparison_failure_blocks_without_output(tmp_path):
+    import os
+    output=tmp_path/'output'
+    proc=subprocess.run([sys.executable,str(ROOT/'scripts/deployment_impact.py'),'--base','invalid','--head','a'*40],
+        capture_output=True,text=True,env=dict(os.environ,GITHUB_OUTPUT=str(output)))
+    assert proc.returncode==2 and 'blocked' in proc.stdout
+    assert not output.exists()
+
+
+def test_same_commit_is_unknown_not_auto_deploy():
+    sha=subprocess.check_output(['git','rev-parse','HEAD'],cwd=ROOT).decode().strip()
+    assert impact.compare(sha,sha,ROOT)[0] is None
+
+
+def test_configuration_keys_still_compatible(tmp_path,monkeypatch):
+    path=tmp_path/'config.json';path.write_text((ROOT/'脚本/本地统计/数据库配置.example.json').read_text())
+    monkeypatch.setattr(m,'DEFAULT_CONFIG_PATH',path)
+    assert set(m.load_local_config())=={'DB_CONFIG','DB_TLS_VERIFY','DB_TLS_CA_PEM'}
+
+
+@pytest.mark.parametrize('field,value,table', [
+    ('is_st',1,'ultra_research_universe'),('market_cap',29,'ultra_research_universe'),
+    ('listed_date','2023-12-01','ultra_research_universe'),('eligible',0,'ultra_research_universe'),
+    ('paused',1,'ultra_research_bar'),('money',49999999,'ultra_research_bar'),('volume',0,'ultra_research_bar'),
+])
+def test_all_seven_share_real_pool_and_denominator(db,tmp_path,monkeypatch,field,value,table):
+    from types import SimpleNamespace
+    engine,calendar=db
+    original=m.pattern_candidates
+    def every_pattern(frame,params):
+        candidates=original(frame,params)
+        for name in m.STRATEGIES:
+            candidates[name]=True
+        return candidates
+    monkeypatch.setattr(m,'pattern_candidates',every_pattern)
+    monkeypatch.setattr(m,'make_three_selector',lambda:SimpleNamespace(evaluate=lambda frame,code:list(m.THREE_METHODS)))
     with engine.begin() as conn:
-        conn.execute(text('DELETE FROM ultra_research_calendar WHERE trade_date<:first'),
-                     {'first':calendar[71].date()})
-    result=m.run(engine=engine, strategies='红悬停', output_dir=tmp_path, show_progress=False)
-    assert len(result['details']) == 4
+        conn.execute(text("UPDATE {} SET {}=:value WHERE trade_date='2024-01-02'".format(table,field)),{'value':value})
+    result=m.run(engine=engine,strategies='all',params={'strength_quantile':0},output_dir=tmp_path,show_progress=False)
+    groups=[g.signal_date.tolist() for _,g in result['details'].groupby('strategy')]
+    assert len(groups)==7 and all(dates==list(calendar[161:]) for dates in groups)
+    # All signals deliberately identical: actual production summary code must yield equal denominators.
+    denominators=[g['有效样本'].tolist() for _,g in result['summary'].groupby('策略')]
+    assert all(counts==[3,2,1] for counts in denominators)
+    meta=json.loads((result['output_dir']/'运行参数.json').read_text())
+    assert meta['shared_base_samples']==4
+
+
+def test_gap_inside_common_readiness_is_explicit(db,tmp_path):
+    engine,calendar=db
     with engine.begin() as conn:
-        conn.execute(text('DELETE FROM ultra_research_calendar WHERE trade_date=:first'),
-                     {'first':calendar[71].date()})
-    with pytest.raises(ValueError, match='预热'):
-        m.run(engine=engine, strategies='红悬停', output_dir=tmp_path, show_progress=False)
+        conn.execute(text('DELETE FROM ultra_research_bar WHERE trade_date=:day'),{'day':calendar[150].date()})
+    with pytest.raises(ValueError,match='预热行情缺失'):
+        m.run(engine=engine,strategies='all',output_dir=tmp_path,show_progress=False)
 
 
-def test_expanded_db_cannot_expand_four_strategy_pool(db, tmp_path):
-    engine, _ = db
-    with engine.begin() as conn:
-        conn.execute(text("INSERT INTO ultra_research_universe SELECT trade_date, '830001.XBJ', display_name, listed_date, eligible, is_st, market_cap FROM ultra_research_universe"))
-        conn.execute(text("UPDATE short_research_coverage SET universe_count=2, eligible_count=2"))
-    result=m.run(engine=engine, strategies='four', output_dir=tmp_path, show_progress=False)
-    coverage=pd.read_csv(result['output_dir']/'数据覆盖.csv')
-    assert coverage['code'].tolist() == ['000001.XSHE']
+def test_real_git_rename_delete_and_nonancestor(tmp_path):
+    def git(*args):
+        return subprocess.check_output(['git',*args],cwd=tmp_path,stderr=subprocess.DEVNULL).decode().strip()
+    git('init','-q');git('config','user.email','test@example.invalid');git('config','user.name','Test')
+    a=tmp_path/'docs/seven-strategy-statistics.md';a.parent.mkdir();a.write_text('research')
+    runtime=tmp_path/'runtime.py';runtime.write_text('runtime')
+    def commit():
+        git('add','.');git('commit','-qm','test');return git('rev-parse','HEAD')
+    base=commit()
+    a.rename(tmp_path/'docs/ultra-short-statistics.md');renamed=commit()
+    assert impact.compare(base,renamed,tmp_path)[0] is False
+    (tmp_path/'docs/ultra-short-statistics.md').unlink();deleted=commit()
+    assert impact.compare(renamed,deleted,tmp_path)[0] is False
+    runtime.rename(a);mixed=commit()
+    assert impact.compare(deleted,mixed,tmp_path)[0] is True
+    assert impact.compare(base,mixed,tmp_path)[0] is True
+    assert impact.compare(mixed,base,tmp_path)[0] is None
 
 
-def test_precise_config_is_reused_without_new_keys(tmp_path, monkeypatch):
-    config=tmp_path/'private.json'
-    config.write_text((ROOT/'脚本/本地统计/数据库配置.example.json').read_text())
-    monkeypatch.setattr(m, 'DEFAULT_CONFIG_PATH', config)
-    settings=m.load_local_config()
-    assert settings['DB_CONFIG']['host']=='your_mysql_host'
-    assert set(settings)=={'DB_CONFIG','DB_TLS_VERIFY','DB_TLS_CA_PEM'}
-
-
-def test_predefined_manifest_does_not_allow_duplicate_or_wrong_day(db, tmp_path):
-    engine, _ = db
-    with engine.begin() as conn:
-        conn.execute(text("INSERT INTO short_research_coverage SELECT * FROM short_research_coverage WHERE signal_date='2024-01-02'"))
-    with pytest.raises(ValueError, match='重复'):
-        m.run(engine=engine, strategies='three', output_dir=tmp_path, show_progress=False)
+def test_manual_deploy_has_no_automatic_comparison_gate():
+    workflow=(ROOT/'.github/workflows/deploy.yml').read_text()
+    classify=workflow.split('id: impact',1)[1].split('run: python3 scripts/deployment_impact.py',1)[0]
+    assert "if: github.event_name == 'push'" in classify
+    deploy=workflow.split('  deploy:',1)[1]
+    assert "inputs.operation == 'deploy' && vars.DEPLOY_ENABLED == 'true'" in deploy
+    assert "inputs.operation == 'check'" in deploy
+    assert 'continue-on-error' not in workflow

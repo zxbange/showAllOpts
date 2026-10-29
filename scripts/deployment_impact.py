@@ -1,4 +1,4 @@
-"""Conservative deployment gate; unknown paths or comparison failures require deployment."""
+"""Deployment gate: known runtime changes deploy; uncertain comparisons block publication."""
 import argparse
 import os
 from pathlib import Path
@@ -29,7 +29,7 @@ def requires_deployment(paths):
 
 def compare(base, head, cwd=None):
     if any(not re.fullmatch(r'[0-9a-f]{40}', sha or '') or sha == '0'*40 for sha in (base, head)):
-        return True, 'missing or invalid comparison SHA'
+        return None, 'missing or invalid comparison SHA; automatic publication blocked'
     try:
         subprocess.run(['git', 'merge-base', '--is-ancestor', base, head], cwd=cwd,
                        check=True, capture_output=True, timeout=30)
@@ -37,7 +37,9 @@ def compare(base, head, cwd=None):
                                 cwd=cwd, check=True, capture_output=True, timeout=30)
         paths = result.stdout.decode('utf-8').rstrip('\0').split('\0') if result.stdout else []
     except (OSError, UnicodeError, subprocess.SubprocessError):
-        return True, 'comparison unavailable; conservative deployment'
+        return None, 'comparison unavailable; automatic publication blocked'
+    if not paths:
+        return None, 'empty comparison; automatic publication blocked'
     required = requires_deployment(paths)
     return required, 'runtime/unknown/empty change' if required else 'only independent statistics files'
 
@@ -48,6 +50,9 @@ def main():
     parser.add_argument('--head', default=os.environ.get('HEAD_SHA', ''))
     args = parser.parse_args()
     required, reason = compare(args.base, args.head)
+    if required is None:
+        print('Deployment impact unknown: ' + reason)
+        return 2
     value = 'true' if required else 'false'
     print('deploy_required={}: {}'.format(value, reason))
     if os.environ.get('GITHUB_OUTPUT'):
