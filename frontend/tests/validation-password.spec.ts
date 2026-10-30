@@ -89,7 +89,8 @@ test('saved password indicator preserves secrets; probe and start use named conn
   await page.getByRole('button', { name: '测试连接' }).click()
   await expect.poll(() => passwords.length).toBe(4)
   expect(passwords[3]).toBeNull()
-  await page.getByRole('button', { name: '清空并新增' }).click()
+  await expect(page.getByRole('button', { name: '清空并新增' })).toHaveCount(0)
+  await picker.selectOption('')
   await expect(password).not.toHaveAttribute('placeholder', '********')
   await expect(password).toHaveValue('')
   expect(
@@ -157,4 +158,62 @@ test('probe state resets on edits and ignores late success and failure', async (
   await expect(page.getByText('连接及三张研究表字段读取测试通过（只读）')).toHaveCount(0)
   await page.getByLabel('数据库密码', { exact: true }).fill('changed')
   await expect(button).toHaveClass(/probe-idle/)
+})
+
+test('save by new name retains old profile and requires explicit password for changed target', async ({
+  page,
+}) => {
+  const original = {
+    id: 'a'.repeat(32),
+    revision: 1,
+    name: '原库',
+    host: 'db.example',
+    port: 3306,
+    database: 'research',
+    username: 'reader',
+    tls: 'verify',
+    ca_pem: '',
+    password_set: true,
+  }
+  let saves = 0
+  let probes = 0
+  await page.route('**/api/v1/**', (r) =>
+    r.fulfill({ json: { enabled: false, modules: [], jobs: [], dates: [] } }),
+  )
+  await page.route('**/validation/access', (r) =>
+    r.fulfill({ json: { mode: 'pair', authenticated: true, csrf_token: 'mock' } }),
+  )
+  await page.route('**/validation/sources', (r) => r.fulfill({ json: { sources: [original] } }))
+  await page.route('**/validation/sources/test', (r) => {
+    probes++
+    return r.fulfill({ json: { ok: true } })
+  })
+  await page.route('**/validation/sources/save', (r) => {
+    saves++
+    const body = r.request().postDataJSON()
+    expect(body.name).toBe('新库')
+    expect(body.password).toBe('explicit-new-password')
+    const { password: _, ...fields } = body
+    return r.fulfill({ json: { ...fields, id: 'b'.repeat(32), revision: 1, password_set: true } })
+  })
+  await page.goto('/short-term/validation')
+  const picker = page.getByLabel('验证数据源')
+  await picker.selectOption(`${original.id}:1`)
+  const password = page.getByLabel('数据库密码', { exact: true })
+  await expect(password).toHaveAttribute('placeholder', '********')
+  await page.getByLabel('配置名称', { exact: true }).fill('新库')
+  await expect(password).not.toHaveAttribute('placeholder', '********')
+  await page.getByRole('button', { name: '保存', exact: true }).click()
+  await expect(page.getByText('数据库名称或连接信息已变更，请重新输入密码')).toBeVisible()
+  expect(saves).toBe(0)
+  await password.fill('explicit-new-password')
+  await page.getByRole('button', { name: '保存', exact: true }).click()
+  await expect(picker).toHaveValue(`${'b'.repeat(32)}:1`)
+  await expect(picker.getByRole('option', { name: '原库', exact: true })).toHaveCount(1)
+  await expect(picker.getByRole('option', { name: '新库', exact: true })).toHaveCount(1)
+  await page.getByLabel('数据库地址', { exact: true }).fill('other.example')
+  await page.getByRole('button', { name: '测试连接', exact: true }).click()
+  await expect(page.getByText('数据库名称或连接信息已变更，请重新输入密码')).toBeVisible()
+  expect(probes).toBe(0)
+  await expect(page.getByRole('button', { name: '清空并新增' })).toHaveCount(0)
 })

@@ -189,3 +189,22 @@ def test_observation_boundary_does_not_read_future_rows(setup):
     job=jobs.create(['oversold'],calendar[170].date(),calendar[184].date(),calendar[184].date())
     result=finish(jobs,job['id']);assert result['status']=='completed',result
     assert all(row['待观察']==1 and row['有效样本']==0 for row in result['summary'])
+
+
+def test_new_intents_after_terminal_and_uncertain_retry_keep_history(setup):
+    jobs, _, _, calendar = setup
+    args = (['oversold'], calendar[170].date(), calendar[190].date(), calendar[195].date())
+    prior = []
+    for index, status in enumerate(('completed', 'failed', 'cancelled')):
+        current = jobs.create(*args, request_id=f'intent-{index}')
+        assert current['id'] not in prior
+        # A second intent while the first is active still deduplicates.
+        assert jobs.create(*args, request_id=f'uncertain-{index}')['id'] == current['id']
+        with jobs.db() as db:
+            current['status'] = status
+            jobs.save(db, current)
+        # Unknown response retried with the same ID returns the terminal record.
+        assert jobs.create(*args, request_id=f'intent-{index}')['id'] == current['id']
+        assert jobs.create(*args, request_id=f'uncertain-{index}')['id'] == current['id']
+        prior.append(current['id'])
+    assert len(jobs.list()) == 3

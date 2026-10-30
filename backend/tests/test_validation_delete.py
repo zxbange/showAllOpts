@@ -187,3 +187,22 @@ def test_api_conflict_and_shared_encrypted_config_survives(secure, config):
     assert client.post(path, json={}).status_code == 200
     assert sources.get(ref['id'], ref['revision']) == config
     assert sources.list()[0]['id'] == ref['id']
+
+
+def test_delete_request_aliases_only_for_deleted_task(setup):
+    jobs, settings, engine, calendar = setup
+    args = (['oversold'], calendar[170].date(), calendar[190].date(), calendar[195].date())
+    first = jobs.create(*args, request_id='first')
+    assert jobs.create(*args, request_id='alias-one')['id'] == first['id']
+    jobs.action(first['id'], 'pause')
+    second = jobs.create(*args, request_id='second')
+    assert jobs.create(*args, request_id='alias-two')['id'] == second['id']
+    jobs.delete(first['id'])
+    with jobs.db() as db:
+        assert db.execute('SELECT job FROM job_requests').fetchall() == [(second['id'],)]
+    restored = ValidationJobs(settings, engine)
+    with restored.db() as db:
+        job = restored.get(second['id'], db)
+        job['status'] = 'completed'
+        restored.save(db, job)
+    assert restored.create(*args, request_id='alias-two')['id'] == second['id']

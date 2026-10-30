@@ -70,6 +70,9 @@ class ValidationJobs:
             db.executescript('''
                 CREATE TABLE IF NOT EXISTS jobs (
                     id TEXT PRIMARY KEY, fingerprint TEXT UNIQUE, payload TEXT NOT NULL);
+                CREATE TABLE IF NOT EXISTS job_requests (
+                    fingerprint TEXT PRIMARY KEY, job TEXT NOT NULL);
+                CREATE INDEX IF NOT EXISTS job_requests_job ON job_requests(job);
                 CREATE TABLE IF NOT EXISTS stocks (
                     job TEXT, code TEXT, bars TEXT, universe TEXT, details TEXT, coverage TEXT,
                     PRIMARY KEY(job,code));
@@ -134,9 +137,16 @@ class ValidationJobs:
             existing = db.execute('SELECT payload FROM jobs WHERE fingerprint=?', (fingerprint,)).fetchone()
             if existing:
                 return json.loads(existing[0])
+            alias = db.execute('SELECT j.payload FROM job_requests r JOIN jobs j ON j.id=r.job WHERE r.fingerprint=?',
+                               (fingerprint,)).fetchone()
+            if alias:
+                return json.loads(alias[0])
             for row in db.execute('SELECT payload FROM jobs'):
                 active = json.loads(row[0])
                 if active['status'] in ('queued', 'running') and active.get('requested') == params:
+                    # Persist accepted retries too: a lost response must still map
+                    # to this job after it completes or the server restarts.
+                    db.execute('INSERT INTO job_requests VALUES (?,?)', (fingerprint, active['id']))
                     return active
             job = dict(id=uuid.uuid4().hex, **params, requested=params, formula_params=dict(stats.PARAMS), price_field='adj_close', warmup_days=160, generation=0, status='queued', stage='等待读取计划', done=0, total=0,
                        captured=0, created_at=now(), updated_at=now(), error=None, summary=[], windows=[], base_samples=0)
@@ -192,7 +202,7 @@ class ValidationJobs:
                 # All job-owned data is in these tables, including payload cursors,
                 # frozen plans and aggregates. Never unlink the shared DB or lock:
                 # unlinking a locked file would permit two different lock inodes.
-                for table in ('outcomes', 'windows', 'stocks'):
+                for table in ('outcomes', 'windows', 'stocks', 'job_requests'):
                     db.execute(f'DELETE FROM {table} WHERE job=?', (ident,))
                 db.execute('DELETE FROM jobs WHERE id=?', (ident,))
         finally:

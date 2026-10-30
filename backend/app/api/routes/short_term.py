@@ -251,6 +251,8 @@ async def connection_input(request, service):
             old = service.sources.get(body.id, body.revision)
         except SourceError as exc:
             raise HTTPException(409, str(exc)) from None
+        if not service.sources.can_retain_password(old, config):
+            raise HTTPException(422, '数据库名称或连接信息已变更，请重新输入密码')
         config['password'] = old['password']
     return body, config
 

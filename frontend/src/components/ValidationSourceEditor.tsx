@@ -33,7 +33,15 @@ export const ValidationSourceEditor = forwardRef<
   const [form, setForm] = useState(empty)
   const [editing, setEditing] = useState<SourceRef | null>(null)
   const [password, setPassword] = useState('')
-  const savedPassword = !!editing && sources.some((s) => s.id === editing.id && s.password_set)
+  const original = sources.find((s) => s.id === editing?.id && s.revision === editing.revision)
+  const unchangedConnection =
+    !!original &&
+    (['name', 'host', 'port', 'database', 'username', 'tls', 'ca_pem'] as const).every((field) =>
+      field === 'host'
+        ? original[field].toLowerCase() === form[field].toLowerCase()
+        : original[field] === form[field],
+    )
+  const savedPassword = unchangedConnection && original?.password_set
   const [message, setMessage] = useState('')
   const [busy, setBusy] = useState(false)
   const [dirty, setDirty] = useState(false)
@@ -89,6 +97,8 @@ export const ValidationSourceEditor = forwardRef<
     if (action === 'test') setTestState('testing')
     setMessage('')
     try {
+      if (editing && !password && !unchangedConnection)
+        throw new Error('数据库名称或连接信息已变更，请重新输入密码')
       const body = { ...form, ...(editing || {}), password: editing && !password ? null : password }
       if (action === 'save') {
         const result = await validationRequest<Source>(adminKey, '/sources/save', body)
@@ -282,20 +292,7 @@ export const ValidationSourceEditor = forwardRef<
                   : '连接尚未测试'}
           </span>
           <button className="button" disabled={busy} onClick={() => void submit('save')}>
-            加密保存并使用
-          </button>
-          <button
-            className="button button-quiet"
-            onClick={() => {
-              clearTest()
-              setEditing(null)
-              setDirty(false)
-              onSelect(null)
-              setForm(empty)
-              setPassword('')
-            }}
-          >
-            清空并新增
+            保存
           </button>
         </div>
       </details>

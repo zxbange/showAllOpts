@@ -38,7 +38,7 @@ def test_encryption_versions_and_no_echo(secure,config):
     assert config['password'] not in response.text+client.get('/short-term/validation/sources').text
     raw=(jobs.root/'jobs.sqlite3').read_bytes()
     for key in ('name','host','database','username','password'):assert config[key].encode() not in raw
-    second=client.post('/short-term/validation/sources/save',json={**config,'password':None,'host':'127.0.0.1','id':first['id'],'revision':1}).json()
+    second=client.post('/short-term/validation/sources/save',json={**config,'host':'127.0.0.1','id':first['id'],'revision':1}).json()
     assert second['revision']==2 and sources.get(first['id'],1)==config
     assert sources.get(first['id'],2)['password']==config['password']
     assert client.post('/short-term/validation/sources/save',json={**config,'id':first['id'],'revision':1}).status_code==409
@@ -236,8 +236,7 @@ def test_equal_config_saves_and_probe_do_not_version(secure, config, monkeypatch
         sources.save({**config, 'password': None}, first['id'], 1)
     assert sources.save({**config, 'password': 'different'}, first['id'], 1) == changed
     assert sources.save({**config, 'password': None}, first['id'], 2) == changed
-    with pytest.raises(SourceError):
-        sources.save({**config, 'database': 'different'})
+    assert sources.save({**config, 'database': 'different'}) == dict(id=first['id'], revision=3)
 
 
 def test_concurrent_equal_edits_and_new_names(secure, config):
@@ -253,8 +252,7 @@ def test_concurrent_equal_edits_and_new_names(secure, config):
     with ThreadPoolExecutor(max_workers=4) as pool:
         created = list(pool.map(lambda _: sources.save({**config, 'name': '另一连接'}), range(4)))
     assert all(r == created[0] for r in created)
-    with pytest.raises(SourceError, match='同名'):
-        sources.save({**config, 'name': '另一连接'}, first['id'], 2)
+    assert sources.save({**config, 'name': '另一连接'}, first['id'], 2) == created[0]
 
 
 @pytest.mark.parametrize('change', [dict(database='PRIVATE-DB'), dict(username='PRIVATE-USER'),
@@ -291,4 +289,48 @@ def test_preexisting_duplicate_names_can_save_unchanged(secure, config):
             (cipher.encrypt(json.dumps(dict(id=second['id'], revision=1, config=config)).encode()), second['id']))
     assert sources.save(config, first['id'], 1) == first
     assert sources.save(config, second['id'], 1) == second
+    assert len(sources.list()) == 2
+
+
+@pytest.mark.parametrize('change', [dict(name='新名称'), dict(host='127.0.0.1'), dict(port=3307),
+    dict(database='another'), dict(username='another'), dict(tls='disabled'), dict(ca_pem='new CA')])
+def test_changed_connection_never_reuses_saved_secret_for_probe_or_save(secure, config, monkeypatch, change):
+    _, sources, _, client = secure
+    auth(client)
+    ref = sources.save(config)
+    probe = Mock(return_value={'ok': True})
+    monkeypatch.setattr(sources, 'test', probe)
+    for action in ('test', 'save'):
+        response = client.post('/short-term/validation/sources/'+action,
+            json={**config, **change, **ref, 'password': None})
+        assert response.status_code == 422
+        assert config['password'] not in response.text
+    probe.assert_not_called()
+    assert sources.get(ref['id'], 1) == config
+
+
+def test_names_create_or_update_without_renaming_old_profile(secure, config):
+    jobs, sources, _, client = secure
+    auth(client)
+    original = sources.save(config)
+    task = jobs.create(['oversold'], __import__('datetime').date(2024,1,1), None, None, source=original)
+    created = client.post('/short-term/validation/sources/save', json={**config, **original, 'name':'新库'}).json()
+    assert created['id'] != original['id'] and created['revision'] == 1
+    assert sources.get(original['id'], 1) == config
+    changed = client.post('/short-term/validation/sources/save', json={**config, 'name':'新库', 'password':'new-secret'}).json()
+    assert changed['id'] == created['id'] and changed['revision'] == 2
+    assert sources.get(created['id'], 1)['password'] == config['password']
+    assert sources.get(created['id'], 2)['password'] == 'new-secret'
+    assert jobs.get(task['id'])['source'] == original
+    assert {s['name'] for s in sources.list()} == {config['name'], '新库'}
+
+
+def test_concurrent_new_name_from_same_selection_creates_one_profile(secure, config):
+    from concurrent.futures import ThreadPoolExecutor
+    _, sources, _, _ = secure
+    original = sources.save(config)
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        refs = list(pool.map(lambda _: sources.save({**config, 'name':'新增'}, original['id'], 1), range(4)))
+    assert all(ref == refs[0] for ref in refs)
+    assert refs[0]['id'] != original['id'] and refs[0]['revision'] == 1
     assert len(sources.list()) == 2

@@ -138,13 +138,17 @@ class ValidationSources:
             raise SourceError('连接配置格式无效，请检查TLS选项和CA证书')
         return result
 
+    @classmethod
+    def can_retain_password(cls, previous, config):
+        return {k: v for k, v in cls.canonical(previous).items() if k != 'password'} == {
+            k: v for k, v in cls.canonical(config).items() if k != 'password'}
+
     def save(self, config, ident=None, expected_revision=None):
         config = self.canonical(config)
         cipher = self.cipher()
         # This check is offline: saving an allowed hostname does not initiate DNS/network access.
         if (self.settings.validation_allowed_targets or self.settings.validation_admin_key.get_secret_value()) and f"{config['host'].lower().rstrip('.')}:{config['port']}" not in self.settings.validation_allowed_targets:
             raise SourceError('数据库目标未获部署者允许，请检查 VALIDATION_ALLOWED_TARGETS')
-        creating = ident is None
         ident = ident or uuid.uuid4().hex
         from app.services.short_validation import now
         with self.jobs.db() as db:
@@ -161,6 +165,25 @@ class ValidationSources:
                 for old_id, old_revision, old_ciphertext in db.execute('SELECT id,revision,ciphertext FROM validation_sources').fetchall():
                     self._decode(old_ciphertext, old_id, old_revision)
                 db.execute('INSERT INTO validation_source_key VALUES (1,?)', (cipher.encrypt(b'validation-source-key-v1'),))
+            if ident != 'service':
+                latest = [(i, r, self._decode(c, i, r)) for i, r, c in db.execute("""SELECT s.id,s.revision,s.ciphertext
+                    FROM validation_sources s WHERE s.id!='service'
+                    AND s.revision=(SELECT max(t.revision) FROM validation_sources t WHERE t.id=s.id)""").fetchall()]
+                selected = next((item for item in latest if item[0] == ident), None)
+                if selected is None and expected_revision is not None:
+                    raise SourceError('配置已更新或不存在，请重新选择后再编辑')
+                if selected is None or selected[2]['name'] != config['name']:
+                    # Name identifies the intended profile. A new name creates a
+                    # separate profile; an existing name updates that profile only.
+                    if config.get('password') is None:
+                        raise SourceError('新增或切换数据库名称时，请重新输入密码')
+                    matches = [item for item in latest if item[2]['name'] == config['name']]
+                    if len(matches) > 1:
+                        raise SourceError('历史配置存在同名项，请从列表选择具体配置后保存')
+                    if matches:
+                        ident, expected_revision, _ = matches[0]
+                    else:
+                        ident, expected_revision = uuid.uuid4().hex, None
             row = db.execute('SELECT revision,ciphertext FROM validation_sources WHERE id=? ORDER BY revision DESC LIMIT 1', (ident,)).fetchone()
             previous = self._decode(row[1], ident, row[0]) if row else None
             if ident != 'service' and (row is None and expected_revision is not None or
@@ -178,21 +201,13 @@ class ValidationSources:
                     base = self._decode(old[0], ident, expected_revision)
                 if base is None:
                     raise SourceError('新连接需要填写密码（无密码账户可明确填写空字符串）')
+                if not self.can_retain_password(base, config):
+                    raise SourceError('数据库名称或连接信息已变更，请重新输入密码')
                 config['password'] = base['password']
             # Compare authenticated plaintext inside the write transaction, not
             # randomized ciphertext. Concurrent equivalent edits return one version.
             if previous is not None and self.canonical(previous) == config:
                 return dict(id=ident, revision=row[0])
-            # Names identify logical connections in the UI; never silently merge
-            # different connections or rewrite historical references.
-            for other_id, other_revision, encrypted in db.execute("""SELECT s.id,s.revision,s.ciphertext
-                    FROM validation_sources s WHERE s.id!='service' AND s.id!=?
-                    AND s.revision=(SELECT max(t.revision) FROM validation_sources t WHERE t.id=s.id)""", (ident,)).fetchall():
-                other = self._decode(encrypted, other_id, other_revision)
-                if ident != 'service' and other['name'] == config['name']:
-                    if creating and self.canonical(other) == config:
-                        return dict(id=other_id, revision=other_revision)
-                    raise SourceError('已有同名数据库配置，请选择该配置编辑，或使用其他名称')
             if ident != 'service' and row is not None and expected_revision != row[0]:
                 raise SourceError('配置已更新或不存在，请重新选择后再编辑')
             revision = row[0]+1 if row else 1

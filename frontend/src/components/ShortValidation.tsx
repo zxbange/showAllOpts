@@ -241,7 +241,6 @@ function ValidationPanel({ adminKey, onLock }: { adminKey: ValidationAuth; onLoc
   const deleteTrigger = useRef<HTMLButtonElement | null>(null)
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
-  const [requestId, setRequestId] = useState(() => requestToken())
   useEffect(() => {
     let active = true
     let timer: ReturnType<typeof setTimeout>
@@ -278,8 +277,10 @@ function ValidationPanel({ adminKey, onLock }: { adminKey: ValidationAuth; onLoc
       if (!deletedIds.current.has(job.id))
         setJobs((old) => [job, ...old.filter((j) => j.id !== job.id)])
       if (!path) setSetupOpen(false)
+      return true
     } catch (e) {
       setError(e instanceof Error ? e.message : '操作失败')
+      return false
     } finally {
       setBusy(false)
     }
@@ -411,7 +412,17 @@ function ValidationPanel({ adminKey, onLock }: { adminKey: ValidationAuth; onLoc
                   setBusy(true)
                   try {
                     const prepared = await sourceEditor.current?.prepare()
-                    await operate('', {
+                    // Only a non-secret idempotency ID survives an uncertain response
+                    // or reload. No credentials or connection details are stored here.
+                    const key = 'validation-pending-start'
+                    let requestId: string
+                    try {
+                      requestId = sessionStorage.getItem(key) || requestToken()
+                      sessionStorage.setItem(key, requestId)
+                    } catch {
+                      throw new Error('无法保存请求标识，请允许当前页面使用会话存储后重试')
+                    }
+                    const accepted = await operate('', {
                       methods,
                       start,
                       end: end || null,
@@ -419,6 +430,8 @@ function ValidationPanel({ adminKey, onLock }: { adminKey: ValidationAuth; onLoc
                       request_id: requestId,
                       source: prepared ?? source,
                     })
+                    if (accepted && sessionStorage.getItem(key) === requestId)
+                      sessionStorage.removeItem(key)
                   } catch (e) {
                     setError(e instanceof Error ? e.message : '数据库配置保存失败')
                   } finally {
@@ -429,16 +442,6 @@ function ValidationPanel({ adminKey, onLock }: { adminKey: ValidationAuth; onLoc
               >
                 <Play size={17} aria-hidden="true" />
                 开始验证
-              </button>
-              <button
-                className="button button-quiet"
-                disabled={busy}
-                onClick={() => {
-                  setRequestId(requestToken())
-                  setError('已准备新任务，再点击开始验证；现有结果保留。')
-                }}
-              >
-                准备重新读取数据
               </button>
             </div>
           </div>
