@@ -56,6 +56,9 @@ class Settings(BaseSettings):
             raise ConfigurationError('Cannot read the selected configuration file. Check permissions and UTF-8 encoding.') from None
 
     app_name: str = 'ShowAllOpts API'
+    validation_admin_key: SecretStr = SecretStr('')
+    validation_encryption_key: SecretStr = SecretStr('')
+    validation_allowed_targets: list[str] = []
     social_worker_enabled: bool = True
     margin_worker_enabled: bool = True
     social_browser_login_key: SecretStr = SecretStr('')

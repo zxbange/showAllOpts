@@ -203,3 +203,46 @@
   text-align: right;
   border-bottom: 1px solid var(--border);
 }
+
+.short-validation,
+.short-validation fieldset {
+  min-width: 0;
+}
+.short-validation .validation-source {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  padding: 1rem;
+}
+.validation-source label {
+  display: grid;
+  gap: 0.35rem;
+  margin: 0.75rem 0;
+  min-width: 0;
+}
+.validation-source input,
+.validation-source select,
+.validation-source textarea {
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+  box-sizing: border-box;
+}
+.validation-source summary {
+  cursor: pointer;
+}
+.validation-source textarea {
+  min-height: 5rem;
+  resize: vertical;
+}
+@media (max-width: 760px) {
+  .short-validation input,
+  .short-validation select,
+  .short-validation textarea {
+    font-size: 16px;
+    max-width: 100%;
+  }
+  .short-validation button {
+    white-space: normal;
+    max-width: 100%;
+  }
+}

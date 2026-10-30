@@ -4,7 +4,7 @@ The OS lock spans a work unit; SQLite atomically commits results and cursor.
 All workers may poll, but only one can perform a unit, including after restart.
 Inputs are frozen before calculation. A retry never reloads a committed input.
 """
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from datetime import date, datetime, timezone
 import hashlib
 import json
@@ -53,6 +53,7 @@ class ValidationJobs:
         self.root = settings.log_path / 'short-validation'
         self.root.mkdir(parents=True, exist_ok=True)
         self.engine = engine
+        self.sources = None
         self.stop_event = threading.Event()
         self.thread = None
         with self.db() as db:
@@ -71,6 +72,12 @@ class ValidationJobs:
                 CREATE INDEX IF NOT EXISTS outcomes_summary ON outcomes(job,strategy,horizon,value);
                 CREATE INDEX IF NOT EXISTS windows_summary ON windows(job,strategy);
             ''')
+            # The unreleased first implementation used 'cancelled' to mean pause.
+            for ident, payload in db.execute('SELECT id,payload FROM jobs').fetchall():
+                job = json.loads(payload)
+                if job['status'] == 'cancelled' and not job.get('cancel_requested_at'):
+                    job['status'] = 'paused'
+                    db.execute('UPDATE jobs SET payload=? WHERE id=?', (json.dumps(job), ident))
 
     @contextmanager
     def db(self):
@@ -98,8 +105,13 @@ class ValidationJobs:
             raise KeyError(ident)
         return json.loads(row[0])
 
-    def create(self, methods, start, end, observed, request_id=None):
-        params = dict(methods=sorted(set(methods)), start=str(start), end=str(end) if end else None, observed=str(observed) if observed else None, version=VERSION)
+    def create(self, methods, start, end, observed, request_id=None, source=None):
+        if self.sources is not None:
+            if source is None:
+                source = self.sources.freeze_service()
+            else:
+                self.sources.get(source['id'], source['revision'])
+        params = dict(source=source, methods=sorted(set(methods)), start=str(start), end=str(end) if end else None, observed=str(observed) if observed else None, version=VERSION)
         if not params['methods'] or any(m not in METHODS for m in params['methods']):
             raise ValueError('请选择至少一种支持的策略')
         if not date(2000, 1, 1) <= start <= (end or observed or date.today()) <= (observed or date.today()) <= date.today() or ((observed or date.today())-start).days > 3660:
@@ -123,16 +135,48 @@ class ValidationJobs:
         with self.db() as db:
             db.execute('BEGIN IMMEDIATE')
             job = self.get(ident, db)
-            if action == 'cancel' and job['status'] in ('queued', 'running'):
+            if action == 'cancel':
+                if job['status'] in ('completed', 'cancelled', 'cancelling'):
+                    return job
                 job['generation'] += 1
-                job['status'], job['stage'] = 'cancelled', '已暂停；当前未提交工作不会计入进度'
-            elif action == 'retry' and job['status'] in ('failed', 'cancelled'):
-                if job['version'] != VERSION:
-                    raise ValueError('算法版本已变化，请创建新任务')
+                job.update(status='cancelling', stage='正在取消，等待在途工作退出；不会提交新结果', cancel_requested_at=now())
+            elif action == 'pause' and job['status'] in ('queued', 'running'):
                 job['generation'] += 1
-                job['status'], job['error'], job['stage'] = 'queued', None, '等待从已提交断点继续'
+                job['status'], job['stage'] = 'paused', '已暂停；在途工作返回后丢弃未提交部分'
+            elif action == 'retry':
+                if job['status'] in ('cancelled', 'cancelling'):
+                    raise ValueError('已取消或正在取消的任务不能继续，请新建任务')
+                if job['status'] in ('failed', 'paused'):
+                    if job['version'] != VERSION:
+                        raise ValueError('算法版本已变化，请创建新任务')
+                    job['generation'] += 1
+                    job['status'], job['error'], job['stage'] = 'queued', None, '等待从已提交断点继续'
             self.save(db, job)
-            return job
+        if action == 'cancel':
+            self.acknowledge_cancel()
+        return self.get(ident)
+
+    def finish_cancellations(self):
+        # Caller holds the OS worker lock: there can be no in-flight work in any worker.
+        with self.db() as db:
+            db.execute('BEGIN IMMEDIATE')
+            for (payload,) in db.execute('SELECT payload FROM jobs').fetchall():
+                job = json.loads(payload)
+                if job['status'] == 'cancelling':
+                    job.update(status='cancelled', stage='已取消（不能继续；可新建任务）', cancelled_at=now())
+                    self.save(db, job)
+
+    def acknowledge_cancel(self):
+        lock = portalocker.Lock(str(self.root / 'worker.lock'), timeout=0,
+                                flags=portalocker.LOCK_EX | portalocker.LOCK_NB)
+        try:
+            lock.acquire()
+        except portalocker.exceptions.LockException:
+            return
+        try:
+            self.finish_cancellations()
+        finally:
+            lock.release()
 
     def start(self):
         self.thread = threading.Thread(target=self.loop, daemon=True, name='short-validation')
@@ -162,6 +206,7 @@ class ValidationJobs:
         except portalocker.exceptions.LockException:
             return False
         try:
+            self.finish_cancellations()
             with self.db() as db:
                 jobs = [json.loads(r[0]) for r in db.execute('SELECT payload FROM jobs ORDER BY rowid')]
             job = next((j for j in jobs if j['status'] in ('queued', 'running')), None)
@@ -170,7 +215,12 @@ class ValidationJobs:
             try:
                 if job['version'] != VERSION:
                     raise ValueError('任务算法版本已变化，请创建新任务')
-                self.work(job)
+                needs_source = 'calendar' not in job or job['captured'] < job['total']
+                if self.sources is not None and needs_source and not job.get('source'):
+                    raise ValueError('旧任务未绑定不可变数据源，请新建任务；已完成输入冻结的旧任务仍可继续')
+                context = self.sources.engine(job['source']) if self.sources is not None and needs_source else nullcontext(self.engine)
+                with context as source_engine:
+                    self.work(job, source_engine)
             except Exception as exc:
                 if self.stop_event.is_set():
                     return False
@@ -185,7 +235,10 @@ class ValidationJobs:
                         self.save(db, current)
             return True
         finally:
-            lock.release()
+            try:
+                self.finish_cancellations()
+            finally:
+                lock.release()
 
     def stage(self, ident, label, generation):
         with self.db() as db:
@@ -197,14 +250,19 @@ class ValidationJobs:
             self.save(db, job)
         return True
 
-    def work(self, job):
+    def work(self, job, source_engine=None):
+        source_engine = source_engine if source_engine is not None else self.engine
         ident = job['id']
         if 'calendar' not in job:
             if not self.stage(ident, '读取日历和股票清单（查询超时20秒）', job['generation']):
                 return
-            stats.validate_schema(self.engine)
-            start, end, observed, calendar = stats.load_plan(self.engine, job['start'], job['end'], job['observed'])
-            codes = stats.read_sql(self.engine, '''SELECT DISTINCT code FROM ultra_research_universe
+            stats.validate_schema(source_engine)
+            if not self.stage(ident, '读取研究日期计划', job['generation']):
+                return
+            start, end, observed, calendar = stats.load_plan(source_engine, job['start'], job['end'], job['observed'])
+            if not self.stage(ident, '读取合格股票清单', job['generation']):
+                return
+            codes = stats.read_sql(source_engine, '''SELECT DISTINCT code FROM ultra_research_universe
                 WHERE trade_date BETWEEN :first AND :last AND eligible=1 AND is_st=0
                 AND market_cap>=:cap ORDER BY code LIMIT 20001''',
                 dict(first=start.date(), last=end.date(), cap=stats.PARAMS['min_market_cap']))['code'].tolist()
@@ -229,8 +287,10 @@ class ValidationJobs:
                 return
             frames = []
             # A stock's two source tables are read in the same transaction.
-            with self.engine.connect() as connection, connection.begin():
+            with source_engine.connect() as connection, connection.begin():
                 for table in ('ultra_research_bar', 'ultra_research_universe'):
+                    if not self.stage(ident, '冻结输入 '+code+' / '+table, job['generation']):
+                        return
                     extra = "AND asset_type='stock'" if table.endswith('_bar') else ''
                     frame = pd.read_sql_query(text(f'''SELECT * FROM {table} WHERE code=:code
                         AND trade_date BETWEEN :first AND :last {extra} ORDER BY trade_date LIMIT {MAX_ROWS+1}'''),

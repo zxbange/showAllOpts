@@ -19,6 +19,7 @@ from app.services.social import SocialMonitor
 from app.services.social_browser import BrowserLogin
 from app.services.margin_guarantee import MarginGuarantee
 from app.services.short_validation import ValidationJobs
+from app.services.validation_sources import ValidationSources
 
 logger = logging.getLogger(__name__)
 
@@ -41,6 +42,7 @@ def create_app(settings: Settings | None = None, engine: Engine | None = None) -
         application.state.margin_guarantee = margin_guarantee
         validation_engine = build_engine(settings)
         validation = ValidationJobs(settings, validation_engine)
+        validation.sources = ValidationSources(validation, settings)
         application.state.short_validation = validation
         validation.start()
         cache.start()

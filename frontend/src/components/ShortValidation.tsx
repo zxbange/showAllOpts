@@ -1,4 +1,6 @@
 import { useEffect, useState } from 'react'
+import { validationRequest } from '../api/validation'
+import { ValidationSourceEditor, type SourceRef } from './ValidationSourceEditor'
 
 type Metric = Record<string, string | number | null>
 type Job = {
@@ -12,6 +14,9 @@ type Job = {
   stage: string
   done: number
   total: number
+  source?: SourceRef | null
+  cancel_requested_at?: string
+  cancelled_at?: string
   captured: number
   updated_at: string
   error: string | null
@@ -23,7 +28,9 @@ const statuses: Record<string, string> = {
   queued: '等待',
   running: '运行中',
   failed: '失败',
-  cancelled: '已暂停',
+  paused: '已暂停',
+  cancelling: '正在取消',
+  cancelled: '已取消',
   completed: '完成',
 }
 // getRandomValues also works on the existing HTTP deployment (randomUUID does not).
@@ -31,24 +38,6 @@ function requestToken() {
   return Array.from(crypto.getRandomValues(new Uint8Array(16)), (value) =>
     value.toString(16).padStart(2, '0'),
   ).join('')
-}
-async function api(path = '', body?: unknown): Promise<unknown> {
-  const response = await fetch(
-    '/api/v1/short-term/validation/jobs' + path,
-    body === undefined
-      ? {}
-      : {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(body),
-        },
-  )
-  const data = await response.json()
-  if (!response.ok)
-    throw new Error(
-      typeof data.detail === 'string' ? data.detail : '操作失败，请检查日期和策略选择',
-    )
-  return data
 }
 const metric = (value: string | number | null) =>
   value == null
@@ -83,6 +72,80 @@ function Metrics({ rows }: { rows: Metric[] }) {
   )
 }
 export function ShortValidation() {
+  const [key, setKey] = useState('')
+  const [unlocked, setUnlocked] = useState('')
+  const [message, setMessage] = useState('')
+  const [setup, setSetup] = useState('')
+  useEffect(() => {
+    let active = true
+    fetch('/api/v1/short-term/validation/access', { cache: 'no-store' })
+      .then((r) => r.json())
+      .then((data) => {
+        if (!active) return
+        const missing = [
+          !data.admin_configured && 'VALIDATION_ADMIN_KEY',
+          !data.encryption_configured && 'VALIDATION_ENCRYPTION_KEY',
+          !data.targets_configured && 'VALIDATION_ALLOWED_TARGETS',
+        ].filter(Boolean)
+        setSetup(missing.length ? '请部署者设置：' + missing.join('、') : '')
+      })
+      .catch(() => {
+        if (active) setSetup('无法读取验证管理设置')
+      })
+    return () => {
+      active = false
+    }
+  }, [])
+  if (unlocked)
+    return (
+      <ValidationPanel
+        adminKey={unlocked}
+        onLock={() => {
+          setUnlocked('')
+          setKey('')
+        }}
+      />
+    )
+  return (
+    <section className="short-validation" aria-label="验证管理登录">
+      <h2>短线胜率验证</h2>
+      <p>验证管理和数据库配置需要管理员密钥及HTTPS。密钥仅保留在当前页面内存，刷新后需重新输入。</p>
+      {setup && <p>{setup}</p>}
+      {!window.isSecureContext && <p role="alert">请通过HTTPS访问后再输入管理密钥或数据库凭证。</p>}
+      <label>
+        验证管理密钥
+        <input
+          aria-label="验证管理密钥"
+          type="password"
+          autoComplete="off"
+          disabled={!window.isSecureContext}
+          value={key}
+          onChange={(e) => setKey(e.target.value)}
+        />
+      </label>
+      <button
+        className="button"
+        disabled={!key || !window.isSecureContext}
+        onClick={async () => {
+          try {
+            await validationRequest(key, '/jobs')
+            setUnlocked(key)
+            setKey('')
+            setMessage('')
+          } catch (e) {
+            setKey('')
+            setMessage(e instanceof Error ? e.message : '验证失败')
+          }
+        }}
+      >
+        解锁验证管理
+      </button>
+      {message && <p role="alert">{message}</p>}
+    </section>
+  )
+}
+function ValidationPanel({ adminKey, onLock }: { adminKey: string; onLock: () => void }) {
+  const [source, setSource] = useState<SourceRef | null>(null)
   const [methods, setMethods] = useState<string[]>(Object.keys(choices))
   const [start, setStart] = useState('2024-01-01')
   const [end, setEnd] = useState('')
@@ -96,7 +159,7 @@ export function ShortValidation() {
     let timer: ReturnType<typeof setTimeout>
     const poll = async () => {
       try {
-        const data = (await api()) as { jobs: Job[] }
+        const data = await validationRequest<{ jobs: Job[] }>(adminKey, '/jobs')
         if (!Array.isArray(data.jobs)) throw new Error('任务响应格式异常，请刷新后重试')
         if (active) {
           setJobs(data.jobs)
@@ -113,12 +176,12 @@ export function ShortValidation() {
       active = false
       clearTimeout(timer)
     }
-  }, [])
+  }, [adminKey])
   async function operate(path: string, body: unknown) {
     setBusy(true)
     setError('')
     try {
-      const job = (await api(path, body)) as Job
+      const job = await validationRequest<Job>(adminKey, '/jobs' + path, body)
       setJobs((old) => [job, ...old.filter((j) => j.id !== job.id)])
     } catch (e) {
       setError(e instanceof Error ? e.message : '操作失败')
@@ -129,6 +192,10 @@ export function ShortValidation() {
   return (
     <section className="short-validation" aria-label="短线胜率验证">
       <h2>短线胜率验证</h2>
+      <button className="button button-quiet" onClick={onLock}>
+        锁定验证管理
+      </button>
+      <ValidationSourceEditor adminKey={adminKey} selected={source} onSelect={setSource} />
       <p>
         四策略统一沪深股票池、基础过滤、后复权价格与原始成交量。按 T 收盘比较 T+1/2/3
         交易日收盘，严格上涨计胜，持平计入分母；各期限仅计有效样本，停牌、缺行情及待观察单列。这是形态统计，非逐笔实盘回测，不含费用，不代表可成交收益。
@@ -195,6 +262,7 @@ export function ShortValidation() {
               end: end || null,
               observed: observed || null,
               request_id: requestId,
+              source,
             })
           }
         >
@@ -235,7 +303,7 @@ export function ShortValidation() {
             （查询或单股计算期间不会虚增进度）
           </p>
           {job.error && <p role="alert">{job.error}</p>}
-          {['failed', 'cancelled'].includes(job.status) && (
+          {['failed', 'paused'].includes(job.status) && (
             <button
               className="button"
               disabled={busy}
@@ -248,11 +316,34 @@ export function ShortValidation() {
             <button
               className="button button-quiet"
               disabled={busy}
-              onClick={() => void operate('/' + job.id + '/cancel', {})}
+              onClick={() => void operate('/' + job.id + '/pause', {})}
             >
               暂停任务
             </button>
           )}
+          {['queued', 'running', 'paused', 'failed'].includes(job.status) && (
+            <button
+              className="button button-quiet"
+              disabled={busy}
+              onClick={() => void operate('/' + job.id + '/cancel', {})}
+            >
+              取消任务（不可继续）
+            </button>
+          )}
+          {job.cancel_requested_at && (
+            <p>
+              请求取消：{new Date(job.cancel_requested_at).toLocaleString('zh-CN')}
+              {job.cancelled_at
+                ? ' · 已确认停止：' + new Date(job.cancelled_at).toLocaleString('zh-CN')
+                : ' · 等待在途工作退出'}
+            </p>
+          )}
+          <p>
+            数据源版本：
+            {job.source
+              ? `${job.source.id === 'service' ? '服务默认' : job.source.id} / v${job.source.revision}`
+              : '旧任务冻结输入'}
+          </p>
           {job.status === 'completed' && (
             <>
               {job.summary.some((row) => Number(row['有效样本']) < 30) && (
