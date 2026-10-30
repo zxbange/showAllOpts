@@ -76,12 +76,22 @@ export function ShortValidation() {
   const [unlocked, setUnlocked] = useState('')
   const [message, setMessage] = useState('')
   const [setup, setSetup] = useState('')
+  const [allowHttp, setAllowHttp] = useState(false)
+  const usingHttp = window.location.protocol === 'http:'
+  const transportAllowed = window.location.protocol === 'https:' || (usingHttp && allowHttp)
+  const warning =
+    usingHttp && allowHttp ? (
+      <p role="alert">
+        HTTP兼容模式已开启：管理密钥、数据库密码及查询结果以明文传输，可能被窃听或篡改。后台加密不能保护传输过程。
+      </p>
+    ) : null
   useEffect(() => {
     let active = true
     fetch('/api/v1/short-term/validation/access', { cache: 'no-store' })
       .then((r) => r.json())
       .then((data) => {
         if (!active) return
+        setAllowHttp(data.https_required === false)
         const missing = [
           !data.admin_configured && 'VALIDATION_ADMIN_KEY',
           !data.encryption_configured && 'VALIDATION_ENCRYPTION_KEY',
@@ -98,34 +108,40 @@ export function ShortValidation() {
   }, [])
   if (unlocked)
     return (
-      <ValidationPanel
-        adminKey={unlocked}
-        onLock={() => {
-          setUnlocked('')
-          setKey('')
-        }}
-      />
+      <>
+        {warning}
+        <ValidationPanel
+          adminKey={unlocked}
+          onLock={() => {
+            setUnlocked('')
+            setKey('')
+          }}
+        />
+      </>
     )
   return (
     <section className="short-validation" aria-label="验证管理登录">
       <h2>短线胜率验证</h2>
-      <p>验证管理和数据库配置需要管理员密钥及HTTPS。密钥仅保留在当前页面内存，刷新后需重新输入。</p>
+      <p>
+        验证管理和数据库配置需要管理员密钥，默认要求HTTPS。密钥仅保留在当前页面内存，刷新后需重新输入。
+      </p>
       {setup && <p>{setup}</p>}
-      {!window.isSecureContext && <p role="alert">请通过HTTPS访问后再输入管理密钥或数据库凭证。</p>}
+      {warning}
+      {!transportAllowed && <p role="alert">请通过HTTPS访问后再输入管理密钥或数据库凭证。</p>}
       <label>
         验证管理密钥
         <input
           aria-label="验证管理密钥"
           type="password"
           autoComplete="off"
-          disabled={!window.isSecureContext}
+          disabled={!transportAllowed}
           value={key}
           onChange={(e) => setKey(e.target.value)}
         />
       </label>
       <button
         className="button"
-        disabled={!key || !window.isSecureContext}
+        disabled={!key || !transportAllowed}
         onClick={async () => {
           try {
             await validationRequest(key, '/jobs')

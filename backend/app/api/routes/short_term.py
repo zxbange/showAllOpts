@@ -59,7 +59,7 @@ def validation_admin(request: Request, response: Response):
     expected = settings.validation_admin_key.get_secret_value()
     if len(expected) < 32:
         raise HTTPException(503, '请部署者设置至少32位 VALIDATION_ADMIN_KEY')
-    if request.url.scheme != 'https':
+    if request.url.scheme != 'https' and not settings.validation_allow_http:
         raise HTTPException(403, '验证管理须经HTTPS访问；请正确配置可信反向代理')
     supplied = request.headers.get('Authorization', '')
     if not hmac.compare_digest(supplied.encode(), ('Bearer '+expected).encode()):
@@ -77,7 +77,7 @@ def validation_access(request: Request, response: Response):
     settings = request.app.state.short_validation.sources.settings
     return {'admin_configured': len(settings.validation_admin_key.get_secret_value()) >= 32,
             'encryption_configured': bool(settings.validation_encryption_key.get_secret_value()),
-            'targets_configured': bool(settings.validation_allowed_targets), 'https_required': True}
+            'targets_configured': bool(settings.validation_allowed_targets), 'https_required': not settings.validation_allow_http}
 
 
 @router.get('/validation/jobs')

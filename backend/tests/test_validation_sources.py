@@ -184,3 +184,30 @@ def test_cancel_during_source_query_never_commits_input(setup):
     event.listen(engine,'before_cursor_execute',cancel);jobs.tick()
     result=jobs.get(job['id']);assert result['status']=='cancelled' and result['captured']==0
     with jobs.db() as db:assert db.execute('SELECT count(*) FROM stocks').fetchone()[0]==0
+
+
+def test_http_opt_in_preserves_security(secure, config, monkeypatch):
+    jobs, sources, settings, client = secure
+    url = 'http://testserver/short-term/validation'
+    assert settings.validation_allow_http is False
+    assert client.get(url+'/access').json()['https_required'] is True
+    auth(client)
+    for headers in ({'X-Forwarded-Proto': 'https'}, {'Forwarded': 'proto=https'}):
+        assert client.get(url+'/jobs', headers=headers).status_code == 403
+    settings.validation_allow_http = True
+    assert client.get(url+'/access').json()['https_required'] is False
+    client.headers.pop('Authorization')
+    assert client.post(url+'/sources/save', json=config).status_code == 403
+    auth(client)
+    resolve = Mock(return_value=[(socket.AF_INET, socket.SOCK_STREAM, 6, '', ('10.1.2.3',3306))])
+    monkeypatch.setattr(socket, 'getaddrinfo', resolve)
+    assert client.post(url+'/sources/save', json={**config,'host':'unapproved.example'}).status_code == 409
+    assert not resolve.called
+    response = client.post(url+'/sources/save', json=config)
+    assert response.status_code == 200
+    assert config['password'] not in response.text
+    assert config['password'].encode() not in (jobs.root/'jobs.sqlite3').read_bytes()
+    settings.validation_encryption_key = SecretStr('')
+    assert client.post(url+'/sources/save', json=config).status_code == 409
+    settings.validation_allow_http = False
+    assert client.get(url+'/jobs').status_code == 403

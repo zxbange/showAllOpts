@@ -6,7 +6,12 @@ async function unlock(page: Page) {
 test.beforeEach(async ({ page }) => {
   await page.route('**/api/v1/short-term/validation/access', (r) =>
     r.fulfill({
-      json: { admin_configured: true, encryption_configured: true, targets_configured: true },
+      json: {
+        admin_configured: true,
+        encryption_configured: true,
+        targets_configured: true,
+        https_required: false,
+      },
     }),
   )
   await page.route('**/api/v1/short-term/validation/sources', (r) =>
@@ -82,7 +87,15 @@ test('select strategies, resume failure, refresh durable task and show unavailab
 test('empty selection blocks submission', async ({ page }) => {
   await page.route('**/api/v1/**', (r) =>
     r.fulfill({
-      json: { jobs: [], enabled: false, modules: [], trade_date: null, dates: [], counts: {} },
+      json: {
+        jobs: [],
+        enabled: false,
+        modules: [],
+        trade_date: null,
+        dates: [],
+        counts: {},
+        https_required: false,
+      },
     }),
   )
   await page.goto('/short-term')

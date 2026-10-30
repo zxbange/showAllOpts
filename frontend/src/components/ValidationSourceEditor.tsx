@@ -113,7 +113,7 @@ export function ValidationSourceEditor({
       <details>
         <summary>新增或编辑数据库配置</summary>
         <p>
-          仅管理员经HTTPS操作；目标须由部署者允许。配置加密保存在服务器管理数据库，不向统计源库写表。密码只用于本次请求，不保存到浏览器存储。
+          仅管理员操作，默认要求HTTPS；HTTP兼容模式须显式开启。目标须由部署者允许。配置加密保存在服务器管理数据库，不向统计源库写表。密码只用于本次请求，不保存到浏览器存储。
         </p>
         <p>
           {editing

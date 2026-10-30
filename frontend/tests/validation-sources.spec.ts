@@ -28,7 +28,12 @@ test('admin config test-save keeps password in request only, version selection a
     const path = new URL(r.request().url()).pathname
     if (path.endsWith('/access'))
       return r.fulfill({
-        json: { admin_configured: true, encryption_configured: true, targets_configured: true },
+        json: {
+          admin_configured: true,
+          encryption_configured: true,
+          targets_configured: true,
+          https_required: false,
+        },
       })
     expect(r.request().headers().authorization).toBe('Bearer test-admin-key')
     if (path.endsWith('/sources')) return r.fulfill({ json: { sources: saved ? [saved] : [] } })
@@ -62,8 +67,10 @@ test('admin config test-save keeps password in request only, version selection a
     return r.fulfill({ json: { jobs: [job()] } })
   })
   await page.goto('/short-term')
+  await expect(page.getByText(/HTTP兼容模式已开启/)).toBeVisible()
   await page.getByLabel('验证管理密钥').fill('test-admin-key')
   await page.getByRole('button', { name: '解锁验证管理' }).click()
+  await expect(page.getByText(/HTTP兼容模式已开启/)).toBeVisible()
   await page.getByText('新增或编辑数据库配置', { exact: true }).click()
   for (const [label, value] of [
     ['配置名称', '研究库'],
@@ -97,13 +104,22 @@ test('admin config test-save keeps password in request only, version selection a
   await expect(page.getByLabel('验证管理密钥')).toHaveValue('')
 })
 
-test('insecure context disables credential entry', async ({ page }) => {
-  await page.addInitScript(() => Object.defineProperty(window, 'isSecureContext', { value: false }))
-  await page.route('**/api/v1/**', (r) =>
-    r.fulfill({ json: { enabled: false, modules: [], trade_date: null, dates: [], counts: {} } }),
-  )
-  await page.goto('/short-term')
-  await expect(page.getByLabel('验证管理密钥')).toBeDisabled()
-  await expect(page.getByRole('button', { name: '解锁验证管理' })).toBeDisabled()
-  await expect(page.getByText('请通过HTTPS访问后再输入管理密钥或数据库凭证。')).toBeVisible()
-})
+for (const httpsRequired of [true, undefined]) {
+  test(`HTTP credential entry disabled unless explicitly allowed (${httpsRequired})`, async ({
+    page,
+  }) => {
+    await page.addInitScript(() =>
+      Object.defineProperty(window, 'isSecureContext', { value: false }),
+    )
+    await page.route('**/api/v1/**', (r) =>
+      r.fulfill({ json: { enabled: false, modules: [], trade_date: null, dates: [], counts: {} } }),
+    )
+    await page.route('**/api/v1/short-term/validation/access', (r) =>
+      r.fulfill({ json: { https_required: httpsRequired } }),
+    )
+    await page.goto('/short-term')
+    await expect(page.getByLabel('验证管理密钥')).toBeDisabled()
+    await expect(page.getByRole('button', { name: '解锁验证管理' })).toBeDisabled()
+    await expect(page.getByText('请通过HTTPS访问后再输入管理密钥或数据库凭证。')).toBeVisible()
+  })
+}
