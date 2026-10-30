@@ -1,6 +1,10 @@
-import { useEffect, useState } from 'react'
-import { validationRequest } from '../api/validation'
-import { ValidationSourceEditor, type SourceRef } from './ValidationSourceEditor'
+import { useEffect, useState, useRef } from 'react'
+import { validationRequest, type ValidationAuth } from '../api/validation'
+import {
+  ValidationSourceEditor,
+  type SourceRef,
+  type SourceEditorHandle,
+} from './ValidationSourceEditor'
 
 type Metric = Record<string, string | number | null>
 type Job = {
@@ -73,37 +77,56 @@ function Metrics({ rows }: { rows: Metric[] }) {
 }
 export function ShortValidation() {
   const [key, setKey] = useState('')
-  const [unlocked, setUnlocked] = useState('')
+  const [unlocked, setUnlocked] = useState<ValidationAuth | null>(null)
+  const [mode, setMode] = useState<'pair' | 'legacy' | null>(null)
   const [message, setMessage] = useState('')
-  const [setup, setSetup] = useState('')
   const [allowHttp, setAllowHttp] = useState(false)
+  const [confirmed, setConfirmed] = useState(false)
+  const pairing = useRef(false)
+  const [pairBusy, setPairBusy] = useState(false)
   const usingHttp = window.location.protocol === 'http:'
-  const transportAllowed = window.location.protocol === 'https:' || (usingHttp && allowHttp)
+  const transportAllowed =
+    window.location.protocol === 'https:' ||
+    (usingHttp && (mode === 'pair' ? confirmed : allowHttp))
   const warning =
-    usingHttp && allowHttp ? (
+    usingHttp && (mode === 'pair' || allowHttp) ? (
       <p role="alert">
-        HTTP兼容模式已开启：管理密钥、数据库密码及查询结果以明文传输，可能被窃听或篡改。后台加密不能保护传输过程。
+        HTTP兼容模式已开启：配对码、管理凭证、数据库密码及查询结果以明文传输，可能被窃听或篡改。后台加密不能保护传输过程。
       </p>
     ) : null
   useEffect(() => {
     let active = true
-    fetch('/api/v1/short-term/validation/access', { cache: 'no-store' })
-      .then((r) => r.json())
+    fetch('/api/v1/short-term/validation/access', {
+      cache: 'no-store',
+      credentials: 'same-origin',
+      headers: { 'X-Validation-Origin': window.location.origin },
+      redirect: 'error',
+    })
+      .then((r) => {
+        if (!r.ok) throw new Error('无法读取验证管理状态')
+        return r.json()
+      })
       .then((data) => {
         if (!active) return
+        setMode(data.mode === 'pair' ? 'pair' : 'legacy')
         setAllowHttp(data.https_required === false)
-        const missing = [
-          !data.admin_configured && 'VALIDATION_ADMIN_KEY',
-          !data.encryption_automatic && !data.encryption_configured && 'VALIDATION_ENCRYPTION_KEY',
-          !data.targets_configured && 'VALIDATION_ALLOWED_TARGETS',
-        ].filter(Boolean)
-        setSetup(missing.length ? '请部署者设置：' + missing.join('、') : '')
+        if (data.authenticated && typeof data.csrf_token === 'string') {
+          setUnlocked({ csrf: data.csrf_token })
+          setConfirmed(true)
+        }
       })
       .catch(() => {
-        if (active) setSetup('无法读取验证管理设置')
+        if (active) setMessage('无法读取验证管理状态，请刷新后重试')
       })
+    const expired = () => {
+      setUnlocked(null)
+      setKey('')
+      setMessage('会话已过期，请在终端领取新码并重新配对。')
+    }
+    window.addEventListener('validation-session-expired', expired)
     return () => {
       active = false
+      window.removeEventListener('validation-session-expired', expired)
     }
   }, [])
   if (unlocked)
@@ -112,55 +135,104 @@ export function ShortValidation() {
         {warning}
         <ValidationPanel
           adminKey={unlocked}
-          onLock={() => {
-            setUnlocked('')
-            setKey('')
+          onLock={async () => {
+            try {
+              if (typeof unlocked !== 'string') await validationRequest(unlocked, '/logout', {})
+              setUnlocked(null)
+              setKey('')
+              setMessage('已注销；再次使用或更换浏览器需重新领取配对码。')
+            } catch (e) {
+              setMessage(e instanceof Error ? e.message : '注销失败，请重试')
+            }
           }}
         />
+        {message && <p role="alert">{message}</p>}
       </>
     )
   return (
     <section className="short-validation" aria-label="验证管理登录">
-      <h2>短线胜率验证</h2>
-      <p>
-        验证管理和数据库配置需要管理员密钥，默认要求HTTPS。密钥仅保留在当前页面内存，刷新后需重新输入。
-      </p>
-      {setup && <p>{setup}</p>}
+      <h2>{mode === 'pair' ? '首次配对或重新登录' : '短线胜率验证'}</h2>
+      {mode === 'pair' ? (
+        <>
+          <p>
+            站主在服务器项目目录、使用API服务账户运行以下命令，领取10分钟有效的一次性配对码。无需编辑服务器配置。
+          </p>
+          <pre style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>
+            APP_ENV_FILE=config/app.config backend/.venv/bin/python backend/validation_pair.py
+            --origin {window.location.origin}
+          </pre>
+          <p>
+            命令使用现有部署的配置路径。配对码不要发送到聊天；会话最多8小时，刷新后保留。注销、过期或更换浏览器时重新领取；终端加
+            --revoke-sessions 可撤销所有旧会话。
+          </p>
+        </>
+      ) : (
+        <p>当前沿用既有管理密钥模式，不能通过配对码绕过。管理密钥仅保留在页面内存。</p>
+      )}
       {warning}
-      {!transportAllowed && <p role="alert">请通过HTTPS访问后再输入管理密钥或数据库凭证。</p>}
+      {usingHttp && mode === 'pair' && (
+        <label>
+          <input
+            type="checkbox"
+            checked={confirmed}
+            onChange={(e) => setConfirmed(e.target.checked)}
+          />
+          我确认在HTTP上由本人操作并接受明文传输风险
+        </label>
+      )}
+      {!transportAllowed && mode === 'legacy' && (
+        <p role="alert">请通过HTTPS访问后再输入管理密钥或数据库凭证。</p>
+      )}
       <label>
-        验证管理密钥
+        {mode === 'pair' ? '一次性配对码' : '验证管理密钥'}
         <input
-          aria-label="验证管理密钥"
+          aria-label={mode === 'pair' ? '一次性配对码' : '验证管理密钥'}
           type="password"
           autoComplete="off"
-          disabled={!transportAllowed}
+          disabled={!mode || !transportAllowed}
           value={key}
           onChange={(e) => setKey(e.target.value)}
         />
       </label>
       <button
         className="button"
-        disabled={!key || !transportAllowed}
+        disabled={pairBusy || !key || !transportAllowed || !mode}
         onClick={async () => {
+          if (pairing.current) return
+          pairing.current = true
+          setPairBusy(true)
           try {
-            await validationRequest(key, '/jobs')
-            setUnlocked(key)
+            if (mode === 'pair') {
+              const result = await validationRequest<{ csrf_token: string }>(
+                { csrf: '' },
+                '/pair',
+                { code: key, http_confirmed: confirmed },
+              )
+              setUnlocked({ csrf: result.csrf_token })
+            } else {
+              await validationRequest(key, '/jobs')
+              setUnlocked(key)
+            }
             setKey('')
             setMessage('')
           } catch (e) {
             setKey('')
             setMessage(e instanceof Error ? e.message : '验证失败')
+          } finally {
+            pairing.current = false
+            setPairBusy(false)
           }
         }}
       >
-        解锁验证管理
+        {mode === 'pair' ? '配对并进入' : '解锁验证管理'}
       </button>
       {message && <p role="alert">{message}</p>}
     </section>
   )
 }
-function ValidationPanel({ adminKey, onLock }: { adminKey: string; onLock: () => void }) {
+function ValidationPanel({ adminKey, onLock }: { adminKey: ValidationAuth; onLock: () => void }) {
+  const sourceEditor = useRef<SourceEditorHandle>(null)
+  const starting = useRef(false)
   const [source, setSource] = useState<SourceRef | null>(null)
   const [methods, setMethods] = useState<string[]>(Object.keys(choices))
   const [start, setStart] = useState('2024-01-01')
@@ -211,7 +283,12 @@ function ValidationPanel({ adminKey, onLock }: { adminKey: string; onLock: () =>
       <button className="button button-quiet" onClick={onLock}>
         锁定验证管理
       </button>
-      <ValidationSourceEditor adminKey={adminKey} selected={source} onSelect={setSource} />
+      <ValidationSourceEditor
+        ref={sourceEditor}
+        adminKey={adminKey}
+        selected={source}
+        onSelect={setSource}
+      />
       <p>
         四策略统一沪深股票池、基础过滤、后复权价格与原始成交量。按 T 收盘比较 T+1/2/3
         交易日收盘，严格上涨计胜，持平计入分母；各期限仅计有效样本，停牌、缺行情及待观察单列。这是形态统计，非逐笔实盘回测，不含费用，不代表可成交收益。
@@ -271,16 +348,27 @@ function ValidationPanel({ adminKey, onLock }: { adminKey: string; onLock: () =>
             (!!end && start > end) ||
             (!!end && !!observed && end > observed)
           }
-          onClick={() =>
-            void operate('', {
-              methods,
-              start,
-              end: end || null,
-              observed: observed || null,
-              request_id: requestId,
-              source,
-            })
-          }
+          onClick={async () => {
+            if (starting.current) return
+            starting.current = true
+            setBusy(true)
+            try {
+              const prepared = await sourceEditor.current?.prepare()
+              await operate('', {
+                methods,
+                start,
+                end: end || null,
+                observed: observed || null,
+                request_id: requestId,
+                source: prepared ?? source,
+              })
+            } catch (e) {
+              setError(e instanceof Error ? e.message : '数据库配置保存失败')
+            } finally {
+              starting.current = false
+              setBusy(false)
+            }
+          }}
         >
           开始验证
         </button>

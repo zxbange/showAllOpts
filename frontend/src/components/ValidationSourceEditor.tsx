@@ -1,5 +1,5 @@
-import { useEffect, useState } from 'react'
-import { validationRequest } from '../api/validation'
+import { useEffect, useState, useImperativeHandle, forwardRef } from 'react'
+import { validationRequest, type ValidationAuth } from '../api/validation'
 export type SourceRef = { id: string; revision: number }
 type Source = SourceRef & {
   name: string
@@ -12,7 +12,7 @@ type Source = SourceRef & {
   password_set: boolean
 }
 const empty = {
-  name: '',
+  name: '研究数据库',
   host: '',
   port: 3306,
   database: '',
@@ -20,21 +20,33 @@ const empty = {
   tls: 'verify',
   ca_pem: '',
 }
-export function ValidationSourceEditor({
-  adminKey,
-  selected,
-  onSelect,
-}: {
-  adminKey: string
-  selected: SourceRef | null
-  onSelect: (source: SourceRef | null) => void
-}) {
+export type SourceEditorHandle = { prepare: () => Promise<SourceRef | null> }
+export const ValidationSourceEditor = forwardRef<
+  SourceEditorHandle,
+  {
+    adminKey: ValidationAuth
+    selected: SourceRef | null
+    onSelect: (source: SourceRef | null) => void
+  }
+>(function ValidationSourceEditor({ adminKey, selected, onSelect }, ref) {
   const [sources, setSources] = useState<Source[]>([])
   const [form, setForm] = useState(empty)
   const [editing, setEditing] = useState<SourceRef | null>(null)
   const [password, setPassword] = useState('')
   const [message, setMessage] = useState('')
   const [busy, setBusy] = useState(false)
+  const [dirty, setDirty] = useState(false)
+  const paired = typeof adminKey !== 'string'
+  useImperativeHandle(ref, () => ({
+    prepare: async () => {
+      if (dirty || (paired && !selected)) {
+        const result = await submit('save', true)
+        if (!result) throw new Error('请先填写数据库连接信息')
+        return result
+      }
+      return selected
+    },
+  }))
   useEffect(() => {
     let active = true
     validationRequest<{ sources: Source[] }>(adminKey, '/sources')
@@ -49,7 +61,7 @@ export function ValidationSourceEditor({
       active = false
     }
   }, [adminKey])
-  async function submit(action: 'save' | 'test') {
+  async function submit(action: 'save' | 'test', rethrow = false): Promise<SourceRef | undefined> {
     setBusy(true)
     setMessage('')
     try {
@@ -60,13 +72,16 @@ export function ValidationSourceEditor({
         setEditing({ id: result.id, revision: result.revision })
         onSelect({ id: result.id, revision: result.revision })
         setPassword('')
+        setDirty(false)
         setMessage('配置已加密保存并选用新版本；已有任务仍绑定原版本。')
+        return { id: result.id, revision: result.revision }
       } else {
         const result = await validationRequest<{ message: string }>(adminKey, '/sources/test', body)
         setMessage(result.message)
       }
     } catch (e) {
       setMessage(e instanceof Error ? e.message : '操作失败')
+      if (rethrow) throw e
     } finally {
       setBusy(false)
     }
@@ -82,9 +97,15 @@ export function ValidationSourceEditor({
           onChange={(e) => {
             const source = sources.find((s) => `${s.id}:${s.revision}` === e.target.value)
             onSelect(source ? { id: source.id, revision: source.revision } : null)
+            setDirty(false)
+            setPassword('')
+            setEditing(source ? { id: source.id, revision: source.revision } : null)
+            setForm(source ?? empty)
           }}
         >
-          <option value="">服务默认数据库（创建任务时绑定配置版本）</option>
+          <option value="">
+            {paired ? '填写新数据库连接' : '服务默认数据库（创建任务时绑定配置版本）'}
+          </option>
           {sources.map((s) => (
             <option key={s.id} value={`${s.id}:${s.revision}`}>
               {s.name} · v{s.revision}
@@ -110,10 +131,10 @@ export function ValidationSourceEditor({
       >
         编辑所选配置
       </button>
-      <details>
+      <details open={paired || undefined}>
         <summary>新增或编辑数据库配置</summary>
         <p>
-          仅管理员操作，默认要求HTTPS；HTTP兼容模式须显式开启。目标须由部署者允许。配置加密保存在服务器管理数据库，不向统计源库写表。密码只用于本次请求，不保存到浏览器存储。
+          仅管理员操作，HTTP需要本人确认风险。仅连接你明确填写的目标，危险地址会被阻止。配置加密保存在服务器管理数据库，不向统计源库写表。密码只用于本次请求，不保存到浏览器存储。
         </p>
         <p>
           {editing
@@ -141,7 +162,10 @@ export function ValidationSourceEditor({
               }
               autoComplete="off"
               value={form[field]}
-              onChange={(e) => setForm((old) => ({ ...old, [field]: e.target.value }))}
+              onChange={(e) => {
+                setDirty(true)
+                setForm((old) => ({ ...old, [field]: e.target.value }))
+              }}
             />
           </label>
         ))}
@@ -153,7 +177,10 @@ export function ValidationSourceEditor({
             min={1}
             max={65535}
             value={form.port}
-            onChange={(e) => setForm((old) => ({ ...old, port: Number(e.target.value) }))}
+            onChange={(e) => {
+              setDirty(true)
+              setForm((old) => ({ ...old, port: Number(e.target.value) }))
+            }}
           />
         </label>
         <label>
@@ -163,7 +190,10 @@ export function ValidationSourceEditor({
             type="password"
             autoComplete="new-password"
             value={password}
-            onChange={(e) => setPassword(e.target.value)}
+            onChange={(e) => {
+              setDirty(true)
+              setPassword(e.target.value)
+            }}
           />
         </label>
         <label>
@@ -171,7 +201,10 @@ export function ValidationSourceEditor({
           <select
             aria-label="数据库TLS"
             value={form.tls}
-            onChange={(e) => setForm((old) => ({ ...old, tls: e.target.value }))}
+            onChange={(e) => {
+              setDirty(true)
+              setForm((old) => ({ ...old, tls: e.target.value }))
+            }}
           >
             <option value="verify">加密并校验证书和身份（推荐）</option>
             <option value="required">加密但不校验证书</option>
@@ -183,7 +216,10 @@ export function ValidationSourceEditor({
           <textarea
             aria-label="数据库CA证书"
             value={form.ca_pem}
-            onChange={(e) => setForm((old) => ({ ...old, ca_pem: e.target.value }))}
+            onChange={(e) => {
+              setDirty(true)
+              setForm((old) => ({ ...old, ca_pem: e.target.value }))
+            }}
           />
         </label>
         <div className="short-controls">
@@ -197,6 +233,8 @@ export function ValidationSourceEditor({
             className="button button-quiet"
             onClick={() => {
               setEditing(null)
+              setDirty(false)
+              onSelect(null)
               setForm(empty)
               setPassword('')
             }}
@@ -208,4 +246,4 @@ export function ValidationSourceEditor({
       {message && <p role="status">{message}</p>}
     </fieldset>
   )
-}
+})

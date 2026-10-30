@@ -75,7 +75,7 @@ class ValidationSources:
     def allowed(self, config):
         host, port = config['host'].lower().rstrip('.'), int(config['port'])
         targets = self.settings.validation_allowed_targets
-        if f'{host}:{port}' not in targets:
+        if (targets or self.settings.validation_admin_key.get_secret_value()) and f'{host}:{port}' not in targets:
             raise SourceError('数据库目标未获部署者允许，请检查 VALIDATION_ALLOWED_TARGETS')
         # Resolve once and pin the resulting socket, so DNS cannot rebind between check/use.
         try:
@@ -128,7 +128,7 @@ class ValidationSources:
     def save(self, config, ident=None, expected_revision=None):
         cipher = self.cipher()
         # This check is offline: saving an allowed hostname does not initiate DNS/network access.
-        if f"{config['host'].lower().rstrip('.')}:{config['port']}" not in self.settings.validation_allowed_targets:
+        if (self.settings.validation_allowed_targets or self.settings.validation_admin_key.get_secret_value()) and f"{config['host'].lower().rstrip('.')}:{config['port']}" not in self.settings.validation_allowed_targets:
             raise SourceError('数据库目标未获部署者允许，请检查 VALIDATION_ALLOWED_TARGETS')
         ident = ident or uuid.uuid4().hex
         from app.services.short_validation import now

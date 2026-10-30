@@ -23,3 +23,24 @@ it('does not stringify malformed server details containing secret inputs', async
     '操作失败，请检查输入与管理配置',
   )
 })
+
+it('uses same-origin session cookies and CSRF headers without bearer or persistent browser storage', async () => {
+  const fetch = vi.fn().mockResolvedValue({ ok: true, json: async () => ({ ok: true }) })
+  vi.stubGlobal('window', { location: { origin: 'http://site.example:8081' } })
+  vi.stubGlobal('fetch', fetch)
+  await validationRequest({ csrf: 'page-only-csrf' }, '/jobs', { methods: ['bukou'] })
+  expect(fetch).toHaveBeenCalledWith(
+    '/api/v1/short-term/validation/jobs',
+    expect.objectContaining({
+      credentials: 'same-origin',
+      redirect: 'error',
+      cache: 'no-store',
+      headers: {
+        'X-Validation-Client': 'browser',
+        'X-Validation-Origin': 'http://site.example:8081',
+        'X-Validation-CSRF': 'page-only-csrf',
+        'Content-Type': 'application/json',
+      },
+    }),
+  )
+})

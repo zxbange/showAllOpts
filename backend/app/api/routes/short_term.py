@@ -22,6 +22,7 @@ from fastapi import Request, HTTPException, Response
 from pydantic import BaseModel, Field, SecretStr, ValidationError
 from starlette.concurrency import run_in_threadpool
 from app.services.validation_sources import SourceError
+from app.services.validation_access import ValidationAccess, AccessError, COOKIE, COOKIE_PATH, canonical_origin
 
 
 class SourceRef(BaseModel):
@@ -51,14 +52,57 @@ class ConnectionInput(BaseModel):
     revision: int | None = Field(default=None, ge=1)
 
 
+def access_service(request):
+    return ValidationAccess(request.app.state.short_validation.sources.settings)
+
+
+def request_origin(request, mutation=False):
+    from urllib.parse import urlsplit
+    supplied = request.headers.get('origin')
+    declared = request.headers.get('x-validation-origin')
+    try:
+        upstream = canonical_origin(str(request.base_url))
+        candidate = canonical_origin(supplied or declared or upstream)
+    except AccessError:
+        raise HTTPException(403, '站点来源无效，请从本站验证页面操作') from None
+    # Existing trusted proxies can strip the external port from Host. The exact
+    # origin is authorized by the console-issued code / persisted session below,
+    # never by a caller-controlled header alone. Still require same host/scheme.
+    actual, proxied = urlsplit(candidate), urlsplit(upstream)
+    if (request.headers.get('sec-fetch-site') in ('cross-site', 'same-site')
+            or (supplied is not None and supplied != candidate)
+            or (declared is not None and declared != candidate)
+            or (mutation and supplied != candidate)
+            or actual.hostname != proxied.hostname or actual.scheme != proxied.scheme):
+        raise HTTPException(403, '仅允许本站页面请求，请从本站验证页面操作')
+    return candidate
+
+
+def paired_session(request, mutation=False):
+    origin = request_origin(request, mutation)
+    if request.headers.get('x-validation-client') != 'browser':
+        raise HTTPException(403, '请从本站验证页面操作')
+    try:
+        session = access_service(request).session(request.cookies.get(COOKIE, ''), origin)
+    except AccessError as error:
+        raise HTTPException(error.status, str(error)) from None
+    if mutation and not hmac.compare_digest(request.headers.get('x-validation-csrf', '').encode(), session['csrf_token'].encode()):
+        raise HTTPException(403, '页面校验已失效，请刷新后重试')
+    return session
+
+
 def validation_admin(request: Request, response: Response):
     response.headers['Cache-Control'] = 'no-store'
-    response.headers['Vary'] = 'Authorization'
+    response.headers['Vary'] = 'Authorization, Cookie'
     service = request.app.state.short_validation
     settings = service.sources.settings
     expected = settings.validation_admin_key.get_secret_value()
+    if not expected:
+        paired_session(request, request.method != 'GET')
+        request.state.validation_paired = True
+        return service
     if len(expected) < 32:
-        raise HTTPException(503, '请部署者设置至少32位 VALIDATION_ADMIN_KEY')
+        raise HTTPException(503, '既有管理密钥无效；配对不能绕过已有管理设置')
     if request.url.scheme != 'https' and not settings.validation_allow_http:
         raise HTTPException(403, '验证管理须经HTTPS访问；请正确配置可信反向代理')
     supplied = request.headers.get('Authorization', '')
@@ -75,11 +119,60 @@ def public_job(job):
 def validation_access(request: Request, response: Response):
     from app.services.validation_keys import POSIX_KEY_STORAGE
     response.headers['Cache-Control'] = 'no-store'
-    settings = request.app.state.short_validation.sources.settings
-    return {'admin_configured': len(settings.validation_admin_key.get_secret_value()) >= 32,
+    response.headers['Vary'] = 'Cookie'
+    access = access_service(request)
+    settings = access.settings
+    origin = request_origin(request)
+    data = {'mode': 'legacy' if access.legacy else 'pair', 'authenticated': False,
+            'admin_configured': len(settings.validation_admin_key.get_secret_value()) >= 32,
             'encryption_configured': bool(settings.validation_encryption_key.get_secret_value()),
             'encryption_automatic': POSIX_KEY_STORAGE,
-            'targets_configured': bool(settings.validation_allowed_targets), 'https_required': not settings.validation_allow_http}
+            'targets_configured': bool(settings.validation_allowed_targets),
+            'https_required': access.legacy and not settings.validation_allow_http}
+    if not access.legacy and request.cookies.get(COOKIE):
+        try:
+            data.update(access.session(request.cookies[COOKIE], origin))
+            data['authenticated'] = True
+        except AccessError:
+            pass
+    return data
+
+
+@router.post('/validation/pair')
+async def pair_validation(request: Request, response: Response):
+    origin = request_origin(request, True)
+    if request.headers.get('x-validation-client') != 'browser':
+        raise HTTPException(403, '请从本站验证页面操作')
+    try:
+        raw = await request.body()
+        if len(raw) > 1024:
+            raise ValueError()
+        import json
+        body = json.loads(raw)
+        code = body.get('code')
+        if not isinstance(code, str) or not 1 <= len(code) <= 100:
+            raise ValueError()
+        confirmed = body.get('http_confirmed') is True
+    except Exception:
+        raise HTTPException(422, '配对输入格式无效') from None
+    try:
+        access = access_service(request)
+        token = access.pair(code, origin, confirmed)
+        session = access.session(token, origin)
+    except AccessError as error:
+        raise HTTPException(error.status, str(error)) from None
+    response.set_cookie(COOKIE, token, httponly=True, secure=request.url.scheme == 'https', samesite='strict', path=COOKIE_PATH)
+    response.headers['Cache-Control'] = 'no-store'
+    return session
+
+
+@router.post('/validation/logout')
+def logout_validation(request: Request, response: Response):
+    paired_session(request, True)
+    access_service(request).logout(request.cookies[COOKIE])
+    response.delete_cookie(COOKIE, path=COOKIE_PATH, httponly=True, secure=request.url.scheme == 'https', samesite='strict')
+    response.headers['Cache-Control'] = 'no-store'
+    return {'ok': True}
 
 
 @router.get('/validation/jobs')
@@ -88,9 +181,11 @@ def validation_jobs(service=Depends(validation_admin)):
 
 
 @router.post('/validation/jobs')
-def create_validation(body: ValidationRequest, service=Depends(validation_admin)):
+def create_validation(body: ValidationRequest, request: Request, service=Depends(validation_admin)):
     try:
         source = body.source.model_dump() if body.source else None
+        if getattr(request.state, 'validation_paired', False) and (source is None or source['id'] == 'service'):
+            raise ValueError('请先填写并保存要验证的数据库连接')
         return public_job(service.create(body.methods, body.start, body.end, body.observed, body.request_id, source))
     except ValueError as exc:
         raise HTTPException(422, str(exc)) from None
@@ -152,6 +247,10 @@ async def save_validation_source(request: Request, service=Depends(validation_ad
 async def test_validation_source(request: Request, service=Depends(validation_admin)):
     _, config = await connection_input(request, service)
     try:
+        if not access_service(request).legacy:
+            access_service(request).limit_probe(request.cookies[COOKIE])
         return await run_in_threadpool(service.sources.test, config)
+    except AccessError as exc:
+        raise HTTPException(exc.status, str(exc)) from None
     except SourceError as exc:
         raise HTTPException(409, str(exc)) from None
