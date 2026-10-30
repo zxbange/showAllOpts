@@ -8,7 +8,6 @@ import threading
 import ssl
 import uuid
 
-from cryptography.fernet import Fernet
 import pymysql
 from sqlalchemy import create_engine
 
@@ -52,22 +51,26 @@ class ValidationSources:
             db.execute('CREATE TABLE IF NOT EXISTS validation_source_key (id INTEGER PRIMARY KEY CHECK(id=1), verifier BLOB NOT NULL)')
 
     def cipher(self):
-        key = self.settings.validation_encryption_key.get_secret_value()
-        if not key:
-            raise SourceError('请部署者设置 VALIDATION_ENCRYPTION_KEY；连接信息不会以明文保存')
+        from app.services.validation_keys import persistent_cipher, KeyStorageError
+
+        def validate(cipher):
+            with self.jobs.db() as db:
+                marker = db.execute('SELECT verifier FROM validation_source_key WHERE id=1').fetchone()
+                rows = db.execute('SELECT ciphertext FROM validation_sources').fetchall() if not marker else []
+            if marker or rows:
+                if cipher is None:
+                    raise KeyStorageError('已有加密数据库配置但原密钥缺失，请恢复原密钥；不会生成替代密钥或删除数据')
+                try:
+                    if marker and cipher.decrypt(marker[0]) != b'validation-source-key-v1':
+                        raise ValueError()
+                    for row in rows:
+                        cipher.decrypt(row[0])
+                except Exception:
+                    raise KeyStorageError('数据库配置无法解密：加密密钥与此管理数据库不匹配，已禁止读取和写入') from None
         try:
-            cipher = Fernet(key.encode('ascii'))
-        except Exception:
-            raise SourceError('VALIDATION_ENCRYPTION_KEY 格式无效，请检查服务器安全配置') from None
-        with self.jobs.db() as db:
-            row = db.execute('SELECT verifier FROM validation_source_key WHERE id=1').fetchone()
-        if row:
-            try:
-                if cipher.decrypt(row[0]) != b'validation-source-key-v1':
-                    raise ValueError()
-            except Exception:
-                raise SourceError('数据库配置无法解密：加密密钥与此管理数据库不匹配，已禁止读取和写入') from None
-        return cipher
+            return persistent_cipher(self.jobs.root, self.settings.validation_encryption_key.get_secret_value(), validate)
+        except KeyStorageError as error:
+            raise SourceError(str(error)) from None
 
     def allowed(self, config):
         host, port = config['host'].lower().rstrip('.'), int(config['port'])

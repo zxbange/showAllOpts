@@ -135,7 +135,7 @@ test('shared module cards stay available while loading and after failures', asyn
   for (const [path, count] of [
     ['etf-shares', 2],
     ['dividend-selection', 2],
-    ['short-term', 4],
+    ['short-term', 5],
   ] as const) {
     let release!: () => void
     const response = new Promise<void>((resolve) => {
@@ -159,25 +159,6 @@ test('shared module cards stay available while loading and after failures', asyn
     }
     await expect(page.locator('.state-panel[role=alert]')).toContainText('测试加载失败')
     await expect(cards).toHaveCount(count)
-    if (path === 'short-term') {
-      await page.getByRole('tab', { name: '补票龙', exact: true }).focus()
-      await page.keyboard.press('ArrowRight')
-      await expect(page.getByRole('tab', { name: '红悬停龙', exact: true })).toBeFocused()
-      await expect(page.getByRole('tab', { name: '红悬停龙', exact: true })).toHaveAttribute(
-        'aria-selected',
-        'true',
-      )
-      await page.keyboard.press('End')
-      await expect(page.getByRole('tab', { name: '超跌后止跌反弹', exact: true })).toHaveAttribute(
-        'aria-selected',
-        'true',
-      )
-      await page.keyboard.press('Home')
-      await expect(page.getByRole('tab', { name: '补票龙', exact: true })).toHaveAttribute(
-        'aria-selected',
-        'true',
-      )
-    }
     await page.unrouteAll({ behavior: 'wait' })
   }
 })

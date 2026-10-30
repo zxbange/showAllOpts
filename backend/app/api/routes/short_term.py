@@ -73,10 +73,12 @@ def public_job(job):
 
 @router.get('/validation/access')
 def validation_access(request: Request, response: Response):
+    from app.services.validation_keys import POSIX_KEY_STORAGE
     response.headers['Cache-Control'] = 'no-store'
     settings = request.app.state.short_validation.sources.settings
     return {'admin_configured': len(settings.validation_admin_key.get_secret_value()) >= 32,
             'encryption_configured': bool(settings.validation_encryption_key.get_secret_value()),
+            'encryption_automatic': POSIX_KEY_STORAGE,
             'targets_configured': bool(settings.validation_allowed_targets), 'https_required': not settings.validation_allow_http}
 
 

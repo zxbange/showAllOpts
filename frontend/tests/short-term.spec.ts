@@ -64,16 +64,16 @@ test('short term tabs, dates, candles and pagination', async ({ page }, info) =>
   await expect(page.getByRole('img', { name: /形态示例近30个交易日/ })).toBeVisible()
   await page.getByRole('button', { name: '下一页', exact: true }).click()
   await expect(page.getByRole('heading', { name: '下一页股票 600001.XSHG' })).toBeVisible()
-  await page.getByRole('tab', { name: /红悬停龙/ }).click()
+  await page.getByRole('link', { name: /红悬停龙/ }).click()
   await expect(page.getByRole('heading', { name: '本日暂无符合条件的股票' })).toBeVisible()
-  await page.getByRole('tab', { name: /蓄力龙/ }).click()
+  await page.getByRole('link', { name: /蓄力龙/ }).click()
   await page.getByLabel('短线选股日期').selectOption('2026-09-29')
   await expect(page.locator('.short-summary')).toContainText('2026-09-29')
   await expect(page.getByRole('img', { name: /形态示例近30个交易日/ })).toBeVisible()
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(
     true,
   )
-  await page.getByRole('tab', { name: /超跌后止跌反弹/ }).click()
+  await page.getByRole('link', { name: /超跌后止跌反弹/ }).click()
   await expect(page.locator('.short-summary').first()).toContainText('后复权')
   await expect(page.getByRole('img', { name: /形态示例近30个交易日/ })).toBeVisible()
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(
@@ -127,7 +127,7 @@ test('old snapshots distinguish uncomputed rebound from zero candidates', async 
     }),
   )
   await page.goto('/short-term')
-  await page.getByRole('tab', { name: /超跌后止跌反弹/ }).click()
+  await page.getByRole('link', { name: /超跌后止跌反弹/ }).click()
   await expect(page.getByRole('heading', { name: '此快照尚未计算超跌反弹' })).toBeVisible()
   await page.route('**/api/v1/short-term/latest?*', (r) =>
     r.fulfill({

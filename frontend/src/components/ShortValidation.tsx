@@ -94,7 +94,7 @@ export function ShortValidation() {
         setAllowHttp(data.https_required === false)
         const missing = [
           !data.admin_configured && 'VALIDATION_ADMIN_KEY',
-          !data.encryption_configured && 'VALIDATION_ENCRYPTION_KEY',
+          !data.encryption_automatic && !data.encryption_configured && 'VALIDATION_ENCRYPTION_KEY',
           !data.targets_configured && 'VALIDATION_ALLOWED_TARGETS',
         ].filter(Boolean)
         setSetup(missing.length ? '请部署者设置：' + missing.join('、') : '')

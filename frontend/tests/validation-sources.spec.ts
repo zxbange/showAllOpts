@@ -66,7 +66,7 @@ test('admin config test-save keeps password in request only, version selection a
     }
     return r.fulfill({ json: { jobs: [job()] } })
   })
-  await page.goto('/short-term')
+  await page.goto('/short-term/validation')
   await expect(page.getByText(/HTTP兼容模式已开启/)).toBeVisible()
   await page.getByLabel('验证管理密钥').fill('test-admin-key')
   await page.getByRole('button', { name: '解锁验证管理' }).click()
@@ -117,7 +117,7 @@ for (const httpsRequired of [true, undefined]) {
     await page.route('**/api/v1/short-term/validation/access', (r) =>
       r.fulfill({ json: { https_required: httpsRequired } }),
     )
-    await page.goto('/short-term')
+    await page.goto('/short-term/validation')
     await expect(page.getByLabel('验证管理密钥')).toBeDisabled()
     await expect(page.getByRole('button', { name: '解锁验证管理' })).toBeDisabled()
     await expect(page.getByText('请通过HTTPS访问后再输入管理密钥或数据库凭证。')).toBeVisible()

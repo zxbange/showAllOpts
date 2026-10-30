@@ -5,6 +5,10 @@ import { HomePage } from './pages/HomePage'
 import { MomentumPage } from './pages/MomentumPage'
 import { LoadingState } from './components/States'
 
+const ShortValidationPage = lazy(() =>
+  import('./pages/ShortValidationPage').then((m) => ({ default: m.ShortValidationPage })),
+)
+
 const ShortTermPage = lazy(() =>
   import('./pages/ShortTermPage').then((m) => ({ default: m.ShortTermPage })),
 )
@@ -75,6 +79,14 @@ export default function App() {
             element={
               <Suspense fallback={<LoadingState />}>
                 <SocialMonitorPage />
+              </Suspense>
+            }
+          />
+          <Route
+            path="short-term/validation"
+            element={
+              <Suspense fallback={<LoadingState />}>
+                <ShortValidationPage />
               </Suspense>
             }
           />

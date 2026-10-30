@@ -49,7 +49,7 @@ def test_encryption_versions_and_no_echo(secure,config):
 
 def test_bad_keys_block_reads_and_all_writes(secure,config):
     _,sources,settings,_=secure;ref=sources.save(config)
-    for key in (Fernet.generate_key().decode(),'','not-a-key'):
+    for key in (Fernet.generate_key().decode(),'not-a-key'):
         settings.validation_encryption_key=SecretStr(key)
         with pytest.raises(SourceError):sources.get(ref['id'],ref['revision'])
         with pytest.raises(SourceError):sources.save(config)
@@ -207,7 +207,7 @@ def test_http_opt_in_preserves_security(secure, config, monkeypatch):
     assert response.status_code == 200
     assert config['password'] not in response.text
     assert config['password'].encode() not in (jobs.root/'jobs.sqlite3').read_bytes()
-    settings.validation_encryption_key = SecretStr('')
+    settings.validation_encryption_key = SecretStr('invalid')
     assert client.post(url+'/sources/save', json=config).status_code == 409
     settings.validation_allow_http = False
     assert client.get(url+'/jobs').status_code == 403

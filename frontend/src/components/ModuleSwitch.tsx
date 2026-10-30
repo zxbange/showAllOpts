@@ -77,7 +77,11 @@ export function ModuleSwitch<T extends string>({
             key={item.id}
             to={item.href}
             aria-label={item.name}
-            className={({ isActive }) => 'module-card' + (isActive ? ' active' : '')}
+            aria-current={value !== undefined ? (value === item.id ? 'page' : false) : undefined}
+            className={({ isActive }) =>
+              'module-card' +
+              ((value !== undefined ? value === item.id : isActive) ? ' active' : '')
+            }
           >
             {content}
           </NavLink>
