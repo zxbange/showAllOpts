@@ -79,6 +79,6 @@ test('static task shows committed progress and timings; legacy freeze remains di
   await tasks.last().locator('summary').filter({ hasText: '任务参数' }).click()
   await expect(tasks.last()).not.toContainText('输入方式：')
   await page.locator('summary').filter({ hasText: '配置新的验证任务' }).click()
-  await expect(page.getByText('新任务每批最多20股', { exact: false })).toBeVisible()
+  await expect(page.getByText('新任务每批最多20股', { exact: false })).toHaveCount(0)
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
 })

@@ -441,9 +441,6 @@ function ValidationPanel({ adminKey, onLock }: { adminKey: ValidationAuth; onLoc
                 准备重新读取数据
               </button>
             </div>
-            <p className="validation-hint">
-              新任务每批最多20股，边读边算并保存断点，不预先冻结全部行情。任务期间请保持源历史数据不变。启动时自动保存连接，关闭页面后后台继续运行。
-            </p>
           </div>
         </div>
       </details>
