@@ -18,6 +18,7 @@ from app.core.logging import ensure_logging
 from app.services.social import SocialMonitor
 from app.services.social_browser import BrowserLogin
 from app.services.margin_guarantee import MarginGuarantee
+from app.services.short_validation import ValidationJobs
 
 logger = logging.getLogger(__name__)
 
@@ -38,6 +39,10 @@ def create_app(settings: Settings | None = None, engine: Engine | None = None) -
         social.browser_login = browser_login
         margin_guarantee = MarginGuarantee(settings)
         application.state.margin_guarantee = margin_guarantee
+        validation_engine = build_engine(settings)
+        validation = ValidationJobs(settings, validation_engine)
+        application.state.short_validation = validation
+        validation.start()
         cache.start()
         social.start()
         margin_guarantee.start()
@@ -45,6 +50,8 @@ def create_app(settings: Settings | None = None, engine: Engine | None = None) -
         try:
             yield
         finally:
+            await asyncio.to_thread(validation.stop)
+            validation_engine.dispose()
             await asyncio.to_thread(margin_guarantee.stop)
             await asyncio.to_thread(browser_login.stop)
             await asyncio.to_thread(social.stop)

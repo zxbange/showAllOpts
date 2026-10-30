@@ -163,3 +163,43 @@
     grid-template-columns: 1fr;
   }
 }
+
+.short-validation {
+  margin: 1.5rem 0;
+  padding: 1.25rem;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+}
+.short-validation p {
+  line-height: 1.7;
+  overflow-wrap: anywhere;
+}
+.short-validation fieldset {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1rem;
+  margin: 1rem 0;
+}
+.short-validation .short-controls {
+  flex-wrap: wrap;
+}
+.short-validation input[type='date'] {
+  display: block;
+  max-width: 100%;
+}
+.short-validation article {
+  border-top: 1px solid var(--border);
+  margin-top: 1rem;
+  padding-top: 1rem;
+}
+.short-validation table {
+  border-collapse: collapse;
+  font-size: 0.85rem;
+}
+.short-validation th,
+.short-validation td {
+  padding: 0.5rem;
+  white-space: nowrap;
+  text-align: right;
+  border-bottom: 1px solid var(--border);
+}

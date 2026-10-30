@@ -11,7 +11,7 @@ import pytest
 from sqlalchemy import Date, create_engine, event
 
 
-PATH = Path(__file__).resolve().parents[2] / '脚本/本地统计/七策略胜率统计_本地版.py'
+PATH = Path(__file__).resolve().parents[2] / 'backend/app/services/short_statistics.py'
 spec = importlib.util.spec_from_file_location('ultra_statistics', PATH)
 m = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(m)
@@ -419,14 +419,14 @@ def test_config_default_fallback_and_explicit_missing_are_distinct():
 
 
 def test_config_paths_use_script_location_not_working_directory(tmp_path, monkeypatch):
-    location = tmp_path / 'script'
-    location.mkdir()
+    location = tmp_path / '脚本/本地统计'
+    location.mkdir(parents=True)
     cwd = tmp_path / 'other'
     cwd.mkdir()
     config = location / 'settings.json'
     settings = local_settings()
     config.write_text(m.json.dumps(settings), encoding='utf-8')
-    monkeypatch.setattr(m, '__file__', str(location / 'statistics.py'))
+    monkeypatch.setattr(m, '__file__', str(tmp_path / 'backend/app/services/short_statistics.py'))
     monkeypatch.setattr(m, 'DEFAULT_CONFIG_PATH', config)
     monkeypatch.chdir(cwd)
     assert m.load_local_config() == settings

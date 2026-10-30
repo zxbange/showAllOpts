@@ -3,7 +3,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 START, END = '# BEGIN SHARED OVERSOLD RULES', '# END SHARED OVERSOLD RULES'
-TARGETS = ['脚本/本地统计/七策略胜率统计_本地版.py',
+TARGETS = ['backend/app/services/short_statistics.py',
            'collectors/短线选股_数据库版.py', 'collectors/策略批量采集_数据库版.py']
 
 

@@ -157,7 +157,7 @@ test('shared module cards stay available while loading and after failures', asyn
     } finally {
       release()
     }
-    await expect(page.getByRole('alert')).toContainText('测试加载失败')
+    await expect(page.locator('.state-panel[role=alert]')).toContainText('测试加载失败')
     await expect(cards).toHaveCount(count)
     if (path === 'short-term') {
       await page.getByRole('tab', { name: '补票龙', exact: true }).focus()

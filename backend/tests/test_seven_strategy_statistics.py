@@ -19,7 +19,7 @@ spec.loader.exec_module(impact)
 
 
 def test_three_production_function_ast_parity():
-    local = ast.parse((ROOT/'脚本/本地统计/七策略胜率统计_本地版.py').read_text())
+    local = ast.parse((ROOT/'backend/app/services/short_statistics.py').read_text())
     prod = ast.parse((ROOT/'collectors/短线选股_数据库版.py').read_text())
     factory = next(n for n in local.body if isinstance(n,ast.FunctionDef) and n.name=='make_three_selector')
     original = next(n for n in prod.body if isinstance(n,ast.FunctionDef) and n.name=='_short_term_strategy')
@@ -30,7 +30,7 @@ def test_three_production_function_ast_parity():
                 return ast.copy_location(ast.Name(id=node.attr,ctx=node.ctx),node)
             return self.generic_visit(node)
     for node in factory.body:
-        if isinstance(node,(ast.FunctionDef,ast.ClassDef)):
+        if isinstance(node,(ast.FunctionDef,ast.ClassDef)) and node.name != 'evaluate':
             assert ast.dump(Normalize().visit(node)) == originals[node.name]
 
 

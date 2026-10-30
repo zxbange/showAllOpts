@@ -1,4 +1,7 @@
 import { expect, test } from '@playwright/test'
+test.beforeEach(async ({ page }) => {
+  await page.route('**/api/v1/short-term/validation/jobs', (r) => r.fulfill({ json: { jobs: [] } }))
+})
 const bars = Array.from({ length: 30 }, (_, i) => ({
   date: `2026-09-${String(i + 1).padStart(2, '0')}`,
   open: 10 + i * 0.1,

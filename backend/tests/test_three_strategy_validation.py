@@ -13,7 +13,7 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[2]
 SOURCE = ROOT / '脚本/本地统计/短线三策略胜率验证_研究版.py'
-ORIGINAL = ROOT / '脚本/本地统计/七策略胜率统计_本地版.py'
+ORIGINAL = ROOT / 'backend/app/services/short_statistics.py'
 
 
 @pytest.fixture

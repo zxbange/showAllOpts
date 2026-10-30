@@ -1,3 +1,4 @@
+import { ShortValidation } from '../components/ShortValidation'
 import { ModuleSwitch } from '../components/ModuleSwitch'
 import { PageHeader } from '../components/PageHeader'
 import { useCallback, useState } from 'react'
@@ -110,6 +111,7 @@ export function ShortTermPage() {
         <CandlestickChart size={32} />
       </PageHeader>
 
+      <ShortValidation />
       <section className="short-toolbar">
         <div>
           <h2>
