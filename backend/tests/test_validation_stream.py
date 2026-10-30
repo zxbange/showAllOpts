@@ -44,12 +44,20 @@ def test_static_matches_frozen_and_single_batch_all_four_and_boundaries(setup, m
         conn.execute(text('UPDATE ultra_research_bar SET paused=1 WHERE trade_date=:day'), {'day': calendar[193].date()})
         conn.execute(text('DELETE FROM ultra_research_bar WHERE trade_date=:day'), {'day': calendar[194].date()})
     methods = list(module.METHODS)
-    baseline = new(jobs, calendar, 'old', methods, 'frozen')
+    # Preserve the v1 separate-observation contract: missing data during the
+    # signal interval intentionally fails the three-strategy input validation.
+    def legacy(token, mode=STATIC_MODE):
+        job = new(jobs, calendar, token, methods, mode)
+        with jobs.db() as db:
+            job.update(version='four-close-v1', observed=str(calendar[195].date()))
+            jobs.save(db, job)
+        return job
+    baseline = legacy('old', 'frozen')
     assert finish(jobs, baseline['id'])['status'] == 'completed'
-    current = new(jobs, calendar, 'batch', methods)
+    current = legacy('batch')
     assert finish(jobs, current['id'])['status'] == 'completed'
     monkeypatch.setattr(module, 'BATCH_SIZE', 1)
-    single = new(jobs, calendar, 'single', methods)
+    single = legacy('single')
     assert finish(jobs, single['id'])['status'] == 'completed'
     for ident in (current['id'], single['id']):
         assert values(jobs, ident) == values(jobs, baseline['id'])

@@ -233,7 +233,6 @@ function ValidationPanel({ adminKey, onLock }: { adminKey: ValidationAuth; onLoc
   const [methods, setMethods] = useState<string[]>(Object.keys(choices))
   const [start, setStart] = useState('2024-01-01')
   const [end, setEnd] = useState('')
-  const [observed, setObserved] = useState('')
   const [jobs, setJobs] = useState<Job[]>([])
   const [deleting, setDeleting] = useState<Job | null>(null)
   const deletedIds = useRef(new Set<string>())
@@ -327,6 +326,7 @@ function ValidationPanel({ adminKey, onLock }: { adminKey: ValidationAuth; onLoc
             <details className="validation-disclosure validation-methodology">
               <summary>统计口径与数据说明</summary>
               <p>
+                新任务的验证截止日同时限制信号日期与收益观察日期，截止日之后的收盘价不参与统计；尚未到期的收益期限计为待观察。
                 四策略统一沪深股票池、基础过滤、后复权价格与原始成交量。按 T 收盘比较 T+1/2/3
                 交易日收盘，严格上涨计胜，持平计入分母；各期限仅计有效样本，停牌、缺行情及待观察单列。这是形态统计，非逐笔实盘回测，不含费用，不代表可成交收益。
               </p>
@@ -368,44 +368,28 @@ function ValidationPanel({ adminKey, onLock }: { adminKey: ValidationAuth; onLoc
             </fieldset>
             <div className="validation-dates">
               <label>
-                信号开始
+                验证开始日
                 <input
-                  aria-label="信号开始"
+                  aria-label="验证开始日"
                   type="date"
                   value={start}
                   onChange={(e) => setStart(e.target.value)}
                 />
               </label>
               <label>
-                信号截止
+                验证截止日
                 <input
-                  aria-label="信号截止"
+                  aria-label="验证截止日"
                   type="date"
                   value={end}
                   onChange={(e) => setEnd(e.target.value)}
                 />
               </label>
-              <label>
-                观察截止
-                <input
-                  aria-label="观察截止"
-                  type="date"
-                  value={observed}
-                  onChange={(e) => setObserved(e.target.value)}
-                />
-              </label>
             </div>
-            <p className="validation-hint">截止日期留空，使用已采集的最新收盘交易日。</p>
             <div className="validation-start">
               <button
                 className="button button-primary"
-                disabled={
-                  busy ||
-                  !methods.length ||
-                  !start ||
-                  (!!end && start > end) ||
-                  (!!end && !!observed && end > observed)
-                }
+                disabled={busy || !methods.length || !start || (!!end && start > end)}
                 onClick={async () => {
                   if (starting.current) return
                   starting.current = true
@@ -426,7 +410,6 @@ function ValidationPanel({ adminKey, onLock }: { adminKey: ValidationAuth; onLoc
                       methods,
                       start,
                       end: end || null,
-                      observed: observed || null,
                       request_id: requestId,
                       source: prepared ?? source,
                     })
@@ -466,9 +449,7 @@ function ValidationPanel({ adminKey, onLock }: { adminKey: ValidationAuth; onLoc
         <div className="validation-empty">
           <History size={28} aria-hidden="true" />
           <h3>从一次验证开始</h3>
-          <p>
-            尚无验证任务。默认自2024-01-01开始；截止日期留空采用已有最新收盘交易日。服务器会检查已有研究数据和预热覆盖。
-          </p>
+          <p>尚无验证任务。默认自2024-01-01开始。服务器会检查已有研究数据和预热覆盖。</p>
         </div>
       )}
       {jobs.map((job) => (
@@ -482,7 +463,10 @@ function ValidationPanel({ adminKey, onLock }: { adminKey: ValidationAuth; onLoc
             </h3>
           </div>
           <p className="validation-hint">
-            {job.start} 至 {job.end || '最新可用日'} · 观察截至 {job.observed || '最新可用日'}
+            {job.start} 至 {job.end || '最新可用日'}
+            {job.version === 'four-close-v2'
+              ? ' · 信号与收益均截至验证截止日'
+              : ` · 旧版口径：观察截至 ${job.observed || '最新可用日'}`}
           </p>
           {job.status !== 'completed' && (
             <div className="validation-progress">
@@ -523,7 +507,7 @@ function ValidationPanel({ adminKey, onLock }: { adminKey: ValidationAuth; onLoc
           <div className="validation-job-actions">
             {['failed', 'paused'].includes(job.status) && (
               <button
-                className="button"
+                className="button button-quiet validation-retry-button"
                 disabled={busy}
                 onClick={() => void operate('/' + job.id + '/retry', {})}
               >

@@ -36,7 +36,7 @@ class ValidationRequest(BaseModel):
     methods: list[Literal['bukou', 'redhover', 'xuli', 'oversold']] = Field(min_length=1, max_length=4)
     start: date = date(2024, 1, 1)
     end: date | None = None
-    observed: date | None = None
+    observed: date | None = Field(default=None, deprecated=True, description="兼容旧客户端；新任务忽略此字段，以end作为统一截止")
     request_id: str | None = Field(default=None, max_length=64, pattern=r'^[a-zA-Z0-9-]+$')
     source: SourceRef | None = None
 
@@ -197,7 +197,7 @@ def create_validation(body: ValidationRequest, request: Request, service=Depends
         source = body.source.model_dump() if body.source else None
         if getattr(request.state, 'validation_paired', False) and (source is None or source['id'] == 'service'):
             raise ValueError('请先填写并保存要验证的数据库连接')
-        return public_job(service.create(body.methods, body.start, body.end, body.observed, body.request_id, source), service)
+        return public_job(service.create(body.methods, body.start, body.end, None, body.request_id, source), service)
     except ValueError as exc:
         raise HTTPException(422, str(exc)) from None
 

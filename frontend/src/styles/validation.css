@@ -184,7 +184,7 @@
 .validation-setup-grid {
   display: grid;
   grid-template-columns: minmax(0, 1.08fr) minmax(0, 1fr);
-  align-items: start;
+  align-items: stretch;
   gap: 20px;
 }
 .validation-card {
@@ -314,7 +314,7 @@
 }
 .validation-page .validation-strategies {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 160px), 1fr));
   gap: 10px;
   padding: 0;
   border: 0;
@@ -340,6 +340,8 @@
   background: #fff6f0;
 }
 .validation-strategies span {
+  min-width: 0;
+  overflow-wrap: anywhere;
   font-size: 13px;
   font-weight: 600;
 }
@@ -359,9 +361,6 @@
 .validation-dates label {
   display: grid;
   gap: 7px;
-}
-.validation-dates label:first-child {
-  grid-column: 1/-1;
 }
 .validation-start {
   display: grid;
@@ -593,6 +592,7 @@
 @media (max-width: 1100px) {
   .validation-setup-grid {
     grid-template-columns: minmax(0, 1fr);
+    align-items: start;
   }
 }
 @media (max-width: 700px) {
@@ -731,4 +731,30 @@
   color: #b91c1c;
   border-color: #f0a5a5;
   background: #fef2f2;
+}
+
+.validation-page .validation-job-actions .button {
+  min-height: 40px;
+  min-width: 88px;
+  padding: 10px 17px;
+}
+.validation-page .validation-retry-button {
+  background: #fff;
+  color: var(--jade);
+  border: 1px solid var(--border);
+}
+.validation-page .validation-retry-button:hover:not(:disabled) {
+  background: #f0faf6;
+  border-color: var(--jade);
+}
+.validation-page .validation-retry-button:focus-visible {
+  outline: 2px solid var(--jade);
+  outline-offset: 3px;
+}
+.validation-page .validation-retry-button:disabled {
+  background: #fff;
+  color: var(--jade);
+  opacity: 0.55;
+  transform: none;
+  cursor: not-allowed;
 }

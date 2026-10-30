@@ -440,16 +440,28 @@ def window_summary(details, strategies=None):
     return pd.DataFrame(rows)
 
 
-def load_plan(engine, start, end=None, as_of=None, warmup_days=WARMUP_DAYS):
+def load_plan(engine, start, end=None, as_of=None, warmup_days=WARMUP_DAYS, hard_cutoff=False):
     now = dt.datetime.utcnow() + dt.timedelta(hours=8)
     cutoff = now.date() if now.hour >= 16 else now.date()-dt.timedelta(days=1)
-    latest = read_sql(engine, "SELECT MAX(trade_date) AS latest FROM ultra_research_bar WHERE asset_type='stock'")['latest'].iloc[0]
+    if hard_cutoff:
+        # Resolve only collected closes at/before the requested boundary. In
+        # particular, weekends/holidays are not required to be trading dates.
+        cutoff = min(cutoff, pd.Timestamp(end).date()) if end else cutoff
+        latest = read_sql(engine, "SELECT MAX(trade_date) AS latest FROM ultra_research_bar "
+                          "WHERE asset_type='stock' AND trade_date <= :end",
+                          {'end': cutoff})['latest'].iloc[0]
+        as_of = None  # A stale third date from an older client cannot extend it.
+    else:
+        latest = read_sql(engine, "SELECT MAX(trade_date) AS latest FROM ultra_research_bar WHERE asset_type='stock'")['latest'].iloc[0]
     if pd.isna(latest):
         raise ValueError('股票行情表为空，请先完成采集')
     observed = min(pd.Timestamp(latest).normalize(), pd.Timestamp(as_of or cutoff), pd.Timestamp(cutoff))
     start = pd.Timestamp(start).normalize()
     end = pd.Timestamp(end).normalize() if end else observed
-    if start > end or end > observed:
+    if hard_cutoff:
+        if start > end or start > observed:
+            raise ValueError('要求：开始日期≤截止日期，且区间内存在已采集的收盘交易日')
+    elif start > end or end > observed:
         raise ValueError('要求：开始日期 <= 信号截止日 <= 可用观察截止日')
     raw = read_sql(engine, 'SELECT trade_date FROM ultra_research_calendar WHERE trade_date <= :end ORDER BY trade_date LIMIT 20001', {'end': observed.date()})
     if len(raw) > 20000:

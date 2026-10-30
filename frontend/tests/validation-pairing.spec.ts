@@ -92,7 +92,7 @@ test('pair, enter database, select strategies and start directly; refresh, pause
     await page.getByLabel(label, { exact: true }).fill(value)
   await page.getByRole('checkbox', { name: '红悬停', exact: true }).uncheck()
   await page.getByRole('checkbox', { name: '超跌后止跌反弹', exact: true }).uncheck()
-  await page.getByLabel('信号开始').fill('2024-02-01')
+  await page.getByLabel('验证开始日', { exact: true }).fill('2024-02-01')
   await page.getByRole('button', { name: '开始验证', exact: true }).click()
   await expect(page.getByRole('heading', { name: '补票龙 · 蓄力龙 — 运行中' })).toBeVisible()
   expect(saves).toBe(1)

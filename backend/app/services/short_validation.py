@@ -23,7 +23,8 @@ from sqlalchemy import text, bindparam
 from app.services import short_statistics as stats
 
 logger = logging.getLogger(__name__)
-VERSION = 'four-close-v1'
+VERSION = 'four-close-v2'
+SUPPORTED_VERSIONS = {'four-close-v1', VERSION}
 METHODS = {'bukou': '补票龙', 'redhover': '红悬停龙', 'xuli': '蓄力龙', 'oversold': '超跌后止跌反弹'}
 MAX_ROWS = 4000
 BATCH_SIZE = 20
@@ -118,7 +119,7 @@ class ValidationJobs:
             raise KeyError(ident)
         return json.loads(row[0])
 
-    def create(self, methods, start, end, observed, request_id=None, source=None, input_mode=STATIC_MODE):
+    def create(self, methods, start, end=None, observed=None, request_id=None, source=None, input_mode=STATIC_MODE):
         if self.sources is not None:
             if source is None:
                 source = self.sources.freeze_service()
@@ -126,11 +127,13 @@ class ValidationJobs:
                 self.sources.get(source['id'], source['revision'])
         if input_mode not in (STATIC_MODE, 'frozen'):
             raise ValueError('不支持的输入模式')
+        # Older clients may still submit observed; it must never extend a new task.
+        observed = end
         params = dict(input_mode=input_mode, source=source, methods=sorted(set(methods)), start=str(start), end=str(end) if end else None, observed=str(observed) if observed else None, version=VERSION)
         if not params['methods'] or any(m not in METHODS for m in params['methods']):
             raise ValueError('请选择至少一种支持的策略')
-        if not date(2000, 1, 1) <= start <= (end or observed or date.today()) <= (observed or date.today()) <= date.today() or ((observed or date.today())-start).days > 3660:
-            raise ValueError('要求2000年起、开始≤信号截止≤观察截止≤今天，区间不超过10年')
+        if not date(2000, 1, 1) <= start <= (end or date.today()) <= date.today() or ((end or date.today())-start).days > 3660:
+            raise ValueError('要求2000年起、开始≤截止≤今天，区间不超过10年')
         fingerprint = hashlib.sha256(json.dumps([params, request_id or str(date.today())], sort_keys=True).encode()).hexdigest()
         with self.db() as db:
             db.execute('BEGIN IMMEDIATE')
@@ -169,7 +172,7 @@ class ValidationJobs:
                 if job['status'] in ('cancelled', 'cancelling'):
                     raise ValueError('已取消或正在取消的任务不能继续，请新建任务')
                 if job['status'] in ('failed', 'paused'):
-                    if job['version'] != VERSION:
+                    if job['version'] not in SUPPORTED_VERSIONS:
                         raise ValueError('算法版本已变化，请创建新任务')
                     job['generation'] += 1
                     job['status'], job['error'], job['stage'] = 'queued', None, '等待从已提交断点继续'
@@ -265,7 +268,7 @@ class ValidationJobs:
             if job is None:
                 return False
             try:
-                if job['version'] != VERSION:
+                if job['version'] not in SUPPORTED_VERSIONS:
                     raise ValueError('任务算法版本已变化，请创建新任务')
                 if job.get('input_mode') not in (None, 'frozen', STATIC_MODE):
                     raise ValueError('任务输入模式不受当前版本支持，请创建新任务')
@@ -324,7 +327,9 @@ class ValidationJobs:
             stats.validate_schema(source_engine)
             if not self.stage(ident, '读取研究日期计划', job['generation']):
                 return
-            start, end, observed, calendar = stats.load_plan(source_engine, job['start'], job['end'], job['observed'])
+            plan_options = {'hard_cutoff': True} if job['version'] == VERSION else {}
+            start, end, observed, calendar = stats.load_plan(
+                source_engine, job['start'], job['end'], job['observed'], **plan_options)
             if not self.stage(ident, '读取合格股票清单', job['generation']):
                 return
             codes = stats.read_sql(source_engine, '''SELECT DISTINCT code FROM ultra_research_universe
