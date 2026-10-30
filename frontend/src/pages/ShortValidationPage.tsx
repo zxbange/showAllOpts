@@ -2,10 +2,11 @@ import { ShortValidation } from '../components/ShortValidation'
 import { ShortTermNavigation } from '../components/ShortTermNavigation'
 import { PageHeader } from '../components/PageHeader'
 import '../styles/short-term.css'
+import '../styles/validation.css'
 
 export function ShortValidationPage() {
   return (
-    <div className="short-page page-enter">
+    <div className="short-page validation-page page-enter">
       <PageHeader switcher={<ShortTermNavigation value="validation" />}>
         <div>
           <h1>短线胜率验证</h1>

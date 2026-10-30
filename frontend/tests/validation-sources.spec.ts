@@ -71,6 +71,7 @@ test('admin config test-save keeps password in request only, version selection a
   await page.getByLabel('验证管理密钥').fill('test-admin-key')
   await page.getByRole('button', { name: '解锁验证管理' }).click()
   await expect(page.getByText(/HTTP兼容模式已开启/)).toBeVisible()
+  await page.getByText('配置新的验证任务', { exact: false }).click()
   await page.getByText('新增或编辑数据库配置', { exact: true }).click()
   for (const [label, value] of [
     ['配置名称', '研究库'],
