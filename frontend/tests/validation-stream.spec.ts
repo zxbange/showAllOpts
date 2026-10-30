@@ -48,7 +48,7 @@ test('static task shows committed progress and timings; legacy freeze remains di
             done: 0,
             captured: 67,
             total: 5133,
-            stage: '已暂停',
+            stage: '已暂停；在途工作返回后丢弃未提交部分',
           },
         ],
       },
@@ -57,6 +57,8 @@ test('static task shows committed progress and timings; legacy freeze remains di
   await page.goto('/short-term/validation')
   const tasks = page.locator('.validation-job')
   await expect(tasks).toHaveCount(2)
+  await expect(page.getByText(/最后活动：/)).toHaveCount(0)
+  await expect(page.getByText(/在途工作返回后丢弃未提交部分/)).toHaveCount(0)
   await expect(tasks.first().getByRole('progressbar', { name: '已提交股票' })).toHaveAttribute(
     'value',
     '20',
@@ -66,7 +68,8 @@ test('static task shows committed progress and timings; legacy freeze remains di
   )
   await expect(tasks.first().getByRole('progressbar', { name: '冻结输入' })).toHaveCount(0)
   await tasks.first().locator('summary').filter({ hasText: '任务参数' }).click()
-  await expect(tasks.first()).toContainText('静态源分批读取')
+  await expect(tasks.first()).not.toContainText('输入方式：')
+  await expect(tasks.first()).not.toContainText('统计版本：')
   await expect(tasks.first()).toContainText('最近阶段耗时（秒，非累计）')
   await expect(tasks.first()).toContainText('行情读取 0.400')
   await expect(tasks.last().getByRole('progressbar', { name: '冻结输入' })).toHaveAttribute(
@@ -74,7 +77,7 @@ test('static task shows committed progress and timings; legacy freeze remains di
     '67',
   )
   await tasks.last().locator('summary').filter({ hasText: '任务参数' }).click()
-  await expect(tasks.last()).toContainText('旧模式：先冻结输入，再计算')
+  await expect(tasks.last()).not.toContainText('输入方式：')
   await page.locator('summary').filter({ hasText: '配置新的验证任务' }).click()
   await expect(page.getByText('新任务每批最多20股', { exact: false })).toBeVisible()
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)

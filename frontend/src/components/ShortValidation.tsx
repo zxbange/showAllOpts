@@ -487,7 +487,7 @@ function ValidationPanel({ adminKey, onLock }: { adminKey: ValidationAuth; onLoc
           {job.status !== 'completed' && (
             <div className="validation-progress">
               <p role="status">
-                {job.stage} ·{' '}
+                {job.stage.replace(/；?在途工作返回后丢弃未提交部分/g, '')} ·{' '}
                 {job.input_mode === 'static-batch-v1'
                   ? `已提交 ${job.done}/${job.total}`
                   : `输入 ${job.captured}/${job.total} · 已计算 ${job.done}/${job.total}`}
@@ -515,10 +515,6 @@ function ValidationPanel({ adminKey, onLock }: { adminKey: ValidationAuth; onLoc
               </div>
             </div>
           )}
-          <p className="validation-activity">
-            最后活动：{new Date(job.updated_at).toLocaleString('zh-CN')} ·
-            查询或单股计算期间不会虚增进度
-          </p>
           {job.error && (
             <p className="validation-feedback" role="alert">
               {job.error}
@@ -531,7 +527,7 @@ function ValidationPanel({ adminKey, onLock }: { adminKey: ValidationAuth; onLoc
                 disabled={busy}
                 onClick={() => void operate('/' + job.id + '/retry', {})}
               >
-                从断点重试
+                重试
               </button>
             )}
             {['queued', 'running'].includes(job.status) && (
@@ -575,14 +571,7 @@ function ValidationPanel({ adminKey, onLock }: { adminKey: ValidationAuth; onLoc
             </p>
           )}
           <details className="validation-disclosure validation-task-meta">
-            <summary>任务参数与数据源</summary>
-            <p>统计版本：{job.version}</p>
-            <p>
-              输入方式：
-              {job.input_mode === 'static-batch-v1'
-                ? '静态源分批读取（每批最多20股，逐股提交断点）'
-                : '旧模式：先冻结输入，再计算'}
-            </p>
+            <summary>任务参数</summary>
             {job.stage_started_at && (
               <p>阶段开始：{new Date(job.stage_started_at).toLocaleString('zh-CN')}</p>
             )}

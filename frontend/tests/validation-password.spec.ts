@@ -80,7 +80,7 @@ test('saved password indicator preserves secrets; probe and start use named conn
   await page.getByRole('button', { name: '开始验证', exact: true }).click()
   await expect.poll(() => saves).toBe(1)
   expect(passwords[2]).toBe('same-secret')
-  await page.getByText('任务参数与数据源', { exact: true }).click()
+  await page.getByText('任务参数', { exact: true }).click()
   await expect(page.getByText('数据库：研究库')).toBeVisible()
   await page.getByText('配置新的验证任务', { exact: false }).click()
   await expect(password).toHaveAttribute('placeholder', '********')

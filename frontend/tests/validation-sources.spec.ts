@@ -92,10 +92,10 @@ test('admin config test-save keeps password in request only, version selection a
   await expect(page.getByLabel('验证数据源')).toHaveValue('source1:1')
   await page.getByRole('button', { name: '开始验证', exact: true }).click()
   await page.getByRole('button', { name: '暂停任务', exact: true }).click()
-  await page.getByRole('button', { name: '从断点重试', exact: true }).click()
+  await page.getByRole('button', { name: '重试', exact: true }).click()
   await page.getByRole('button', { name: '取消任务', exact: true }).click()
   await expect(page.getByText('正在取消，等待在途查询', { exact: false })).toBeVisible()
-  await expect(page.getByRole('button', { name: '从断点重试', exact: true })).toHaveCount(0)
+  await expect(page.getByRole('button', { name: '重试', exact: true })).toHaveCount(0)
   status = 'cancelled'
   await expect(page.getByRole('heading', { name: '补票龙 — 已取消' })).toBeVisible()
   expect(

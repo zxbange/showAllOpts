@@ -74,8 +74,8 @@ test('select strategies, resume failure, refresh durable task and show unavailab
   await expect(panel.getByRole('alert')).toContainText('测试查询超时')
   await page.reload()
   await unlock(page)
-  await expect(panel.getByRole('button', { name: '从断点重试' })).toBeVisible()
-  await panel.getByRole('button', { name: '从断点重试' }).click()
+  await expect(panel.getByRole('button', { name: '重试' })).toBeVisible()
+  await panel.getByRole('button', { name: '重试' }).click()
   await expect(panel.getByText('部分策略/期限有效样本不足30', { exact: false })).toBeVisible()
   await expect(panel.getByRole('cell', { name: '—', exact: true })).toBeVisible()
   await expect(page.locator('body')).toHaveJSProperty(

@@ -101,9 +101,9 @@ test('pair, enter database, select strategies and start directly; refresh, pause
   await page.reload()
   await expect(page.getByRole('heading', { name: '补票龙 · 蓄力龙 — 运行中' })).toBeVisible()
   await page.getByRole('button', { name: '暂停任务', exact: true }).click()
-  await page.getByRole('button', { name: '从断点重试', exact: true }).click()
+  await page.getByRole('button', { name: '重试', exact: true }).click()
   await page.getByRole('button', { name: '取消任务', exact: true }).click()
-  await expect(page.getByRole('button', { name: '从断点重试', exact: true })).toHaveCount(0)
+  await expect(page.getByRole('button', { name: '重试', exact: true })).toHaveCount(0)
   expect(
     await page.evaluate(() => JSON.stringify({ ...localStorage, ...sessionStorage })),
   ).not.toMatch(/one-time-console-code|page-csrf|only-page-memory-password/)
