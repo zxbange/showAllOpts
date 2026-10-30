@@ -65,3 +65,28 @@ def test_quarter_versions_skip_append_and_generation_rebuild(cached, session, en
         source.execute(VERSION.update().values(generation='rebuilt', revision=2))
     cache.refresh('earnings-gap', background=False)
     assert_matches(cache, session, 'earnings-gap')
+
+
+from test_short_term_collector import mod, ns, complete_meta
+
+
+def test_collector_same_second_repair_replaces_cached_details(cached, session, engine, ns, mod, monkeypatch):
+    from sqlalchemy.orm import sessionmaker
+    _, cache = cached
+    stamp = datetime(2026, 10, 22, 17)
+    monkeypatch.setattr(mod, 'china_now', lambda: stamp)
+    day = stamp.date()
+    meta = complete_meta(ns)
+    meta['counts']['oversold'] = 1
+    session.add_all([ShortTermRun(trade_date=day, payload=meta, updated_at=stamp),
+                    ShortTermStock(trade_date=day, code='a', payload={'methods': ['bukou']}, updated_at=stamp)])
+    session.commit()
+    cache.refresh('short-term', background=False)
+    assert ns.save_day(sessionmaker(bind=engine), day, meta, [{'code': 'a', 'methods': ['oversold']}])
+    cache.refresh('short-term', background=False)
+    session.expire_all()
+    assert_matches(cache, session, 'short-term')
+    with cache.session('short-term') as local:
+        assert local.get(ShortTermStock, (day, 'a')).payload['methods'] == ['oversold']
+        assert local.get(ShortTermRun, day).updated_at == stamp
+        assert local.get(ShortTermRun, day).payload['snapshot_revision']

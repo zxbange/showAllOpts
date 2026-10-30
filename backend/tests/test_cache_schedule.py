@@ -231,3 +231,47 @@ def test_disabled_cache_rejects_schedule_write(scheduled, engine):
         response = client.post('/api/v1/cache/schedule', json={'daily_time': '08:00'})
         assert response.status_code == 409
     assert not cache.schedule.path.exists()
+
+
+def test_first_tick_busy_across_due_time_keeps_live_worker_slot(scheduled):
+    _, cache, clock, calls = scheduled
+    clock[0] = clock[0].replace(hour=6, minute=59)
+    lock = cache.acquire()
+    try:
+        cache.tick()  # First observation must count even though this lock is busy.
+        clock[0] = clock[0].replace(hour=7, minute=1)
+        cache.tick()
+        assert calls == []
+    finally:
+        lock.release()
+    cache.tick()
+    assert len(calls) == 1 and calls[0][2] == '2026-10-29T07:00:00+08:00'
+    cache.tick()
+    assert len(calls) == 1
+
+
+def test_first_tick_after_due_time_does_not_catch_up(scheduled):
+    _, cache, clock, calls = scheduled
+    clock[0] = clock[0].replace(hour=7, minute=1)
+    cache.tick()
+    assert calls == []
+    clock[0] += timedelta(days=1)
+    cache.tick()
+    assert len(calls) == 1
+
+
+def test_edit_during_first_busy_tick_uses_saved_plan_boundary(scheduled):
+    _, cache, clock, calls = scheduled
+    clock[0] = clock[0].replace(hour=6, minute=59)
+    lock = cache.acquire()
+    try:
+        cache.tick()
+        clock[0] = clock[0].replace(hour=7, minute=1)
+        cache.save_schedule('07:00')  # An explicit edit after due must wait for tomorrow.
+    finally:
+        lock.release()
+    cache.tick()
+    assert calls == []
+    clock[0] += timedelta(days=1)
+    cache.tick()
+    assert len(calls) == 1

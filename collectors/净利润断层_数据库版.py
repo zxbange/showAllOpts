@@ -25,6 +25,9 @@ Base = declarative_base()
 # BEGIN SHARED EARNINGS VERSION
 import uuid as _earnings_uuid
 from sqlalchemy import BigInteger, Column, Date, MetaData, String, Table
+from sqlalchemy.schema import CreateTable as _EarningsCreateTable
+from sqlalchemy import text as _earnings_text
+from sqlalchemy.exc import IntegrityError as _EarningsIntegrityError
 
 
 def _earnings_version_table():
@@ -41,16 +44,27 @@ def _prepare_earnings_version(Session):
     if not getattr(Session, '_earnings_version_ready', False):
         table = _earnings_version_table()
         engine = Session.kw['bind']
-        table.create(engine, checkfirst=True)
+        # Database-side idempotence works on older SQLAlchemy used in notebooks.
+        ddl = str(_EarningsCreateTable(table).compile(dialect=engine.dialect))
+        with engine.begin() as connection:
+            connection.execute(_earnings_text(ddl.replace('CREATE TABLE', 'CREATE TABLE IF NOT EXISTS', 1)))
         # Adopt existing quarters once; the first local protocol sync establishes
         # a fresh baseline before trusting these versions.
         runs = Table('earnings_gap_run', MetaData(), Column('report_period', Date, primary_key=True))
         with engine.begin() as connection:
-            existing = {row.report_period for row in connection.execute(table.select())}
-            for row in connection.execute(runs.select()):
-                if row.report_period not in existing:
-                    connection.execute(table.insert().values(report_period=row.report_period,
-                                       generation=_earnings_uuid.uuid4().hex, revision=0))
+            periods = [row.report_period for row in connection.execute(runs.select())]
+        for period in periods:
+            try:
+                with engine.begin() as connection:
+                    if connection.execute(table.select().where(table.c.report_period == period)).first() is None:
+                        connection.execute(table.insert().values(report_period=period,
+                                           generation=_earnings_uuid.uuid4().hex, revision=0))
+            except _EarningsIntegrityError:
+                # A concurrent initializer may have adopted this quarter first.
+                # Never overwrite its generation or a writer's advanced revision.
+                with engine.begin() as connection:
+                    if connection.execute(table.select().where(table.c.report_period == period)).first() is None:
+                        raise
         Session._earnings_version_ready = True
 
 

@@ -8,6 +8,7 @@ import re
 import sys
 import threading
 import time
+import uuid
 from contextlib import contextmanager
 from copy import deepcopy
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP, localcontext
@@ -748,7 +749,10 @@ def _short_term_strategy(_apis, _config):
                 # Validate JSON before entering the database driver (no NaN/Infinity).
                 json.dumps(payload, allow_nan=False)
                 session.add(ShortTermStock(trade_date=day, code=r['code'], payload=payload, updated_at=stamp))
-            session.add(ShortTermRun(trade_date=day, payload=meta, updated_at=stamp))
+            # A same-second repair can leave all counts unchanged; every actual
+            # replacement needs its own identity for atomic downstream day sync.
+            versioned_meta = dict(meta, snapshot_revision=uuid.uuid4().hex)
+            session.add(ShortTermRun(trade_date=day, payload=versioned_meta, updated_at=stamp))
             session.commit()
         return True
 

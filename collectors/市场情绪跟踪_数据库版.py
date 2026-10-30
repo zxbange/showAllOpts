@@ -34,6 +34,8 @@ from sqlalchemy import BigInteger, Column, Integer, MetaData, String, Table, Tex
 from sqlalchemy import event as _journal_event, inspect as _journal_inspect
 from sqlalchemy.exc import IntegrityError as _JournalIntegrityError
 from sqlalchemy.dialects.mysql import LONGTEXT as _JournalLongText
+from sqlalchemy.schema import CreateTable as _JournalCreateTable
+from sqlalchemy import text as _journal_text
 
 def _result_journal_tables():
     meta = MetaData()
@@ -58,7 +60,12 @@ def _install_result_journal(Session, models, module):
         return
     meta, head, changes = _result_journal_tables()
     engine = Session.kw['bind']
-    meta.create_all(engine)
+    # Compile explicitly for SQLAlchemy versions predating CreateTable(if_not_exists=True).
+    # Database-side IF NOT EXISTS avoids the check-then-create race across collectors.
+    with engine.begin() as connection:
+        for table in meta.sorted_tables:
+            ddl = str(_JournalCreateTable(table).compile(dialect=engine.dialect))
+            connection.execute(_journal_text(ddl.replace('CREATE TABLE', 'CREATE TABLE IF NOT EXISTS', 1)))
     # Initialization races are harmless; never reset an existing generation/revision.
     with engine.begin() as connection:
         exists = connection.execute(head.select().where(head.c.module == module)).first()

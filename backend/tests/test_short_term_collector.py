@@ -207,3 +207,27 @@ def test_correct_rule_missing_oversold_is_recomputed_and_never_zero_filled(ns):
         assert session.get(ns.ShortTermRun, day).payload['counts']['oversold'] == 1
         assert session.query(ns.ShortTermStock).count() == 1
     engine.dispose()
+
+
+def test_same_second_detail_repair_changes_snapshot_revision(ns, mod, monkeypatch):
+    stamp = dt.datetime(2026, 10, 22, 17)
+    monkeypatch.setattr(mod, 'china_now', lambda: stamp)
+    engine = create_engine('sqlite://')
+    ns.Base.metadata.create_all(engine)
+    Session = sessionmaker(bind=engine)
+    day, meta = stamp.date(), complete_meta(ns, 1)
+    records = [{'code': '600001.XSHG', 'methods': ['bukou']}]
+    ns.save_day(Session, day, meta, records)
+    with Session.begin() as session:
+        previous = dict(session.get(ns.ShortTermRun, day).payload)
+        session.query(ns.ShortTermStock).delete()
+    assert ns.save_day(Session, day, meta, records)
+    with Session() as session:
+        current = session.get(ns.ShortTermRun, day)
+        assert current.updated_at == stamp
+        assert current.payload['counts'] == previous['counts']
+        assert current.payload['snapshot_revision'] != previous['snapshot_revision']
+        assert ns.complete_day(session, current)
+    assert 'snapshot_revision' not in meta
+    assert not ns.save_day(Session, day, meta, records)
+    engine.dispose()

@@ -101,6 +101,9 @@ _PROGRESS_LOCAL = threading.local()
 # BEGIN SHARED EARNINGS VERSION
 import uuid as _earnings_uuid
 from sqlalchemy import BigInteger, Column, Date, MetaData, String, Table
+from sqlalchemy.schema import CreateTable as _EarningsCreateTable
+from sqlalchemy import text as _earnings_text
+from sqlalchemy.exc import IntegrityError as _EarningsIntegrityError
 
 
 def _earnings_version_table():
@@ -117,16 +120,27 @@ def _prepare_earnings_version(Session):
     if not getattr(Session, '_earnings_version_ready', False):
         table = _earnings_version_table()
         engine = Session.kw['bind']
-        table.create(engine, checkfirst=True)
+        # Database-side idempotence works on older SQLAlchemy used in notebooks.
+        ddl = str(_EarningsCreateTable(table).compile(dialect=engine.dialect))
+        with engine.begin() as connection:
+            connection.execute(_earnings_text(ddl.replace('CREATE TABLE', 'CREATE TABLE IF NOT EXISTS', 1)))
         # Adopt existing quarters once; the first local protocol sync establishes
         # a fresh baseline before trusting these versions.
         runs = Table('earnings_gap_run', MetaData(), Column('report_period', Date, primary_key=True))
         with engine.begin() as connection:
-            existing = {row.report_period for row in connection.execute(table.select())}
-            for row in connection.execute(runs.select()):
-                if row.report_period not in existing:
-                    connection.execute(table.insert().values(report_period=row.report_period,
-                                       generation=_earnings_uuid.uuid4().hex, revision=0))
+            periods = [row.report_period for row in connection.execute(runs.select())]
+        for period in periods:
+            try:
+                with engine.begin() as connection:
+                    if connection.execute(table.select().where(table.c.report_period == period)).first() is None:
+                        connection.execute(table.insert().values(report_period=period,
+                                           generation=_earnings_uuid.uuid4().hex, revision=0))
+            except _EarningsIntegrityError:
+                # A concurrent initializer may have adopted this quarter first.
+                # Never overwrite its generation or a writer's advanced revision.
+                with engine.begin() as connection:
+                    if connection.execute(table.select().where(table.c.report_period == period)).first() is None:
+                        raise
         Session._earnings_version_ready = True
 
 
@@ -153,6 +167,8 @@ from sqlalchemy import BigInteger, Column, Integer, MetaData, String, Table, Tex
 from sqlalchemy import event as _journal_event, inspect as _journal_inspect
 from sqlalchemy.exc import IntegrityError as _JournalIntegrityError
 from sqlalchemy.dialects.mysql import LONGTEXT as _JournalLongText
+from sqlalchemy.schema import CreateTable as _JournalCreateTable
+from sqlalchemy import text as _journal_text
 
 def _result_journal_tables():
     meta = MetaData()
@@ -177,7 +193,12 @@ def _install_result_journal(Session, models, module):
         return
     meta, head, changes = _result_journal_tables()
     engine = Session.kw['bind']
-    meta.create_all(engine)
+    # Compile explicitly for SQLAlchemy versions predating CreateTable(if_not_exists=True).
+    # Database-side IF NOT EXISTS avoids the check-then-create race across collectors.
+    with engine.begin() as connection:
+        for table in meta.sorted_tables:
+            ddl = str(_JournalCreateTable(table).compile(dialect=engine.dialect))
+            connection.execute(_journal_text(ddl.replace('CREATE TABLE', 'CREATE TABLE IF NOT EXISTS', 1)))
     # Initialization races are harmless; never reset an existing generation/revision.
     with engine.begin() as connection:
         exists = connection.execute(head.select().where(head.c.module == module)).first()
@@ -4955,7 +4976,10 @@ def _short_term_strategy(_apis, _config):
                 # Validate JSON before entering the database driver (no NaN/Infinity).
                 json.dumps(payload, allow_nan=False)
                 session.add(ShortTermStock(trade_date=day, code=r['code'], payload=payload, updated_at=stamp))
-            session.add(ShortTermRun(trade_date=day, payload=meta, updated_at=stamp))
+            # A same-second repair can leave all counts unchanged; every actual
+            # replacement needs its own identity for atomic downstream day sync.
+            versioned_meta = dict(meta, snapshot_revision=uuid.uuid4().hex)
+            session.add(ShortTermRun(trade_date=day, payload=versioned_meta, updated_at=stamp))
             session.commit()
         return True
 

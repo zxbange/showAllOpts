@@ -459,6 +459,15 @@ class SnapshotCache:
 
     def tick(self, moment=None):
         moment = moment or now()
+        # Observe startup even while a manual/module sync holds refresh.lock. A
+        # first successful lock after today's deadline must not look like a late
+        # startup and discard a slot that became due while this worker was alive.
+        # The schedule file is atomically replaced; re-read it under the schedule
+        # lock below so a concurrent edit still uses its own changed_at boundary.
+        if self.schedule_floor is None:
+            plan = self.schedule.read()
+            self.schedule_floor = self.schedule_floor_for(plan, moment)
+            self.schedule_revision = plan['revision']
         # Claim a run while holding both locks; saves only take the short schedule lock,
         # so changing tomorrow's plan never waits for a long database transfer.
         lock = self.acquire()
