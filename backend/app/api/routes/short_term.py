@@ -18,10 +18,12 @@ def latest(session: Annotated[Session, Depends(get_session)], day: date | None =
 
 # Validation management includes credentials/network probes, so all operations are admin-only.
 import hmac
+import sqlite3
 from fastapi import Request, HTTPException, Response
 from pydantic import BaseModel, Field, SecretStr, ValidationError
 from starlette.concurrency import run_in_threadpool
 from app.services.validation_sources import SourceError
+from app.services.short_validation import DeleteConflict
 from app.services.validation_access import ValidationAccess, AccessError, COOKIE, COOKIE_PATH, canonical_origin
 
 
@@ -189,6 +191,17 @@ def create_validation(body: ValidationRequest, request: Request, service=Depends
         return public_job(service.create(body.methods, body.start, body.end, body.observed, body.request_id, source))
     except ValueError as exc:
         raise HTTPException(422, str(exc)) from None
+
+
+@router.post('/validation/jobs/{ident}/delete')
+def delete_validation(ident: str, service=Depends(validation_admin)):
+    try:
+        service.delete(ident)
+        return {'deleted': True}
+    except DeleteConflict as exc:
+        raise HTTPException(409, str(exc)) from None
+    except (sqlite3.Error, OSError):
+        raise HTTPException(503, '删除暂未完成，请稍后重试；不会清除源行情或其他任务') from None
 
 
 @router.post('/validation/jobs/{ident}/{action}')

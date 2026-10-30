@@ -520,7 +520,7 @@
 .validation-job-actions:empty {
   display: none;
 }
-.validation-job-actions .button:last-child:not(:first-child) {
+.validation-job-actions .button:last-child:not(:first-child):not(.button-primary) {
   color: var(--accent);
 }
 .validation-page .validation-task-meta {
@@ -737,4 +737,39 @@
   .validation-setup > summary > span {
     display: none;
   }
+}
+.validation-page .validation-delete-button {
+  color: var(--accent);
+}
+.validation-page .validation-delete-dialog {
+  width: min(540px, calc(100vw - 32px));
+  max-height: calc(100dvh - 32px);
+  box-sizing: border-box;
+  overflow: auto;
+  margin: auto;
+  padding: 26px;
+  border: 1px solid var(--border);
+  border-radius: 18px;
+  background: var(--panel);
+  color: var(--text);
+  box-shadow: 0 24px 80px #30241b33;
+}
+.validation-page .validation-delete-dialog::backdrop {
+  background: #30241b66;
+}
+.validation-page .validation-delete-dialog h2 {
+  margin: 0 0 16px;
+  font-size: 21px;
+}
+.validation-page .validation-delete-dialog p {
+  line-height: 1.8;
+}
+.validation-page .validation-delete-id {
+  overflow-wrap: anywhere;
+  font-size: 12px;
+  color: var(--muted);
+}
+.validation-page .validation-delete-dialog .validation-job-actions {
+  margin-top: 24px;
+  justify-content: flex-end;
 }

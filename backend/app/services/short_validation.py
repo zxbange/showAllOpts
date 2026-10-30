@@ -26,6 +26,10 @@ METHODS = {'bukou': '补票龙', 'redhover': '红悬停龙', 'xuli': '蓄力龙'
 MAX_ROWS = 4000
 
 
+class DeleteConflict(ValueError):
+    """A safe, user-facing explanation for a deletion that cannot run yet."""
+
+
 def now():
     return datetime.now(timezone.utc).isoformat()
 
@@ -155,6 +159,36 @@ class ValidationJobs:
         if action == 'cancel':
             self.acknowledge_cancel()
         return self.get(ident)
+
+    def delete(self, ident):
+        # IDs are never reused. A retry of a completed deletion needs no worker lock.
+        try:
+            self.get(ident)
+        except KeyError:
+            return
+        lock = portalocker.Lock(str(self.root / 'worker.lock'), timeout=0,
+                                flags=portalocker.LOCK_EX | portalocker.LOCK_NB)
+        try:
+            lock.acquire()
+        except portalocker.exceptions.LockException:
+            raise DeleteConflict('后台工作尚未退出，请等待当前工作单元结束后重试删除') from None
+        try:
+            with self.db() as db:
+                db.execute('BEGIN IMMEDIATE')
+                try:
+                    job = self.get(ident, db)
+                except KeyError:
+                    return
+                if job['status'] not in ('queued', 'paused', 'failed', 'completed', 'cancelled'):
+                    raise DeleteConflict('运行中或正在取消的任务不能删除，请先取消并等待显示“已取消”')
+                # All job-owned data is in these tables, including payload cursors,
+                # frozen plans and aggregates. Never unlink the shared DB or lock:
+                # unlinking a locked file would permit two different lock inodes.
+                for table in ('outcomes', 'windows', 'stocks'):
+                    db.execute(f'DELETE FROM {table} WHERE job=?', (ident,))
+                db.execute('DELETE FROM jobs WHERE id=?', (ident,))
+        finally:
+            lock.release()
 
     def finish_cancellations(self):
         # Caller holds the OS worker lock: there can be no in-flight work in any worker.

@@ -9,6 +9,7 @@ import {
   AlertTriangle,
 } from 'lucide-react'
 import { ValidationResults } from './ValidationResults'
+import { ValidationDeleteDialog } from './ValidationDeleteDialog'
 import { validationRequest, type ValidationAuth } from '../api/validation'
 import {
   ValidationSourceEditor,
@@ -247,6 +248,10 @@ function ValidationPanel({ adminKey, onLock }: { adminKey: ValidationAuth; onLoc
   const [end, setEnd] = useState('')
   const [observed, setObserved] = useState('')
   const [jobs, setJobs] = useState<Job[]>([])
+  const [deleting, setDeleting] = useState<Job | null>(null)
+  const deletedIds = useRef(new Set<string>())
+  const historyHeading = useRef<HTMLHeadingElement>(null)
+  const deleteTrigger = useRef<HTMLButtonElement | null>(null)
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
   const [requestId, setRequestId] = useState(() => requestToken())
@@ -258,7 +263,8 @@ function ValidationPanel({ adminKey, onLock }: { adminKey: ValidationAuth; onLoc
         const data = await validationRequest<{ jobs: Job[] }>(adminKey, '/jobs')
         if (!Array.isArray(data.jobs)) throw new Error('任务响应格式异常，请刷新后重试')
         if (active) {
-          setJobs(data.jobs)
+          // Ignore a GET begun before a successful deletion returned.
+          setJobs(data.jobs.filter((job) => !deletedIds.current.has(job.id)))
           if (firstPoll.current) {
             if (data.jobs.length) setSetupOpen(false)
             firstPoll.current = false
@@ -282,7 +288,8 @@ function ValidationPanel({ adminKey, onLock }: { adminKey: ValidationAuth; onLoc
     setError('')
     try {
       const job = await validationRequest<Job>(adminKey, '/jobs' + path, body)
-      setJobs((old) => [job, ...old.filter((j) => j.id !== job.id)])
+      if (!deletedIds.current.has(job.id))
+        setJobs((old) => [job, ...old.filter((j) => j.id !== job.id)])
       if (!path) setSetupOpen(false)
     } catch (e) {
       setError(e instanceof Error ? e.message : '操作失败')
@@ -459,7 +466,7 @@ function ValidationPanel({ adminKey, onLock }: { adminKey: ValidationAuth; onLoc
       <div className="validation-section-heading validation-history-heading">
         <div>
           <span className="validation-eyebrow">任务与结果</span>
-          <h2>
+          <h2 ref={historyHeading} tabIndex={-1}>
             <History size={21} aria-hidden="true" />
             验证记录
           </h2>
@@ -550,7 +557,20 @@ function ValidationPanel({ adminKey, onLock }: { adminKey: ValidationAuth; onLoc
                 取消任务（不可继续）
               </button>
             )}
+            <button
+              className="button button-quiet validation-delete-button"
+              disabled={busy || ['running', 'cancelling'].includes(job.status)}
+              onClick={(event) => {
+                deleteTrigger.current = event.currentTarget
+                setDeleting(job)
+              }}
+            >
+              删除记录
+            </button>
           </div>
+          {['running', 'cancelling'].includes(job.status) && (
+            <p className="validation-hint">删除前请先取消任务，并等待显示“已取消”。</p>
+          )}
           {job.cancel_requested_at && (
             <p>
               请求取消：{new Date(job.cancel_requested_at).toLocaleString('zh-CN')}
@@ -584,6 +604,28 @@ function ValidationPanel({ adminKey, onLock }: { adminKey: ValidationAuth; onLoc
           )}
         </article>
       ))}
+      {deleting && (
+        <ValidationDeleteDialog
+          id={deleting.id}
+          description={`${deleting.methods.map((m) => choices[m as keyof typeof choices]).join(' · ')} · ${deleting.start} 至 ${deleting.end || '最新可用日'}`}
+          adminKey={adminKey}
+          onBusy={setBusy}
+          onClose={() => {
+            setDeleting(null)
+            requestAnimationFrame(() => {
+              if (deleteTrigger.current?.isConnected && !deleteTrigger.current.disabled)
+                deleteTrigger.current.focus()
+              else historyHeading.current?.focus()
+            })
+          }}
+          onDeleted={() => {
+            deletedIds.current.add(deleting.id)
+            setJobs((old) => old.filter((job) => job.id !== deleting.id))
+            setDeleting(null)
+            requestAnimationFrame(() => historyHeading.current?.focus())
+          }}
+        />
+      )}
     </section>
   )
 }
