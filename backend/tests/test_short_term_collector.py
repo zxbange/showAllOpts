@@ -27,6 +27,9 @@ def mod(monkeypatch):
 def ns(mod):
     return mod._short_term_strategy({}, mod.DB_CONFIG)
 
+def complete_meta(ns, bukou=0):
+    return {'rule_version': ns.RULE_VERSION, 'counts': {'bukou': bukou, 'redhover': 0, 'xuli': 0, 'oversold': 0}}
+
 def history():
     close = np.linspace(10, 20, 90)
     close[-4:] = [20, 21, 20.5, 21.5]
@@ -68,8 +71,8 @@ def test_complete_day_idempotent_zero_results_and_atomicity(ns):
     ns.Base.metadata.create_all(engine)
     Session = sessionmaker(bind=engine)
     day = dt.date(2026, 10, 22)
-    assert ns.save_day(Session, day, {'counts': {}}, [])
-    assert not ns.save_day(Session, day, {}, [{'code': 'x'}])
+    assert ns.save_day(Session, day, complete_meta(ns), [])
+    assert not ns.save_day(Session, day, complete_meta(ns), [])
     record = {'trade_date': day, 'code': '600001.XSHG', 'name': 'example', 'bars': []}
     with pytest.raises(Exception):
         ns.save_day(Session, day + dt.timedelta(days=1), {}, [record, record])
@@ -87,7 +90,7 @@ def test_retention_uses_three_calendar_trading_days_and_skips_existing(mod, monk
     Session = sessionmaker(bind=engine)
     old = dt.date(2026, 10, 20)
     for day in [old] + days:
-        ns.save_day(Session, day, {'rule_version': ns.RULE_VERSION}, [{'trade_date': day, 'code': '600001.XSHG'}])
+        ns.save_day(Session, day, complete_meta(ns, 1), [{'trade_date': day, 'code': '600001.XSHG', 'methods': ['bukou']}])
     @contextmanager
     def database_scope(*args):
         yield Session
@@ -169,15 +172,38 @@ def test_rule_upgrade_replaces_snapshot_atomically(ns):
     Session = sessionmaker(bind=engine)
     day = dt.date(2026, 10, 22)
     record = {'code': 'a', 'trade_date': day}
-    ns.save_day(Session, day, {'rule_version': 'old'}, [record])
+    with Session() as session:
+        session.add(ns.ShortTermRun(trade_date=day, payload={'rule_version': 'old'}, updated_at=dt.datetime.now()))
+        session.add(ns.ShortTermStock(trade_date=day, code='a', payload={'code': 'a'}, updated_at=dt.datetime.now()))
+        session.commit()
     with pytest.raises(Exception):
         ns.save_day(Session, day, {'rule_version': ns.RULE_VERSION}, [record, record])
     with Session() as session:
         assert session.query(ns.ShortTermRun).one().payload['rule_version'] == 'old'
         assert session.query(ns.ShortTermStock).count() == 1
-    assert ns.save_day(Session, day, {'rule_version': ns.RULE_VERSION}, [])
+    assert ns.save_day(Session, day, complete_meta(ns), [])
     with Session() as session:
         assert session.query(ns.ShortTermStock).count() == 0
         assert session.query(ns.ShortTermRun).one().payload['rule_version'] == ns.RULE_VERSION
-    assert not ns.save_day(Session, day, {'rule_version': ns.RULE_VERSION}, [])
+    assert not ns.save_day(Session, day, complete_meta(ns), [])
+    engine.dispose()
+
+
+def test_correct_rule_missing_oversold_is_recomputed_and_never_zero_filled(ns):
+    engine = create_engine('sqlite://')
+    ns.Base.metadata.create_all(engine)
+    Session = sessionmaker(bind=engine)
+    day = dt.date(2026, 10, 22)
+    incomplete = complete_meta(ns)
+    del incomplete['counts']['oversold']
+    with Session.begin() as session:
+        session.add(ns.ShortTermRun(trade_date=day, payload=incomplete, updated_at=dt.datetime.now()))
+    with pytest.raises(ValueError):
+        ns.save_day(Session, day, incomplete, [])
+    complete = complete_meta(ns)
+    complete['counts']['oversold'] = 1
+    assert ns.save_day(Session, day, complete, [{'code': '600001.XSHG', 'methods': ['oversold']}])
+    with Session() as session:
+        assert session.get(ns.ShortTermRun, day).payload['counts']['oversold'] == 1
+        assert session.query(ns.ShortTermStock).count() == 1
     engine.dispose()

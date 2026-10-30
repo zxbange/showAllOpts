@@ -96,6 +96,182 @@ _API_NAMES = ('get_all_securities', 'get_trade_days', 'get_price', 'get_extras',
 _PROGRESS_LOCAL = threading.local()
 
 
+
+
+# BEGIN SHARED EARNINGS VERSION
+import uuid as _earnings_uuid
+from sqlalchemy import BigInteger, Column, Date, MetaData, String, Table
+
+
+def _earnings_version_table():
+    table = Table('earnings_sync_head', MetaData(),
+                  Column('report_period', Date, primary_key=True),
+                  Column('generation', String(32), nullable=False),
+                  Column('revision', BigInteger, nullable=False))
+    table.dialect_options['mysql']['engine'] = 'InnoDB'
+    table.dialect_options['mysql']['charset'] = 'utf8mb4'
+    return table
+
+
+def _prepare_earnings_version(Session):
+    if not getattr(Session, '_earnings_version_ready', False):
+        table = _earnings_version_table()
+        engine = Session.kw['bind']
+        table.create(engine, checkfirst=True)
+        # Adopt existing quarters once; the first local protocol sync establishes
+        # a fresh baseline before trusting these versions.
+        runs = Table('earnings_gap_run', MetaData(), Column('report_period', Date, primary_key=True))
+        with engine.begin() as connection:
+            existing = {row.report_period for row in connection.execute(table.select())}
+            for row in connection.execute(runs.select()):
+                if row.report_period not in existing:
+                    connection.execute(table.insert().values(report_period=row.report_period,
+                                       generation=_earnings_uuid.uuid4().hex, revision=0))
+        Session._earnings_version_ready = True
+
+
+def _lock_earnings_version(session, period):
+    table = _earnings_version_table()
+    row = session.execute(table.select().where(table.c.report_period == period).with_for_update()).first()
+    if row is None:
+        session.execute(table.insert().values(report_period=period, generation=_earnings_uuid.uuid4().hex, revision=0))
+    return table
+
+
+def _advance_earnings_version(session, table, period, rebuild=False):
+    values = {'revision': table.c.revision + 1}
+    if rebuild:
+        values['generation'] = _earnings_uuid.uuid4().hex
+    session.execute(table.update().where(table.c.report_period == period).values(**values))
+
+# END SHARED EARNINGS VERSION
+
+# BEGIN SHARED RESULT JOURNAL
+import json as _journal_json
+import uuid as _journal_uuid
+from sqlalchemy import BigInteger, Column, Integer, MetaData, String, Table, Text
+from sqlalchemy import event as _journal_event, inspect as _journal_inspect
+from sqlalchemy.exc import IntegrityError as _JournalIntegrityError
+from sqlalchemy.dialects.mysql import LONGTEXT as _JournalLongText
+
+def _result_journal_tables():
+    meta = MetaData()
+    head = Table('result_sync_head', meta,
+                 Column('module', String(48), primary_key=True),
+                 Column('protocol', Integer, nullable=False),
+                 Column('generation', String(32), nullable=False),
+                 Column('revision', BigInteger, nullable=False))
+    changes = Table('result_sync_change', meta,
+                    Column('module', String(48), primary_key=True),
+                    Column('revision', BigInteger, primary_key=True),
+                    Column('payload', Text().with_variant(_JournalLongText(), 'mysql'), nullable=False))
+    for table in meta.tables.values():
+        table.dialect_options['mysql']['engine'] = 'InnoDB'
+        table.dialect_options['mysql']['charset'] = 'utf8mb4'
+    return meta, head, changes
+
+
+def _install_result_journal(Session, models, module):
+    """Journal every ORM write and explicitly wrapped bulk DML in the same transaction."""
+    if getattr(Session, '_result_journal_module', None) == module:
+        return
+    meta, head, changes = _result_journal_tables()
+    engine = Session.kw['bind']
+    meta.create_all(engine)
+    # Initialization races are harmless; never reset an existing generation/revision.
+    with engine.begin() as connection:
+        exists = connection.execute(head.select().where(head.c.module == module)).first()
+    if exists is None:
+        try:
+            with engine.begin() as connection:
+                connection.execute(head.insert().values(module=module, protocol=1,
+                                   generation=_journal_uuid.uuid4().hex, revision=0))
+        except _JournalIntegrityError:
+            with engine.begin() as connection:
+                if connection.execute(head.select().where(head.c.module == module)).first() is None:
+                    raise
+    tracked = tuple(models)
+    info_key = 'result_journal:' + module
+
+    def lock(session):
+        info = session.info.get(info_key)
+        if info is None:
+            with session.no_autoflush:
+                row = session.execute(head.select().where(head.c.module == module).with_for_update()).first()
+            if row is None or row.protocol != 1:
+                raise ValueError('结果同步日志版本无效，请检查采集版本。')
+            info = {'revision': row.revision, 'records': {}, 'written': False}
+            session.info[info_key] = info
+        return info
+
+    def record(session, table, keys, deleted):
+        if not keys:
+            return
+        info = lock(session)
+        for key in keys:
+            values = [value.isoformat() if hasattr(value, 'isoformat') else value for value in key]
+            identity = (table.name, _journal_json.dumps(values, ensure_ascii=True, separators=(',', ':')))
+            info['records'][identity] = {'table': table.name, 'key': values, 'deleted': bool(deleted)}
+        payload = _journal_json.dumps(list(info['records'].values()), ensure_ascii=True, separators=(',', ':'))
+        with session.no_autoflush:
+            if not info['written']:
+                info['revision'] += 1
+                session.execute(head.update().where(head.c.module == module).values(revision=info['revision']))
+                session.execute(changes.insert().values(module=module, revision=info['revision'], payload=payload))
+                info['written'] = True
+            else:
+                session.execute(changes.update().where((changes.c.module == module) &
+                                (changes.c.revision == info['revision'])).values(payload=payload))
+
+    def before_flush(session, context, instances):
+        rows = [row for row in session.new if isinstance(row, tracked)]
+        rows += [row for row in session.dirty if isinstance(row, tracked)
+                 and session.is_modified(row, include_collections=False)]
+        rows += [row for row in session.deleted if isinstance(row, tracked)]
+        groups = {}
+        for row in rows:
+            state = _journal_inspect(row)
+            keys = list(row.__table__.primary_key.columns)
+            if state.persistent and state.identity != tuple(getattr(row, column.name) for column in keys):
+                raise ValueError('结果同步不允许修改主键；请删除旧记录再插入新记录。')
+            deleted = row in session.deleted
+            group = (row.__table__, deleted)
+            groups.setdefault(group, []).append(tuple(getattr(row, column.name) for column in keys))
+        for (table, deleted), keys in groups.items():
+            record(session, table, keys, deleted)
+
+    def reset(session):
+        session.info.pop(info_key, None)
+
+    _journal_event.listen(Session, 'before_flush', before_flush)
+    _journal_event.listen(Session, 'after_commit', reset)
+    _journal_event.listen(Session, 'after_rollback', reset)
+    # sessionmaker copies this info dictionary into each new Session.
+    Session.configure(info=dict(Session.kw.get('info', {}), _result_journal_callbacks=(tracked, lock, record)))
+    Session._result_journal_module = module
+
+
+def _result_bulk(query, values=None):
+    """Serialize before selecting affected keys, then journal the exact bulk write."""
+    session = query.session
+    model = query.column_descriptions[0]['entity']
+    registry = session.info.get('_result_journal_callbacks')
+    if registry is None or model not in registry[0]:
+        raise ValueError('批量写入缺少结果同步日志，拒绝无日志修改。')
+    tracked, lock, record = registry
+    lock(session)
+    session.flush()
+    table = model.__table__
+    keys = query.with_entities(*table.primary_key.columns).with_for_update().all()
+    if not keys:
+        return 0
+    record(session, table, keys, values is None)
+    if values is None:
+        return query.delete(synchronize_session=False)
+    return query.update(values, synchronize_session=False)
+
+# END SHARED RESULT JOURNAL
+
 # BEGIN SHARED OVERSOLD RULES
 OVERSOLD_PARAMS = dict(min_market_cap=30., min_listing_days=365, min_money=50_000_000.,
                        oversold_3=-.08, rebound_volume=1.)
@@ -902,6 +1078,7 @@ def _sentiment_strategy(_apis, _config):
         return records
 
     def save_records(Session, records):
+        _install_result_journal(Session, (MarketSentiment,), 'market-sentiment')
         dates = [record['trade_date'] for record in records]
         return _save_record_set(Session, MarketSentiment, records,
             (MarketSentiment.trade_date.in_(dates),), ('trade_date',))
@@ -927,8 +1104,9 @@ def _sentiment_strategy(_apis, _config):
             raise ValueError('指定区间未返回交易日，未清理或写入数据。')
         results = []
         with database_scope(Base, _config) as Session:
+            _install_result_journal(Session, (MarketSentiment,), 'market-sentiment')
             with session_scope(Session) as session:
-                removed = session.query(MarketSentiment).filter(MarketSentiment.trade_date < cutoff).delete(synchronize_session=False)
+                removed = _result_bulk(session.query(MarketSentiment).filter(MarketSentiment.trade_date < cutoff))
                 session.commit()
                 existing = {as_date(row[0]) for row in session.query(MarketSentiment.trade_date).filter(
                     MarketSentiment.trade_date >= start, MarketSentiment.trade_date <= end).all()}
@@ -1368,6 +1546,7 @@ def _microcap_strategy(_apis, _config):
             return day, previous, histories
 
     def save_period(Session, record, skip_existing=False, invalidate_next=None):
+        _install_result_journal(Session, (MicrocapTemperature,), 'microcap-temperature')
         _progress_note('写入当前采样期温度数据')
         required = RESULT_COLUMNS + ['member_codes']
         for field in required:
@@ -1384,7 +1563,7 @@ def _microcap_strategy(_apis, _config):
                 if query.first() is not None:
                     return False
             else:
-                query.delete(synchronize_session=False)
+                _result_bulk(query)
             session.add(MicrocapTemperature(**record))
             mark_daily_pending(session, record['series_id'], invalidate_next)
             session.commit()
@@ -1393,8 +1572,8 @@ def _microcap_strategy(_apis, _config):
     def mark_daily_pending(session, series_id, day):
         if day is not None:
             # 与当前日期一起提交：即使下一行原计数恰好正确，也能识别尚未完成的派生修复。
-            changed = session.query(MicrocapTemperature).filter_by(series_id=series_id, trade_date=day).update(
-                {'sample_count': 0, 'updated_at': china_now()}, synchronize_session=False)
+            changed = _result_bulk(session.query(MicrocapTemperature).filter_by(series_id=series_id, trade_date=day),
+                {'sample_count': 0, 'updated_at': china_now()})
             if changed != 1:
                 raise ValueError('待衔接日期被其他任务修改，请停止并重跑。')
 
@@ -1423,6 +1602,7 @@ def _microcap_strategy(_apis, _config):
 
 
     def repair_daily_derived(Session, record, old, invalidate_next=None):
+        _install_result_journal(Session, (MicrocapTemperature,), 'microcap-temperature')
         # 补齐更早日期后，仅修正依赖历史序列的列，不重新采集或覆盖原始指标、成分股。
         fields = ('sample_step', 'sample_count') + PCT_FIELDS + ('score', 'micro_index', 'period_return')
         updates = {field: record[field] for field in fields if record[field] != old[field]}
@@ -1431,8 +1611,8 @@ def _microcap_strategy(_apis, _config):
         updates['updated_at'] = china_now()
         session = Session()
         try:
-            changed = session.query(MicrocapTemperature).filter_by(
-                series_id=record['series_id'], trade_date=record['trade_date']).update(updates, synchronize_session=False)
+            changed = _result_bulk(session.query(MicrocapTemperature).filter_by(
+                series_id=record['series_id'], trade_date=record['trade_date']), updates)
             if changed != 1:
                 raise ValueError('每日序列被其他任务修改，请停止并重跑。')
             mark_daily_pending(session, record['series_id'], invalidate_next)
@@ -1511,6 +1691,7 @@ def _microcap_strategy(_apis, _config):
         series_id = series_key(start, micro_num, sample_step)
         records = []
         with database_scope(Base, _config) as Session:
+            _install_result_journal(Session, (MicrocapTemperature,), 'microcap-temperature')
             if sample_step == 1:
                 return collect_daily(Session, start, end, micro_num)
             last, previous, histories = load_resume(Session, series_id, include_latest=skip_existing)
@@ -2032,7 +2213,9 @@ def _earnings_strategy(_apis, _config):
         # 先验证原始筛选阈值，再量化写入值；任何转换失败均发生在删除旧快照之前。
         # 不修改原始 records 和公告 JSON，也不把 Decimal 转回 float。
         db_records = [database_record(r) for r in records]
+        _prepare_earnings_version(Session)
         with session_scope(Session) as session:
+            version_table = _lock_earnings_version(session, period)
             if skip_existing:
                 # 股票快照只插入首次命中的结果；不覆盖、不删除已入库股票。
                 existing = {row[0] for row in session.query(EarningsStock.code).filter(
@@ -2060,6 +2243,8 @@ def _earnings_strategy(_apis, _config):
                 if not fresh_db and not metadata_changed:
                     return []
                 session.add_all([EarningsStock(**record) for record in fresh_db])
+                if fresh_db:
+                    _advance_earnings_version(session, version_table, period)
                 session.commit()
                 return fresh
             # 清空与重建只针对当前季度，并在同一个事务提交，合法零命中也有元数据。
@@ -2068,6 +2253,7 @@ def _earnings_strategy(_apis, _config):
             session.add_all([EarningsStock(**r) for r in db_records])
             session.add(EarningsRun(report_period=period, as_of_date=as_of, updated_at=china_now(),
                                    universe_count=universe_count, matched_count=len(records), rule_version=RULE_VERSION))
+            _advance_earnings_version(session, version_table, period, rebuild=True)
             session.commit()
             return records
 
@@ -3265,6 +3451,7 @@ def _etf_heat_strategy(_apis, _config):
 
 
     def save_rows(Session, records, repair_missing=False):
+        _install_result_journal(Session, (Heat, Pool), 'etf-momentum')
         keys = {(r['trade_date'], r['code']) for r in records}
         if len(keys) != len(records):
             raise ValueError('交易日和基金代码重复')
@@ -3283,9 +3470,9 @@ def _etf_heat_strategy(_apis, _config):
                     if (row['trade_date'], row['code']) not in existing or existing[(row['trade_date'], row['code'])] is not None or row['score'] is None:
                         continue
                     values = {key: value for key, value in row.items() if key not in ('trade_date', 'code')}
-                    changed = session.query(Heat).filter(
+                    changed = _result_bulk(session.query(Heat).filter(
                         Heat.trade_date == row['trade_date'], Heat.code == row['code'],
-                        Heat.score.is_(None)).update(values, synchronize_session=False)
+                        Heat.score.is_(None)), values)
                     if changed:
                         repaired.append(row)
             session.commit()
@@ -3302,9 +3489,10 @@ def _etf_heat_strategy(_apis, _config):
             error='保留范围交易日历不足、重复、乱序或含未来日期，未清理数据库')[0]
 
     def cleanup_old_data(Session, retention_start):
+        _install_result_journal(Session, (Heat, Pool), 'etf-momentum')
         """Remove expired results for all funds, including funds outside the current pool."""
         with session_scope(Session) as session:
-            deleted = session.query(Heat).filter(Heat.trade_date < retention_start).delete(synchronize_session=False)
+            deleted = _result_bulk(session.query(Heat).filter(Heat.trade_date < retention_start))
             session.commit()
         _progress_note('保留最近 {} 个交易日（{} 起），已清理 {} 条过期热度'.format(
             settings['retention_trade_days'], retention_start, deleted))
@@ -3329,6 +3517,7 @@ def _etf_heat_strategy(_apis, _config):
         days = [day for day in days if day >= retention_start]
         output = []
         with database_scope(Base, _config) as Session:
+            _install_result_journal(Session, (Heat, Pool), 'etf-momentum')
             cleanup_old_data(Session, retention_start)
             if not days:
                 return pd.DataFrame(output)
@@ -4724,11 +4913,37 @@ def _short_term_strategy(_apis, _config):
                 'ma_periods': list(MA_PERIODS), 'chart_days': 30, 'adjustment': 'pre', 'retention_trade_days': 3, 'exclude_st': True, 'min_market_cap': 30}
         return meta, selected
 
+    def complete_meta(meta):
+        counts = meta.get('counts') if isinstance(meta, dict) else None
+        return (isinstance(meta, dict) and meta.get('rule_version') == RULE_VERSION
+                and isinstance(counts, dict)
+                and builtins.all(type(counts.get(method)) is int and counts[method] >= 0 for method in METHODS))
+
+    def counts_match(meta, methods):
+        actual = {method: 0 for method in METHODS}
+        for values in methods:
+            if not isinstance(values, list) or not values or not builtins.all(isinstance(value, str) for value in values) or len(values) != len(set(values)):
+                return False
+            if builtins.any(value not in METHODS for value in values):
+                return False
+            for value in values:
+                actual[value] += 1
+        return actual == {method: meta['counts'][method] for method in METHODS}
+
+    def complete_day(session, head):
+        if not complete_meta(head.payload):
+            return False
+        # Read only method lists, not the large chart JSON, when verifying completion.
+        methods = (row[0] for row in session.query(ShortTermStock.payload['methods']).filter_by(trade_date=head.trade_date))
+        return counts_match(head.payload, methods)
+
     def save_day(Session, day, meta, records):
+        if not complete_meta(meta) or not counts_match(meta, (r.get('methods') for r in records)):
+            raise ValueError('短线快照计数或明细不完整，拒绝写入；不能把未计算策略补为零。')
         stamp = china_now()
         with session_scope(Session) as session:
             previous = session.query(ShortTermRun).filter_by(trade_date=day).first()
-            if previous is not None and previous.payload.get('rule_version') == meta.get('rule_version'):
+            if previous is not None and complete_day(session, previous):
                 return False
             # Replace older rules atomically; a failed collection never removes the old snapshot.
             if previous is not None:
@@ -4763,7 +4978,7 @@ def _short_term_strategy(_apis, _config):
                     session.query(model).filter(model.trade_date < keep_days[0]).delete(synchronize_session=False)
                 session.commit()
                 existing = set(r.trade_date for r in session.query(ShortTermRun).all()
-                               if r.payload.get('rule_version') == RULE_VERSION)
+                               if complete_day(session, r))
             pending = [d for d in keep_days if d <= end and d not in existing]
             for day in _progress_items(pending, '短线选股交易日', str):
                 meta, records = collect(day)

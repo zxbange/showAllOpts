@@ -29,6 +29,133 @@ Q = Decimal('0.0000000001')
 Base = declarative_base()
 
 
+# BEGIN SHARED RESULT JOURNAL
+import json as _journal_json
+import uuid as _journal_uuid
+from sqlalchemy import BigInteger, Column, Integer, MetaData, String, Table, Text
+from sqlalchemy import event as _journal_event, inspect as _journal_inspect
+from sqlalchemy.exc import IntegrityError as _JournalIntegrityError
+from sqlalchemy.dialects.mysql import LONGTEXT as _JournalLongText
+
+def _result_journal_tables():
+    meta = MetaData()
+    head = Table('result_sync_head', meta,
+                 Column('module', String(48), primary_key=True),
+                 Column('protocol', Integer, nullable=False),
+                 Column('generation', String(32), nullable=False),
+                 Column('revision', BigInteger, nullable=False))
+    changes = Table('result_sync_change', meta,
+                    Column('module', String(48), primary_key=True),
+                    Column('revision', BigInteger, primary_key=True),
+                    Column('payload', Text().with_variant(_JournalLongText(), 'mysql'), nullable=False))
+    for table in meta.tables.values():
+        table.dialect_options['mysql']['engine'] = 'InnoDB'
+        table.dialect_options['mysql']['charset'] = 'utf8mb4'
+    return meta, head, changes
+
+
+def _install_result_journal(Session, models, module):
+    """Journal every ORM write and explicitly wrapped bulk DML in the same transaction."""
+    if getattr(Session, '_result_journal_module', None) == module:
+        return
+    meta, head, changes = _result_journal_tables()
+    engine = Session.kw['bind']
+    meta.create_all(engine)
+    # Initialization races are harmless; never reset an existing generation/revision.
+    with engine.begin() as connection:
+        exists = connection.execute(head.select().where(head.c.module == module)).first()
+    if exists is None:
+        try:
+            with engine.begin() as connection:
+                connection.execute(head.insert().values(module=module, protocol=1,
+                                   generation=_journal_uuid.uuid4().hex, revision=0))
+        except _JournalIntegrityError:
+            with engine.begin() as connection:
+                if connection.execute(head.select().where(head.c.module == module)).first() is None:
+                    raise
+    tracked = tuple(models)
+    info_key = 'result_journal:' + module
+
+    def lock(session):
+        info = session.info.get(info_key)
+        if info is None:
+            with session.no_autoflush:
+                row = session.execute(head.select().where(head.c.module == module).with_for_update()).first()
+            if row is None or row.protocol != 1:
+                raise ValueError('结果同步日志版本无效，请检查采集版本。')
+            info = {'revision': row.revision, 'records': {}, 'written': False}
+            session.info[info_key] = info
+        return info
+
+    def record(session, table, keys, deleted):
+        if not keys:
+            return
+        info = lock(session)
+        for key in keys:
+            values = [value.isoformat() if hasattr(value, 'isoformat') else value for value in key]
+            identity = (table.name, _journal_json.dumps(values, ensure_ascii=True, separators=(',', ':')))
+            info['records'][identity] = {'table': table.name, 'key': values, 'deleted': bool(deleted)}
+        payload = _journal_json.dumps(list(info['records'].values()), ensure_ascii=True, separators=(',', ':'))
+        with session.no_autoflush:
+            if not info['written']:
+                info['revision'] += 1
+                session.execute(head.update().where(head.c.module == module).values(revision=info['revision']))
+                session.execute(changes.insert().values(module=module, revision=info['revision'], payload=payload))
+                info['written'] = True
+            else:
+                session.execute(changes.update().where((changes.c.module == module) &
+                                (changes.c.revision == info['revision'])).values(payload=payload))
+
+    def before_flush(session, context, instances):
+        rows = [row for row in session.new if isinstance(row, tracked)]
+        rows += [row for row in session.dirty if isinstance(row, tracked)
+                 and session.is_modified(row, include_collections=False)]
+        rows += [row for row in session.deleted if isinstance(row, tracked)]
+        groups = {}
+        for row in rows:
+            state = _journal_inspect(row)
+            keys = list(row.__table__.primary_key.columns)
+            if state.persistent and state.identity != tuple(getattr(row, column.name) for column in keys):
+                raise ValueError('结果同步不允许修改主键；请删除旧记录再插入新记录。')
+            deleted = row in session.deleted
+            group = (row.__table__, deleted)
+            groups.setdefault(group, []).append(tuple(getattr(row, column.name) for column in keys))
+        for (table, deleted), keys in groups.items():
+            record(session, table, keys, deleted)
+
+    def reset(session):
+        session.info.pop(info_key, None)
+
+    _journal_event.listen(Session, 'before_flush', before_flush)
+    _journal_event.listen(Session, 'after_commit', reset)
+    _journal_event.listen(Session, 'after_rollback', reset)
+    # sessionmaker copies this info dictionary into each new Session.
+    Session.configure(info=dict(Session.kw.get('info', {}), _result_journal_callbacks=(tracked, lock, record)))
+    Session._result_journal_module = module
+
+
+def _result_bulk(query, values=None):
+    """Serialize before selecting affected keys, then journal the exact bulk write."""
+    session = query.session
+    model = query.column_descriptions[0]['entity']
+    registry = session.info.get('_result_journal_callbacks')
+    if registry is None or model not in registry[0]:
+        raise ValueError('批量写入缺少结果同步日志，拒绝无日志修改。')
+    tracked, lock, record = registry
+    lock(session)
+    session.flush()
+    table = model.__table__
+    keys = query.with_entities(*table.primary_key.columns).with_for_update().all()
+    if not keys:
+        return 0
+    record(session, table, keys, values is None)
+    if values is None:
+        return query.delete(synchronize_session=False)
+    return query.update(values, synchronize_session=False)
+
+# END SHARED RESULT JOURNAL
+
+
 def _checked_trade_days(raw, start=None, end=None, count=None,
                         error='交易日历缺失、重复、乱序或越界。', missing_error=None):
     """Normalize and validate an exchange calendar before calculating or writing."""
@@ -359,6 +486,7 @@ def load_resume(Session, series_id, include_latest=False):
 
 
 def save_period(Session, record, skip_existing=False, invalidate_next=None):
+    _install_result_journal(Session, (MicrocapTemperature,), 'microcap-temperature')
     required = RESULT_COLUMNS + ['member_codes']
     for field in required:
         if field not in record or (record[field] is None and field != 'avg_np_growth'):
@@ -375,7 +503,7 @@ def save_period(Session, record, skip_existing=False, invalidate_next=None):
             if query.first() is not None:
                 return False
         else:
-            query.delete(synchronize_session=False)
+            _result_bulk(query)
         session.add(MicrocapTemperature(**record))
         mark_daily_pending(session, record['series_id'], invalidate_next)
         session.commit()
@@ -390,8 +518,8 @@ def save_period(Session, record, skip_existing=False, invalidate_next=None):
 def mark_daily_pending(session, series_id, day):
     if day is not None:
         # 与当前日期一起提交：即使下一行原计数恰好正确，也能识别尚未完成的派生修复。
-        changed = session.query(MicrocapTemperature).filter_by(series_id=series_id, trade_date=day).update(
-            {'sample_count': 0, 'updated_at': china_now()}, synchronize_session=False)
+        changed = _result_bulk(session.query(MicrocapTemperature).filter_by(series_id=series_id, trade_date=day),
+            {'sample_count': 0, 'updated_at': china_now()})
         if changed != 1:
             raise ValueError('待衔接日期被其他任务修改，请停止并重跑。')
 
@@ -420,6 +548,7 @@ def stored_period(Session, series_id, day):
 
 
 def repair_daily_derived(Session, record, old, invalidate_next=None):
+    _install_result_journal(Session, (MicrocapTemperature,), 'microcap-temperature')
     # 补齐更早日期后，仅修正依赖历史序列的列，不重新采集或覆盖原始指标、成分股。
     fields = ('sample_step', 'sample_count') + PCT_FIELDS + ('score', 'micro_index', 'period_return')
     updates = {field: record[field] for field in fields if record[field] != old[field]}
@@ -428,8 +557,8 @@ def repair_daily_derived(Session, record, old, invalidate_next=None):
     updates['updated_at'] = china_now()
     session = Session()
     try:
-        changed = session.query(MicrocapTemperature).filter_by(
-            series_id=record['series_id'], trade_date=record['trade_date']).update(updates, synchronize_session=False)
+        changed = _result_bulk(session.query(MicrocapTemperature).filter_by(
+            series_id=record['series_id'], trade_date=record['trade_date']), updates)
         if changed != 1:
             raise ValueError('每日序列被其他任务修改，请停止并重跑。')
         mark_daily_pending(session, record['series_id'], invalidate_next)
@@ -512,6 +641,7 @@ def run(start_date=START_DATE, end_date=END_DATE, micro_num=MICRO_NUM, sample_st
     try:
         Base.metadata.create_all(engine)
         Session = sessionmaker(bind=engine)
+        _install_result_journal(Session, (MicrocapTemperature,), 'microcap-temperature')
         if sample_step == 1:
             return collect_daily(Session, start, end, micro_num)
         last, previous, histories = load_resume(Session, series_id, include_latest=skip_existing)

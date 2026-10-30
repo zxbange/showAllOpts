@@ -389,3 +389,34 @@ def test_insert_only_earnings_skips_fetching_already_saved_stocks(c):
     c.env['fetch_events']=lambda *args:pytest.fail('already saved')
     c.env['screen']=lambda *args:pytest.fail('already saved')
     assert c.env['run'](skip_existing=True)==[]
+
+
+def test_quarter_revision_append_noop_and_rebuild(c):
+    from sqlalchemy import select
+    table = c.env['_earnings_version_table']()
+    save, item = c.env['save_results'], record(c)
+    period, day = item['report_period'], item['valuation_date']
+    def version():
+        with c.engine.connect() as connection:
+            return dict(connection.execute(select(table)).mappings().one())
+    save(c.Session, period, day, 6000, [item], skip_existing=True)
+    first = version()
+    assert first['revision'] == 1
+    save(c.Session, period, day, 6000, [item], skip_existing=True)
+    assert version() == first
+    save(c.Session, period, day, 6000, [record(c, code='000001.XSHE')], skip_existing=True)
+    second = version()
+    assert second['generation'] == first['generation'] and second['revision'] == 2
+    save(c.Session, period, day, 6000, [item], skip_existing=False)
+    rebuilt = version()
+    assert rebuilt['generation'] != first['generation'] and rebuilt['revision'] == 3
+    def fail(conn, cursor, statement, *args):
+        if statement.startswith('INSERT INTO earnings_gap_stock'):
+            raise RuntimeError('simulated write failure')
+    sql_event.listen(c.engine, 'before_cursor_execute', fail)
+    try:
+        with pytest.raises(RuntimeError):
+            save(c.Session, period, day, 6000, [item], skip_existing=False)
+    finally:
+        sql_event.remove(c.engine, 'before_cursor_execute', fail)
+    assert version() == rebuilt

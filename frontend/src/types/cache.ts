@@ -13,6 +13,7 @@ export interface CacheModule {
     processed?: number
     elapsed_seconds?: number
   }
+  sync_note?: string | null
   error: string | null
 }
 export interface CacheSchedule {

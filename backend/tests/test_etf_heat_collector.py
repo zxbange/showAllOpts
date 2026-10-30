@@ -112,7 +112,7 @@ def test_full_run_repeat_and_partial_latest_preserve_head(mod, monkeypatch, tmp_
     monkeypatch.setattr(mod, 'sum', np.sum, raising=False)
     assert len(strategy.run())==3
     from sqlalchemy import inspect
-    assert set(inspect(database).get_table_names())=={'etf_momentum_heat','etf_momentum_pool'}
+    assert set(inspect(database).get_table_names())=={'etf_momentum_heat','etf_momentum_pool','result_sync_head','result_sync_change'}
     with sessionmaker(bind=database)() as s:
         assert s.query(strategy.Pool).one().rule_version=='etf_close_momentum_v3'
         assert all(r.score is not None for r in s.query(strategy.Heat))

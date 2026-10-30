@@ -23,6 +23,7 @@ from app.core.cache_sync import sync_tables
 from app.core.append_sync import APPEND_PARTITIONS, copy_append
 from app.core.sync_progress import reporter, report
 from app.core.ownership_sync import copy_ownership
+from app.core.result_sync import MODULE_IDS as JOURNAL_MODULES, copy_results
 from app.models.short_term import ShortTermRun, ShortTermStock
 from app.models.ownership import OwnershipStock, OwnershipReport, OwnershipHolders
 from app.models.etf_heat import Heat, Pool
@@ -93,6 +94,7 @@ class SnapshotCache:
         self.schedule_floor = None
         self.schedule_revision = None
         self.schedule = CacheSchedule(settings)
+        self.sync_notes = {}
 
     def read_state(self):
         try:
@@ -193,7 +195,7 @@ class SnapshotCache:
             entry = state['modules'].get(module, {})
             items.append({'id': module, 'name': name, 'ready': self.snapshot_path(module, entry) is not None,
                           'updated_at': entry.get('updated_at'), 'last_attempt_at': entry.get('last_attempt_at'),
-                          'rows': entry.get('rows'), 'error': entry.get('error'),
+                          'rows': entry.get('rows'), 'error': entry.get('error'), 'sync_note': entry.get('sync_note'),
                           'progress': dict(entry.get('progress') or {},
                               status=('interrupted' if not running and (entry.get('progress') or {}).get('status') in ('running', 'waiting')
                                       else (entry.get('progress') or {}).get('status', 'idle')))})
@@ -223,7 +225,21 @@ class SnapshotCache:
         finally:
             engine.dispose()
 
+    def validate_module(self, module, target):
+        if module == 'etf-momentum':
+            head = target.execute(select(Pool.__table__)).mappings().first()
+            if head:
+                if head['rule_version'] not in ('etf_close_momentum_v1', 'etf_close_momentum_v2', 'etf_close_momentum_v3'):
+                    raise SnapshotDataError('请先在聚宽运行计算入库版 ETF/LOF 采集脚本，再同步热度结果。')
+                codes = set(target.scalars(select(Heat.code).where(Heat.trade_date == head['as_of_date'])))
+                if {m['code'] for m in head['members']} - codes:
+                    raise SnapshotDataError('ETF/LOF 最新热度结果尚未完整入库，保留上一快照。')
+
     def copy_module(self, module, full=False):
+        if module in JOURNAL_MODULES:
+            result = copy_results(self, module, full)
+            if result is not None:
+                return result
         if module == 'institution-ownership':
             result = copy_ownership(self, full)
             if result is not None:
@@ -255,15 +271,10 @@ class SnapshotCache:
                     if module == 'institution-ownership':
                         # Legacy fallback cannot certify an existing journal cursor.
                         target.exec_driver_sql('DROP TABLE IF EXISTS ownership_cache_cursor')
-                    count = sync_tables(source, target, tables, module, incremental)
-                    if module == 'etf-momentum':
-                        head = target.execute(select(Pool.__table__)).mappings().first()
-                        if head:
-                            if head['rule_version'] not in ('etf_close_momentum_v1', 'etf_close_momentum_v2', 'etf_close_momentum_v3'):
-                                raise SnapshotDataError('请先在聚宽运行计算入库版 ETF/LOF 采集脚本，再同步热度结果。')
-                            codes = set(target.scalars(select(Heat.code).where(Heat.trade_date == head['as_of_date'])))
-                            if {m['code'] for m in head['members']} - codes:
-                                raise SnapshotDataError('ETF/LOF 最新热度结果尚未完整入库，保留上一快照。')
+                    count = sync_tables(source, target, tables, module, incremental, notes=self.sync_notes)
+                    self.validate_module(module, target)
+                    if module in JOURNAL_MODULES:
+                        target.exec_driver_sql('DROP TABLE IF EXISTS result_sync_cursor_v1')
                     if module == 'industry-momentum':
                         target.execute(text('CREATE INDEX IF NOT EXISTS ix_local_momentum_type_date ON industry_momentum (industry_type, trade_date)'))
                         target.execute(text('CREATE INDEX IF NOT EXISTS ix_local_momentum_history ON industry_momentum (industry_type, industry_code, trade_date)'))
@@ -360,7 +371,7 @@ class SnapshotCache:
                     filename, rows = result
                     if filename != entry.get('file') or not entry.get('updated_at'):
                         entry['updated_at'] = now().isoformat()
-                    entry.update(file=filename, rows=rows, error=None)
+                    entry.update(file=filename, rows=rows, error=None, sync_note=self.sync_notes.get(module))
                     entry['progress'].update(status='complete', stage='同步完成', percent=100, elapsed_seconds=round(time.monotonic()-started, 1))
                     logger.info('Cache refresh complete module=%s rows=%s seconds=%.2f', module, rows, time.monotonic()-started)
                 except SyncCancelled:

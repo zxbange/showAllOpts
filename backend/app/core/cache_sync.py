@@ -163,9 +163,21 @@ def sync_earnings(source, target, tables):
     logger.info('Cache quarter sync quarters=%s downloaded=%s', len(changed), fetched)
 
 
-def sync_tables(source, target, tables, module, incremental):
+def sync_tables(source, target, tables, module, incremental, notes=None):
     report('同步数据表', percent=10)
-    if incremental and module == 'earnings-gap':
+    handled = False
+    if module == 'earnings-gap':
+        from app.core.earnings_sync import sync_quarters
+        handled = sync_quarters(source, target, tables, incremental)
+        if notes is not None:
+            notes[module] = None if handled else '源库未启用完整季度版本，本次使用全量清单对账；升级独立及批量采集器后自动切换季度增量。'
+    if module == 'short-term':
+        from app.core.short_term_sync import sync_short_term
+        sync_short_term(source, target, tables, incremental)
+        handled = True
+    if handled:
+        pass
+    elif incremental and module == 'earnings-gap':
         sync_earnings(source, target, tables)
     else:
         for index, table in enumerate(tables):

@@ -176,6 +176,7 @@ export function CacheControl() {
                         </small>
                       </div>
                     )}
+                    {item.sync_note && <p className="cache-row-error">{item.sync_note}</p>}
                     {item.error &&
                       !['waiting', 'running'].includes(item.progress?.status ?? '') && (
                         <p className="cache-row-error">{item.error}</p>

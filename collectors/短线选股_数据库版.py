@@ -706,11 +706,37 @@ def _short_term_strategy(_apis, _config):
                 'ma_periods': list(MA_PERIODS), 'chart_days': 30, 'adjustment': 'pre', 'retention_trade_days': 3, 'exclude_st': True, 'min_market_cap': 30}
         return meta, selected
 
+    def complete_meta(meta):
+        counts = meta.get('counts') if isinstance(meta, dict) else None
+        return (isinstance(meta, dict) and meta.get('rule_version') == RULE_VERSION
+                and isinstance(counts, dict)
+                and builtins.all(type(counts.get(method)) is int and counts[method] >= 0 for method in METHODS))
+
+    def counts_match(meta, methods):
+        actual = {method: 0 for method in METHODS}
+        for values in methods:
+            if not isinstance(values, list) or not values or not builtins.all(isinstance(value, str) for value in values) or len(values) != len(set(values)):
+                return False
+            if builtins.any(value not in METHODS for value in values):
+                return False
+            for value in values:
+                actual[value] += 1
+        return actual == {method: meta['counts'][method] for method in METHODS}
+
+    def complete_day(session, head):
+        if not complete_meta(head.payload):
+            return False
+        # Read only method lists, not the large chart JSON, when verifying completion.
+        methods = (row[0] for row in session.query(ShortTermStock.payload['methods']).filter_by(trade_date=head.trade_date))
+        return counts_match(head.payload, methods)
+
     def save_day(Session, day, meta, records):
+        if not complete_meta(meta) or not counts_match(meta, (r.get('methods') for r in records)):
+            raise ValueError('短线快照计数或明细不完整，拒绝写入；不能把未计算策略补为零。')
         stamp = china_now()
         with session_scope(Session) as session:
             previous = session.query(ShortTermRun).filter_by(trade_date=day).first()
-            if previous is not None and previous.payload.get('rule_version') == meta.get('rule_version'):
+            if previous is not None and complete_day(session, previous):
                 return False
             # Replace older rules atomically; a failed collection never removes the old snapshot.
             if previous is not None:
@@ -745,7 +771,7 @@ def _short_term_strategy(_apis, _config):
                     session.query(model).filter(model.trade_date < keep_days[0]).delete(synchronize_session=False)
                 session.commit()
                 existing = set(r.trade_date for r in session.query(ShortTermRun).all()
-                               if r.payload.get('rule_version') == RULE_VERSION)
+                               if complete_day(session, r))
             pending = [d for d in keep_days if d <= end and d not in existing]
             for day in _progress_items(pending, '短线选股交易日', str):
                 meta, records = collect(day)
