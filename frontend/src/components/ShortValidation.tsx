@@ -1,13 +1,5 @@
 import { useEffect, useState, useRef } from 'react'
-import {
-  ShieldCheck,
-  LockKeyhole,
-  Play,
-  Database,
-  SlidersHorizontal,
-  History,
-  AlertTriangle,
-} from 'lucide-react'
+import { ShieldCheck, LockKeyhole, Play, Database, SlidersHorizontal, History } from 'lucide-react'
 import { ValidationResults } from './ValidationResults'
 import { ValidationDeleteDialog } from './ValidationDeleteDialog'
 import { validationRequest, type ValidationAuth } from '../api/validation'
@@ -32,6 +24,7 @@ type Job = {
   source?: SourceRef | null
   cancel_requested_at?: string
   cancelled_at?: string
+  source_name?: string
   input_mode?: string
   stage_started_at?: string
   timings?: Record<string, number>
@@ -70,13 +63,6 @@ export function ShortValidation() {
   const transportAllowed =
     window.location.protocol === 'https:' ||
     (usingHttp && (mode === 'pair' ? confirmed : allowHttp))
-  const warning =
-    usingHttp && (mode === 'pair' || allowHttp) ? (
-      <p className="validation-warning" role="alert">
-        <AlertTriangle size={17} aria-hidden="true" />{' '}
-        HTTP兼容模式已开启：配对码、管理凭证、数据库密码及查询结果以明文传输，可能被窃听或篡改。后台加密不能保护传输过程。
-      </p>
-    ) : null
   useEffect(() => {
     let active = true
     fetch('/api/v1/short-term/validation/access', {
@@ -115,7 +101,6 @@ export function ShortValidation() {
   if (unlocked)
     return (
       <>
-        {warning}
         <ValidationPanel
           adminKey={unlocked}
           onLock={async () => {
@@ -172,7 +157,6 @@ export function ShortValidation() {
       ) : (
         <p className="validation-hint">正在确认会话，请稍候。</p>
       )}
-      {warning}
       {usingHttp && mode === 'pair' && (
         <label className="validation-consent">
           <input
@@ -565,7 +549,7 @@ function ValidationPanel({ adminKey, onLock }: { adminKey: ValidationAuth; onLoc
                 disabled={busy}
                 onClick={() => void operate('/' + job.id + '/cancel', {})}
               >
-                取消任务（不可继续）
+                取消任务
               </button>
             )}
             <button
@@ -591,7 +575,7 @@ function ValidationPanel({ adminKey, onLock }: { adminKey: ValidationAuth; onLoc
             </p>
           )}
           <details className="validation-disclosure validation-task-meta">
-            <summary>任务参数与数据源版本</summary>
+            <summary>任务参数与数据源</summary>
             <p>统计版本：{job.version}</p>
             <p>
               输入方式：
@@ -619,10 +603,9 @@ function ValidationPanel({ adminKey, onLock }: { adminKey: ValidationAuth; onLoc
                 : `输入 ${job.captured}/${job.total} · 已计算 ${job.done}/${job.total}`}
             </p>
             <p>
-              数据源版本：
-              {job.source
-                ? `${job.source.id === 'service' ? '服务默认' : job.source.id} / v${job.source.revision}`
-                : '旧任务冻结输入'}
+              数据库：
+              {job.source_name ||
+                (job.source?.id === 'service' ? '服务默认数据库' : '已保存数据库')}
             </p>
           </details>
           {job.status === 'completed' && (

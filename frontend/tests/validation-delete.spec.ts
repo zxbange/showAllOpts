@@ -148,7 +148,7 @@ test('running and cancelling cannot delete; late polling cannot resurrect a dele
   await page.goto('/short-term/validation')
   const trigger = page.getByRole('button', { name: '删除记录', exact: true })
   await expect(trigger).toBeDisabled()
-  await page.getByRole('button', { name: '取消任务（不可继续）' }).click()
+  await page.getByRole('button', { name: '取消任务' }).click()
   await expect(trigger).toBeDisabled()
   job.status = 'cancelled'
   await expect(trigger).toBeEnabled({ timeout: 6000 })

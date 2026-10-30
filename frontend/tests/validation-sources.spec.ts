@@ -67,10 +67,10 @@ test('admin config test-save keeps password in request only, version selection a
     return r.fulfill({ json: { jobs: [job()] } })
   })
   await page.goto('/short-term/validation')
-  await expect(page.getByText(/HTTP兼容模式已开启/)).toBeVisible()
+  await expect(page.getByText(/HTTP兼容模式已开启/)).toHaveCount(0)
   await page.getByLabel('验证管理密钥').fill('test-admin-key')
   await page.getByRole('button', { name: '解锁验证管理' }).click()
-  await expect(page.getByText(/HTTP兼容模式已开启/)).toBeVisible()
+  await expect(page.getByText(/HTTP兼容模式已开启/)).toHaveCount(0)
   await page.getByText('配置新的验证任务', { exact: false }).click()
   await page.getByText('新增或编辑数据库配置', { exact: true }).click()
   for (const [label, value] of [
@@ -81,8 +81,8 @@ test('admin config test-save keeps password in request only, version selection a
     ['数据库密码', 'temporary-db-password'],
   ])
     await page.getByLabel(label, { exact: true }).fill(value)
-  await page.getByRole('button', { name: '测试连接（只读）', exact: true }).click()
-  await expect(page.getByText('只读连接测试通过')).toBeVisible()
+  await page.getByRole('button', { name: '测试连接', exact: true }).click()
+  await expect(page.getByRole('button', { name: '测试连接', exact: true })).toHaveClass(/probe-success/)
   await expect(page.getByLabel('数据库密码', { exact: true })).toHaveValue('temporary-db-password')
   await page.getByRole('button', { name: '加密保存并使用' }).click()
   await expect(page.getByText('模拟保存失败，请修正后重试')).toBeVisible()
@@ -93,7 +93,7 @@ test('admin config test-save keeps password in request only, version selection a
   await page.getByRole('button', { name: '开始验证', exact: true }).click()
   await page.getByRole('button', { name: '暂停任务', exact: true }).click()
   await page.getByRole('button', { name: '从断点重试', exact: true }).click()
-  await page.getByRole('button', { name: '取消任务（不可继续）', exact: true }).click()
+  await page.getByRole('button', { name: '取消任务', exact: true }).click()
   await expect(page.getByText('正在取消，等待在途查询', { exact: false })).toBeVisible()
   await expect(page.getByRole('button', { name: '从断点重试', exact: true })).toHaveCount(0)
   status = 'cancelled'

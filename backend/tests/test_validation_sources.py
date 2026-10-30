@@ -211,3 +211,84 @@ def test_http_opt_in_preserves_security(secure, config, monkeypatch):
     assert client.post(url+'/sources/save', json=config).status_code == 409
     settings.validation_allow_http = False
     assert client.get(url+'/jobs').status_code == 403
+
+
+def test_equal_config_saves_and_probe_do_not_version(secure, config, monkeypatch):
+    jobs, sources, _, client = secure
+    auth(client)
+    first = sources.save(config)
+    body = {**config, **first}
+    monkeypatch.setattr(sources, 'test', lambda c: {'ok': True, 'message': '只读测试'})
+    assert client.post('/short-term/validation/sources/test', json=body).status_code == 200
+    for password in (config['password'], None):
+        response = client.post('/short-term/validation/sources/save', json={**body, 'password': password})
+        assert response.status_code == 200
+        assert response.json()['revision'] == 1
+        assert 'password' not in response.json()
+    assert sources.save({**config, 'host': 'DB.EXAMPLE', 'port': '3306'}, **{'ident': first['id'], 'expected_revision': 1}) == first
+    assert sources.save(config) == first  # same named connection, including another browser
+    with jobs.db() as db:
+        assert db.execute('SELECT count(*) FROM validation_sources').fetchone()[0] == 1
+    changed = sources.save({**config, 'password': 'different'}, first['id'], 1)
+    assert changed['revision'] == 2
+    assert sources.get(first['id'], 1) == config
+    with pytest.raises(SourceError):
+        sources.save({**config, 'password': None}, first['id'], 1)
+    assert sources.save({**config, 'password': 'different'}, first['id'], 1) == changed
+    assert sources.save({**config, 'password': None}, first['id'], 2) == changed
+    with pytest.raises(SourceError):
+        sources.save({**config, 'database': 'different'})
+
+
+def test_concurrent_equal_edits_and_new_names(secure, config):
+    from concurrent.futures import ThreadPoolExecutor
+    jobs, sources, settings, _ = secure
+    first = sources.save(config)
+    def save(_):
+        separate = ValidationSources(ValidationJobs(settings, jobs.engine), settings)
+        return separate.save({**config, 'password': 'changed'}, first['id'], 1)
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        refs = list(pool.map(save, range(4)))
+    assert all(r == refs[0] and r['revision'] == 2 for r in refs)
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        created = list(pool.map(lambda _: sources.save({**config, 'name': '另一连接'}), range(4)))
+    assert all(r == created[0] for r in created)
+    with pytest.raises(SourceError, match='同名'):
+        sources.save({**config, 'name': '另一连接'}, first['id'], 2)
+
+
+@pytest.mark.parametrize('change', [dict(database='PRIVATE-DB'), dict(username='PRIVATE-USER'),
+    dict(password='unique-private-password '), dict(tls='required'), dict(ca_pem='certificate')])
+def test_semantic_changes_remain_distinct(secure, config, change):
+    _, sources, _, _ = secure
+    first = sources.save(config)
+    assert sources.save({**config, **change}, first['id'], 1)['revision'] == 2
+
+
+def test_tls_defaults_invalid_null_and_named_task(secure, config):
+    _, sources, _, client = secure
+    auth(client)
+    first = sources.save(config)
+    body = {**config, **first}
+    body.pop('tls'); body.pop('ca_pem')
+    assert client.post('/short-term/validation/sources/save', json=body).json()['revision'] == 1
+    for value in (None, '', 'VERIFY'):
+        assert client.post('/short-term/validation/sources/save', json={**body, 'tls': value}).status_code == 422
+    task = client.post('/short-term/validation/jobs', json={'methods': ['oversold'], 'source': first}).json()
+    assert task['source_name'] == config['name']
+    sources.save({**config, 'name': '重命名'}, first['id'], 1)
+    listing = client.get('/short-term/validation/jobs').json()['jobs']
+    assert listing[0]['source'] == first and listing[0]['source_name'] == config['name']
+
+
+def test_preexisting_duplicate_names_can_save_unchanged(secure, config):
+    jobs, sources, _, _ = secure
+    first = sources.save(config)
+    second = sources.save({**config, 'name': 'old duplicate'})
+    cipher = sources.cipher()
+    with jobs.db() as db:
+        db.execute('UPDATE validation_sources SET ciphertext=? WHERE id=?',
+            (cipher.encrypt(json.dumps(dict(id=second['id'], revision=1, config=config)).encode()), second['id']))
+    assert sources.save(config, first['id'], 1) == first
+    assert sources.save(config, second['id'], 1) == second
+    assert len(sources.list()) == 2

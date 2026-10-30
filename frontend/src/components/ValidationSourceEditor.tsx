@@ -1,4 +1,4 @@
-import { useEffect, useState, useImperativeHandle, forwardRef } from 'react'
+import { useEffect, useRef, useState, useImperativeHandle, forwardRef } from 'react'
 import { validationRequest, type ValidationAuth } from '../api/validation'
 export type SourceRef = { id: string; revision: number }
 type Source = SourceRef & {
@@ -33,9 +33,25 @@ export const ValidationSourceEditor = forwardRef<
   const [form, setForm] = useState(empty)
   const [editing, setEditing] = useState<SourceRef | null>(null)
   const [password, setPassword] = useState('')
+  const savedPassword = !!editing && sources.some((s) => s.id === editing.id && s.password_set)
   const [message, setMessage] = useState('')
   const [busy, setBusy] = useState(false)
   const [dirty, setDirty] = useState(false)
+  const [saving, setSaving] = useState(false)
+  const [testState, setTestState] = useState<'idle' | 'testing' | 'success' | 'error'>('idle')
+  const requestGeneration = useRef(0)
+  const inFlight = useRef(false)
+  function clearTest() {
+    requestGeneration.current++
+    setTestState('idle')
+    setMessage('')
+  }
+  useEffect(() => {
+    clearTest()
+    return () => {
+      requestGeneration.current++
+    }
+  }, [selected?.id, selected?.revision, adminKey])
   const paired = typeof adminKey !== 'string'
   useImperativeHandle(ref, () => ({
     prepare: async () => {
@@ -62,7 +78,15 @@ export const ValidationSourceEditor = forwardRef<
     }
   }, [adminKey])
   async function submit(action: 'save' | 'test', rethrow = false): Promise<SourceRef | undefined> {
+    if (inFlight.current) {
+      if (rethrow) throw new Error('请等待当前连接操作完成')
+      return
+    }
+    inFlight.current = true
+    const generation = requestGeneration.current
     setBusy(true)
+    setSaving(action === 'save')
+    if (action === 'test') setTestState('testing')
     setMessage('')
     try {
       const body = { ...form, ...(editing || {}), password: editing && !password ? null : password }
@@ -73,21 +97,26 @@ export const ValidationSourceEditor = forwardRef<
         onSelect({ id: result.id, revision: result.revision })
         setPassword('')
         setDirty(false)
-        setMessage('配置已加密保存并选用新版本；已有任务仍绑定原版本。')
+        setMessage('配置已加密保存并选用；已有任务继续使用启动时的连接信息。')
         return { id: result.id, revision: result.revision }
       } else {
-        const result = await validationRequest<{ message: string }>(adminKey, '/sources/test', body)
-        setMessage(result.message)
+        await validationRequest(adminKey, '/sources/test', body)
+        if (generation === requestGeneration.current) setTestState('success')
       }
     } catch (e) {
-      setMessage(e instanceof Error ? e.message : '操作失败')
+      if (generation === requestGeneration.current) {
+        setMessage(e instanceof Error ? e.message : '操作失败')
+        if (action === 'test') setTestState('error')
+      }
       if (rethrow) throw e
     } finally {
+      inFlight.current = false
       setBusy(false)
+      setSaving(false)
     }
   }
   return (
-    <fieldset className="validation-source" disabled={busy}>
+    <fieldset className="validation-source" disabled={saving}>
       <legend className="sr-only">验证数据库（独立于其他模块）</legend>
       <div className="validation-source-picker">
         <label>
@@ -96,6 +125,7 @@ export const ValidationSourceEditor = forwardRef<
             aria-label="验证数据源"
             value={selected ? `${selected.id}:${selected.revision}` : ''}
             onChange={(e) => {
+              clearTest()
               const source = sources.find((s) => `${s.id}:${s.revision}` === e.target.value)
               onSelect(source ? { id: source.id, revision: source.revision } : null)
               setDirty(false)
@@ -104,12 +134,10 @@ export const ValidationSourceEditor = forwardRef<
               setForm(source ?? empty)
             }}
           >
-            <option value="">
-              {paired ? '填写新数据库连接' : '服务默认数据库（创建任务时绑定配置版本）'}
-            </option>
+            <option value="">{paired ? '填写新数据库连接' : '服务默认数据库'}</option>
             {sources.map((s) => (
               <option key={s.id} value={`${s.id}:${s.revision}`}>
-                {s.name} · v{s.revision}
+                {s.name}
               </option>
             ))}
           </select>
@@ -126,7 +154,7 @@ export const ValidationSourceEditor = forwardRef<
               setForm(source)
               setEditing({ id: source.id, revision: source.revision })
               setPassword('')
-              setMessage('密码不回显；编辑时留空保留原密码。')
+              clearTest()
             }
           }}
         >
@@ -135,14 +163,6 @@ export const ValidationSourceEditor = forwardRef<
       </div>
       <details className="validation-connection" open={paired || undefined}>
         <summary>新增或编辑数据库配置</summary>
-        <p className="validation-hint">
-          只读连接研究数据源，独立于其他模块。密码加密保存，不在浏览器持久存储。
-        </p>
-        <p>
-          {editing
-            ? `编辑 v${editing.revision}，保存将创建新版本；密码留空保留。`
-            : '新增配置；请填写连接信息。'}
-        </p>
         <div className="validation-source-fields">
           {(['name', 'host', 'port', 'database', 'username'] as const).map((field) => (
             <label key={field} className={'validation-field-' + field}>
@@ -171,6 +191,7 @@ export const ValidationSourceEditor = forwardRef<
                 autoComplete="off"
                 value={form[field]}
                 onChange={(e) => {
+                  clearTest()
                   setDirty(true)
                   setForm((old) => ({
                     ...old,
@@ -186,12 +207,20 @@ export const ValidationSourceEditor = forwardRef<
               aria-label="数据库密码"
               type="password"
               autoComplete="new-password"
+              placeholder={savedPassword ? '********' : undefined}
+              aria-describedby="validation-password-help"
               value={password}
               onChange={(e) => {
+                clearTest()
                 setDirty(true)
                 setPassword(e.target.value)
               }}
             />
+            <small id="validation-password-help">
+              {savedPassword
+                ? '******** 表示已保存密码；输入可替换，清空则保留原密码。'
+                : '请输入数据库密码。'}
+            </small>
           </label>
         </div>
         <details className="validation-disclosure validation-tls">
@@ -202,6 +231,7 @@ export const ValidationSourceEditor = forwardRef<
               aria-label="数据库TLS"
               value={form.tls}
               onChange={(e) => {
+                clearTest()
                 setDirty(true)
                 setForm((old) => ({ ...old, tls: e.target.value }))
               }}
@@ -217,6 +247,7 @@ export const ValidationSourceEditor = forwardRef<
               aria-label="数据库CA证书"
               value={form.ca_pem}
               onChange={(e) => {
+                clearTest()
                 setDirty(true)
                 setForm((old) => ({ ...old, ca_pem: e.target.value }))
               }}
@@ -224,15 +255,39 @@ export const ValidationSourceEditor = forwardRef<
           </label>
         </details>
         <div className="short-controls validation-source-actions">
-          <button className="button" onClick={() => void submit('test')}>
-            测试连接（只读）
+          <button
+            className={'button validation-probe probe-' + testState}
+            disabled={busy}
+            aria-busy={busy && !saving}
+            onClick={() => void submit('test')}
+          >
+            测试连接{' '}
+            <span aria-hidden="true">
+              {busy && !saving
+                ? '…'
+                : testState === 'success'
+                  ? '✓'
+                  : testState === 'error'
+                    ? '✕'
+                    : ''}
+            </span>
           </button>
-          <button className="button" onClick={() => void submit('save')}>
+          <span className="sr-only" role="status">
+            {busy && !saving
+              ? '正在测试连接'
+              : testState === 'success'
+                ? '连接成功'
+                : testState === 'error'
+                  ? '连接失败'
+                  : '连接尚未测试'}
+          </span>
+          <button className="button" disabled={busy} onClick={() => void submit('save')}>
             加密保存并使用
           </button>
           <button
             className="button button-quiet"
             onClick={() => {
+              clearTest()
               setEditing(null)
               setDirty(false)
               onSelect(null)

@@ -82,7 +82,7 @@ test('pair, enter database, select strategies and start directly; refresh, pause
   await page.getByLabel('我确认在HTTP上由本人操作并接受明文传输风险').check()
   await page.getByLabel('一次性配对码').fill('one-time-console-code')
   await page.getByRole('button', { name: '配对并进入' }).click()
-  await expect(page.getByText(/HTTP兼容模式已开启/)).toBeVisible()
+  await expect(page.getByText(/HTTP兼容模式已开启/)).toHaveCount(0)
   for (const [label, value] of [
     ['数据库地址', 'db.example'],
     ['数据库名', 'research'],
@@ -102,7 +102,7 @@ test('pair, enter database, select strategies and start directly; refresh, pause
   await expect(page.getByRole('heading', { name: '补票龙 · 蓄力龙 — 运行中' })).toBeVisible()
   await page.getByRole('button', { name: '暂停任务', exact: true }).click()
   await page.getByRole('button', { name: '从断点重试', exact: true }).click()
-  await page.getByRole('button', { name: '取消任务（不可继续）', exact: true }).click()
+  await page.getByRole('button', { name: '取消任务', exact: true }).click()
   await expect(page.getByRole('button', { name: '从断点重试', exact: true })).toHaveCount(0)
   expect(
     await page.evaluate(() => JSON.stringify({ ...localStorage, ...sessionStorage })),

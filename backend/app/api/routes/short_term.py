@@ -113,8 +113,17 @@ def validation_admin(request: Request, response: Response):
     return service
 
 
-def public_job(job):
-    return {key: value for key, value in job.items() if key not in ('calendar', 'codes')}
+def public_job(job, service=None):
+    result = {key: value for key, value in job.items() if key not in ('calendar', 'codes')}
+    result['source_name'] = '未绑定数据源'
+    if job.get('source'):
+        result['source_name'] = '已保存数据库（名称暂不可用）'
+        if service is not None and service.sources is not None:
+            try:
+                result['source_name'] = service.sources.get(job['source']['id'], job['source']['revision'])['name']
+            except SourceError:
+                pass  # Keep historical tasks readable even if their key is unavailable.
+    return result
 
 
 @router.get('/validation/access')
@@ -179,7 +188,7 @@ def logout_validation(request: Request, response: Response):
 
 @router.get('/validation/jobs')
 def validation_jobs(service=Depends(validation_admin)):
-    return {'jobs': [public_job(job) for job in service.list()]}
+    return {'jobs': [public_job(job, service) for job in service.list()]}
 
 
 @router.post('/validation/jobs')
@@ -188,7 +197,7 @@ def create_validation(body: ValidationRequest, request: Request, service=Depends
         source = body.source.model_dump() if body.source else None
         if getattr(request.state, 'validation_paired', False) and (source is None or source['id'] == 'service'):
             raise ValueError('请先填写并保存要验证的数据库连接')
-        return public_job(service.create(body.methods, body.start, body.end, body.observed, body.request_id, source))
+        return public_job(service.create(body.methods, body.start, body.end, body.observed, body.request_id, source), service)
     except ValueError as exc:
         raise HTTPException(422, str(exc)) from None
 
@@ -207,7 +216,7 @@ def delete_validation(ident: str, service=Depends(validation_admin)):
 @router.post('/validation/jobs/{ident}/{action}')
 def validation_action(ident: str, action: Literal['retry', 'pause', 'cancel'], service=Depends(validation_admin)):
     try:
-        return public_job(service.action(ident, action))
+        return public_job(service.action(ident, action), service)
     except KeyError:
         raise HTTPException(404, '任务不存在') from None
     except ValueError as exc:

@@ -2,28 +2,6 @@
 .validation-page {
   --validation-radius: 18px;
 }
-.validation-page .page-header .module-card-switch {
-  display: grid;
-  grid-template-columns: repeat(5, minmax(0, 1fr));
-  gap: 8px;
-  margin-top: 20px;
-}
-.validation-page .page-header .module-card {
-  min-width: 0;
-  min-height: 65px;
-  padding: 12px;
-  gap: 9px;
-  border-radius: 12px;
-}
-.validation-page .page-header .module-card-text strong {
-  font-size: 13px;
-}
-.validation-page .page-header .module-card-text small {
-  font-size: 11px;
-}
-.validation-page .module-card-count {
-  display: none;
-}
 .validation-page .short-validation {
   margin: 20px 0;
   padding: 0;
@@ -296,9 +274,9 @@
   margin-top: 14px;
 }
 .validation-source-actions .button:first-child {
-  border: 1px solid #b6d7d0;
-  color: var(--jade);
-  background: #f3faf7;
+  border: 1px solid var(--border);
+  color: var(--text);
+  background: var(--panel);
 }
 .validation-page .validation-disclosure {
   border-top: 1px solid var(--border);
@@ -618,26 +596,6 @@
   }
 }
 @media (max-width: 700px) {
-  .validation-page .page-header .module-card-switch {
-    display: flex;
-    flex-wrap: nowrap;
-    overflow-x: auto;
-    padding-bottom: 6px;
-    gap: 7px;
-  }
-  .validation-page .page-header .module-card {
-    flex: 0 0 auto;
-    min-height: 42px;
-    padding: 10px 12px;
-    gap: 7px;
-  }
-  .validation-page .page-header .module-card-text small {
-    display: none;
-  }
-  .validation-page .page-header .module-card svg {
-    width: 16px;
-    height: 16px;
-  }
   .validation-page .validation-card,
   .validation-page .validation-job,
   .validation-page .validation-pair-card {
@@ -695,16 +653,6 @@
   .validation-page .validation-table th,
   .validation-page .validation-table td {
     padding: 11px 12px;
-  }
-}
-@media (max-width: 700px) {
-  .validation-page .page-header .module-card-switch {
-    display: grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    overflow: visible;
-  }
-  .validation-page .page-header .module-card.active {
-    grid-column: 1/-1;
   }
 }
 .validation-setup {
@@ -772,4 +720,15 @@
 .validation-page .validation-delete-dialog .validation-job-actions {
   margin-top: 24px;
   justify-content: flex-end;
+}
+
+.validation-source .validation-probe.probe-success {
+  color: #166534;
+  border-color: #86c79a;
+  background: #f0fdf4;
+}
+.validation-source .validation-probe.probe-error {
+  color: #b91c1c;
+  border-color: #f0a5a5;
+  background: #fef2f2;
 }
