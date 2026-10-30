@@ -21,7 +21,7 @@ def setup(tmp_path):
     return ValidationJobs(settings,engine),settings,engine,calendar
 
 def create(jobs,calendar,methods=None):
-    return jobs.create(methods or ['oversold'],calendar[170].date(),calendar[190].date(),calendar[195].date())
+    return jobs.create(methods or ['oversold'],calendar[170].date(),calendar[190].date(),calendar[195].date(), input_mode='frozen')
 
 def finish(jobs,ident):
     for _ in range(15):

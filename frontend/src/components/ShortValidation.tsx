@@ -32,6 +32,9 @@ type Job = {
   source?: SourceRef | null
   cancel_requested_at?: string
   cancelled_at?: string
+  input_mode?: string
+  stage_started_at?: string
+  timings?: Record<string, number>
   captured: number
   updated_at: string
   error: string | null
@@ -343,7 +346,7 @@ function ValidationPanel({ adminKey, onLock }: { adminKey: ValidationAuth; onLoc
                 交易日收盘，严格上涨计胜，持平计入分母；各期限仅计有效样本，停牌、缺行情及待观察单列。这是形态统计，非逐笔实盘回测，不含费用，不代表可成交收益。
               </p>
               <p>
-                沿用原90日形态窗口；红悬停的价格取整与统一股票池可能使信号不同于生产选股。输入冻结后从本地断点计算，修复源数据后可准备重新读取数据并创建新任务；重试会复用已保存输入。
+                沿用原90日形态窗口；红悬停的价格取整与统一股票池可能使信号不同于生产选股。新任务按静态源分批读取、边算边提交，不再预先复制全部行情。重试跳过已提交股票，重读未提交部分；任务期间请保持源历史数据不变，若历史数据修订请新建任务。旧冻结任务仍复用已保存输入。
               </p>
             </details>
             <fieldset className="validation-strategies">
@@ -454,7 +457,9 @@ function ValidationPanel({ adminKey, onLock }: { adminKey: ValidationAuth; onLoc
                 准备重新读取数据
               </button>
             </div>
-            <p className="validation-hint">启动时自动保存连接。关闭页面后，后台任务继续运行。</p>
+            <p className="validation-hint">
+              新任务每批最多20股，边读边算并保存断点，不预先冻结全部行情。任务期间请保持源历史数据不变。启动时自动保存连接，关闭页面后后台继续运行。
+            </p>
           </div>
         </div>
       </details>
@@ -498,13 +503,19 @@ function ValidationPanel({ adminKey, onLock }: { adminKey: ValidationAuth; onLoc
           {job.status !== 'completed' && (
             <div className="validation-progress">
               <p role="status">
-                {job.stage} · 输入 {job.captured}/{job.total} · 已计算 {job.done}/{job.total}
+                {job.stage} ·{' '}
+                {job.input_mode === 'static-batch-v1'
+                  ? `已提交 ${job.done}/${job.total}`
+                  : `输入 ${job.captured}/${job.total} · 已计算 ${job.done}/${job.total}`}
               </p>
               <div className="validation-progress-grid">
-                {[
-                  ['冻结输入', job.captured],
-                  ['信号计算', job.done],
-                ].map(([label, value]) => (
+                {(job.input_mode === 'static-batch-v1'
+                  ? [['已提交股票', job.done]]
+                  : [
+                      ['冻结输入', job.captured],
+                      ['信号计算', job.done],
+                    ]
+                ).map(([label, value]) => (
                   <label key={label}>
                     {label}
                     <span>
@@ -583,7 +594,29 @@ function ValidationPanel({ adminKey, onLock }: { adminKey: ValidationAuth; onLoc
             <summary>任务参数与数据源版本</summary>
             <p>统计版本：{job.version}</p>
             <p>
-              输入 {job.captured}/{job.total} · 已计算 {job.done}/{job.total}
+              输入方式：
+              {job.input_mode === 'static-batch-v1'
+                ? '静态源分批读取（每批最多20股，逐股提交断点）'
+                : '旧模式：先冻结输入，再计算'}
+            </p>
+            {job.stage_started_at && (
+              <p>阶段开始：{new Date(job.stage_started_at).toLocaleString('zh-CN')}</p>
+            )}
+            {job.timings && (
+              <p>
+                最近阶段耗时（秒，非累计）：
+                {Object.entries(job.timings)
+                  .map(
+                    ([phase, seconds]) =>
+                      `${({ connect: '连接', ultra_research_bar: '行情读取', ultra_research_universe: '快照读取', compute: '单股计算', commit: '断点提交' } as Record<string, string>)[phase] || phase} ${seconds.toFixed(3)}`,
+                  )
+                  .join(' · ')}
+              </p>
+            )}
+            <p>
+              {job.input_mode === 'static-batch-v1'
+                ? `已提交 ${job.done}/${job.total}`
+                : `输入 ${job.captured}/${job.total} · 已计算 ${job.done}/${job.total}`}
             </p>
             <p>
               数据源版本：

@@ -2,7 +2,8 @@
 
 The OS lock spans a work unit; SQLite atomically commits results and cursor.
 All workers may poll, but only one can perform a unit, including after restart.
-Inputs are frozen before calculation. A retry never reloads a committed input.
+New tasks read bounded static-source batches and commit each stock's results.
+Legacy tasks retain their frozen inputs and never reload a committed input.
 """
 from contextlib import contextmanager, nullcontext
 from datetime import date, datetime, timezone
@@ -11,12 +12,13 @@ import json
 import logging
 import sqlite3
 import threading
+import time
 import uuid
 
 import pandas as pd
 import numpy as np
 import portalocker
-from sqlalchemy import text
+from sqlalchemy import text, bindparam
 
 from app.services import short_statistics as stats
 
@@ -24,6 +26,10 @@ logger = logging.getLogger(__name__)
 VERSION = 'four-close-v1'
 METHODS = {'bukou': '补票龙', 'redhover': '红悬停龙', 'xuli': '蓄力龙', 'oversold': '超跌后止跌反弹'}
 MAX_ROWS = 4000
+BATCH_SIZE = 20
+STATIC_MODE = 'static-batch-v1'
+BAR_COLUMNS = 'trade_date, code, open, high, low, close, adj_open, adj_high, adj_low, adj_close, volume, money, paused, high_limit, low_limit'
+UNIVERSE_COLUMNS = 'trade_date, code, display_name, listed_date, eligible, is_st, market_cap'
 
 
 class DeleteConflict(ValueError):
@@ -109,13 +115,15 @@ class ValidationJobs:
             raise KeyError(ident)
         return json.loads(row[0])
 
-    def create(self, methods, start, end, observed, request_id=None, source=None):
+    def create(self, methods, start, end, observed, request_id=None, source=None, input_mode=STATIC_MODE):
         if self.sources is not None:
             if source is None:
                 source = self.sources.freeze_service()
             else:
                 self.sources.get(source['id'], source['revision'])
-        params = dict(source=source, methods=sorted(set(methods)), start=str(start), end=str(end) if end else None, observed=str(observed) if observed else None, version=VERSION)
+        if input_mode not in (STATIC_MODE, 'frozen'):
+            raise ValueError('不支持的输入模式')
+        params = dict(input_mode=input_mode, source=source, methods=sorted(set(methods)), start=str(start), end=str(end) if end else None, observed=str(observed) if observed else None, version=VERSION)
         if not params['methods'] or any(m not in METHODS for m in params['methods']):
             raise ValueError('请选择至少一种支持的策略')
         if not date(2000, 1, 1) <= start <= (end or observed or date.today()) <= (observed or date.today()) <= date.today() or ((observed or date.today())-start).days > 3660:
@@ -249,12 +257,23 @@ class ValidationJobs:
             try:
                 if job['version'] != VERSION:
                     raise ValueError('任务算法版本已变化，请创建新任务')
-                needs_source = 'calendar' not in job or job['captured'] < job['total']
+                if job.get('input_mode') not in (None, 'frozen', STATIC_MODE):
+                    raise ValueError('任务输入模式不受当前版本支持，请创建新任务')
+                needs_source = ('calendar' not in job or
+                                (job['done'] < job['total'] if job.get('input_mode') == STATIC_MODE
+                                 else job['captured'] < job['total']))
                 if self.sources is not None and needs_source and not job.get('source'):
                     raise ValueError('旧任务未绑定不可变数据源，请新建任务；已完成输入冻结的旧任务仍可继续')
                 context = self.sources.engine(job['source']) if self.sources is not None and needs_source else nullcontext(self.engine)
                 with context as source_engine:
                     self.work(job, source_engine)
+                if job.get('timings'):
+                    with self.db() as db:
+                        db.execute('BEGIN IMMEDIATE')
+                        current = self.get(job['id'], db)
+                        if current['generation'] == job['generation'] and current['status'] in ('running', 'completed'):
+                            current['timings'] = job['timings']
+                            self.save(db, current)
             except Exception as exc:
                 if self.stop_event.is_set():
                     return False
@@ -263,6 +282,7 @@ class ValidationJobs:
                     db.execute('BEGIN IMMEDIATE')
                     current = self.get(job['id'], db)
                     if current['status'] in ('queued', 'running') and current['generation'] == job['generation']:
+                        current['timings'] = job.get('timings', {})
                         current['status'] = 'failed'
                         # Only our data validation messages are exposed; never driver messages.
                         current['error'] = str(exc) if isinstance(exc, ValueError) else type(exc).__name__ + '：读取或计算失败，请检查数据/连接后重试'
@@ -281,6 +301,7 @@ class ValidationJobs:
             if job['status'] not in ('queued', 'running') or job['generation'] != generation or self.stop_event.is_set():
                 return False
             job['status'], job['stage'] = 'running', label
+            job['stage_started_at'] = now()
             self.save(db, job)
         return True
 
@@ -315,7 +336,10 @@ class ValidationJobs:
                 self.save(db, current)
             return
         calendar = pd.DatetimeIndex(pd.to_datetime(job['calendar']))
-        if job['captured'] < job['total']:
+        if job.get('input_mode') == STATIC_MODE and job['done'] < job['total']:
+            self.stream_batch(job, source_engine, calendar)
+            return
+        if job.get('input_mode') != STATIC_MODE and job['captured'] < job['total']:
             code = job['codes'][job['captured']]
             if not self.stage(ident, '冻结输入 '+code+'（单股有界读取，超时20秒）', job['generation']):
                 return
@@ -349,6 +373,69 @@ class ValidationJobs:
             with self.db() as db:
                 row = db.execute('SELECT bars,universe FROM stocks WHERE job=? AND code=?', (ident, code)).fetchone()
             bars, universe = map(frame_read, row)
+            self.compute_stock(job, code, bars, universe, calendar)
+            return
+        if not self.stage(ident, '汇总已提交的策略信号', job['generation']):
+            return
+        if not job['base_samples']:
+            raise ValueError('没有可用基础样本；请检查预热、行情与历史快照，不能当作零胜率')
+        summary, windows = self.summarize(ident, [METHODS[m] for m in job['methods']])
+        with self.db() as db:
+            db.execute('BEGIN IMMEDIATE')
+            current = self.get(ident, db)
+            if current['status'] != 'running' or current['generation'] != job['generation']:
+                return
+            current.update(status='completed', stage='完成', summary=summary, windows=windows)
+            self.save(db, current)
+
+    @contextmanager
+    def timed(self, job, phase):
+        started = time.monotonic()
+        try:
+            yield
+        finally:
+            seconds = round(time.monotonic() - started, 3)
+            job.setdefault('timings', {})[phase] = seconds
+            logger.info('Validation phase job=%s phase=%s seconds=%.3f', job['id'], phase, seconds)
+
+    def stream_batch(self, job, source_engine, calendar):
+        codes = job['codes'][job['done']:job['done'] + BATCH_SIZE]
+        label = '读取批次 {}–{} / {}（静态源，尚未提交的股票重试时重读）'.format(
+            job['done'] + 1, job['done'] + len(codes), job['total'])
+        if not self.stage(job['id'], label, job['generation']):
+            return
+        frames = []
+        with self.timed(job, 'connect'):
+            connection = source_engine.connect()
+        with connection, connection.begin():
+            for table, columns, extra in (
+                ('ultra_research_bar', BAR_COLUMNS, "AND asset_type='stock'"),
+                ('ultra_research_universe', UNIVERSE_COLUMNS, '')):
+                if not self.stage(job['id'], label + ' / ' + table, job['generation']):
+                    return
+                # A hard aggregate limit bounds buffering even if the source schema is malformed.
+                limit = len(codes) * MAX_ROWS + 1
+                query = text(f"SELECT {columns} FROM {table} WHERE code IN :codes "
+                             f"AND trade_date BETWEEN :first AND :last {extra} "
+                             f"ORDER BY code,trade_date LIMIT {limit}").bindparams(bindparam('codes', expanding=True))
+                with self.timed(job, table):
+                    frame = pd.read_sql_query(query, connection, params=dict(
+                        codes=codes, first=calendar[0].date(), last=calendar[-1].date()))
+                if len(frame) >= limit or (not frame.empty and frame.groupby('code').size().max() > MAX_ROWS):
+                    raise ValueError('单股行情超过4000行，请缩短日期区间或检查重复数据')
+                frames.append(frame)
+        # Source transaction/connection is released before CPU work. No raw input is persisted.
+        groups = [dict(tuple(frame.groupby('code', sort=False))) for frame in frames]
+        for code in codes:
+            if not self.stage(job['id'], '计算股票 ' + code + '（静态批次；逐股提交断点）', job['generation']):
+                return
+            bars, universe = [group.get(code, frame.iloc[:0]) for group, frame in zip(groups, frames)]
+            if not self.compute_stock(job, code, bars, universe, calendar):
+                return
+
+    def compute_stock(self, job, code, bars, universe, calendar):
+        ident = job['id']
+        with self.timed(job, 'compute'):
             selected = [METHODS[m] for m in job['methods']]
             start, end = pd.Timestamp(job['start']), pd.Timestamp(job['end'])
             samples, quality = stats.stock_samples(code, bars, universe, calendar, start, end, stats.PARAMS, selected=selected)
@@ -365,44 +452,37 @@ class ValidationJobs:
                 part['strategy'] = method
                 pieces.append(part)
             details = pd.concat(pieces, ignore_index=True)
-            with self.db() as db:
-                db.execute('BEGIN IMMEDIATE')
-                current = self.get(ident, db)
-                if current['status'] != 'running' or current['generation'] != job['generation'] or self.stop_event.is_set():
-                    return
-                db.execute('UPDATE stocks SET details=?,coverage=? WHERE job=? AND code=?',
-                           (frame_json(details), json.dumps(quality), ident, code))
-                for sample in details.to_dict('records'):
-                    day, strategy = str(sample['signal_date']), sample['strategy']
-                    values = []
-                    for h in (1, 2, 3):
-                        value = sample[f'd{h}_return_pct']
-                        value = float(value) if pd.notna(value) and np.isfinite(value) else None
-                        status = sample[f'd{h}_status']
-                        db.execute('INSERT INTO outcomes VALUES (?,?,?,?,?,?,?)',
-                                   (ident, code, day, strategy, h, value, status))
-                        values.append(value if status == '有效' else None)
-                    complete = all(v is not None for v in values)
-                    db.execute('INSERT INTO windows VALUES (?,?,?,?,?,?,?)',
-                        (ident, code, day, strategy, max(values) if complete else None,
-                         min(values) if complete else None, int(max(values)>0) if complete else None))
-                current['done'] += 1
-                current['base_samples'] += quality['base_samples']
-                current['stage'] = '计算断点已保存 '+code
-                self.save(db, current)
-            return
-        if not self.stage(ident, '汇总已提交的策略信号', job['generation']):
-            return
-        if not job['base_samples']:
-            raise ValueError('没有可用基础样本；请检查预热、行情与历史快照，不能当作零胜率')
-        summary, windows = self.summarize(ident, [METHODS[m] for m in job['methods']])
-        with self.db() as db:
+        with self.timed(job, 'commit'), self.db() as db:
             db.execute('BEGIN IMMEDIATE')
             current = self.get(ident, db)
-            if current['status'] != 'running' or current['generation'] != job['generation']:
+            if current['status'] != 'running' or current['generation'] != job['generation'] or self.stop_event.is_set():
                 return
-            current.update(status='completed', stage='完成', summary=summary, windows=windows)
+            if job.get('input_mode') == STATIC_MODE:
+                db.execute('INSERT INTO stocks(job,code) VALUES (?,?)', (ident, code))
+            db.execute('UPDATE stocks SET details=?,coverage=? WHERE job=? AND code=?',
+                       (frame_json(details), json.dumps(quality), ident, code))
+            for sample in details.to_dict('records'):
+                day, strategy = str(sample['signal_date']), sample['strategy']
+                values = []
+                for h in (1, 2, 3):
+                    value = sample[f'd{h}_return_pct']
+                    value = float(value) if pd.notna(value) and np.isfinite(value) else None
+                    status = sample[f'd{h}_status']
+                    db.execute('INSERT INTO outcomes VALUES (?,?,?,?,?,?,?)',
+                               (ident, code, day, strategy, h, value, status))
+                    values.append(value if status == '有效' else None)
+                complete = all(v is not None for v in values)
+                db.execute('INSERT INTO windows VALUES (?,?,?,?,?,?,?)',
+                    (ident, code, day, strategy, max(values) if complete else None,
+                     min(values) if complete else None, int(max(values)>0) if complete else None))
+            if current['done'] != job['codes'].index(code):
+                raise ValueError('任务断点冲突，请重试')
+            current['timings'] = dict(job.get('timings', {}))
+            current['done'] += 1
+            current['base_samples'] += quality['base_samples']
+            current['stage'] = '计算断点已保存 '+code
             self.save(db, current)
+        return True
 
     def summarize(self, ident, methods):
         """SQLite performs aggregation and median sorting on disk; no all-stock concat."""
