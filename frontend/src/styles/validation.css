@@ -759,3 +759,18 @@
   transform: none;
   cursor: not-allowed;
 }
+
+.validation-execution-time {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.5rem 1rem;
+  margin: 0.9rem 0 0;
+  font-size: 0.85rem;
+  color: var(--muted, #75675e);
+}
+.validation-execution-time strong {
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+  color: var(--text, #302a26);
+}

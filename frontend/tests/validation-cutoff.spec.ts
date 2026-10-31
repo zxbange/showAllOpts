@@ -171,7 +171,7 @@ test('retry matches adjacent controls and preserves busy guard and keyboard inte
 for (const status of ['paused', 'queued', 'running', 'cancelling', 'cancelled', 'completed']) {
   test(`retry eligibility remains ${status}`, async ({ page }) => {
     await mock(page, [job(status, 'four-close-v1')])
-    await expect(page.getByText('旧版口径：观察截至 2026-10-09', { exact: false })).toBeVisible()
+    await expect(page.getByText('旧版口径：观察截至 2026-10-09', { exact: false })).toHaveCount(0)
     await expect(page.getByRole('button', { name: '重试', exact: true })).toHaveCount(
       status === 'paused' ? 1 : 0,
     )

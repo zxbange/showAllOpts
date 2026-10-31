@@ -23,6 +23,9 @@ from sqlalchemy import text, bindparam
 from app.services import short_statistics as stats
 from app.services.validation_errors import mark_phase, report, automatic_retry_allowed
 
+from app.services.validation_timing import ExecutionTimer, interrupt_timing, stop_timing
+from app.services.validation_connection import TaskSource
+
 logger = logging.getLogger(__name__)
 VERSION = 'four-close-v2'
 SUPPORTED_VERSIONS = {'four-close-v1', VERSION}
@@ -81,6 +84,8 @@ class ValidationJobs:
         self.root.mkdir(parents=True, exist_ok=True)
         self.engine = engine
         self.sources = None
+        self.execution_timer = None
+        self.source_lease = None
         self.stop_event = threading.Event()
         self.thread = None
         with self.db() as db:
@@ -173,7 +178,7 @@ class ValidationJobs:
                     db.execute('INSERT INTO job_requests VALUES (?,?)', (fingerprint, active['id']))
                     return active
             job = dict(id=uuid.uuid4().hex, **params, requested=params, formula_params=dict(stats.PARAMS), price_field='adj_close', warmup_days=160, generation=0, status='queued', stage='等待读取计划', done=0, total=0,
-                       captured=0, auto_retry_count=0, next_retry_at=None, retry_exhausted=False, created_at=now(), updated_at=now(), error=None, summary=[], windows=[], base_samples=0)
+                       captured=0, execution_seconds=0.0, execution_partial=False, first_started_at=None, auto_retry_count=0, next_retry_at=None, retry_exhausted=False, created_at=now(), updated_at=now(), error=None, summary=[], windows=[], base_samples=0)
             db.execute('INSERT INTO jobs VALUES (?,?,?)', (job['id'], fingerprint, json.dumps(job)))
             return job
 
@@ -184,10 +189,12 @@ class ValidationJobs:
             if action == 'cancel':
                 if job['status'] in ('completed', 'cancelled', 'cancelling'):
                     return job
+                stop_timing(job)
                 job['generation'] += 1
                 job.update(next_retry_at=None, work_pending=False)
                 job.update(status='cancelling', stage='正在取消，等待在途工作退出；不会提交新结果', cancel_requested_at=now())
             elif action == 'pause' and job['status'] in ('queued', 'running', 'retry_wait'):
+                stop_timing(job)
                 job['generation'] += 1
                 job.update(next_retry_at=None, work_pending=False)
                 job['status'], job['stage'] = 'paused', '已暂停；在途工作返回后丢弃未提交部分'
@@ -266,13 +273,15 @@ class ValidationJobs:
 
     def stop(self):
         self.stop_event.set()
+        if self.execution_timer:
+            self.execution_timer.request_stop()
         if self.thread:
             self.thread.join(timeout=2)
 
     def loop(self):
         while not self.stop_event.is_set():
             try:
-                worked = self.tick()
+                worked = self.drain()
             except Exception as exc:
                 report(logger, exc, phase='worker')
                 # Storage errors must not kill the polling worker or expose private SQL.
@@ -280,13 +289,42 @@ class ValidationJobs:
             if not worked:
                 self.stop_event.wait(2)
 
-    def tick(self):
+    def drain(self):
+        # Keep the execution lock across batches, so another worker cannot open
+        # a second connection for this same task between its checkpoints.
         lock = portalocker.Lock(str(self.root / 'worker.lock'), timeout=0,
                                 flags=portalocker.LOCK_EX | portalocker.LOCK_NB)
         try:
             lock.acquire()
         except portalocker.exceptions.LockException:
             return False
+        lease = TaskSource(self, lock)
+        self.source_lease = lease
+        worked = False
+        try:
+            while not self.stop_event.is_set():
+                if not self.tick(_lease=lease):
+                    break
+                worked = True
+                if lease.key is None:
+                    break  # release the global lock between different tasks
+            return worked
+        finally:
+            try:
+                lease.close()
+            finally:
+                self.source_lease = None
+                lock.release()
+
+    def tick(self, _lease=None):
+        lock = portalocker.Lock(str(self.root / 'worker.lock'), timeout=0,
+                                flags=portalocker.LOCK_EX | portalocker.LOCK_NB)
+        if _lease is None:
+            try:
+                lock.acquire()
+            except portalocker.exceptions.LockException:
+                return False
+        timer = None
         try:
             self.finish_cancellations()
             with self.db() as db:
@@ -298,6 +336,7 @@ class ValidationJobs:
                 if job is None:
                     return False
                 if job.get('work_pending'):
+                    interrupt_timing(job)
                     # Holding the OS lock proves the previous work unit no longer
                     # owns execution. A leftover guard can also follow an ordinary
                     # deployment whose shutdown exceeded stop()'s join timeout.
@@ -320,7 +359,10 @@ class ValidationJobs:
                     job.update(status='running', next_retry_at=None, stage='正在自动重试')
                 # Reserve the work unit before touching the source or computing.
                 job['work_pending'] = True
+                timer = ExecutionTimer(self, job, now())
                 self.save(db, job)
+            self.execution_timer = timer
+            timer.start()
             job['_phase'] = 'source_config'
             try:
                 if job['version'] not in SUPPORTED_VERSIONS:
@@ -332,7 +374,8 @@ class ValidationJobs:
                                  else job['captured'] < job['total']))
                 if self.sources is not None and needs_source and not job.get('source'):
                     raise ValueError('旧任务未绑定不可变数据源，请新建任务；已完成输入冻结的旧任务仍可继续')
-                context = self.sources.engine(job['source']) if self.sources is not None and needs_source else nullcontext(self.engine)
+                context = (nullcontext(_lease.get(job, needs_source)) if _lease is not None else
+                           self.sources.engine(job['source']) if self.sources is not None and needs_source else nullcontext(self.engine))
                 with context as source_engine:
                     self.work(job, source_engine)
                 with self.db() as db:
@@ -382,9 +425,20 @@ class ValidationJobs:
             return True
         finally:
             try:
-                self.finish_cancellations()
+                try:
+                    if timer is not None:
+                        timer.finish()
+                finally:
+                    self.finish_cancellations()
+                    if _lease is not None and _lease.key:
+                        current = self.get(_lease.key[0])
+                        if (self.stop_event.is_set() or current['status'] not in ('queued', 'running')
+                                or current['generation'] != _lease.key[1]):
+                            _lease.close()
             finally:
-                lock.release()
+                self.execution_timer = None
+                if _lease is None:
+                    lock.release()
 
     @contextmanager
     def failure_state(self, job):
@@ -522,9 +576,14 @@ class ValidationJobs:
             return
         frames = []
         with self.timed(job, 'connect'):
-            connection = source_engine.connect()
+            connection = self.source_lease.checkout() if self.source_lease else source_engine.connect()
         job['_phase'] = 'source_read'
-        with connection, connection.begin():
+        with (nullcontext(connection) if self.source_lease else connection), connection.begin():
+            if self.source_lease:
+                # Check an idle socket without implicit reconnect or replay. A
+                # failed ping follows the ordinary persisted retry budget.
+                with self.timed(job, 'connect'):
+                    connection.exec_driver_sql('SELECT 1')
             for table, columns, extra in (
                 ('ultra_research_bar', BAR_COLUMNS, "AND asset_type='stock'"),
                 ('ultra_research_universe', UNIVERSE_COLUMNS, '')):
@@ -541,7 +600,8 @@ class ValidationJobs:
                 if len(frame) >= limit or (not frame.empty and frame.groupby('code').size().max() > MAX_ROWS):
                     raise ValueError('单股行情超过4000行，请缩短日期区间或检查重复数据')
                 frames.append(frame)
-        # Source transaction/connection is released before CPU work. No raw input is persisted.
+        # End the read transaction before CPU work; the task lease retains its
+        # physical connection across batches. No raw input is persisted.
         job['_phase'] = 'compute'
         groups = [dict(tuple(frame.groupby('code', sort=False))) for frame in frames]
         for code in codes:

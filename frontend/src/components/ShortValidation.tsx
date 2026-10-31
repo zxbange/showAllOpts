@@ -29,7 +29,11 @@ type Job = {
   cancelled_at?: string
   source_name?: string
   input_mode?: string
-  stage_started_at?: string
+  first_started_at?: string | null
+  execution_seconds?: number
+  execution_partial?: boolean
+  execution_approximate?: boolean
+  execution_token?: string
   timings?: Record<string, number>
   captured: number
   updated_at: string
@@ -54,6 +58,36 @@ function requestToken() {
     value.toString(16).padStart(2, '0'),
   ).join('')
 }
+function ExecutionTime({ job }: { job: Job }) {
+  const approximate =
+    job.execution_approximate ||
+    (!!job.execution_token && !['queued', 'running'].includes(job.status))
+  const value = job.execution_seconds
+  const seconds = Math.max(0, Math.floor(value ?? 0))
+  const duration = [Math.floor(seconds / 3600), Math.floor(seconds / 60) % 60, seconds % 60]
+    .map((part) => String(part).padStart(2, '0'))
+    .join(':')
+  return (
+    <p
+      className="validation-execution-time"
+      title={
+        job.execution_partial
+          ? '仅包含启用计时后记录的执行时间，历史耗时未知'
+          : approximate
+            ? '累计执行时间；意外中断可能丢失尚未保存的计时片段'
+            : '累计实际执行时间，不含暂停和重试等待'
+      }
+    >
+      <span>任务执行耗时</span>
+      <strong>
+        {value === undefined
+          ? '未知'
+          : `${job.execution_partial ? '已记录 ' : approximate ? '约 ' : ''}${duration}`}
+      </strong>
+    </p>
+  )
+}
+
 export function ShortValidation() {
   const [key, setKey] = useState('')
   const [unlocked, setUnlocked] = useState<ValidationAuth | null>(null)
@@ -452,9 +486,7 @@ function ValidationPanel({ adminKey }: { adminKey: ValidationAuth }) {
           </div>
           <p className="validation-hint">
             {job.start} 至 {job.end || '最新可用日'}
-            {job.version === 'four-close-v2'
-              ? ' · 信号与收益均截至验证截止日'
-              : ` · 旧版口径：观察截至 ${job.observed || '最新可用日'}`}
+            {job.version === 'four-close-v2' && ' · 信号与收益均截至验证截止日'}
           </p>
           {job.status !== 'completed' && (
             <div className="validation-progress">
@@ -485,15 +517,23 @@ function ValidationPanel({ adminKey }: { adminKey: ValidationAuth }) {
                   </label>
                 ))}
               </div>
+              <ExecutionTime job={job} />
             </div>
           )}
-          {job.status !== 'completed' && (job.status === 'retry_wait' || (job.auto_retry_count ?? 0) > 0) && (
-            <p className="validation-hint" role="status">
-              自动重试：{job.auto_retry_count ?? 0}/5
-              {job.next_retry_at && ` · 下次 ${new Date(job.next_retry_at).toLocaleString('zh-CN')}`}
-              {job.retry_exhausted && ' · 次数已用尽'}
-            </p>
+          {job.status === 'completed' && (
+            <div className="validation-progress">
+              <ExecutionTime job={job} />
+            </div>
           )}
+          {job.status !== 'completed' &&
+            (job.status === 'retry_wait' || (job.auto_retry_count ?? 0) > 0) && (
+              <p className="validation-hint" role="status">
+                自动重试：{job.auto_retry_count ?? 0}/5
+                {job.next_retry_at &&
+                  ` · 下次 ${new Date(job.next_retry_at).toLocaleString('zh-CN')}`}
+                {job.retry_exhausted && ' · 次数已用尽'}
+              </p>
+            )}
           {job.error && (
             <p className="validation-feedback" role="alert">
               {job.error}
@@ -538,9 +578,6 @@ function ValidationPanel({ adminKey }: { adminKey: ValidationAuth }) {
               删除记录
             </button>
           </div>
-          {['running', 'cancelling'].includes(job.status) && (
-            <p className="validation-hint">删除前请先取消任务，并等待显示“已取消”。</p>
-          )}
           {job.cancel_requested_at && (
             <p>
               请求取消：{new Date(job.cancel_requested_at).toLocaleString('zh-CN')}
@@ -551,9 +588,14 @@ function ValidationPanel({ adminKey }: { adminKey: ValidationAuth }) {
           )}
           <details className="validation-disclosure validation-task-meta">
             <summary>任务参数</summary>
-            {job.stage_started_at && (
-              <p>阶段开始：{new Date(job.stage_started_at).toLocaleString('zh-CN')}</p>
-            )}
+            <p>
+              任务开始：
+              {job.first_started_at
+                ? new Date(job.first_started_at).toLocaleString('zh-CN')
+                : job.execution_partial === false
+                  ? '尚未开始'
+                  : '未知（旧任务）'}
+            </p>
             {job.timings && (
               <p>
                 最近阶段耗时（秒，非累计）：
@@ -566,12 +608,7 @@ function ValidationPanel({ adminKey }: { adminKey: ValidationAuth }) {
               </p>
             )}
             <p>
-              {job.input_mode === 'static-batch-v1'
-                ? `已提交 ${job.done}/${job.total}`
-                : `输入 ${job.captured}/${job.total} · 已计算 ${job.done}/${job.total}`}
-            </p>
-            <p>
-              数据库：
+              数据源：
               {job.source_name ||
                 (job.source?.id === 'service' ? '服务默认数据库' : '已保存数据库')}
             </p>

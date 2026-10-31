@@ -118,7 +118,7 @@ def test_worker_loop_survives(setup, monkeypatch, caplog):
     def broken():
         jobs.stop_event.set()
         raise sqlite3.OperationalError(SECRET)
-    monkeypatch.setattr(jobs, 'tick', broken)
+    monkeypatch.setattr(jobs, 'drain', broken)
     with caplog.at_level(logging.ERROR):
         jobs.loop()
     assert 'Validation failure job=unassigned' in caplog.text
