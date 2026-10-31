@@ -65,3 +65,24 @@ def test_rebound_api_filters_snapshot_and_preserves_pagination(client, session):
     assert data['total'] == 7 and len(data['items']) == 1
     assert data['counts']['oversold'] == 7
     assert 'oversold' in data['items'][0]['methods']
+
+
+def test_pagination_only_loads_candles_for_visible_stocks(client, session):
+    seed(session)
+    loaded = []
+
+    def record_load(stock, context):
+        loaded.append((stock.trade_date, stock.code))
+
+    event.listen(ShortTermStock, 'load', record_load)
+    try:
+        data = client.get('/api/v1/short-term/latest?method=bukou&offset=6').json()
+        assert data['total'] == 7
+        assert [row['code'] for row in data['items']] == ['6']
+        assert loaded == [(date(2026, 10, 22), '6')]
+        loaded.clear()
+        empty = client.get('/api/v1/short-term/latest?method=bukou&offset=100').json()
+        assert empty['total'] == 7 and empty['items'] == []
+        assert loaded == []
+    finally:
+        event.remove(ShortTermStock, 'load', record_load)

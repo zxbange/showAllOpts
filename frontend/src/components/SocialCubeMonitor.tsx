@@ -1,4 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
+import { usePolling } from '../hooks/usePolling'
+import { socialRequest as request } from '../api/social'
 import { Clock3, ExternalLink, Layers3, Plus, RefreshCw } from 'lucide-react'
 
 export type MonitoredCube = {
@@ -91,19 +93,6 @@ function cubeAlias(name: string | null | undefined, title: string, symbol: strin
   return name && name !== title && name !== symbol ? name : ''
 }
 
-async function request<T>(path: string, body?: unknown, signal?: AbortSignal): Promise<T> {
-  const response = await fetch(`/api/v1/social-monitor${path}`, {
-    method: body === undefined ? 'GET' : 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    signal,
-    ...(body === undefined ? {} : { body: JSON.stringify(body) }),
-  })
-  const data = await response.json().catch(() => null)
-  if (!response.ok)
-    throw new Error(typeof data?.detail === 'string' ? data.detail : '组合监控请求失败，请重试')
-  return data as T
-}
-
 function cubeState(
   cube: MonitoredCube,
   enabled: boolean,
@@ -140,54 +129,52 @@ export function SocialCubeMonitor({
   const [feed, setFeed] = useState<RebalanceFeed>({ total: 0, page: 1, items: [] })
   const [loading, setLoading] = useState(true)
   const [busy, setBusy] = useState(false)
-  const [revision, setRevision] = useState(0)
   const [error, setError] = useState('')
+  const [loadError, setLoadError] = useState('')
   const [notice, setNotice] = useState('')
 
-  const refresh = useCallback(
-    async (signal?: AbortSignal) => {
+  const load = useCallback(
+    async (signal: AbortSignal) => {
       const query = new URLSearchParams({ page: String(page) })
       if (filter) query.set('cube_id', filter)
-      const data = await request<RebalanceFeed>(`/cube-rebalances?${query}`, undefined, signal)
-      if (!signal?.aborted) {
-        setFeed(data)
-        setLoading(false)
-      }
+      return request<RebalanceFeed>(`/cube-rebalances?${query}`, undefined, signal)
     },
     [filter, page],
   )
 
   useEffect(() => {
-    const abort = new AbortController()
     setLoading(true)
-    const load = () =>
-      void refresh(abort.signal).catch((err: unknown) => {
-        if (!abort.signal.aborted) {
-          setError(err instanceof Error ? err.message : '调仓记录加载失败')
-          setLoading(false)
-        }
-      })
-    load()
-    const timer = window.setInterval(load, 10000)
-    return () => {
-      abort.abort()
-      window.clearInterval(timer)
-    }
-  }, [refresh, revision])
+  }, [load])
+  const { refresh, cancel: cancelLoad } = usePolling(
+    load,
+    (data) => {
+      setFeed(data)
+      setLoading(false)
+      setLoadError('')
+    },
+    (reason) => {
+      setLoadError(reason instanceof Error ? reason.message : '调仓记录加载失败')
+      setLoading(false)
+    },
+    10000,
+  )
 
   async function action(work: () => Promise<void>, message: string) {
+    cancelLoad()
     setBusy(true)
     setError('')
     setNotice('')
     try {
       await work()
       await onChanged()
-      setRevision((current) => current + 1)
       setNotice(message)
     } catch (err) {
       setError(err instanceof Error ? err.message : '组合操作失败，请重试')
     } finally {
       setBusy(false)
+      void refresh().catch((reason: unknown) =>
+        setLoadError(reason instanceof Error ? reason.message : '调仓记录加载失败'),
+      )
     }
   }
 
@@ -216,9 +203,9 @@ export function SocialCubeMonitor({
           </span>
         </div>
       </div>
-      {error && (
+      {(error || loadError) && (
         <p className="social-error" role="alert">
-          {error}
+          {error || loadError}
         </p>
       )}
       {notice && (

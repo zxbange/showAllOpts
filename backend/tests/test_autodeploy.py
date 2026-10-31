@@ -8,6 +8,9 @@ from types import SimpleNamespace
 import tempfile
 import unittest
 from unittest.mock import patch
+import pytest
+
+pytest.importorskip('pwd', reason='Linux deployment helpers require POSIX user accounts')
 
 ROOT = Path(__file__).resolve().parents[2]
 

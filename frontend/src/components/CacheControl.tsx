@@ -1,8 +1,9 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Database, RefreshCw, X } from 'lucide-react'
 import { cancelCache, getCacheStatus, refreshCache } from '../api/client'
 import { CacheScheduleForm } from './CacheScheduleForm'
 import type { CacheStatus } from '../types/cache'
+import { usePolling } from '../hooks/usePolling'
 import '../styles/cache.css'
 
 function formatTime(value: string | null) {
@@ -23,14 +24,9 @@ export function CacheControl() {
   const dialog = useRef<HTMLDialogElement>(null)
   const signature = useRef<string | null>(null)
   const mounted = useRef(false)
-  const controller = useRef<AbortController | null>(null)
-  const load = useCallback(async () => {
-    controller.current?.abort()
-    const active = new AbortController()
-    controller.current = active
-    try {
-      const result = await getCacheStatus(active.signal)
-      if (!mounted.current || active.signal.aborted) return
+  const { refresh: load, cancel: cancelLoad } = usePolling(
+    getCacheStatus,
+    (result) => {
       setStatus(result)
       setError('')
       const next = JSON.stringify(result.modules.map((m) => [m.id, m.updated_at, m.ready]))
@@ -38,24 +34,16 @@ export function CacheControl() {
         window.dispatchEvent(new Event('data-cache-updated'))
       }
       signature.current = next
-    } catch (reason) {
-      if (!active.signal.aborted && mounted.current) {
-        setError(reason instanceof Error ? reason.message : '暂时无法读取同步状态。')
-      }
-    }
-  }, [])
+    },
+    (reason) => setError(reason instanceof Error ? reason.message : '暂时无法读取同步状态。'),
+    status?.refreshing || open ? 3000 : 30000,
+  )
   useEffect(() => {
     mounted.current = true
-    void load()
     return () => {
       mounted.current = false
-      controller.current?.abort()
     }
-  }, [load])
-  useEffect(() => {
-    const timer = window.setInterval(() => void load(), status?.refreshing || open ? 3000 : 30000)
-    return () => window.clearInterval(timer)
-  }, [load, status?.refreshing, open])
+  }, [])
   useEffect(() => {
     if (open) dialog.current?.showModal()
     else dialog.current?.close()
@@ -140,8 +128,11 @@ export function CacheControl() {
               schedule={status}
               autoRefresh={status.auto_refresh}
               onSaved={(plan) => {
-                controller.current?.abort()
+                cancelLoad()
                 setStatus((previous) => (previous ? { ...previous, ...plan } : previous))
+                void load().catch((reason: unknown) =>
+                  setError(reason instanceof Error ? reason.message : '暂时无法读取同步状态。'),
+                )
               }}
             />
             <div className="cache-list">

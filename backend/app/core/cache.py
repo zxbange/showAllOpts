@@ -14,11 +14,11 @@ import uuid
 import portalocker
 
 from app.core.cache_schedule import CacheSchedule
-from sqlalchemy import create_engine, text, select
+from sqlalchemy import create_engine, text
 from sqlalchemy.orm import Session
 from sqlalchemy.pool import NullPool
 
-from app.core.cache_errors import failure_details, retryable_source_error, SnapshotDataError
+from app.core.cache_errors import failure_details, retryable_source_error
 from app.core.cache_sync import sync_tables
 from app.core.append_sync import APPEND_PARTITIONS, copy_append
 from app.core.sync_progress import reporter, report

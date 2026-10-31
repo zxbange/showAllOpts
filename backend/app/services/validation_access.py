@@ -3,7 +3,6 @@ from contextlib import contextmanager
 import hashlib
 import hmac
 import os
-from pathlib import Path
 import secrets
 import sqlite3
 import stat

@@ -2,6 +2,7 @@
 import importlib.util
 import io
 import json
+import os
 from pathlib import Path
 import shutil
 import signal
@@ -16,6 +17,7 @@ SPEC.loader.exec_module(deploy)
 OLD, NEW = 'a' * 40, 'b' * 40
 
 
+@unittest.skipUnless(os.name == 'posix', 'Linux deployment requires POSIX directory fsync and symlinks')
 class TransactionTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
@@ -417,6 +419,7 @@ class PrimitiveTests(unittest.TestCase):
             with self.assertRaisesRegex(deploy.DeployError, 'changed during'):
                 deploy.ready('service', 'http://127.0.0.1:8000')
 
+    @unittest.skipUnless(os.name == 'posix', 'Deployment locks use fcntl')
     def test_lock_rejects_concurrent_deployment(self):
         with tempfile.TemporaryDirectory() as temp, patch.object(deploy,'ROOT',Path(temp)):
             with deploy.deployment_lock():
@@ -435,6 +438,7 @@ class PrimitiveTests(unittest.TestCase):
             self.assertEqual(popen.call_args.kwargs['env']['GIT_TERMINAL_PROMPT'],'0')
             self.assertEqual(popen.call_args.kwargs['stdin'],subprocess.DEVNULL)
 
+    @unittest.skipUnless(os.name == 'posix', 'Deployment cleanup uses POSIX process groups')
     def test_run_interrupt_reaps_child_group(self):
         process = Mock(pid=123)
         process.communicate.side_effect = [KeyboardInterrupt(), ('',''), ('','')]
@@ -450,6 +454,7 @@ class PrimitiveTests(unittest.TestCase):
                 with self.assertRaises(deploy.DeployError):
                     deploy.protected_target(NEW, ['private/settings'])
 
+    @unittest.skipUnless(os.name == 'posix', 'Deployment cleanup uses POSIX process groups')
     def test_run_masks_repeated_termination_during_cleanup(self):
         process = Mock(pid=123)
         handlers = {sig: deploy.interrupted for sig in deploy.INTERRUPT_SIGNALS}

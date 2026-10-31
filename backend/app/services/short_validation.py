@@ -25,6 +25,7 @@ from app.services.validation_errors import mark_phase, report, automatic_retry_a
 
 from app.services.validation_timing import ExecutionTimer, interrupt_timing, stop_timing
 from app.services.validation_connection import TaskSource
+from app.services.momentum import china_today
 
 logger = logging.getLogger(__name__)
 VERSION = 'four-close-v2'
@@ -158,9 +159,10 @@ class ValidationJobs:
         params = dict(input_mode=input_mode, source=source, methods=sorted(set(methods)), start=str(start), end=str(end) if end else None, observed=str(observed) if observed else None, version=VERSION)
         if not params['methods'] or any(m not in METHODS for m in params['methods']):
             raise ValueError('请选择至少一种支持的策略')
-        if not date(2000, 1, 1) <= start <= (end or date.today()) <= date.today() or ((end or date.today())-start).days > 3660:
+        today = china_today()
+        if not date(2000, 1, 1) <= start <= (end or today) <= today or ((end or today)-start).days > 3660:
             raise ValueError('要求2000年起、开始≤截止≤今天，区间不超过10年')
-        fingerprint = hashlib.sha256(json.dumps([params, request_id or str(date.today())], sort_keys=True).encode()).hexdigest()
+        fingerprint = hashlib.sha256(json.dumps([params, request_id or str(today)], sort_keys=True).encode()).hexdigest()
         with self.db() as db:
             db.execute('BEGIN IMMEDIATE')
             existing = db.execute('SELECT payload FROM jobs WHERE fingerprint=?', (fingerprint,)).fetchone()

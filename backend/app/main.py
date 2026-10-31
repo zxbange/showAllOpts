@@ -1,6 +1,6 @@
 import logging
 import asyncio
-from contextlib import asynccontextmanager
+from contextlib import AsyncExitStack, asynccontextmanager
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -33,33 +33,34 @@ def create_app(settings: Settings | None = None, engine: Engine | None = None) -
     @asynccontextmanager
     async def lifespan(application: FastAPI):
         ensure_logging(settings)
-        social = SocialMonitor(settings)
-        application.state.social = social
-        browser_login = BrowserLogin(settings, social)
-        application.state.social_browser = browser_login
-        social.browser_login = browser_login
-        margin_guarantee = MarginGuarantee(settings)
-        application.state.margin_guarantee = margin_guarantee
-        validation_engine = build_engine(settings)
-        validation = ValidationJobs(settings, validation_engine)
-        validation.sources = ValidationSources(validation, settings)
-        application.state.short_validation = validation
-        validation.start()
-        cache.start()
-        social.start()
-        margin_guarantee.start()
-        logger.info('Application ready cache_enabled=%s', settings.cache_enabled)
-        try:
+        # Register cleanup before starting workers, including partially failed startup.
+        # ExitStack also continues cleanup if an individual stop() raises.
+        async with AsyncExitStack() as cleanup:
+            cleanup.callback(database.dispose)
+            cleanup.push_async_callback(asyncio.to_thread, cache.stop)
+            social = SocialMonitor(settings)
+            cleanup.push_async_callback(asyncio.to_thread, social.stop)
+            application.state.social = social
+            browser_login = BrowserLogin(settings, social)
+            cleanup.push_async_callback(asyncio.to_thread, browser_login.stop)
+            application.state.social_browser = browser_login
+            social.browser_login = browser_login
+            margin_guarantee = MarginGuarantee(settings)
+            cleanup.push_async_callback(asyncio.to_thread, margin_guarantee.stop)
+            application.state.margin_guarantee = margin_guarantee
+            validation_engine = build_engine(settings)
+            cleanup.callback(validation_engine.dispose)
+            validation = ValidationJobs(settings, validation_engine)
+            cleanup.push_async_callback(asyncio.to_thread, validation.stop)
+            validation.sources = ValidationSources(validation, settings)
+            application.state.short_validation = validation
+            validation.start()
+            cache.start()
+            social.start()
+            margin_guarantee.start()
+            logger.info('Application ready cache_enabled=%s', settings.cache_enabled)
             yield
-        finally:
-            await asyncio.to_thread(validation.stop)
-            validation_engine.dispose()
-            await asyncio.to_thread(margin_guarantee.stop)
-            await asyncio.to_thread(browser_login.stop)
-            await asyncio.to_thread(social.stop)
-            await asyncio.to_thread(cache.stop)
-            database.dispose()
-            logger.info('Application shutdown complete')
+        logger.info('Application shutdown complete')
 
     application = FastAPI(title=settings.app_name, version='1.0.0', lifespan=lifespan)
     application.state.cache = cache

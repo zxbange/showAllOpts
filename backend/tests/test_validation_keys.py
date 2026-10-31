@@ -3,8 +3,10 @@ import stat
 from cryptography.fernet import Fernet
 from pydantic import SecretStr
 import pytest
-from app.services.validation_keys import KeyStorageError
+from app.services.validation_keys import KeyStorageError, POSIX_KEY_STORAGE
 from test_validation_sources import secure, config
+
+requires_posix = pytest.mark.skipif(not POSIX_KEY_STORAGE, reason='Automatic key storage requires POSIX permissions')
 
 
 def initialize(root):
@@ -14,6 +16,7 @@ def initialize(root):
     return cipher.encrypt(b'probe')
 
 
+@requires_posix
 def test_initialization_cross_worker_and_restart(tmp_path):
     root = tmp_path / 'short-validation'
     with ProcessPoolExecutor(max_workers=4) as pool:
@@ -28,6 +31,7 @@ def test_initialization_cross_worker_and_restart(tmp_path):
     assert stat.S_IMODE(path.parent.stat().st_mode) == 0o700
 
 
+@requires_posix
 def test_existing_config_migrates_without_environment(secure, config):
     jobs, sources, settings, _ = secure
     original = settings.validation_encryption_key.get_secret_value()
@@ -39,6 +43,7 @@ def test_existing_config_migrates_without_environment(secure, config):
     assert sources.save(config)['revision'] == 1
 
 
+@requires_posix
 def test_missing_or_corrupt_key_does_not_replace_existing_data(secure, config):
     jobs, sources, settings, _ = secure
     ref = sources.save(config)
@@ -59,6 +64,7 @@ def test_missing_or_corrupt_key_does_not_replace_existing_data(secure, config):
     assert sources.get(ref['id'], ref['revision']) == config
 
 
+@requires_posix
 def test_first_use_without_config_and_permissions(secure, config):
     jobs, sources, settings, _ = secure
     settings.validation_encryption_key = SecretStr('')
@@ -70,6 +76,7 @@ def test_first_use_without_config_and_permissions(secure, config):
         sources.cipher()
 
 
+@requires_posix
 def test_symlink_directory_and_file_rejected(tmp_path):
     outside = tmp_path / 'outside'; outside.mkdir(mode=0o700)
     directory = tmp_path / 'short-validation-secrets'
@@ -85,6 +92,7 @@ def test_symlink_directory_and_file_rejected(tmp_path):
     assert key.read_bytes() == before
 
 
+@requires_posix
 def test_legacy_database_import_and_public_access_has_no_side_effect(secure, config):
     jobs, sources, settings, client = secure
     directory = jobs.root.parent / 'short-validation-secrets'

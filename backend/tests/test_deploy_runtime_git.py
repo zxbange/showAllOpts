@@ -7,6 +7,8 @@ import subprocess
 
 import pytest
 
+pytest.importorskip('pwd', reason='Linux deployment helpers require POSIX user accounts')
+
 
 ROOT = Path(__file__).resolve().parents[2]
 loader = importlib.machinery.SourceFileLoader('runtime_git_entry', str(ROOT / 'deploy/automation/showallopts-ssh'))

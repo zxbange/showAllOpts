@@ -168,7 +168,10 @@ def test_legacy_missing_mode_resumes_frozen_inputs_without_source(setup):
 
 
 def test_static_source_version_is_bound_and_no_unselected_strategies(setup, config, monkeypatch):
+    from cryptography.fernet import Fernet
+    from pydantic import SecretStr
     jobs, settings, engine, calendar = setup
+    settings.validation_encryption_key = SecretStr(Fernet.generate_key().decode())
     expand(engine, 2)
     jobs.sources = ValidationSources(jobs, settings)
     ref = jobs.sources.save(config)

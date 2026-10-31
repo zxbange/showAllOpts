@@ -1,4 +1,6 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useState } from 'react'
+import { usePolling } from '../hooks/usePolling'
+import { socialRequest as api } from '../api/social'
 import {
   Bell,
   ExternalLink,
@@ -175,62 +177,50 @@ export function SocialMonitorPage() {
   const [pollingDraft, setPollingDraft] = useState<{ min: string; max: string } | null>(null)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
+  const [loadError, setLoadError] = useState('')
   const [notice, setNotice] = useState('')
 
-  const api = useCallback(async <T,>(path: string, body?: unknown): Promise<T> => {
-    const response = await fetch(`/api/v1/social-monitor${path}`, {
-      method: body === undefined ? 'GET' : 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
-    })
-    const result = await response.json().catch(() => null)
-    if (!response.ok) {
-      throw new Error(
-        typeof result?.detail === 'string' ? result.detail : `请求失败（${response.status}）`,
-      )
-    }
-    return result as T
-  }, [])
+  const load = useCallback(
+    async (signal: AbortSignal) => {
+      const query = new URLSearchParams({ page: String(page) })
+      if (authorFilter) query.set('author_id', authorFilter)
+      if (platformFilter) query.set('platform', platformFilter)
+      if (keyword) query.set('keyword', keyword)
+      return Promise.all([
+        api<Status>('/status', undefined, signal),
+        api<Feed>(`/posts?${query}`, undefined, signal),
+      ])
+    },
+    [page, authorFilter, platformFilter, keyword],
+  )
 
-  const refresh = useCallback(async () => {
-    const query = new URLSearchParams({ page: String(page) })
-    if (authorFilter) query.set('author_id', authorFilter)
-    if (platformFilter) query.set('platform', platformFilter)
-    if (keyword) query.set('keyword', keyword)
-    const [nextStatus, nextFeed] = await Promise.all([
-      api<Status>('/status'),
-      api<Feed>(`/posts?${query}`),
-    ])
-    setStatus(nextStatus)
-    setFeed(nextFeed)
-  }, [api, page, authorFilter, platformFilter, keyword])
-
-  useEffect(() => {
-    let active = true
-    const load = () => {
-      if (active)
-        void refresh().catch((e: Error) => {
-          if (active) setError(e.message)
-        })
-    }
-    load()
-    const timer = window.setInterval(load, 10000)
-    return () => {
-      active = false
-      window.clearInterval(timer)
-    }
-  }, [refresh])
+  const { refresh, cancel: cancelLoad } = usePolling(
+    load,
+    ([nextStatus, nextFeed]) => {
+      setStatus(nextStatus)
+      setFeed(nextFeed)
+      setLoadError('')
+    },
+    (reason) => setLoadError(reason instanceof Error ? reason.message : '动态加载失败，请重试'),
+    10000,
+  )
 
   async function action(work: () => Promise<void>) {
+    cancelLoad()
     setBusy(true)
     setError('')
     setNotice('')
     try {
       await work()
     } catch (e) {
-      setError(e instanceof Error ? e.message : '操作失败，请重试')
+      const reportError = work === refresh ? setLoadError : setError
+      reportError(e instanceof Error ? e.message : '操作失败，请重试')
     } finally {
       setBusy(false)
+      if (work !== refresh)
+        void refresh().catch((reason: unknown) =>
+          setLoadError(reason instanceof Error ? reason.message : '动态加载失败，请重试'),
+        )
     }
   }
 
@@ -325,11 +315,11 @@ export function SocialMonitorPage() {
         <header className="social-heading">
           <h1>博主动态监控</h1>
         </header>
-        <div className="social-panel" aria-busy={!error || busy}>
-          {error ? (
+        <div className="social-panel" aria-busy={!(error || loadError) || busy}>
+          {error || loadError ? (
             <>
               <p role="alert" className="social-error">
-                {error}
+                {error || loadError}
               </p>
               <button
                 className="button button-primary"
@@ -355,9 +345,9 @@ export function SocialMonitorPage() {
           <h1>博主动态监控</h1>
         </div>
       </header>
-      {error && (
+      {(error || loadError) && (
         <div role="alert" className="social-error">
-          {error}
+          {error || loadError}
         </div>
       )}
       {notice && (
@@ -676,7 +666,6 @@ export function SocialMonitorPage() {
                             setStatus(await api<Status>(`/authors/${author.id}/delete`, {}))
                             setAuthorFilter('')
                             setPage(1)
-                            await refresh()
                           })
                       }}
                     >

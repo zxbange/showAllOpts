@@ -18,7 +18,12 @@ def setup(tmp_path):
     closes[180:185]=[9.8,9.4,9.,8.9,9.5]
     database(engine,prices(closes,calendar))
     settings=Settings(_env_file=None,log_dir=tmp_path/'persist')
-    return ValidationJobs(settings,engine),settings,engine,calendar
+    jobs = ValidationJobs(settings, engine)
+    try:
+        yield jobs, settings, engine, calendar
+    finally:
+        jobs.stop()
+        engine.dispose()
 
 def create(jobs,calendar,methods=None):
     return jobs.create(methods or ['oversold'],calendar[170].date(),calendar[190].date(),calendar[195].date(), input_mode='frozen')
@@ -35,6 +40,26 @@ def test_float_lossless():
     restored=frame_read(frame_json(frame))
     assert restored.close.tolist()==frame.close.tolist()
     assert stats.forward_outcomes(restored).iloc[0].d1_win==1
+
+
+def test_create_uses_china_day_for_validation_and_idempotency(setup, monkeypatch):
+    from app.services import short_validation as module
+    jobs, _, _, _ = setup
+    server_day = date(2026, 10, 30)
+
+    class ServerDate(date):
+        @classmethod
+        def today(cls):
+            return server_day
+
+    monkeypatch.setattr(module, 'date', ServerDate)
+    monkeypatch.setattr(module, 'china_today', lambda: date(2026, 10, 31))
+    first = jobs.create(['oversold'], date(2026, 10, 30), date(2026, 10, 31))
+    # UTC rolls over eight hours later; the same Beijing day must retain its job ID.
+    server_day = date(2026, 10, 31)
+    assert jobs.create(['oversold'], date(2026, 10, 30), date(2026, 10, 31))['id'] == first['id']
+    with pytest.raises(ValueError, match='截止'):
+        jobs.create(['oversold'], date(2026, 10, 30), date(2026, 11, 1))
 
 def test_atomic_resume_matches_legacy_and_source_read_only(setup,monkeypatch):
     jobs,settings,engine,calendar=setup

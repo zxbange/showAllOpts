@@ -7,6 +7,7 @@ from unittest.mock import patch
 from test_deploy import deploy
 
 
+@unittest.skipUnless(os.name == 'posix', 'Linux readiness uses uid and proc metadata')
 class ProcessReadinessTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()

@@ -177,7 +177,8 @@ def automatic_retry_allowed(exc, info):
             return False
         if isinstance(error, socket.gaierror):
             return error.errno == socket.EAI_AGAIN
-        if isinstance(error, TimeoutError):
+        if isinstance(error, (TimeoutError, ConnectionResetError, ConnectionAbortedError,
+                              ConnectionRefusedError, BrokenPipeError)):
             return True
         if isinstance(error, OSError) and error.errno in temporary:
             return True

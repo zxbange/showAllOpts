@@ -14,8 +14,8 @@ class ShortTermService:
         if day and day not in dates:
             raise HTTPException(404, '该交易日没有保留的选股快照，请切换日期。')
         meta = next((r.payload for r in runs if r.trade_date == chosen), {})
-        items = [dict(r.payload, code=r.code) for r in self.repository.stocks(chosen)
-                 if method in r.payload.get('methods', [])] if chosen else []
+        total, stocks = self.repository.stocks(chosen, method, offset, limit) if chosen else (0, [])
+        items = [dict(r.payload, code=r.code) for r in stocks]
         return dict(trade_date=chosen, dates=dates, method=method,
                     counts=meta.get('counts', {m: 0 for m in METHODS}), meta=meta,
-                    total=len(items), offset=offset, limit=limit, items=items[offset:offset+limit])
+                    total=total, offset=offset, limit=limit, items=items)

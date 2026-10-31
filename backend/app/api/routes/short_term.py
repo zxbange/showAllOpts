@@ -20,7 +20,7 @@ def latest(session: Annotated[Session, Depends(get_session)], day: date | None =
 import hmac
 import sqlite3
 from fastapi import Request, HTTPException, Response
-from pydantic import BaseModel, Field, SecretStr, ValidationError
+from pydantic import BaseModel, Field, SecretStr
 from starlette.concurrency import run_in_threadpool
 from app.services.validation_sources import SourceError
 from app.services.short_validation import DeleteConflict

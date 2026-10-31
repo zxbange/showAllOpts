@@ -10,6 +10,7 @@ from app.api.routes.short_term import router
 from app.core.config import Settings
 from app.services.short_validation import ValidationJobs
 from app.services.validation_sources import ValidationSources
+from app.services.validation_keys import POSIX_KEY_STORAGE
 from app.services.validation_access import ValidationAccess, AccessError, COOKIE, digest, PAIR_TTL, SESSION_TTL
 from test_validation_sources import config
 
@@ -17,6 +18,8 @@ BASE = '/api/v1/short-term/validation'
 
 @pytest.fixture
 def paired(tmp_path):
+    if not POSIX_KEY_STORAGE:
+        pytest.skip('Browser pairing requires POSIX private key storage')
     settings = Settings(_env_file=None, log_dir=tmp_path, validation_admin_key='', validation_encryption_key='', validation_allowed_targets=[])
     jobs = ValidationJobs(settings, create_engine('sqlite://'))
     jobs.sources = ValidationSources(jobs, settings)
