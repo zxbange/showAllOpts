@@ -85,11 +85,11 @@ def test_calculation_and_model_definitions_keep_original_rules(batch):
         for node in original.body:
             if not isinstance(node, (ast.FunctionDef, ast.ClassDef)):
                 continue
-            if node.name.startswith('Mysql') or node.name in ('as_date', 'china_now'):
+            if node.name.startswith('Mysql') or node.name in ('as_date', 'china_now', 'probe'):
                 continue
             # Resource-owning functions have intentionally moved to common context managers.
             used = {n.id for n in ast.walk(node) if isinstance(n, ast.Name)}
-            if ('Session' in used or 'engine' in used) and node.name not in ('collect_daily', 'load_daily_history', 'stored_period', 'repair_daily_derived'):
+            if ('Session' in used or 'engine' in used) and node.name != 'collect_daily':
                 continue
             actual = next(n for n in body + tree.body if isinstance(n, type(node)) and n.name == node.name)
             class WithoutProgressOutput(ast.NodeTransformer):
@@ -335,8 +335,8 @@ def test_standalone_earnings_insert_only_preserves_first_snapshot(batch, monkeyp
 @pytest.mark.parametrize('name,changes', [
     ('行业动量', {'start_date': '2025-02-01', 'end_date': '2026-10-16', 'industry_type': 'sw_l1'}),
     ('抱团拥挤度', {'start_date': '2024-01-01', 'top_pct': 0.1}),
-    ('微盘温度计', {'start_date': '2022-01-01', 'micro_num': 500, 'sample_step': 10}),
-    ('ETF份额', {'start_date': '2025-01-01', 'lookback_days': 7}),
+    ('微盘温度计', {'start_date': '2022-01-01', 'micro_num': 500}),
+    ('ETF份额', {'start_date': '2025-01-01', 'end_date': '2026-10-16'}),
     ('净利润断层', {'end_date': '2026-10-16'}),
 ])
 def test_grouped_configuration_changes_run_defaults(batch, name, changes):
@@ -471,10 +471,10 @@ def test_shared_sessions_keep_insert_only_across_strategies(batch, monkeypatch, 
         'ETF份额': {'previous_trade_date': day-dt.timedelta(days=1)},
     }[name])
     def save(Session):
-        if name == '行业动量': return strategy.save_day(Session, day, 'sw_l2', [record], skip_existing=True)
-        if name == '抱团拥挤度': return strategy.save_day(Session, day, 0.05, record, skip_existing=True)
-        if name == '微盘温度计': return strategy.save_period(Session, record, skip_existing=True)
-        return strategy.save_window(Session, record['fund_code'], [record], skip_existing=True)
+        if name == '行业动量': return strategy.save_day(Session, day, 'sw_l2', [record])
+        if name == '抱团拥挤度': return strategy.save_day(Session, day, 0.05, record)
+        if name == '微盘温度计': return strategy.save_period(Session, record)
+        return strategy.save_window(Session, record['fund_code'], [record])
     engine = create_engine('sqlite://')
     monkeypatch.setattr(batch, 'connect_database', lambda _: engine)
     with batch.database_scope(strategy.Base, CONFIG) as Session:

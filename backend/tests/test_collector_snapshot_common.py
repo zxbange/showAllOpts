@@ -73,16 +73,21 @@ def test_insert_only_filters_existing_keys_within_scope_and_repeat_has_no_writes
     assert store.writes == []
 
 
-def test_replacement_deletes_only_requested_series_and_dates(batch, store):
+@pytest.mark.parametrize('skip_existing', [False, None, 0, 1])
+def test_overwrite_rejected_without_opening_session_or_modifying_data(batch, store, skip_existing):
     selected = [dict(series='a', day=DAY, code='z', value=40)]
-    assert batch._save_record_set(store.Session, store.model, selected,
-                                  store.filters, store.keys, skip_existing=False) == selected
-    assert store.records() == {('a', DAY, 'z'): 40, ('b', DAY, 'x'): 90, ('a', NEXT, 'x'): 30}
-    assert store.writes == ['DELETE', 'INSERT']
+    before = store.records()
+
+    def forbidden():
+        pytest.fail('Rejected mode must not open a write session')
+
+    with pytest.raises(ValueError, match='skip_existing'):
+        batch._save_record_set(forbidden, store.model, selected,
+                               store.filters, store.keys, skip_existing=skip_existing)
+    assert store.records() == before and store.writes == []
 
 
-@pytest.mark.parametrize('skip_existing', [True, False])
-def test_commit_failure_rolls_back_insert_and_scoped_deletion(batch, store, skip_existing):
+def test_commit_failure_rolls_back_insert_without_touching_existing_rows(batch, store):
     before = store.records()
 
     class FailingSession(store.Session.class_):
@@ -94,16 +99,16 @@ def test_commit_failure_rolls_back_insert_and_scoped_deletion(batch, store, skip
     with pytest.raises(RuntimeError, match='commit failed'):
         batch._save_record_set(failing, store.model,
             [dict(series='a', day=DAY, code='z', value=40)],
-            store.filters, store.keys, skip_existing=skip_existing)
+            store.filters, store.keys)
     assert store.records() == before
 
 
-def test_empty_replacement_does_not_clear_existing_data_or_open_a_session(batch, store):
+def test_empty_collection_does_not_clear_existing_data_or_open_a_session(batch, store):
     before = store.records()
 
     def forbidden():
         pytest.fail('An empty collection must not open a write session')
 
     assert batch._save_record_set(forbidden, store.model, [],
-                                  store.filters, store.keys, skip_existing=False) == []
+                                  store.filters, store.keys) == []
     assert store.records() == before and store.writes == []

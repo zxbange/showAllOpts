@@ -27,7 +27,6 @@ import uuid as _earnings_uuid
 from sqlalchemy import BigInteger, Column, Date, MetaData, String, Table
 from sqlalchemy.schema import CreateTable as _EarningsCreateTable
 from sqlalchemy import text as _earnings_text
-from sqlalchemy.exc import IntegrityError as _EarningsIntegrityError
 
 
 def _earnings_version_table():

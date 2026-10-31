@@ -59,11 +59,11 @@ STRATEGY_CONFIG = {
     },
     '微盘温度计': {
         'start_date': '2021-01-01', 'end_date': None,
-        'micro_num': 1000, 'sample_step': 1, 'batch_size': 1000,
+        'micro_num': 1000, 'batch_size': 1000,
     },
     'ETF份额': {
         'start_date': None, 'end_date': None, 'initial_trade_days': 300,
-        'window_size': 120, 'lookback_days': 5,  # 只新增模式不会回查覆盖。
+        'window_size': 120,
         # 固定跟踪名单；金额单位不影响源数据以“份”入库。
         'funds': {
             'hs300': [('510300.XSHG', '沪深300ETF华泰柏瑞'), ('510310.XSHG', '沪深300ETF易方达'),
@@ -103,7 +103,6 @@ import uuid as _earnings_uuid
 from sqlalchemy import BigInteger, Column, Date, MetaData, String, Table
 from sqlalchemy.schema import CreateTable as _EarningsCreateTable
 from sqlalchemy import text as _earnings_text
-from sqlalchemy.exc import IntegrityError as _EarningsIntegrityError
 
 
 def _earnings_version_table():
@@ -470,19 +469,22 @@ def signal_eligibility(bars, universe, params, return_price_field='adj_close'):
 # END SHARED OVERSOLD RULES
 
 
+def _require_append(skip_existing):
+    if skip_existing is not True:
+        raise ValueError('此采集仅支持只新增，不允许关闭 skip_existing。')
+
+
 def _save_record_set(Session, model, records, filters, key_fields, skip_existing=True):
-    """在调用方限定的范围内新增或替换；一次提交，不覆盖范围外记录。"""
+    """只新增调用方限定范围内尚不存在的主键；已有记录保持原值。"""
+    _require_append(skip_existing)
     if not records:
         return []
     with session_scope(Session) as session:
         rows = session.query(model).filter(*filters)
-        if skip_existing:
-            keys = {tuple(row) for row in rows.with_entities(*(getattr(model, key) for key in key_fields)).all()}
-            records = [r for r in records if tuple(r[key] for key in key_fields) not in keys]
-            if not records:
-                return []
-        else:
-            rows.delete(synchronize_session=False)
+        keys = {tuple(row) for row in rows.with_entities(*(getattr(model, key) for key in key_fields)).all()}
+        records = [r for r in records if tuple(r[key] for key in key_fields) not in keys]
+        if not records:
+            return []
         session.add_all([model(**record) for record in records])
         session.commit()
         return records
@@ -939,7 +941,6 @@ def _momentum_strategy(_apis, _config):
     get_price = _apis.get('get_price')
     get_industries = _apis.get('get_industries')
     get_industry_stocks = _apis.get('get_industry_stocks')
-    query = _apis.get('query')
 
     START_DATE = settings['start_date']
     END_DATE = settings['end_date']
@@ -1044,7 +1045,7 @@ def _momentum_strategy(_apis, _config):
             record['momentum_rank'] = rank
         return records
 
-    def save_day(Session, trade_date, industry_type, records, skip_existing=False):
+    def save_day(Session, trade_date, industry_type, records, skip_existing=True):
         _progress_note('写入当日行业动量')
         day = as_date(trade_date)
         if not records:
@@ -1090,7 +1091,8 @@ def _momentum_strategy(_apis, _config):
             return deleted
 
     def run(start_date=START_DATE, end_date=END_DATE, industry_type=INDUSTRY_TYPE, skip_existing=True):
-        """先清理过期数据；skip_existing=True 时从最新日期之后只新增。"""
+        """先清理过期数据，再从最新日期之后只新增。"""
+        _require_append(skip_existing)
         now_china = china_now()
         today_china = now_china.date()
         if end_date is None:
@@ -1098,8 +1100,7 @@ def _momentum_strategy(_apis, _config):
         initial_start, end = as_date(start_date), as_date(end_date)
         if end > today_china:
             raise ValueError('结束日期不能晚于运行当天。')
-        if skip_existing:
-            end = _closed_day(end, now_china)
+        end = _closed_day(end, now_china)
         # 即使手动指定历史 end_date，保留范围仍以实际运行当天为基准。
         # 日历验证在任何数据库修改之前完成，节假日自动使用最近交易日。
         retention_start = get_retention_start(today_china, RETENTION_TRADE_DAYS)
@@ -1116,9 +1117,7 @@ def _momentum_strategy(_apis, _config):
                 if start > end:
                     raise ValueError('首次入库的开始日期不能晚于结束日期。')
             else:
-                start = as_date(last_date)
-                if skip_existing:
-                    start += datetime.timedelta(days=1)
+                start = as_date(last_date) + datetime.timedelta(days=1)
                 if start < retention_start:
                     start = retention_start
                 if start > end:
@@ -1304,7 +1303,6 @@ def _crowding_strategy(_apis, _config):
     get_all_securities = _apis.get('get_all_securities')
     get_trade_days = _apis.get('get_trade_days')
     get_price = _apis.get('get_price')
-    query = _apis.get('query')
 
     START_DATE = settings['start_date']
     END_DATE = settings['end_date']
@@ -1384,7 +1382,7 @@ def _crowding_strategy(_apis, _config):
         record.update(trade_date=day, updated_at=china_now())
         return record
 
-    def save_day(Session, day, top_pct, record, skip_existing=False):
+    def save_day(Session, day, top_pct, record, skip_existing=True):
         _progress_note('写入当日拥挤度')
         if record['trade_date'] != as_date(day) or record['top_pct'] != Decimal(str(top_pct)):
             raise ValueError('结果日期或 TOP_PCT 不一致，拒绝入库。')
@@ -1401,15 +1399,15 @@ def _crowding_strategy(_apis, _config):
             return as_date(row[0]) if row is not None else None
 
     def run(start_date=START_DATE, end_date=END_DATE, top_pct=TOP_PCT, incremental=True, skip_existing=True):
-        """默认从最后已入库日（含）增量更新；手动补历史时传 incremental=False。"""
+        """默认从最后已入库日之后续传；incremental=False 扫描历史范围但不覆盖已有行。"""
+        _require_append(skip_existing)
         now = china_now()
         today = now.date()
         start = as_date(start_date)
         end = today if end_date is None else as_date(end_date)
         if start > end or end > today:
             raise ValueError('开始日期不能晚于结束日期，结束日期不能晚于运行当天。')
-        if skip_existing:
-            end = _closed_day(end, now)
+        end = _closed_day(end, now)
         pct = Decimal(str(top_pct))
         if not pct.is_finite() or not Decimal('0') < pct <= Decimal('1'):
             raise ValueError('TOP_PCT 必须在 (0, 1] 内。')
@@ -1424,7 +1422,7 @@ def _crowding_strategy(_apis, _config):
                 if last is not None:
                     if last > today:
                         raise ValueError('数据库最新日期晚于运行当天，请检查已有数据。')
-                    start = builtins.max(start, last + datetime.timedelta(days=1) if skip_existing else last)
+                    start = builtins.max(start, last + datetime.timedelta(days=1))
             if start > end:
                 return pd.DataFrame(columns=RESULT_COLUMNS)
             # 仅请求实际增量区间的日历；全部验证通过后才计算、写入日记录。
@@ -1432,7 +1430,7 @@ def _crowding_strategy(_apis, _config):
                 error='交易日历越界、重复或乱序，未写入数据。', missing_error='获取交易日历失败，未写入数据。')
             if not days:
                 return pd.DataFrame(columns=RESULT_COLUMNS)
-            # 默认模式刷新末日；skip_existing=True 仅新增，更早缺口不自动扫描。
+            # 仅新增；默认增量模式不扫描最新入库日之前的缺口。
             for index, day in enumerate(_progress_items(days, '交易日'), 1):
                 try:
                     record = calculate_crowding(day, top_pct)
@@ -1453,6 +1451,8 @@ def _crowding_strategy(_apis, _config):
 def _microcap_strategy(_apis, _config):
     """独立作用域隔离模型、参数和函数，返回本策略的接口。"""
     settings = strategy_settings('微盘温度计')
+    if 'sample_step' in settings:
+        raise ValueError('批量版固定每日采集，请移除 sample_step 配置。')
     get_all_securities = _apis.get('get_all_securities')
     get_trade_days = _apis.get('get_trade_days')
     get_price = _apis.get('get_price')
@@ -1465,7 +1465,6 @@ def _microcap_strategy(_apis, _config):
     START_DATE = settings['start_date']
     END_DATE = settings['end_date']
     MICRO_NUM = settings['micro_num']
-    SAMPLE_STEP = settings['sample_step']
     BATCH_SIZE = settings['batch_size']
     RAW_FIELDS = ('micro_median', 'relative_ratio', 'crowding_ratio', 'amount_crowding_ratio')
     PCT_FIELDS = ('cap_pct', 'relative_pct', 'crowding_pct', 'amount_crowding_pct')
@@ -1685,34 +1684,8 @@ def _microcap_strategy(_apis, _config):
                                   + record['amount_crowding_pct'] * Decimal('0.25'))
         record['sample_count'] = len(histories[RAW_FIELDS[0]])
 
-    def load_resume(Session, series_id, include_latest=False):
-        with session_scope(Session) as session:
-            last = session.query(MicrocapTemperature.trade_date).filter_by(series_id=series_id).order_by(
-                MicrocapTemperature.trade_date.desc()).first()
-            histories = {field: [] for field in RAW_FIELDS}
-            if last is None:
-                return None, None, histories
-            day = as_date(last[0])
-            boundary = (MicrocapTemperature.trade_date <= day if include_latest
-                        else MicrocapTemperature.trade_date < day)
-            # 只新增时纳入最新一期；从已保存的分位基准和指数继续。
-            baseline = session.query(*[getattr(MicrocapTemperature, field) for field in RAW_FIELDS]).filter(
-                MicrocapTemperature.series_id == series_id, boundary).all()
-            for row in baseline:
-                for field, value in zip(RAW_FIELDS, row):
-                    histories[field].append(Decimal(value))
-            for history in histories.values():
-                history.sort()
-            prev = session.query(MicrocapTemperature).filter(
-                MicrocapTemperature.series_id == series_id, boundary,
-            ).order_by(MicrocapTemperature.trade_date.desc()).first()
-            previous = None if prev is None else {
-                column.name: getattr(prev, column.name) for column in MicrocapTemperature.__table__.columns}
-            if previous is not None and previous['sample_count'] != len(baseline):
-                raise ValueError('历史样本不连续，请检查历史删除或外部修改，不能直接续算分位。')
-            return day, previous, histories
-
-    def save_period(Session, record, skip_existing=False, invalidate_next=None):
+    def save_period(Session, record, skip_existing=True, invalidate_next=None):
+        _require_append(skip_existing)
         _install_result_journal(Session, (MicrocapTemperature,), 'microcap-temperature')
         _progress_note('写入当前采样期温度数据')
         required = RESULT_COLUMNS + ['member_codes']
@@ -1726,11 +1699,8 @@ def _microcap_strategy(_apis, _config):
         with session_scope(Session) as session:
             query = session.query(MicrocapTemperature).filter_by(
                 series_id=record['series_id'], trade_date=record['trade_date'])
-            if skip_existing:
-                if query.first() is not None:
-                    return False
-            else:
-                _result_bulk(query)
+            if query.first() is not None:
+                return False
             session.add(MicrocapTemperature(**record))
             mark_daily_pending(session, record['series_id'], invalidate_next)
             session.commit()
@@ -1747,25 +1717,19 @@ def _microcap_strategy(_apis, _config):
 
     def load_daily_history(Session, series_id, end):
         """只读日期、计数及四个分位基准；无缺口时不下载成分股名单。"""
-        session = Session()
-        try:
+        with session_scope(Session) as session:
             fields = ('trade_date', 'sample_count', 'sample_step') + RAW_FIELDS
             rows = session.query(*[getattr(MicrocapTemperature, field) for field in fields]).filter(
                 MicrocapTemperature.series_id == series_id, MicrocapTemperature.trade_date <= end,
             ).order_by(MicrocapTemperature.trade_date).all()
             return {as_date(row[0]): dict(zip(fields, row)) for row in rows}
-        finally:
-            session.close()
 
 
     def stored_period(Session, series_id, day):
-        session = Session()
-        try:
+        with session_scope(Session) as session:
             row = session.query(MicrocapTemperature).filter_by(series_id=series_id, trade_date=day).first()
             return None if row is None else {
                 column.name: getattr(row, column.name) for column in MicrocapTemperature.__table__.columns}
-        finally:
-            session.close()
 
 
     def repair_daily_derived(Session, record, old, invalidate_next=None):
@@ -1776,19 +1740,13 @@ def _microcap_strategy(_apis, _config):
         if not updates:
             return
         updates['updated_at'] = china_now()
-        session = Session()
-        try:
+        with session_scope(Session) as session:
             changed = _result_bulk(session.query(MicrocapTemperature).filter_by(
                 series_id=record['series_id'], trade_date=record['trade_date']), updates)
             if changed != 1:
                 raise ValueError('每日序列被其他任务修改，请停止并重跑。')
             mark_daily_pending(session, record['series_id'], invalidate_next)
             session.commit()
-        except BaseException:
-            session.rollback()
-            raise
-        finally:
-            session.close()
 
 
     def collect_daily(Session, start, end, micro_num):
@@ -1843,50 +1801,20 @@ def _microcap_strategy(_apis, _config):
         return pd.DataFrame(records, columns=RESULT_COLUMNS)
 
 
-    def run(start_date=START_DATE, end_date=END_DATE, micro_num=MICRO_NUM, sample_step=SAMPLE_STEP, skip_existing=True):
+    def run(start_date=START_DATE, end_date=END_DATE, micro_num=MICRO_NUM, skip_existing=True):
+        _require_append(skip_existing)
         start = as_date(start_date)
         now = china_now()
         today = now.date()
         end = today if end_date is None else as_date(end_date)
         if start > end or end > today:
             raise ValueError('开始日期不能晚于结束日期，结束日期不能晚于今天。')
-        if skip_existing:
-            end = _closed_day(end, now)
-        for value in (micro_num, sample_step):
-            if isinstance(value, builtins.bool) or not isinstance(value, builtins.int) or value <= 0:
-                raise ValueError('微盘数量和采样步长必须是正整数。')
-        series_id = series_key(start, micro_num, sample_step)
-        records = []
+        end = _closed_day(end, now)
+        if isinstance(micro_num, builtins.bool) or not isinstance(micro_num, builtins.int) or micro_num <= 0:
+            raise ValueError('微盘数量必须是正整数。')
         with database_scope(Base, _config) as Session:
             _install_result_journal(Session, (MicrocapTemperature,), 'microcap-temperature')
-            if sample_step == 1:
-                return collect_daily(Session, start, end, micro_num)
-            last, previous, histories = load_resume(Session, series_id, include_latest=skip_existing)
-            if last is not None and last > today:
-                raise ValueError('最新入库日期晚于今天，请检查已有数据。')
-            begin = last or start
-            if begin > end:
-                return pd.DataFrame(columns=RESULT_COLUMNS)
-            days = calendar(begin, end)
-            if last is not None and (not days or days[0] != last):
-                raise ValueError('最新入库日不在交易日历中，停止写入。')
-            pending = days[sample_step::sample_step] if skip_existing and last is not None else days[::sample_step]
-            for day in _progress_items(pending, '采样日'):
-                try:
-                    record = calculate_period(day, previous, micro_num)
-                    if record['trade_date'] != day or record['micro_num'] != micro_num:
-                        raise ValueError('计算结果日期或微盘数量不一致。')
-                    record.update(series_id=series_id, sample_step=sample_step)
-                    append_percentiles(record, histories)
-                    if not save_period(Session, record, skip_existing=skip_existing):
-                        raise ValueError('该采样期已被其他任务写入，未覆盖；请重跑以加载已保存的指数和分位基准。')
-                except Exception as exc:
-                    if isinstance(exc, ValueError):
-                        raise
-                    raise RuntimeError('{} 采集失败，请检查聚宽接口、权限及数据库连接。'.format(day)) from None
-                previous = record
-                records.append({field: record[field] for field in RESULT_COLUMNS})
-        return pd.DataFrame(records, columns=RESULT_COLUMNS)
+            return collect_daily(Session, start, end, micro_num)
     return SimpleNamespace(**locals())
 
 
@@ -1894,6 +1822,8 @@ def _microcap_strategy(_apis, _config):
 def _etf_strategy(_apis, _config):
     """独立作用域隔离模型、参数和函数，返回本策略的接口。"""
     settings = strategy_settings('ETF份额')
+    if 'lookback_days' in settings:
+        raise ValueError('批量版只新增，请移除无效的 lookback_days 配置。')
     get_trade_days = _apis.get('get_trade_days')
     query = _apis.get('query')
     finance = _apis.get('finance')
@@ -1901,7 +1831,6 @@ def _etf_strategy(_apis, _config):
     START_DATE = settings['start_date']
     INITIAL_TRADE_DAYS = settings['initial_trade_days']
     END_DATE = settings['end_date']
-    LOOKBACK_DAYS = settings['lookback_days']
     WINDOW_SIZE = settings['window_size']
     ETF_GROUPS = settings['funds']
     SOURCE = 'jqdata.FUND_SHARE_DAILY'
@@ -1986,7 +1915,7 @@ def _etf_strategy(_apis, _config):
                 ETFShare.fund_code, func.min(ETFShare.trade_date), func.max(ETFShare.trade_date),
             ).filter(ETFShare.fund_code.in_(codes)).group_by(ETFShare.fund_code).all()}
 
-    def save_window(Session, code, records, skip_existing=False):
+    def save_window(Session, code, records, skip_existing=True):
         _progress_note('写入当前份额窗口')
         if not records:
             return []
@@ -1996,23 +1925,15 @@ def _etf_strategy(_apis, _config):
         return _save_record_set(Session, ETFShare, records,
             (ETFShare.fund_code == code, ETFShare.trade_date.in_(dates)), ('trade_date',), skip_existing)
 
-    def probe(code='510300.XSHG', end_date=None):
-        """只测试聚宽最近份额接口，不连接 MySQL；用于确认权限、日期和份额单位。"""
-        end = china_now().date() if end_date is None else as_date(end_date)
-        days = previous_days(end, 10)
-        if len(days) < 2:
-            raise ValueError('交易日历不足，无法验证。')
-        records = fetch_window(code, code, days[1:], dict(zip(days[1:], days[:-1])))
-        return pd.DataFrame(records, columns=RESULT_COLUMNS)
-
-    def run(start_date=START_DATE, end_date=END_DATE, incremental=True, lookback_days=LOOKBACK_DAYS, groups=None, skip_existing=True):
+    def run(start_date=START_DATE, end_date=END_DATE, incremental=True, groups=None, skip_existing=True):
+        _require_append(skip_existing)
         today = china_now().date()
         end = today if end_date is None else as_date(end_date)
         start = None if start_date is None else as_date(start_date)
         if end > today or (start is not None and start > end):
             raise ValueError('开始日期不能晚于结束日期，结束日期不能晚于今天。')
-        if not isinstance(incremental, builtins.bool) or isinstance(lookback_days, builtins.bool) or not isinstance(lookback_days, builtins.int) or lookback_days < 1:
-            raise ValueError('incremental 必须为布尔值，回查交易日数必须为正整数。')
+        if not isinstance(incremental, builtins.bool):
+            raise ValueError('incremental 必须为布尔值。')
         selected = list(ETF_GROUPS) if groups is None else list(groups)
         if not selected or builtins.any(group not in ETF_GROUPS for group in selected):
             raise ValueError('分组仅支持 hs300、zz500。')
@@ -2035,16 +1956,13 @@ def _etf_strategy(_apis, _config):
                         continue
                     begin = start
                     if last:
-                        recent = previous_days(as_date(last), 1 if skip_existing else lookback_days)
+                        recent = previous_days(as_date(last), 1)
                         if not recent or recent[-1] != as_date(last):
                             raise ValueError('最新记录不在交易日历中。')
                         # 已有数据以水位为准；即使一年以上没运行，也不能跳过中间缺口。
-                        if skip_existing:
-                            begin = as_date(last) + datetime.timedelta(days=1)
-                            if start_date is not None:
-                                begin = builtins.max(start, begin)
-                        else:
-                            begin = builtins.max(as_date(first), recent[0]) if start_date is None else builtins.max(start, recent[0])
+                        begin = as_date(last) + datetime.timedelta(days=1)
+                        if start_date is not None:
+                            begin = builtins.max(start, begin)
                     if begin > end:
                         continue
                     days = trading_days(begin, end)
@@ -2054,16 +1972,13 @@ def _etf_strategy(_apis, _config):
                     if not prior:
                         raise ValueError('无法确定首日的前一交易日。')
                     before = dict(zip(days, prior + days[:-1]))
-                    # 回查可能早于基金首条有效数据；已有记录本身作为连续性锚点。
+                    # 已有记录作为连续性锚点；指定历史范围时允许基金成立前无数据。
                     seen_data = builtins.bool(last and first and days[0] >= as_date(first))
                     for offset in range(0, len(days), WINDOW_SIZE):
                         window = days[offset:offset + WINDOW_SIZE]
                         _progress_note('份额窗口 {} / {}：{} 至 {}'.format(offset//WINDOW_SIZE+1, (len(days)+WINDOW_SIZE-1)//WINDOW_SIZE, window[0], window[-1]))
                         records = fetch_window(code, name, window, before, require_start=seen_data)
                         if records:
-                            # 已知最新日期处于此窗口时，接口应仍包含它，防止覆盖不完整快照。
-                            if last and window[0] <= as_date(last) <= window[-1] and as_date(last) not in {r['trade_date'] for r in records}:
-                                raise ValueError('源数据未包含已入库的最新日期，停止该基金。')
                             written = save_window(Session, code, records, skip_existing=skip_existing)
                             output.extend(written)
                             seen_data = True
@@ -2175,7 +2090,6 @@ def _earnings_strategy(_apis, _config):
         for frame in _source_pages(fetch_page, key=key.key, label=label, progress=_progress_note, fields=(key.key,)):
             yield from frame.to_dict('records')
 
-    SOURCE_NAMES = {'express': '业绩快报', 'forecast': '业绩预告', 'formal': '正式财报'}
 
     def event(code, kind, pub, period, profit, growth, raw, growth_max=None):
         profit, growth = number(profit), number(growth)
@@ -2368,7 +2282,8 @@ def _earnings_strategy(_apis, _config):
             result[column.name] = rounded
         return result
 
-    def save_results(Session, period, as_of, universe_count, records, skip_existing=False):
+    def save_results(Session, period, as_of, universe_count, records, skip_existing=True):
+        _require_append(skip_existing)
         _progress_note('写入本季度新入选股票')
         if len({r['code'] for r in records}) != len(records):
             raise ValueError('筛选结果包含重复股票。')
@@ -2377,61 +2292,50 @@ def _earnings_strategy(_apis, _config):
                     or r['signal_date'] > as_of or r['announcement_date'] > r['signal_date']
                     or r['open_gap_pct'] <= 3 or r['intraday_pct'] < 0 or r['profit_yoy'] < 20):
                 raise ValueError('筛选结果校验失败，拒绝覆盖数据库。')
-        # 先验证原始筛选阈值，再量化写入值；任何转换失败均发生在删除旧快照之前。
+        # 先验证原始筛选阈值，再量化写入值；任何转换失败均发生在写入之前。
         # 不修改原始 records 和公告 JSON，也不把 Decimal 转回 float。
         db_records = [database_record(r) for r in records]
         _prepare_earnings_version(Session)
         with session_scope(Session) as session:
             version_table = _lock_earnings_version(session, period)
-            if skip_existing:
-                # 股票快照只插入首次命中的结果；不覆盖、不删除已入库股票。
-                existing = {row[0] for row in session.query(EarningsStock.code).filter(
-                    EarningsStock.report_period == period).all()}
-                fresh = [record for record in records if record['code'] not in existing]
-                fresh_db = [record for record in db_records if record['code'] not in existing]
-                run = session.query(EarningsRun).filter(EarningsRun.report_period == period).first()
-                if (run is None and existing) or (run is not None and (run.matched_count < 0 or run.matched_count > len(existing))):
-                    raise ValueError('季度 {} 已有股票少于声明数量或缺少季度元数据；拒绝调低数量发布，请核查后重新采集。'.format(period))
-                count_repair = run is not None and run.matched_count != len(existing)
-                total = len(existing) + len(fresh_db)
-                # 元数据用于网页展示累计命中数量和扫描截止日；仅值有变化时更新。
-                metadata_changed = False
-                if run is None:
-                    session.add(EarningsRun(report_period=period, as_of_date=as_of, updated_at=china_now(),
-                        universe_count=universe_count, matched_count=total, rule_version=RULE_VERSION))
-                    metadata_changed = True
-                else:
-                    values = {'matched_count': total}
-                    if as_of >= run.as_of_date:
-                        values.update(as_of_date=as_of, universe_count=universe_count, rule_version=RULE_VERSION)
-                    for key, value in values.items():
-                        if getattr(run, key) != value:
-                            setattr(run, key, value)
-                            metadata_changed = True
-                    if metadata_changed:
-                        run.updated_at = china_now()
-                if not fresh_db and not metadata_changed:
-                    return []
-                session.add_all([EarningsStock(**record) for record in fresh_db])
-                session.flush()
-                _verify_earnings_quarter(session, period)
-                if fresh_db or count_repair:
-                    _advance_earnings_version(session, version_table, period, rebuild=count_repair)
-                session.commit()
-                return fresh
-            # 清空与重建只针对当前季度，并在同一个事务提交，合法零命中也有元数据。
-            session.query(EarningsStock).filter(EarningsStock.report_period == period).delete(synchronize_session=False)
-            session.query(EarningsRun).filter(EarningsRun.report_period == period).delete(synchronize_session=False)
-            session.add_all([EarningsStock(**r) for r in db_records])
-            session.add(EarningsRun(report_period=period, as_of_date=as_of, updated_at=china_now(),
-                                   universe_count=universe_count, matched_count=len(records), rule_version=RULE_VERSION))
+            # 股票快照只插入首次命中的结果；不覆盖、不删除已入库股票。
+            existing = {row[0] for row in session.query(EarningsStock.code).filter(
+                EarningsStock.report_period == period).all()}
+            fresh = [record for record in records if record['code'] not in existing]
+            fresh_db = [record for record in db_records if record['code'] not in existing]
+            run = session.query(EarningsRun).filter(EarningsRun.report_period == period).first()
+            if (run is None and existing) or (run is not None and (run.matched_count < 0 or run.matched_count > len(existing))):
+                raise ValueError('季度 {} 已有股票少于声明数量或缺少季度元数据；拒绝调低数量发布，请核查后重新采集。'.format(period))
+            count_repair = run is not None and run.matched_count != len(existing)
+            total = len(existing) + len(fresh_db)
+            # 元数据用于网页展示累计命中数量和扫描截止日；仅值有变化时更新。
+            metadata_changed = False
+            if run is None:
+                session.add(EarningsRun(report_period=period, as_of_date=as_of, updated_at=china_now(),
+                    universe_count=universe_count, matched_count=total, rule_version=RULE_VERSION))
+                metadata_changed = True
+            else:
+                values = {'matched_count': total}
+                if as_of >= run.as_of_date:
+                    values.update(as_of_date=as_of, universe_count=universe_count, rule_version=RULE_VERSION)
+                for key, value in values.items():
+                    if getattr(run, key) != value:
+                        setattr(run, key, value)
+                        metadata_changed = True
+                if metadata_changed:
+                    run.updated_at = china_now()
+            if not fresh_db and not metadata_changed:
+                return []
+            session.add_all([EarningsStock(**record) for record in fresh_db])
             session.flush()
             _verify_earnings_quarter(session, period)
-            _advance_earnings_version(session, version_table, period, rebuild=True)
+            if fresh_db or count_repair:
+                _advance_earnings_version(session, version_table, period, rebuild=count_repair)
             session.commit()
-            return records
+            return fresh
 
     def run(end_date=END_DATE, skip_existing=True):
+        _require_append(skip_existing)
         now = china_now()
         requested = as_date(end_date) if end_date is not None else now.date()
         if requested > now.date():
@@ -2448,19 +2352,15 @@ def _earnings_strategy(_apis, _config):
         # 平台提供的全部 A 股，不使用原行业白名单、黑名单、ST/持仓或数量限制。
         names = {str(code): str(row['display_name']) for code, row in universe.iterrows()}
         codes = sorted(names)
-        if not skip_existing:
-            events = fetch_events(codes, period, as_of)
-            records = screen(codes, names, events, period, as_of)
         with database_scope(Base, _config) as Session:
             # 显式指定 InnoDB，确保旧数据库默认引擎不会破坏整批事务。
-            if skip_existing:
-                with session_scope(Session) as session:
-                    existing = {row[0] for row in session.query(EarningsStock.code).filter(
-                        EarningsStock.report_period == period).all()}
-                _progress_note('已有 {} 只股票，本次仅筛选尚未入库股票'.format(len(existing)))
-                pending = [code for code in codes if code not in existing]
-                events = fetch_events(pending, period, as_of) if pending else []
-                records = screen(pending, names, events, period, as_of) if pending else []
+            with session_scope(Session) as session:
+                existing = {row[0] for row in session.query(EarningsStock.code).filter(
+                    EarningsStock.report_period == period).all()}
+            _progress_note('已有 {} 只股票，本次仅筛选尚未入库股票'.format(len(existing)))
+            pending = [code for code in codes if code not in existing]
+            events = fetch_events(pending, period, as_of) if pending else []
+            records = screen(pending, names, events, period, as_of) if pending else []
             records = save_results(Session, period, as_of, len(codes), records, skip_existing=skip_existing)
             _migrate_earnings_versions(Session)
         return pd.DataFrame(records)

@@ -41,19 +41,22 @@ STRATEGY_CONFIG = {
 }
 
 
+def _require_append(skip_existing):
+    if skip_existing is not True:
+        raise ValueError('此采集仅支持只新增，不允许关闭 skip_existing。')
+
+
 def _save_record_set(Session, model, records, filters, key_fields, skip_existing=True):
-    """在调用方限定的范围内新增或替换；一次提交，不覆盖范围外记录。"""
+    """只新增调用方限定范围内尚不存在的主键；已有记录保持原值。"""
+    _require_append(skip_existing)
     if not records:
         return []
     with session_scope(Session) as session:
         rows = session.query(model).filter(*filters)
-        if skip_existing:
-            keys = {tuple(row) for row in rows.with_entities(*(getattr(model, key) for key in key_fields)).all()}
-            records = [r for r in records if tuple(r[key] for key in key_fields) not in keys]
-            if not records:
-                return []
-        else:
-            rows.delete(synchronize_session=False)
+        keys = {tuple(row) for row in rows.with_entities(*(getattr(model, key) for key in key_fields)).all()}
+        records = [r for r in records if tuple(r[key] for key in key_fields) not in keys]
+        if not records:
+            return []
         session.add_all([model(**record) for record in records])
         session.commit()
         return records
