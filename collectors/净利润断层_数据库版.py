@@ -40,6 +40,86 @@ def _earnings_version_table():
     return table
 
 
+_EARNINGS_TABLES = ('earnings_gap_run', 'earnings_gap_stock',
+                    'earnings_sync_head', 'earnings_sync_migration')
+
+
+def _earnings_metadata_text(value, strip=True):
+    # text() result columns may be bytes with older notebook DBAPI drivers.
+    # Never stringify arbitrary objects or treat undecodable/NULL values as safe.
+    if isinstance(value, bytes):
+        try:
+            value = value.decode('ascii')
+        except UnicodeDecodeError:
+            return None
+    if not isinstance(value, str):
+        return None
+    return value.strip() if strip else value
+
+
+def _check_earnings_engines(connection):
+    # Both reads use the collector's same connection/current database. No host,
+    # database name, account, arbitrary metadata or driver exception is exposed.
+    try:
+        selected = connection.execute(_earnings_text('SELECT DATABASE() IS NOT NULL')).scalar()
+        rows = connection.execute(_earnings_text(
+            "SELECT TABLE_NAME, TABLE_TYPE, ENGINE FROM information_schema.TABLES "
+            "WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME IN "
+            "('earnings_gap_run','earnings_gap_stock','earnings_sync_head','earnings_sync_migration')"
+        )).fetchall()
+    except Exception:
+        raise ValueError('净利润断层无法读取当前连接的表引擎元数据；请核对采集账号的元数据权限，拒绝非事务发布。') from None
+    found = {}
+    malformed = False
+    unexpected = 0
+    for row in rows:
+        # SQLAlchemy Row/RowProxy and DBAPI tuples share positional access.
+        if len(row) != 3:
+            malformed = True
+            continue
+        name = _earnings_metadata_text(row[0], strip=False)
+        if name not in _EARNINGS_TABLES:
+            unexpected += 1
+            continue
+        kind = _earnings_metadata_text(row[1])
+        storage = _earnings_metadata_text(row[2])
+        found.setdefault(name, []).append((kind.upper() if kind else None,
+                                          storage.upper() if storage else None))
+    problems = []
+    if selected != 1:
+        problems.append('当前连接未确认已选择数据库')
+    missing = [name for name in _EARNINGS_TABLES if name not in found]
+    if missing:
+        problems.append('缺失或当前账号不可见的表=' + ','.join(missing))
+    if malformed or unexpected:
+        problems.append('元数据结构异常或出现非目标表（数量={}）'.format(unexpected))
+    details = []
+    # Only fixed table/engine/type labels can reach the message. Unknown raw
+    # metadata is deliberately withheld rather than interpolated into logs.
+    known_engines = ('INNODB', 'MYISAM', 'MEMORY', 'ARCHIVE', 'CSV', 'NDB', 'NDBCLUSTER', 'BLACKHOLE', 'FEDERATED', 'MERGE', 'MRG_MYISAM')
+    for name in _EARNINGS_TABLES:
+        values = found.get(name, [])
+        if not values:
+            details.append(name + '=MISSING')
+            continue
+        if len(values) != 1:
+            problems.append(name + ' 返回重复表记录')
+            details.append(name + '=DUPLICATE')
+            continue
+        kind, storage = values[0]
+        label = storage if storage in known_engines else 'UNKNOWN'
+        type_label = kind if kind in ('BASE TABLE', 'VIEW', 'SYSTEM VIEW') else 'UNKNOWN'
+        details.append(name + '=' + label + '/' + type_label)
+        if kind != 'BASE TABLE':
+            problems.append(name + ' 不是已确认的普通表')
+        if storage != 'INNODB':
+            problems.append(name + (' 实际引擎非InnoDB' if storage in known_engines else ' 引擎无法识别或为空'))
+    if problems:
+        raise ValueError('净利润断层表引擎检查失败：' + '；'.join(problems)
+                         + '。当前采集连接：' + ', '.join(details)
+                         + '。请核对采集器与SQL客户端的连接/账号是否一致；拒绝非事务发布。')
+
+
 def _prepare_earnings_version(Session):
     if not getattr(Session, '_earnings_version_ready', False):
         table = _earnings_version_table()
@@ -54,9 +134,7 @@ def _prepare_earnings_version(Session):
             connection.execute(_earnings_text(ddl.replace('CREATE TABLE', 'CREATE TABLE IF NOT EXISTS', 1)))
         if engine.dialect.name == 'mysql':
             with engine.connect() as connection:
-                engines = connection.execute(_earnings_text("SELECT TABLE_NAME, ENGINE FROM information_schema.TABLES WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME IN ('earnings_gap_run','earnings_gap_stock','earnings_sync_head','earnings_sync_migration')")).fetchall()
-            if len(engines) != 4 or any(str(row[1]).lower() != 'innodb' for row in engines):
-                raise ValueError('净利润断层四张数据/版本表必须使用InnoDB；请先检查表引擎，拒绝非事务发布。')
+                _check_earnings_engines(connection)
         # DDL setup does not adopt/publish unvalidated historical quarters.
         # Check both schemas now; migration will create versions transactionally.
         with engine.connect() as connection:
