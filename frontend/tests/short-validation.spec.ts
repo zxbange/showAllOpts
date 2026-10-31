@@ -57,7 +57,8 @@ test('select strategies, resume failure, refresh durable task and show unavailab
       total: 1,
       done: 0,
       updated_at: '2026-10-30T00:00:00Z',
-      error: '测试查询超时',
+      error:
+        'OperationalError：读取源库行情失败；源数据库连接在查询期间中断，可能涉及超时、网络或服务状态，请检查后重试（错误码：MYSQL_2013；任务：0123456789abcdef0123456789abcdef）。已提交断点保留；修复后点击重试。',
       version: 'four-close-v1',
       summary: [],
       windows: [],
@@ -71,7 +72,9 @@ test('select strategies, resume failure, refresh durable task and show unavailab
   await panel.getByRole('checkbox', { name: '红悬停', exact: true }).uncheck()
   await panel.getByRole('checkbox', { name: '蓄力龙', exact: true }).uncheck()
   await panel.getByRole('button', { name: '开始验证', exact: true }).click()
-  await expect(panel.getByRole('alert')).toContainText('测试查询超时')
+  await expect(panel.getByRole('alert')).toContainText('MYSQL_2013')
+  await expect(panel.getByRole('alert')).toContainText('断点保留')
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
   await page.reload()
   await unlock(page)
   await expect(panel.getByRole('button', { name: '重试' })).toBeVisible()

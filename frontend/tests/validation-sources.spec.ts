@@ -101,7 +101,8 @@ test('admin config test-save keeps password in request only, version selection a
   expect(
     await page.evaluate(() => JSON.stringify({ ...localStorage, ...sessionStorage })),
   ).not.toMatch(/test-admin-key|temporary-db-password/)
-  await page.getByRole('button', { name: '锁定验证管理', exact: true }).click()
+  await expect(page.getByRole('button', { name: '锁定验证管理', exact: true })).toHaveCount(0)
+  await page.reload()
   await expect(page.getByLabel('验证管理密钥')).toHaveValue('')
 })
 

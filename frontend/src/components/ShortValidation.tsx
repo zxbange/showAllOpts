@@ -101,19 +101,7 @@ export function ShortValidation() {
   if (unlocked)
     return (
       <>
-        <ValidationPanel
-          adminKey={unlocked}
-          onLock={async () => {
-            try {
-              if (typeof unlocked !== 'string') await validationRequest(unlocked, '/logout', {})
-              setUnlocked(null)
-              setKey('')
-              setMessage('已注销；再次使用或更换浏览器需重新领取配对码。')
-            } catch (e) {
-              setMessage(e instanceof Error ? e.message : '注销失败，请重试')
-            }
-          }}
-        />
+        <ValidationPanel adminKey={unlocked} />
         {message && <p role="alert">{message}</p>}
       </>
     )
@@ -224,7 +212,7 @@ export function ShortValidation() {
     </section>
   )
 }
-function ValidationPanel({ adminKey, onLock }: { adminKey: ValidationAuth; onLock: () => void }) {
+function ValidationPanel({ adminKey }: { adminKey: ValidationAuth }) {
   const sourceEditor = useRef<SourceEditorHandle>(null)
   const starting = useRef(false)
   const firstPoll = useRef(true)
@@ -291,10 +279,6 @@ function ValidationPanel({ adminKey, onLock }: { adminKey: ValidationAuth; onLoc
           <span className="validation-eyebrow">研究设置</span>
           <h2>新建验证</h2>
         </div>
-        <button className="button button-quiet" onClick={onLock}>
-          <LockKeyhole size={15} aria-hidden="true" />
-          锁定验证管理
-        </button>
       </div>
       <details
         className="validation-setup"

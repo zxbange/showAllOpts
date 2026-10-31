@@ -1,6 +1,6 @@
 import { expect, test } from '@playwright/test'
 
-test('pair, enter database, select strategies and start directly; refresh, pause, cancel and logout', async ({
+test('pair, enter database, select strategies and start directly; refresh, pause and cancel', async ({
   page,
 }) => {
   let authenticated = false
@@ -36,10 +36,6 @@ test('pair, enter database, select strategies and start directly; refresh, pause
       return r.fulfill({ status: 401, json: { detail: '会话已失效，请重新配对' } })
     if (r.request().method() === 'POST')
       expect(r.request().headers()['x-validation-csrf']).toBe('page-csrf')
-    if (path.endsWith('/logout')) {
-      authenticated = false
-      return r.fulfill({ json: { ok: true } })
-    }
     if (path.endsWith('/sources')) return r.fulfill({ json: { sources: saved ? [saved] : [] } })
     if (path.endsWith('/sources/save')) {
       saves++
@@ -107,10 +103,9 @@ test('pair, enter database, select strategies and start directly; refresh, pause
   expect(
     await page.evaluate(() => JSON.stringify({ ...localStorage, ...sessionStorage })),
   ).not.toMatch(/one-time-console-code|page-csrf|only-page-memory-password/)
-  await page.getByRole('button', { name: '锁定验证管理', exact: true }).click()
-  await expect(page.getByLabel('一次性配对码')).toBeVisible()
+  await expect(page.getByRole('button', { name: '锁定验证管理', exact: true })).toHaveCount(0)
   await page.reload()
-  await expect(page.getByLabel('一次性配对码')).toBeVisible()
+  await expect(page.getByRole('heading', { name: '补票龙 · 蓄力龙 — 已取消' })).toBeVisible()
 })
 
 test('expired cookie clears form and returns to pairing without leaking inputs', async ({

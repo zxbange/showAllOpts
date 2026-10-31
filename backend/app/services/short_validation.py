@@ -21,6 +21,7 @@ import portalocker
 from sqlalchemy import text, bindparam
 
 from app.services import short_statistics as stats
+from app.services.validation_errors import mark_phase, report
 
 logger = logging.getLogger(__name__)
 VERSION = 'four-close-v2'
@@ -95,12 +96,17 @@ class ValidationJobs:
 
     @contextmanager
     def db(self):
-        db = sqlite3.connect(self.root / 'jobs.sqlite3', timeout=15)
+        db = None
         try:
+            db = sqlite3.connect(self.root / 'jobs.sqlite3', timeout=15)
             with db:
                 yield db
+        except Exception as exc:
+            mark_phase(exc, 'local_store')
+            raise
         finally:
-            db.close()
+            if db is not None:
+                db.close()
 
     def save(self, db, job):
         job['updated_at'] = now()
@@ -175,6 +181,8 @@ class ValidationJobs:
                     if job['version'] not in SUPPORTED_VERSIONS:
                         raise ValueError('算法版本已变化，请创建新任务')
                     job['generation'] += 1
+                    job.pop('error_code', None)
+                    job.pop('error_phase', None)
                     job['status'], job['error'], job['stage'] = 'queued', None, '等待从已提交断点继续'
             self.save(db, job)
         if action == 'cancel':
@@ -247,7 +255,7 @@ class ValidationJobs:
             try:
                 worked = self.tick()
             except Exception as exc:
-                logger.error('Validation worker storage failure: %s', type(exc).__name__)
+                report(logger, exc, phase='worker')
                 # Storage errors must not kill the polling worker or expose private SQL.
                 worked = False
             if not worked:
@@ -267,6 +275,7 @@ class ValidationJobs:
             job = next((j for j in jobs if j['status'] in ('queued', 'running')), None)
             if job is None:
                 return False
+            job['_phase'] = 'source_config'
             try:
                 if job['version'] not in SUPPORTED_VERSIONS:
                     raise ValueError('任务算法版本已变化，请创建新任务')
@@ -290,15 +299,16 @@ class ValidationJobs:
             except Exception as exc:
                 if self.stop_event.is_set():
                     return False
-                logger.warning('Validation job failed id=%s type=%s', job['id'], type(exc).__name__)
-                with self.db() as db:
+                info = report(logger, exc, job, job.get('_phase', 'worker'))
+                with self.failure_state(job), self.db() as db:
                     db.execute('BEGIN IMMEDIATE')
                     current = self.get(job['id'], db)
                     if current['status'] in ('queued', 'running') and current['generation'] == job['generation']:
                         current['timings'] = job.get('timings', {})
                         current['status'] = 'failed'
-                        # Only our data validation messages are exposed; never driver messages.
-                        current['error'] = str(exc) if isinstance(exc, ValueError) else type(exc).__name__ + '：读取或计算失败，请检查数据/连接后重试'
+                        current['error'] = info['message']
+                        current['error_code'] = info['code']
+                        current['error_phase'] = info['phase']
                         self.save(db, current)
             return True
         finally:
@@ -306,6 +316,14 @@ class ValidationJobs:
                 self.finish_cancellations()
             finally:
                 lock.release()
+
+    @contextmanager
+    def failure_state(self, job):
+        try:
+            yield
+        except Exception as exc:
+            report(logger, exc, job, 'local_store')
+            raise
 
     def stage(self, ident, label, generation):
         with self.db() as db:
@@ -324,14 +342,17 @@ class ValidationJobs:
         if 'calendar' not in job:
             if not self.stage(ident, '读取日历和股票清单（查询超时20秒）', job['generation']):
                 return
+            job['_phase'] = 'source_schema'
             stats.validate_schema(source_engine)
             if not self.stage(ident, '读取研究日期计划', job['generation']):
                 return
+            job['_phase'] = 'source_plan'
             plan_options = {'hard_cutoff': True} if job['version'] == VERSION else {}
             start, end, observed, calendar = stats.load_plan(
                 source_engine, job['start'], job['end'], job['observed'], **plan_options)
             if not self.stage(ident, '读取合格股票清单', job['generation']):
                 return
+            job['_phase'] = 'source_universe'
             codes = stats.read_sql(source_engine, '''SELECT DISTINCT code FROM ultra_research_universe
                 WHERE trade_date BETWEEN :first AND :last AND eligible=1 AND is_st=0
                 AND market_cap>=:cap ORDER BY code LIMIT 20001''',
@@ -358,6 +379,7 @@ class ValidationJobs:
             code = job['codes'][job['captured']]
             if not self.stage(ident, '冻结输入 '+code+'（单股有界读取，超时20秒）', job['generation']):
                 return
+            job['_phase'] = 'source_read'
             frames = []
             # A stock's two source tables are read in the same transaction.
             with source_engine.connect() as connection, connection.begin():
@@ -387,9 +409,11 @@ class ValidationJobs:
                 return
             with self.db() as db:
                 row = db.execute('SELECT bars,universe FROM stocks WHERE job=? AND code=?', (ident, code)).fetchone()
+            job['_phase'] = 'compute'
             bars, universe = map(frame_read, row)
             self.compute_stock(job, code, bars, universe, calendar)
             return
+        job['_phase'] = 'summarize'
         if not self.stage(ident, '汇总已提交的策略信号', job['generation']):
             return
         if not job['base_samples']:
@@ -406,8 +430,12 @@ class ValidationJobs:
     @contextmanager
     def timed(self, job, phase):
         started = time.monotonic()
+        job['_phase'] = phase
         try:
             yield
+        except Exception as exc:
+            mark_phase(exc, phase)
+            raise
         finally:
             seconds = round(time.monotonic() - started, 3)
             job.setdefault('timings', {})[phase] = seconds
@@ -422,6 +450,7 @@ class ValidationJobs:
         frames = []
         with self.timed(job, 'connect'):
             connection = source_engine.connect()
+        job['_phase'] = 'source_read'
         with connection, connection.begin():
             for table, columns, extra in (
                 ('ultra_research_bar', BAR_COLUMNS, "AND asset_type='stock'"),
@@ -440,6 +469,7 @@ class ValidationJobs:
                     raise ValueError('单股行情超过4000行，请缩短日期区间或检查重复数据')
                 frames.append(frame)
         # Source transaction/connection is released before CPU work. No raw input is persisted.
+        job['_phase'] = 'compute'
         groups = [dict(tuple(frame.groupby('code', sort=False))) for frame in frames]
         for code in codes:
             if not self.stage(job['id'], '计算股票 ' + code + '（静态批次；逐股提交断点）', job['generation']):
