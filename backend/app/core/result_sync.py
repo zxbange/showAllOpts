@@ -13,6 +13,7 @@ from sqlalchemy import BigInteger, Column, Integer, MetaData, String, Table, Tex
 from sqlalchemy.pool import NullPool
 
 from app.core.cache_errors import SnapshotDataError
+from app.core.etf_snapshot import ETFMembersMissing, validate_etf_snapshot
 from app.core.cache_sync import chunks, key_filter, read_batches, transfer
 from app.core.sync_progress import report
 
@@ -107,6 +108,9 @@ def copy_results(cache, module, full=False):
             if incremental and cursor['revision'] == head['revision']:
                 LOG.info('Cache result journal unchanged module=%s revision=%s', module, head['revision'])
                 return previous.name, cursor['rows']
+            mode = 'incremental' if incremental else 'baseline'
+            LOG.info('Cache result journal start module=%s mode=%s from_revision=%s revision=%s',
+                     module, mode, cursor['revision'] if cursor else None, head['revision'])
             path = cache.root / (module + '-' + uuid.uuid4().hex + '.sqlite')
             local = create_engine('sqlite:///' + path.as_posix(), poolclass=NullPool)
             try:
@@ -130,7 +134,34 @@ def copy_results(cache, module, full=False):
                         report('建立结果同步基线', percent=10)
                         for table in tables:
                             transfer(source, target, table)
-                    cache.validate_module(module, target)
+                    try:
+                        cache.validate_module(module, target)
+                    except ETFMembersMissing as missing:
+                        if module != 'etf-momentum' or not incremental:
+                            raise
+                        LOG.warning('Cache ETF recovery check mode=%s revision=%s date=%s members=%s missing=%s',
+                                    mode, head['revision'], missing.day, missing.expected, missing.missing)
+                        report('核对源库 ETF 候选池完整性', percent=85)
+                        # This is the SAME repeatable-read transaction that supplied
+                        # the journal head and payloads. Never probe a newer snapshot.
+                        try:
+                            source_pool = validate_etf_snapshot(source, require_pool=True)
+                        except ETFMembersMissing as source_missing:
+                            LOG.warning('Cache ETF recovery rejected revision=%s date=%s members=%s missing=%s',
+                                        head['revision'], source_missing.day, source_missing.expected, source_missing.missing)
+                            raise
+                        mode = 'recovered-baseline'
+                        LOG.info('Cache ETF recovery start revision=%s date=%s members=%s missing=0',
+                                 head['revision'], source_pool['as_of_date'], len(source_pool['members']))
+                        report('源库完整，重建 ETF 临时快照', percent=86)
+                        # One rebuild only, limited to this module's private staging
+                        # file. The published file and cursor remain untouched.
+                        for table in tables:
+                            target.execute(table.delete())
+                            transfer(source, target, table)
+                        validate_etf_snapshot(target, require_pool=True)
+                        cache.sync_notes[module] = '源库数据完整，已自动重建 ETF 本地快照。'
+                        report('ETF 临时快照恢复校验通过', percent=95)
                     count = sum(target.scalar(select(func.count()).select_from(table)) for table in tables)
                     target.execute(CURSOR.delete())
                     target.execute(CURSOR.insert().values(module=module, generation=head['generation'], revision=head['revision'], rows=count))
@@ -138,9 +169,11 @@ def copy_results(cache, module, full=False):
                     if target.exec_driver_sql('PRAGMA quick_check').scalar() != 'ok':
                         raise SnapshotDataError('结果同步快照校验失败。')
                 LOG.info('Cache result journal complete module=%s mode=%s revision=%s rows=%s',
-                         module, 'incremental' if incremental else 'baseline', head['revision'], count)
+                         module, mode, head['revision'], count)
                 return path.name, count
             except BaseException:
+                if mode == 'recovered-baseline':
+                    LOG.warning('Cache ETF recovery failed revision=%s; published snapshot unchanged', head['revision'])
                 local.dispose()
                 path.unlink(missing_ok=True)
                 raise

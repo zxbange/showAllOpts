@@ -19,6 +19,9 @@ type Job = {
   version: string
   status: string
   stage: string
+  auto_retry_count?: number
+  next_retry_at?: string | null
+  retry_exhausted?: boolean
   done: number
   total: number
   source?: SourceRef | null
@@ -37,6 +40,7 @@ type Job = {
 const choices = { bukou: '补票龙', redhover: '红悬停', xuli: '蓄力龙', oversold: '超跌后止跌反弹' }
 const statuses: Record<string, string> = {
   queued: '等待',
+  retry_wait: '等待重试',
   running: '运行中',
   failed: '失败',
   paused: '已暂停',
@@ -483,13 +487,20 @@ function ValidationPanel({ adminKey }: { adminKey: ValidationAuth }) {
               </div>
             </div>
           )}
+          {job.status !== 'completed' && (job.status === 'retry_wait' || (job.auto_retry_count ?? 0) > 0) && (
+            <p className="validation-hint" role="status">
+              自动重试：{job.auto_retry_count ?? 0}/5
+              {job.next_retry_at && ` · 下次 ${new Date(job.next_retry_at).toLocaleString('zh-CN')}`}
+              {job.retry_exhausted && ' · 次数已用尽'}
+            </p>
+          )}
           {job.error && (
             <p className="validation-feedback" role="alert">
               {job.error}
             </p>
           )}
           <div className="validation-job-actions">
-            {['failed', 'paused'].includes(job.status) && (
+            {['failed', 'paused', 'retry_wait'].includes(job.status) && (
               <button
                 className="button button-quiet validation-retry-button"
                 disabled={busy}
@@ -498,7 +509,7 @@ function ValidationPanel({ adminKey }: { adminKey: ValidationAuth }) {
                 重试
               </button>
             )}
-            {['queued', 'running'].includes(job.status) && (
+            {['queued', 'running', 'retry_wait'].includes(job.status) && (
               <button
                 className="button button-quiet"
                 disabled={busy}
@@ -507,7 +518,7 @@ function ValidationPanel({ adminKey }: { adminKey: ValidationAuth }) {
                 暂停任务
               </button>
             )}
-            {['queued', 'running', 'paused', 'failed'].includes(job.status) && (
+            {['queued', 'running', 'retry_wait', 'paused', 'failed'].includes(job.status) && (
               <button
                 className="button button-quiet"
                 disabled={busy}

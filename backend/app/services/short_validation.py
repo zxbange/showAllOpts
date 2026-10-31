@@ -6,7 +6,7 @@ New tasks read bounded static-source batches and commit each stock's results.
 Legacy tasks retain their frozen inputs and never reload a committed input.
 """
 from contextlib import contextmanager, nullcontext
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timezone, timedelta
 import hashlib
 import json
 import logging
@@ -21,7 +21,7 @@ import portalocker
 from sqlalchemy import text, bindparam
 
 from app.services import short_statistics as stats
-from app.services.validation_errors import mark_phase, report
+from app.services.validation_errors import mark_phase, report, automatic_retry_allowed
 
 logger = logging.getLogger(__name__)
 VERSION = 'four-close-v2'
@@ -29,6 +29,8 @@ SUPPORTED_VERSIONS = {'four-close-v1', VERSION}
 METHODS = {'bukou': '补票龙', 'redhover': '红悬停龙', 'xuli': '蓄力龙', 'oversold': '超跌后止跌反弹'}
 MAX_ROWS = 4000
 BATCH_SIZE = 20
+AUTO_RETRY_LIMIT = 5
+AUTO_RETRY_SECONDS = 60
 STATIC_MODE = 'static-batch-v1'
 BAR_COLUMNS = 'trade_date, code, open, high, low, close, adj_open, adj_high, adj_low, adj_close, volume, money, paused, high_limit, low_limit'
 UNIVERSE_COLUMNS = 'trade_date, code, display_name, listed_date, eligible, is_st, market_cap'
@@ -40,6 +42,19 @@ class DeleteConflict(ValueError):
 
 def now():
     return datetime.now(timezone.utc).isoformat()
+
+
+def retry_time():
+    return (datetime.fromisoformat(now()) + timedelta(seconds=AUTO_RETRY_SECONDS)).isoformat()
+
+
+def reset_retry(job):
+    # Call only inside a successful progress transaction or explicit manual retry.
+    job.update(auto_retry_count=0, next_retry_at=None, retry_exhausted=False,
+               auto_retry_allowed=False, error=None)
+    job.pop('error_code', None)
+    job.pop('error_phase', None)
+
 
 
 def frame_json(frame):
@@ -152,13 +167,13 @@ class ValidationJobs:
                 return json.loads(alias[0])
             for row in db.execute('SELECT payload FROM jobs'):
                 active = json.loads(row[0])
-                if active['status'] in ('queued', 'running') and active.get('requested') == params:
+                if active['status'] in ('queued', 'running', 'retry_wait') and active.get('requested') == params:
                     # Persist accepted retries too: a lost response must still map
                     # to this job after it completes or the server restarts.
                     db.execute('INSERT INTO job_requests VALUES (?,?)', (fingerprint, active['id']))
                     return active
             job = dict(id=uuid.uuid4().hex, **params, requested=params, formula_params=dict(stats.PARAMS), price_field='adj_close', warmup_days=160, generation=0, status='queued', stage='等待读取计划', done=0, total=0,
-                       captured=0, created_at=now(), updated_at=now(), error=None, summary=[], windows=[], base_samples=0)
+                       captured=0, auto_retry_count=0, next_retry_at=None, retry_exhausted=False, created_at=now(), updated_at=now(), error=None, summary=[], windows=[], base_samples=0)
             db.execute('INSERT INTO jobs VALUES (?,?,?)', (job['id'], fingerprint, json.dumps(job)))
             return job
 
@@ -170,17 +185,21 @@ class ValidationJobs:
                 if job['status'] in ('completed', 'cancelled', 'cancelling'):
                     return job
                 job['generation'] += 1
+                job.update(next_retry_at=None, work_pending=False)
                 job.update(status='cancelling', stage='正在取消，等待在途工作退出；不会提交新结果', cancel_requested_at=now())
-            elif action == 'pause' and job['status'] in ('queued', 'running'):
+            elif action == 'pause' and job['status'] in ('queued', 'running', 'retry_wait'):
                 job['generation'] += 1
+                job.update(next_retry_at=None, work_pending=False)
                 job['status'], job['stage'] = 'paused', '已暂停；在途工作返回后丢弃未提交部分'
             elif action == 'retry':
                 if job['status'] in ('cancelled', 'cancelling'):
                     raise ValueError('已取消或正在取消的任务不能继续，请新建任务')
-                if job['status'] in ('failed', 'paused'):
+                if job['status'] in ('failed', 'paused', 'retry_wait'):
                     if job['version'] not in SUPPORTED_VERSIONS:
                         raise ValueError('算法版本已变化，请创建新任务')
                     job['generation'] += 1
+                    reset_retry(job)
+                    job['work_pending'] = False
                     job.pop('error_code', None)
                     job.pop('error_phase', None)
                     job['status'], job['error'], job['stage'] = 'queued', None, '等待从已提交断点继续'
@@ -208,7 +227,7 @@ class ValidationJobs:
                     job = self.get(ident, db)
                 except KeyError:
                     return
-                if job['status'] not in ('queued', 'paused', 'failed', 'completed', 'cancelled'):
+                if job['status'] not in ('queued', 'paused', 'failed', 'retry_wait', 'completed', 'cancelled'):
                     raise DeleteConflict('运行中或正在取消的任务不能删除，请先取消并等待显示“已取消”')
                 # All job-owned data is in these tables, including payload cursors,
                 # frozen plans and aggregates. Never unlink the shared DB or lock:
@@ -271,10 +290,37 @@ class ValidationJobs:
         try:
             self.finish_cancellations()
             with self.db() as db:
+                db.execute('BEGIN IMMEDIATE')
                 jobs = [json.loads(r[0]) for r in db.execute('SELECT payload FROM jobs ORDER BY rowid')]
-            job = next((j for j in jobs if j['status'] in ('queued', 'running')), None)
-            if job is None:
-                return False
+                job = next((j for j in jobs if j['status'] in ('queued', 'running') or
+                            (j['status'] == 'retry_wait' and j.get('next_retry_at') and
+                             datetime.fromisoformat(j['next_retry_at']) <= datetime.fromisoformat(now()))), None)
+                if job is None:
+                    return False
+                if job.get('work_pending'):
+                    # Holding the OS lock proves the previous work unit no longer
+                    # owns execution. A leftover guard can also follow an ordinary
+                    # deployment whose shutdown exceeded stop()'s join timeout.
+                    # Persist a delayed recovery before touching the source; never
+                    # reset its budget merely because a process was replaced.
+                    used = job.get('auto_retry_count', 0)
+                    waiting = used < AUTO_RETRY_LIMIT
+                    job.update(status='retry_wait' if waiting else 'failed',
+                               work_pending=False, next_retry_at=retry_time() if waiting else None,
+                               auto_retry_allowed=True, retry_exhausted=not waiting,
+                               error_code='WORK_INTERRUPTED', error_phase='worker',
+                               stage='等待自动重试' if waiting else '自动重试已用尽',
+                               error=('上次工作中断，已提交断点保留；将自动重试。' if waiting else
+                                      '上次工作中断，已提交断点保留；自动重试5次已用尽，请检查后手动重试。'))
+                    self.save(db, job)
+                    return True
+                if job['status'] == 'retry_wait':
+                    job['auto_retry_count'] = job.get('auto_retry_count', 0) + 1
+                    job['generation'] += 1
+                    job.update(status='running', next_retry_at=None, stage='正在自动重试')
+                # Reserve the work unit before touching the source or computing.
+                job['work_pending'] = True
+                self.save(db, job)
             job['_phase'] = 'source_config'
             try:
                 if job['version'] not in SUPPORTED_VERSIONS:
@@ -289,15 +335,22 @@ class ValidationJobs:
                 context = self.sources.engine(job['source']) if self.sources is not None and needs_source else nullcontext(self.engine)
                 with context as source_engine:
                     self.work(job, source_engine)
-                if job.get('timings'):
+                with self.db() as db:
+                    db.execute('BEGIN IMMEDIATE')
+                    current = self.get(job['id'], db)
+                    if current['generation'] == job['generation']:
+                        current['work_pending'] = False
+                        if job.get('timings'):
+                            current['timings'] = job['timings']
+                        self.save(db, current)
+            except Exception as exc:
+                if self.stop_event.is_set():
                     with self.db() as db:
                         db.execute('BEGIN IMMEDIATE')
                         current = self.get(job['id'], db)
-                        if current['generation'] == job['generation'] and current['status'] in ('running', 'completed'):
-                            current['timings'] = job['timings']
+                        if current['generation'] == job['generation']:
+                            current['work_pending'] = False
                             self.save(db, current)
-            except Exception as exc:
-                if self.stop_event.is_set():
                     return False
                 info = report(logger, exc, job, job.get('_phase', 'worker'))
                 with self.failure_state(job), self.db() as db:
@@ -305,10 +358,26 @@ class ValidationJobs:
                     current = self.get(job['id'], db)
                     if current['status'] in ('queued', 'running') and current['generation'] == job['generation']:
                         current['timings'] = job.get('timings', {})
-                        current['status'] = 'failed'
-                        current['error'] = info['message']
-                        current['error_code'] = info['code']
-                        current['error_phase'] = info['phase']
+                        current['work_pending'] = False
+                        permitted = automatic_retry_allowed(exc, info)
+                        used = current.get('auto_retry_count', 0)
+                        waiting = permitted and used < AUTO_RETRY_LIMIT
+                        current.update(status='retry_wait' if waiting else 'failed',
+                                       auto_retry_allowed=permitted,
+                                       retry_exhausted=permitted and not waiting,
+                                       next_retry_at=retry_time() if waiting else None,
+                                       error_code=info['code'], error_phase=info['phase'])
+                        message = info['message']
+                        if waiting:
+                            current['stage'] = '等待自动重试'
+                            message = message.replace('修复后点击重试。', '将自动重试。')
+                        elif permitted:
+                            current['stage'] = '自动重试已用尽'
+                            message += ' 自动重试5次已用尽，请检查后手动重试。'
+                        else:
+                            current['stage'] = '失败，等待手动重试'
+                            message += ' 此错误不自动重试。'
+                        current['error'] = message
                         self.save(db, current)
             return True
         finally:
@@ -400,6 +469,7 @@ class ValidationJobs:
                     return
                 db.execute('INSERT INTO stocks(job,code,bars,universe) VALUES (?,?,?,?)', (ident, code, *frames))
                 current['captured'] += 1
+                reset_retry(current)
                 current['stage'] = '输入已保存 '+code
                 self.save(db, current)
             return
@@ -424,7 +494,10 @@ class ValidationJobs:
             current = self.get(ident, db)
             if current['status'] != 'running' or current['generation'] != job['generation']:
                 return
-            current.update(status='completed', stage='完成', summary=summary, windows=windows)
+            current.update(status='completed', stage='完成', summary=summary, windows=windows,
+                           error=None, next_retry_at=None, retry_exhausted=False, auto_retry_allowed=False)
+            current.pop('error_code', None)
+            current.pop('error_phase', None)
             self.save(db, current)
 
     @contextmanager
@@ -524,6 +597,7 @@ class ValidationJobs:
                 raise ValueError('任务断点冲突，请重试')
             current['timings'] = dict(job.get('timings', {}))
             current['done'] += 1
+            reset_retry(current)
             current['base_samples'] += quality['base_samples']
             current['stage'] = '计算断点已保存 '+code
             self.save(db, current)

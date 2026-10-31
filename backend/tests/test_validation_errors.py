@@ -43,7 +43,7 @@ def test_query_error_files_and_retry(setup, monkeypatch):
     try:
         jobs.tick()
         failed = jobs.get(job['id'])
-        assert failed['status'] == 'failed' and failed['done'] == 0
+        assert failed['status'] == 'retry_wait' and failed['done'] == 0
         assert failed['error_code'] == 'MYSQL_2013'
         assert failed['error_phase'] == 'ultra_research_bar'
         assert '读取源库行情' in failed['error'] and '断点保留' in failed['error']

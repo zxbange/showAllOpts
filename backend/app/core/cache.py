@@ -227,13 +227,8 @@ class SnapshotCache:
 
     def validate_module(self, module, target):
         if module == 'etf-momentum':
-            head = target.execute(select(Pool.__table__)).mappings().first()
-            if head:
-                if head['rule_version'] not in ('etf_close_momentum_v1', 'etf_close_momentum_v2', 'etf_close_momentum_v3'):
-                    raise SnapshotDataError('请先在聚宽运行计算入库版 ETF/LOF 采集脚本，再同步热度结果。')
-                codes = set(target.scalars(select(Heat.code).where(Heat.trade_date == head['as_of_date'])))
-                if {m['code'] for m in head['members']} - codes:
-                    raise SnapshotDataError('ETF/LOF 最新热度结果尚未完整入库，保留上一快照。')
+            from app.core.etf_snapshot import validate_etf_snapshot
+            validate_etf_snapshot(target)
 
     def copy_module(self, module, full=False):
         if module in JOURNAL_MODULES:

@@ -430,7 +430,8 @@
   font-weight: 600;
 }
 .status-running,
-.status-queued {
+.status-queued,
+.status-retry_wait {
   color: #89611e;
   background: #fff1d6;
 }

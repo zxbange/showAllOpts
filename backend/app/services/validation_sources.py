@@ -18,27 +18,33 @@ _RESOLVER_SLOTS = threading.BoundedSemaphore(4)
 
 def resolve_addresses(host, port):
     if not _RESOLVER_SLOTS.acquire(blocking=False):
-        raise SourceError('DNS解析繁忙，请稍后重试')
+        raise temporary_dns('DNS解析繁忙，请稍后重试')
     result = queue.Queue(maxsize=1)
     def resolve():
         try:
             result.put((True, socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)))
-        except Exception:
-            result.put((False, None))
+        except Exception as exc:
+            result.put((False, isinstance(exc, socket.gaierror) and exc.errno == socket.EAI_AGAIN))
         finally:
             _RESOLVER_SLOTS.release()
     threading.Thread(target=resolve, daemon=True, name='validation-dns').start()
     try:
         ok, addresses = result.get(timeout=DNS_TIMEOUT)
     except queue.Empty:
-        raise SourceError('DNS解析超时（5秒），请检查允许目标与DNS配置') from None
+        raise temporary_dns('DNS解析超时（5秒），请检查允许目标与DNS配置') from None
     if not ok:
-        raise SourceError('DNS解析失败，请检查允许目标与DNS配置')
+        raise (temporary_dns('DNS解析失败，请检查允许目标与DNS配置') if addresses else SourceError('DNS解析失败，请检查允许目标与DNS配置'))
     return addresses
 
 
 class SourceError(ValueError):
     """Safe public message, never a driver/validation exception or connection value."""
+
+
+def temporary_dns(message):
+    error = SourceError(message)
+    error._validation_dns_temporary = True
+    return error
 
 
 class ValidationSources:

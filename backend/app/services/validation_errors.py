@@ -137,3 +137,50 @@ def report(logger, exc, job=None, phase='worker'):
     info['message'] = (f"{info['kind']}：{PHASES[info['phase']]}失败；{info['reason']}"
                        f"（错误码：{info['code']}；任务：{ident}）。{advice}")
     return info
+
+
+SOURCE_PHASES = frozenset({'source_config', 'source_schema', 'source_plan', 'source_universe',
+                           'source_read', 'connect', 'ultra_research_bar', 'ultra_research_universe'})
+TRANSIENT_MYSQL = frozenset({1040, 1205, 1213, 2002, 2003, 2006, 2013, 2055})
+
+
+def automatic_retry_allowed(exc, info):
+    """Fail closed: an OperationalError name alone is not a retry policy."""
+    phase, code = info['phase'], info['code']
+    if phase == 'local_store':
+        return code.startswith('SQLITE_') and int(code[7:]) & 255 in (5, 6)
+    if phase not in SOURCE_PHASES:
+        return False
+    # Explicit validation failures must not inherit retryability from old context.
+    if isinstance(exc, ValueError) and type(exc).__name__ != 'SourceError':
+        return False
+    import errno
+    import socket
+    import ssl
+    errors = list(chain(exc))
+    # PyMySQL wraps TLS/DNS OSErrors as 2003. Permanent inner errors veto
+    # that broad outer code before any transient-code allowlist is consulted.
+    for error in errors:
+        if isinstance(error, (ssl.SSLError, PermissionError)):
+            return False
+        if isinstance(error, socket.gaierror) and error.errno != socket.EAI_AGAIN:
+            return False
+        if isinstance(error, MySQLError) and error.args and type(error.args[0]) is int:
+            if error.args[0] not in TRANSIENT_MYSQL:
+                return False
+    if code.startswith('MYSQL_'):
+        return int(code[6:]) in TRANSIENT_MYSQL
+    temporary = {errno.ECONNREFUSED, errno.ECONNRESET, errno.ECONNABORTED,
+                 errno.ETIMEDOUT, errno.ENETUNREACH, errno.EHOSTUNREACH, errno.EPIPE}
+    for error in errors:
+        if isinstance(error, ssl.SSLError):
+            return False
+        if isinstance(error, socket.gaierror):
+            return error.errno == socket.EAI_AGAIN
+        if isinstance(error, TimeoutError):
+            return True
+        if isinstance(error, OSError) and error.errno in temporary:
+            return True
+        if getattr(error, '_validation_dns_temporary', False) is True:
+            return True
+    return False
