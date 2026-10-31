@@ -36,9 +36,17 @@ export const methods = [
 export function ShortTermNavigation({
   value,
   counts,
+  day = '',
+  loading = false,
+  error = false,
+  hasSnapshot = true,
 }: {
   value: ShortMethod | 'validation'
   counts?: Partial<Record<ShortMethod, number>>
+  day?: string
+  loading?: boolean
+  error?: boolean
+  hasSnapshot?: boolean
 }) {
   return (
     <ModuleSwitch
@@ -50,15 +58,31 @@ export function ShortTermNavigation({
           name: m.name,
           description: m.subtitle,
           icon: m.icon,
-          href: '/short-term?method=' + m.id,
-          count: counts?.[m.id] ?? '—',
+          href: '/short-term?' + new URLSearchParams({ method: m.id, ...(day ? { day } : {}) }),
+          count: (
+            <span
+              title={
+                loading
+                  ? '数量加载中'
+                  : error
+                    ? '数量加载失败'
+                    : !hasSnapshot
+                      ? '暂无选股快照'
+                      : counts?.[m.id] == null
+                        ? '此快照尚无该策略数量'
+                        : `选股快照：${day || '最新可用日'}`
+              }
+            >
+              {loading || error || !hasSnapshot ? '—' : (counts?.[m.id] ?? '—')}
+            </span>
+          ),
         })),
         {
           id: 'validation',
           name: '胜率验证',
           description: '选择策略与历史区间',
           icon: ChartNoAxesCombined,
-          href: '/short-term/validation',
+          href: '/short-term/validation' + (day ? '?' + new URLSearchParams({ day }) : ''),
         },
       ]}
     />

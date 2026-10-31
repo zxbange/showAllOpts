@@ -1,6 +1,7 @@
-"""Compare small quarterly heads, never scan all historical stock keys when versioned."""
+"""Compare quarterly versions and scalar counts; fetch only changed quarter details."""
 import logging
-from sqlalchemy import BigInteger, Column, Date, MetaData, String, Table, inspect, select
+import re
+from sqlalchemy import BigInteger, Column, Date, MetaData, String, Table, inspect, select, func
 from app.core.cache_errors import SnapshotDataError
 from app.core.cache_sync import chunks, key_filter, transfer
 
@@ -13,21 +14,27 @@ VERSION = Table('earnings_sync_head', MetaData(),
 
 def sync_quarters(source, target, tables, incremental):
     """Return False for legacy sources; callers retain full reconciliation compatibility."""
-    if not inspect(source).has_table(VERSION.name):
-        LOG.warning('Cache earnings versions unavailable; using legacy reconciliation; upgrade both collectors')
-        if inspect(target).has_table(VERSION.name):
-            VERSION.drop(target)
-        return False
     head, stocks = tables
     remote = {row['report_period']: dict(row) for row in source.execute(select(head)).mappings()}
-    versions = {row['report_period']: dict(row) for row in source.execute(select(VERSION)).mappings()}
-    if not remote.keys() <= versions.keys():
-        LOG.warning('Cache earnings versions incomplete; using legacy reconciliation; upgrade both collectors')
+    has_versions = inspect(source).has_table(VERSION.name)
+    versions = {row['report_period']: dict(row) for row in source.execute(select(VERSION)).mappings()} if has_versions else {}
+    if any(not re.fullmatch(r'[0-9a-f]{32}', v['generation'] or '') or v['revision'] < 0 for v in versions.values()):
+        raise SnapshotDataError('季度同步版本无效，请检查采集器。')
+    # A version is only useful if its declared snapshot is complete. Aggregate
+    # small keys/counts, never historical JSON payloads; reject before any copy.
+    actual = dict(source.execute(select(stocks.c.report_period, func.count()).group_by(stocks.c.report_period)).all())
+    for period in sorted(remote.keys() | actual.keys()):
+        meta = remote.get(period)
+        count = actual.get(period, 0)
+        if meta is None or meta['matched_count'] != count or meta['matched_count'] < 0 or meta['matched_count'] > meta['universe_count']:
+            version = versions.get(period)
+            raise SnapshotDataError('季度 {} 数据不完整：声明数量={}，实际数量={}，revision={}；保留上次成功数据，请核查该季度采集。'.format(
+                period, meta['matched_count'] if meta else 'missing', count, version['revision'] if version else 'missing'))
+    if not has_versions or not remote.keys() <= versions.keys():
+        LOG.warning('Cache earnings versions unavailable/incomplete; using validated legacy reconciliation; upgrade both collectors')
         if inspect(target).has_table(VERSION.name):
             VERSION.drop(target)
         return False
-    if any(not v['generation'] or v['revision'] < 0 for v in versions.values()):
-        raise SnapshotDataError('季度同步版本无效，请检查采集器。')
     old = {row['report_period']: dict(row) for row in target.execute(select(head)).mappings()} if incremental else {}
     previous = {}
     if incremental and inspect(target).has_table(VERSION.name):
@@ -49,14 +56,14 @@ def sync_quarters(source, target, tables, incremental):
             remote_keys = {tuple(row) for row in source.execute(select(*columns).where(stocks.c.report_period == period))}
             local_keys = {tuple(row) for row in target.execute(select(*columns).where(stocks.c.report_period == period))}
             if not local_keys <= remote_keys:
-                raise SnapshotDataError('季度新增版本包含删除，请更新采集器或完整同步。')
+                raise SnapshotDataError('季度 {} 新增版本包含删除：源数量={}，缓存数量={}，源revision={}，缓存revision={}；请核查采集器，不能按新增发布删除。'.format(period, meta['matched_count'], old[period]['matched_count'], current['revision'], prior['revision']))
             for batch in chunks(remote_keys - local_keys):
                 fetched = transfer(source, target, stocks, key_filter(stocks, batch))
                 if fetched != len(batch):
                     raise SnapshotDataError('季度新增股票与源数据不一致。')
                 downloaded += fetched
         elif meta['matched_count'] != old[period]['matched_count']:
-            raise SnapshotDataError('季度股票数量变化但版本未更新，请升级采集器并完整同步。')
+            raise SnapshotDataError('季度 {} 股票数量变化但版本未更新：源数量={}，缓存数量={}，generation={}，revision={}；请运行新版采集器的季度版本迁移，保留上次成功数据。'.format(period, meta['matched_count'], old[period]['matched_count'], current['generation'], current['revision']))
         if rebuild or old.get(period) != meta:
             target.execute(head.delete().where(head.c.report_period == period))
             target.execute(head.insert().values(**meta))

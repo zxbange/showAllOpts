@@ -57,6 +57,11 @@ def test_concurrent_first_initialization_and_version_adoption(tmp_path, kind):
         event.remove(engine, 'before_cursor_execute', before)
         event.remove(engine, 'after_cursor_execute', after)
     with engine.begin() as source:
+        if kind == 'earnings':
+            # Schema initialization must not certify existing data. Only a
+            # validated collector write/migration may publish a quarter version.
+            assert source.execute(select(head)).first() is None
+            source.execute(head.insert().values(report_period=date(2026, 9, 30), generation='a'*32, revision=0))
         original = dict(source.execute(select(head)).mappings().one())
         assert original['revision'] == 0
         source.execute(head.update().values(revision=7))

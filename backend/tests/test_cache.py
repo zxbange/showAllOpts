@@ -112,7 +112,7 @@ def test_refresh_selects_only_source_columns_and_does_not_write_source(cached, e
     finally: event.remove(engine,'before_cursor_execute',record)
     selects = [s for s in statements if s.lstrip().startswith('SELECT')]
     # Append modules use bounds plus payload only for nonempty partitions.
-    assert sum('GROUP BY' in sql for sql in selects) == 4
+    assert sum('GROUP BY' in sql for sql in selects) == 5  # Includes earnings completeness counts.
     for _, models in MODULES.values():
         for model in models:
             assert any(model.__tablename__ in sql for sql in selects)

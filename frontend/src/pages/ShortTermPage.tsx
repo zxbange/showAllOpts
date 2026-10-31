@@ -13,14 +13,15 @@ import '../styles/short-term.css'
 const fmt = (n: number | null | undefined, digits = 2) =>
   n == null ? '—' : n.toLocaleString('zh-CN', { maximumFractionDigits: digits })
 export function ShortTermPage() {
-  const [params] = useSearchParams()
+  const [params, setParams] = useSearchParams()
   const method: ShortMethod =
     methods.find((item) => item.id === params.get('method'))?.id ?? 'bukou'
-  const [day, setDay] = useState('')
+  const day = params.get('day') || ''
+  const setDay = (value: string) => setParams({ method, ...(value ? { day: value } : {}) })
   const [offset, setOffset] = useState(0)
   useEffect(() => {
     setOffset(0)
-  }, [method])
+  }, [method, day])
   const loader = useCallback(
     (signal: AbortSignal) => getShortTerm(day, method, offset, signal),
     [day, method, offset],
@@ -29,7 +30,18 @@ export function ShortTermPage() {
   const selected = methods.find((m) => m.id === method)!
   return (
     <div className="short-page page-enter">
-      <PageHeader switcher={<ShortTermNavigation value={method} counts={data?.counts} />}>
+      <PageHeader
+        switcher={
+          <ShortTermNavigation
+            value={method}
+            day={day}
+            counts={data?.trade_date ? data.counts : undefined}
+            loading={loading}
+            error={!!error}
+            hasSnapshot={!!data?.trade_date}
+          />
+        }
+      >
         <div>
           <div className="short-title-row">
             <h1>

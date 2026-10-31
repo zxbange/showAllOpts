@@ -20,6 +20,8 @@ def seed(session, period=P, code='600001.XSHG', **values):
         prices=[{'date':'2026-10-15','open':10.4,'close':10.5,'low':10,'high':10.6}])
     row.update(values)
     session.add(EarningsStock(**row))
+    session.flush()
+    session.get(EarningsRun,period).matched_count = session.query(EarningsStock).filter_by(report_period=period).count()
     session.commit()
 
 

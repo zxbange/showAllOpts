@@ -112,7 +112,7 @@ def test_earnings_only_downloads_changed_quarters_and_tracks_membership(cached, 
         assert len(details) == 1 and details[0][1][:-2] == (str(current),)
         statements.clear()
         cache.refresh('earnings-gap', background=False)
-        assert len(statements) == 2
+        assert len(statements) == 4  # Add source header/count completeness checks.
         assert all('earnings_gap_stock.events' not in sql for sql, _ in statements)
     finally: event.remove(engine, 'before_cursor_execute', capture)
     assert_matches(cache, session, 'earnings-gap')
