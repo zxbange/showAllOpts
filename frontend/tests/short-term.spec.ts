@@ -67,6 +67,8 @@ test('short term tabs, dates, candles and pagination', async ({ page }, info) =>
   await page.getByRole('link', { name: /红悬停龙/ }).click()
   await expect(page.getByRole('heading', { name: '本日暂无符合条件的股票' })).toBeVisible()
   await page.getByRole('link', { name: /蓄力龙/ }).click()
+  await expect(page.getByRole('link', { name: /蓄力龙/ })).toHaveAttribute('aria-current', 'page')
+  await expect(page.getByRole('img', { name: /形态示例近30个交易日/ })).toBeVisible()
   await page.getByLabel('短线选股日期').selectOption('2026-09-29')
   await expect(page.locator('.short-summary')).toContainText('2026-09-29')
   await expect(page.getByRole('img', { name: /形态示例近30个交易日/ })).toBeVisible()

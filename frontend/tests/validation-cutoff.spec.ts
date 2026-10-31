@@ -52,8 +52,13 @@ test('two dates submit one cutoff and cards adapt to extra strategies', async ({
   await expect(page.getByText(/截止日期留空/)).toHaveCount(0)
   const cards = page.locator('.validation-setup-grid > .validation-card')
   async function layout() {
-    const a = (await cards.nth(0).boundingBox())!,
-      b = (await cards.nth(1).boundingBox())!
+    // Read both cards in the same animation frame, not separate browser calls.
+    const [a, b] = await cards.evaluateAll((elements) =>
+      elements.map((element) => {
+        const rect = element.getBoundingClientRect()
+        return { y: rect.y, height: rect.height }
+      }),
+    )
     if (info.project.name === 'desktop') {
       expect(Math.abs(a.height - b.height)).toBeLessThan(1)
       expect(Math.abs(a.y - b.y)).toBeLessThan(1)
