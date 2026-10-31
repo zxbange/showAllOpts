@@ -74,7 +74,7 @@ export function ShortTermPage() {
               </button>
             </div>
           </div>
-          <p>按四种形态筛选股票，查看入选时的K线与均线。</p>
+          <p>按信号日期查看入选股票，K线持续更新至最新采集交易日。</p>
         </div>
         <CandlestickChart size={32} />
       </PageHeader>
@@ -118,52 +118,60 @@ export function ShortTermPage() {
         <>
           <p className="short-summary">
             {data.trade_date} · 扫描 {fmt(data.meta.universe_count, 0)} 只 · {selected.name}入选{' '}
-            {data.total} 只
+            {data.total} 只{data.meta.quotes_as_of && ` · K线截至 ${data.meta.quotes_as_of}`}
           </p>
           {!data.items.length ? (
             <EmptyState title="本日暂无符合条件的股票" description="可切换战法或日期。" />
           ) : (
             <div className="short-stock-grid">
-              {data.items.map((stock) => (
-                <article key={stock.code} className="short-stock-card">
-                  <header>
-                    <div>
-                      <h3>
-                        {stock.name}
-                        <small>{stock.code}</small>
-                      </h3>
-                      <span>{stock.industry || '暂无行业'}</span>
+              {data.items.map((stock) => {
+                const close = stock.quote_date ? stock.quote_close : stock.close
+                const change = stock.quote_date ? stock.quote_pct_change : stock.pct_change
+                return (
+                  <article key={stock.code} className="short-stock-card">
+                    <header>
+                      <div>
+                        <h3>
+                          {stock.name}
+                          <small>{stock.code}</small>
+                        </h3>
+                        <span>{stock.industry || '暂无行业'}</span>
+                      </div>
+                      <div className={`short-price ${(change ?? 0) >= 0 ? 'up' : 'down'}`}>
+                        <strong>{fmt(close)}</strong>
+                        <small>
+                          日涨跌 {(change ?? 0) > 0 ? '+' : ''}
+                          {fmt(change)}%
+                        </small>
+                      </div>
+                    </header>
+                    <div className="short-facts">
+                      <span>
+                        入选时市值 <b>{fmt(stock.market_cap)} 亿</b>
+                      </span>
+                      <span>
+                        入选时PE <b>{fmt(stock.pe)}</b>
+                      </span>
+                      <span>
+                        入选时PB <b>{fmt(stock.pb)}</b>
+                      </span>
                     </div>
-                    <div className={`short-price ${(stock.pct_change ?? 0) >= 0 ? 'up' : 'down'}`}>
-                      <strong>{fmt(stock.close)}</strong>
-                      <small>
-                        {(stock.pct_change ?? 0) > 0 ? '+' : ''}
-                        {fmt(stock.pct_change)}%
-                      </small>
-                    </div>
-                  </header>
-                  <div className="short-facts">
-                    <span>
-                      市值 <b>{fmt(stock.market_cap)} 亿</b>
-                    </span>
-                    <span>
-                      PE <b>{fmt(stock.pe)}</b>
-                    </span>
-                    <span>
-                      PB <b>{fmt(stock.pb)}</b>
-                    </span>
-                  </div>
-                  <ShortTermChart name={stock.name} bars={stock.bars} />
-                  <footer>
-                    {stock.bars.length} 根 · {stock.bars[0]?.date} — {stock.bars.at(-1)?.date}
-                    <span>
-                      {stock.methods
-                        .map((id) => methods.find((m) => m.id === id)?.name)
-                        .join(' · ')}
-                    </span>
-                  </footer>
-                </article>
-              ))}
+                    <ShortTermChart
+                      name={stock.name}
+                      bars={stock.bars}
+                      signalDate={data.trade_date || undefined}
+                    />
+                    <footer>
+                      {stock.bars.length} 根 · {stock.bars[0]?.date} — {stock.bars.at(-1)?.date}
+                      <span>
+                        {stock.methods
+                          .map((id) => methods.find((m) => m.id === id)?.name)
+                          .join(' · ')}
+                      </span>
+                    </footer>
+                  </article>
+                )
+              })}
             </div>
           )}
           {data.total > 6 && (

@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""聚宽研究：短线四种形态；近三个交易日快照及30日K线，不下单。"""
+"""聚宽研究：短线四种形态；信号日后跟踪5个交易日，更新30日K线，不下单。"""
 import builtins
 import datetime
 import json
@@ -317,7 +317,7 @@ def _safe_error(exc, config):
 
 
 def _short_term_strategy(_apis, _config):
-    """原 stock 三战法与四策略统计的超跌反弹；近三日快照入库。"""
+    """四种形态按信号日保存；保留当天及前5个交易日，行情持续更新。"""
     settings = strategy_settings('短线选股')
     if settings['batch_size'] > 100:
         raise ValueError('短线选股 batch_size 不得超过100，避免行情请求过大。')
@@ -326,6 +326,7 @@ def _short_term_strategy(_apis, _config):
     METHODS = {'bukou': '补票龙', 'redhover': '红悬停龙', 'xuli': '蓄力龙', 'oversold': '超跌后止跌反弹'}
     MA_PERIODS = (5, 10, 20, 30, 60)
     RULE_VERSION = 'stock_four_patterns_v3_oversold'
+    WATCH_VERSION, OBSERVATION_DAYS = 1, 5
     Base = declarative_base()
 
     class ShortTermRun(Base):
@@ -605,6 +606,12 @@ def _short_term_strategy(_apis, _config):
         frame['pct_chg'] = (frame['close'] / frame['pre_close'] - 1) * 100
         return frame
 
+    def quote_values(frame):
+        last = frame.iloc[-1]
+        return {'quote_date': as_date(last['date']).isoformat(), 'quote_close': finite(last['close']),
+                'quote_pct_change': finite(last['pct_chg']), 'quote_volume': finite(last['volume']),
+                'bars': chart_bars(frame)}
+
     def read_st_flags(codes, day):
         if not codes:
             return {}
@@ -687,9 +694,11 @@ def _short_term_strategy(_apis, _config):
                 if not methods:
                     continue
                 last = frame.iloc[-1]
-                batch_selected.append({'code': code, 'trade_date': day, 'name': str(securities.loc[code, 'display_name']),
+                record = {'code': code, 'trade_date': day, 'name': str(securities.loc[code, 'display_name']),
                     'methods': methods, 'close': finite(last['close']), 'pct_change': finite(last['pct_chg']),
-                    'volume': finite(last['volume']), 'bars': chart_bars(frame)})
+                    'volume': finite(last['volume']), 'listed_date': listing.isoformat()}
+                record.update(quote_values(frame))
+                batch_selected.append(record)
             selected.extend(batch_selected)
         picked = [r['code'] for r in selected]
         industries = {}
@@ -704,7 +713,9 @@ def _short_term_strategy(_apis, _config):
         meta = {'rule_version': RULE_VERSION, 'universe_count': len(codes), 'evaluated_count': evaluated,
                 'oversold_params': dict(OVERSOLD_PARAMS), 'oversold_adjustment': 'post',
                 'oversold_volume': 'raw', 'short_history_count': young, 'counts': {m: sum(m in r['methods'] for r in selected) for m in METHODS},
-                'ma_periods': list(MA_PERIODS), 'chart_days': 30, 'adjustment': 'pre', 'retention_trade_days': 3, 'exclude_st': True, 'min_market_cap': 30}
+                'ma_periods': list(MA_PERIODS), 'chart_days': 30, 'adjustment': 'pre',
+                'retention_trade_days': OBSERVATION_DAYS + 1, 'observation_trade_days': OBSERVATION_DAYS,
+                'watch_version': WATCH_VERSION, 'quotes_as_of': day.isoformat(), 'exclude_st': True, 'min_market_cap': 30}
         return meta, selected
 
     def complete_meta(meta):
@@ -756,14 +767,80 @@ def _short_term_strategy(_apis, _config):
             session.commit()
         return True
 
+    def refresh_quotes(Session, keep_days):
+        """Fetch once per watched code; publish quotes and changed headers atomically."""
+        latest = keep_days[-1]
+        with session_scope(Session) as session:
+            heads = {r.trade_date: dict(r.payload) for r in session.query(ShortTermRun)
+                     .filter(ShortTermRun.trade_date.in_(keep_days))}
+            pending = [day for day, meta in heads.items()
+                       if meta.get('watch_version') != WATCH_VERSION or meta.get('quotes_as_of') != latest.isoformat()]
+            if not pending:
+                return 0
+            records = [(r.trade_date, r.code, dict(r.payload)) for r in session.query(ShortTermStock)
+                       .filter(ShortTermStock.trade_date.in_(keep_days))]
+        watched = {code for day, code, payload in records if day in pending}
+        quote_keys = ('quote_date', 'quote_close', 'quote_pct_change', 'quote_volume', 'bars')
+        # Today's selected stocks already have current quotes; reuse them across signal dates.
+        quotes = {code: {key: payload[key] for key in quote_keys}
+                  for day, code, payload in records
+                  if code in watched and payload.get('quote_date') == latest.isoformat()
+                  and builtins.all(key in payload for key in quote_keys)}
+        missing = sorted(watched - set(quotes))
+        if missing:
+            days = [as_date(d) for d in get_trade_days(end_date=latest, count=90)]
+            if not days or days[-1] != latest or days != sorted(set(days)):
+                raise ValueError('观察行情交易日日历异常，未更新K线。')
+            listing = {code: as_date(payload['listed_date']) for day, code, payload in records
+                       if code in missing and payload.get('listed_date')}
+            # Upgrade old snapshots without re-running their signal calculations.
+            for day in sorted(set(d for d, c, p in records if c in missing and c not in listing)):
+                codes = [c for d, c, p in records if d == day and c in missing and c not in listing]
+                if not codes:
+                    continue
+                securities = get_all_securities(types=['stock'], date=day)
+                for code in codes:
+                    if securities is None or code not in securities.index:
+                        raise ValueError('观察股票上市信息缺失：{}'.format(code))
+                    listing[code] = as_date(securities.loc[code, 'start_date'])
+            size = settings['batch_size']
+            batches = [missing[i:i+size] for i in range(0, len(missing), size)]
+            for batch in _progress_items(batches, '更新观察股票K线', lambda b: b[0]):
+                raw = get_price(batch, start_date=days[0], end_date=latest, frequency='daily',
+                                fields=['open', 'high', 'low', 'close', 'volume'], fq='pre', skip_paused=False, panel=False)
+                for code in batch:
+                    quotes[code] = quote_values(clean_history(raw, code, days, listing[code]))
+        stamp, updated = china_now(), 0
+        with session_scope(Session) as session:
+            # Do not overwrite a signal snapshot replaced by a concurrent collector.
+            locked = {r.trade_date: r for r in session.query(ShortTermRun)
+                      .filter(ShortTermRun.trade_date.in_(heads)).order_by(ShortTermRun.trade_date).with_for_update()}
+            if set(locked) != set(heads) or builtins.any(locked[d].payload != heads[d] for d in heads):
+                raise RuntimeError('短线信号快照已变化，观察行情未写入，请重新运行。')
+            for record in session.query(ShortTermStock).filter(ShortTermStock.trade_date.in_(pending)):
+                payload = dict(record.payload, **quotes[record.code])
+                if record.code in missing:
+                    payload['listed_date'] = listing[record.code].isoformat()
+                json.dumps(payload, allow_nan=False)
+                record.payload, record.updated_at = payload, stamp
+                updated += 1
+            for day in pending:
+                locked[day].payload = dict(heads[day], watch_version=WATCH_VERSION, quotes_as_of=latest.isoformat(),
+                    retention_trade_days=OBSERVATION_DAYS + 1, observation_trade_days=OBSERVATION_DAYS,
+                    snapshot_revision=uuid.uuid4().hex)
+                locked[day].updated_at = stamp
+            session.commit()
+        _progress_note('短线观察：更新 {} 条入选记录（{} 只股票），K线截至 {}。'.format(updated, len(watched), latest))
+        return updated
+
     def run(end_date=None, skip_existing=True):
         if skip_existing is not True:
             raise ValueError('短线选股固定只新增完整交易日快照。')
         clock = china_now()
         latest = _closed_day(clock.date(), clock)
-        keep_days = [as_date(d) for d in get_trade_days(end_date=latest, count=3)]
-        if len(keep_days) != 3:
-            raise ValueError('最近三个完整交易日日历不足。')
+        keep_days = [as_date(d) for d in get_trade_days(end_date=latest, count=OBSERVATION_DAYS + 1)]
+        if len(keep_days) != OBSERVATION_DAYS + 1 or keep_days != sorted(set(keep_days)) or keep_days[-1] > latest:
+            raise ValueError('最近六个完整交易日日历不足、重复或乱序。')
         requested = end_date if end_date is not None else settings['end_date']
         end = keep_days[-1] if requested is None else as_date(requested)
         if end < keep_days[0] or end > latest:
@@ -781,6 +858,7 @@ def _short_term_strategy(_apis, _config):
                 meta, records = collect(day)
                 if save_day(Session, day, meta, records):
                     results.extend(records)
+            refresh_quotes(Session, keep_days)
         return pd.DataFrame(results, columns=['trade_date', 'code', 'name', 'methods', 'close', 'pct_change', 'industry', 'pe', 'pb', 'market_cap', 'bars'])
 
     return SimpleNamespace(**locals())
@@ -795,7 +873,7 @@ def run(**options):
 if __name__ == '__main__':
     try:
         short_term_df = run()
-        print('短线选股：新增 {} 条股票快照，保留最近三个完整交易日。'.format(len(short_term_df)))
+        print('短线选股：新增 {} 条信号记录，信号后跟踪5个交易日，保留当天及前5个交易日。'.format(len(short_term_df)))
         if len(short_term_df):
             print(short_term_df[['trade_date', 'code', 'name', 'methods', 'close']].to_string(index=False))
     except Exception as exc:

@@ -81,16 +81,17 @@ def test_complete_day_idempotent_zero_results_and_atomicity(ns):
         assert session.query(ns.ShortTermStock).count() == 0
     engine.dispose()
 
-def test_retention_uses_three_calendar_trading_days_and_skips_existing(mod, monkeypatch):
+def test_retention_uses_six_calendar_trading_days_and_skips_current_quotes(mod, monkeypatch):
     engine = create_engine('sqlite://')
-    days = [dt.date(2026, 10, 21), dt.date(2026, 10, 22), dt.date(2026, 10, 23)]
+    days = [d.date() for d in pd.bdate_range(end='2026-10-23', periods=6)]
     monkeypatch.setattr(mod, 'china_now', lambda: dt.datetime(2026, 10, 23, 17))
     ns = mod._short_term_strategy({'get_trade_days': lambda **kw: days}, mod.DB_CONFIG)
     ns.Base.metadata.create_all(engine)
     Session = sessionmaker(bind=engine)
-    old = dt.date(2026, 10, 20)
+    old = days[0] - dt.timedelta(days=1)
     for day in [old] + days:
-        ns.save_day(Session, day, complete_meta(ns, 1), [{'trade_date': day, 'code': '600001.XSHG', 'methods': ['bukou']}])
+        meta = dict(complete_meta(ns, 1), watch_version=ns.WATCH_VERSION, quotes_as_of=days[-1].isoformat())
+        ns.save_day(Session, day, meta, [{'trade_date': day, 'code': '600001.XSHG', 'methods': ['bukou']}])
     @contextmanager
     def database_scope(*args):
         yield Session
@@ -98,7 +99,7 @@ def test_retention_uses_three_calendar_trading_days_and_skips_existing(mod, monk
     assert ns.run().empty  # No market API available: completed days must not be recollected.
     with Session() as session:
         assert [d for d, in session.query(ns.ShortTermRun.trade_date).order_by(ns.ShortTermRun.trade_date)] == days
-        assert session.query(ns.ShortTermStock).count() == 3
+        assert session.query(ns.ShortTermStock).count() == 6
     engine.dispose()
 
 def test_missing_price_dates_fail_instead_of_partial_success(ns):

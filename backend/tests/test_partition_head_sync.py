@@ -71,6 +71,7 @@ def test_quarter_versions_skip_append_and_generation_rebuild(cached, session, en
 
 
 from test_short_term_collector import mod, ns, complete_meta
+from test_short_term_observation import observation
 
 
 def test_collector_same_second_repair_replaces_cached_details(cached, session, engine, ns, mod, monkeypatch):
@@ -93,3 +94,28 @@ def test_collector_same_second_repair_replaces_cached_details(cached, session, e
         assert local.get(ShortTermStock, (day, 'a')).payload['methods'] == ['oversold']
         assert local.get(ShortTermRun, day).updated_at == stamp
         assert local.get(ShortTermRun, day).payload['snapshot_revision']
+
+
+def test_watch_quote_refresh_reaches_cache_with_same_signal_counts(cached, session, engine, observation):
+    from sqlalchemy.orm import sessionmaker
+    o = observation
+    _, cache = cached
+    days = o.calendar[95:101]
+    day, latest = days[0], days[-1]
+    Session = sessionmaker(bind=engine)
+    o.ns.save_day(Session, day, complete_meta(o.ns, 1), [{
+        'code': '600001.XSHG', 'methods': ['bukou'], 'listed_date': o.calendar[0].isoformat(),
+        'close': 9., 'bars': [{'date': day.isoformat(), 'close': 9.}]}])
+    cache.refresh('short-term', background=False)
+    with cache.session('short-term') as local:
+        before = dict(local.get(ShortTermRun, day).payload)
+    o.ns.refresh_quotes(Session, days)
+    cache.refresh('short-term', background=False)
+    with cache.session('short-term') as local:
+        current = local.get(ShortTermRun, day)
+        stock = local.get(ShortTermStock, (day, '600001.XSHG'))
+        assert current.payload['counts'] == before['counts']
+        assert current.payload['snapshot_revision'] != before['snapshot_revision']
+        assert stock.payload['quote_date'] == latest.isoformat()
+        assert stock.payload['bars'][-1]['date'] == latest.isoformat()
+        assert stock.payload['close'] == 9.  # Signal evidence did not turn into latest prices.

@@ -18,6 +18,79 @@ const bars = Array.from({ length: 30 }, (_, i) => ({
   },
 }))
 
+test('six signal dates keep their own stocks while all four charts show latest quotes', async ({
+  page,
+}, info) => {
+  const errors: string[] = []
+  page.on('pageerror', (error) => errors.push(error.message))
+  const dates = ['2026-10-26', '2026-10-23', '2026-10-22', '2026-10-21', '2026-10-20', '2026-10-19']
+  const latestBars = Array.from({ length: 42 }, (_, i) => new Date(Date.UTC(2026, 9, 26 - 41 + i)))
+    .filter((d) => d.getUTCDay() !== 0 && d.getUTCDay() !== 6)
+    .slice(-30)
+    .map((d, i) => ({ ...bars[i], date: d.toISOString().slice(0, 10) }))
+  await page.route('**/api/v1/cache/status', (route) =>
+    route.fulfill({ json: { enabled: false, modules: [] } }),
+  )
+  await page.route('**/api/v1/short-term/latest?*', (route) => {
+    const params = new URL(route.request().url()).searchParams
+    const day = params.get('day') || dates[0]
+    const method = params.get('method') || 'bukou'
+    return route.fulfill({
+      json: {
+        trade_date: day,
+        dates,
+        method,
+        counts: { bukou: 1, redhover: 1, xuli: 1, oversold: 1 },
+        meta: { universe_count: 5000, quotes_as_of: dates[0] },
+        total: 1,
+        offset: 0,
+        limit: 6,
+        items: [
+          {
+            code: '600001.XSHG',
+            name: day === dates[0] ? '当日股票' : '观察股票',
+            methods: [method],
+            industry: '测试行业',
+            close: 10.25,
+            pct_change: 5.5,
+            volume: 10000,
+            market_cap: 60,
+            pe: 12,
+            pb: 2,
+            quote_date: dates[0],
+            quote_close: 20.5,
+            quote_pct_change: -1.2,
+            quote_volume: 20000,
+            bars: latestBars,
+          },
+        ],
+      },
+    })
+  })
+  await page.goto('/short-term')
+  await expect(page.getByLabel('短线选股日期')).toHaveValue(dates[0])
+  await expect(page.getByLabel('短线选股日期').locator('option')).toHaveCount(6)
+  await expect(page.getByRole('heading', { name: '当日股票 600001.XSHG' })).toBeVisible()
+  await page.getByLabel('短线选股日期').selectOption(dates[5])
+  for (const name of ['补票龙', '红悬停龙', '蓄力龙', '超跌后止跌反弹']) {
+    await page.getByRole('link', { name: new RegExp(name) }).click()
+    await expect(page.getByLabel('短线选股日期')).toHaveValue(dates[5])
+    await expect(page.getByRole('heading', { name: '观察股票 600001.XSHG' })).toBeVisible()
+    await expect(page.locator('.short-price strong')).toHaveText('20.5')
+    await expect(page.locator('.short-price')).toContainText('日涨跌 -1.2%')
+    await expect(page.locator('.short-price')).toHaveClass(/down/)
+    await expect(
+      page.getByRole('img', { name: /信号日2026-10-19，行情截至2026-10-26/ }),
+    ).toBeVisible()
+    await expect(page.locator('.short-summary').last()).toContainText('K线截至 2026-10-26')
+  }
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(
+    true,
+  )
+  expect(errors).toEqual([])
+  await page.screenshot({ path: info.outputPath('short-observation.png'), fullPage: true })
+})
+
 test('short term tabs, dates, candles and pagination', async ({ page }, info) => {
   const errors: string[] = []
   page.on('pageerror', (e) => errors.push(e.message))

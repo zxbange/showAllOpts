@@ -7,7 +7,7 @@ class ShortTermRepository:
         self.session = session
 
     def runs(self):
-        return self.session.scalars(select(ShortTermRun).order_by(ShortTermRun.trade_date.desc()).limit(3)).all()
+        return self.session.scalars(select(ShortTermRun).order_by(ShortTermRun.trade_date.desc()).limit(6)).all()
 
     def stocks(self, day, method, offset, limit):
         # Filter the small strategy list first; only load candles for this page.

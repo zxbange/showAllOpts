@@ -7,6 +7,7 @@ import {
   LegendComponent,
   DataZoomComponent,
   AriaComponent,
+  MarkLineComponent,
 } from 'echarts/components'
 import { CanvasRenderer } from 'echarts/renderers'
 import { chartColors } from '../lib/chartTheme'
@@ -21,11 +22,20 @@ use([
   LegendComponent,
   DataZoomComponent,
   AriaComponent,
+  MarkLineComponent,
   CanvasRenderer,
 ])
 const periods = [5, 10, 20, 30, 60]
 const colors = ['#a66e0a', '#497a9c', '#98518f', '#2d826c', '#755f53']
-export function ShortTermChart({ bars, name }: { bars: ShortBar[]; name: string }) {
+export function ShortTermChart({
+  bars,
+  name,
+  signalDate,
+}: {
+  bars: ShortBar[]
+  name: string
+  signalDate?: string
+}) {
   const element = useRef<HTMLDivElement>(null)
   useEffect(() => {
     if (!element.current) return
@@ -37,7 +47,7 @@ export function ShortTermChart({ bars, name }: { bars: ShortBar[]; name: string 
       animationDuration: 450,
       aria: {
         enabled: true,
-        description: `${name}近${bars.length}个交易日的前复权日K线、均线及成交量。阳线红色，阴线绿色。`,
+        description: `${name}近${bars.length}个交易日的前复权日K线、均线及成交量。${signalDate ? `信号日${signalDate}，` : ''}行情截至${bars.at(-1)?.date || '暂无数据'}。阳线红色，阴线绿色。`,
       },
       legend: {
         type: 'scroll',
@@ -103,6 +113,13 @@ export function ShortTermChart({ bars, name }: { bars: ShortBar[]; name: string 
           name: '日K线',
           type: 'candlestick',
           data: bars.map((b) => [b.open, b.close, b.low, b.high]),
+          markLine: {
+            silent: true,
+            symbol: ['none', 'none'],
+            lineStyle: { color: '#755f53', type: 'dashed' },
+            label: { formatter: '信号日', position: 'insideEndTop' },
+            data: signalDate && dates.includes(signalDate) ? [{ xAxis: signalDate }] : [],
+          },
           itemStyle: {
             color: '#c94c39',
             color0: '#29927a',
@@ -137,13 +154,13 @@ export function ShortTermChart({ bars, name }: { bars: ShortBar[]; name: string 
       observer.disconnect()
       chart.dispose()
     }
-  }, [bars, name])
+  }, [bars, name, signalDate])
   return (
     <div
       ref={element}
       className="short-chart"
       role="img"
-      aria-label={`${name}近30个交易日K线及均线`}
+      aria-label={`${name}近30个交易日K线及均线${signalDate ? `，信号日${signalDate}` : ''}，行情截至${bars.at(-1)?.date || '暂无数据'}`}
     />
   )
 }

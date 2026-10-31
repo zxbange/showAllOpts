@@ -86,3 +86,27 @@ def test_pagination_only_loads_candles_for_visible_stocks(client, session):
         assert loaded == []
     finally:
         event.remove(ShortTermStock, 'load', record_load)
+
+
+def test_six_signal_dates_use_latest_quotes_without_changing_signal_membership(client, session):
+    days = [date(2026, 10, d) for d in (16, 19, 20, 21, 22, 23, 26)]
+    latest = days[-1].isoformat()
+    for day in days:
+        session.add(ShortTermRun(trade_date=day, payload={'counts': {'bukou': 1}, 'quotes_as_of': latest},
+                                 updated_at=datetime(2026, 10, 26)))
+        session.add(ShortTermStock(trade_date=day, code='600001.XSHG',
+            payload={'name': '跟踪股票', 'methods': ['bukou'], 'close': 10., 'quote_date': latest,
+                     'quote_close': 12., 'bars': [{'date': latest, 'close': 12.}]},
+            updated_at=datetime(2026, 10, 26)))
+    session.commit()
+    path = '/api/v1/short-term/latest'
+    data = client.get(path).json()
+    assert data['trade_date'] == latest
+    assert data['dates'] == [d.isoformat() for d in reversed(days[1:])]
+    old = client.get(path + '?day=2026-10-19').json()
+    assert old['trade_date'] == '2026-10-19' and old['total'] == 1
+    assert old['items'][0]['close'] == 10.
+    assert old['items'][0]['quote_close'] == 12.
+    assert old['items'][0]['bars'][-1]['date'] == latest
+    assert client.get(path + '?day=2026-10-16').status_code == 404
+    assert client.get(path + '?day=2026-10-19&method=xuli').json()['items'] == []

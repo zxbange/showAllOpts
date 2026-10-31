@@ -19,6 +19,10 @@ export interface ShortStock {
   pe: number | null
   pb: number | null
   market_cap: number | null
+  quote_date?: string
+  quote_close?: number | null
+  quote_pct_change?: number | null
+  quote_volume?: number | null
   bars: ShortBar[]
 }
 export interface ShortOverview {
@@ -26,7 +30,7 @@ export interface ShortOverview {
   dates: string[]
   method: ShortMethod
   counts: Record<ShortMethod, number>
-  meta: { universe_count?: number; evaluated_count?: number }
+  meta: { universe_count?: number; evaluated_count?: number; quotes_as_of?: string }
   total: number
   offset: number
   limit: number
