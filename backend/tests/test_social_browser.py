@@ -46,7 +46,7 @@ def test_browser_endpoints_require_account_and_reject_old_key(browser_client):
     assert client.get(BASE + '/weibo/status').json()['state'] == 'idle'
     assert client.get('/api/v1/social-monitor/status').json()['browser_login_available']
     client.cookies.clear()
-    for method, suffix, body in [('GET', '/status', None), ('POST', '/start', {}),
+    for method, suffix, body in [('GET', '/status', None), ('POST', '/start', {}), ('POST', '/logout', {}),
                                   ('POST', '/action', {'id': 'a' * 32, 'action': 'cancel'}),
                                   ('GET', '/image/' + 'a' * 32, None)]:
         response = client.request(method, BASE + '/weibo' + suffix, json=body,
@@ -93,7 +93,9 @@ def test_shared_state_encryption_expiry_and_commands(browser_client):
     restarted.action('weibo', state['id'], 'click', 100, 100)
     with pytest.raises(ValueError):
         service.action('weibo', state['id'], 'click', 200, 100)
-    service.action('weibo', state['id'], 'cancel')
+    result = service.action('weibo', state['id'], 'cancel')
+    assert result['state'] == 'cancelling' and not result['image']
+    assert service.image('weibo', state['id']) is None
     assert service.command('weibo')['action'] == 'cancel'
     assert service.command('weibo') is None
     with pytest.raises(ValueError):
@@ -230,6 +232,7 @@ def test_session_cookie_snapshot_restored_with_original_expiry(browser_client):
     _, service = browser_client
     playwright = MagicMock()
     context = playwright.chromium.launch_persistent_context.return_value
+    service.monitor.update_config({'weibo_cookie': 'SUB=test-session-cookie'}, verified_platform='weibo')
     cookies = [{'name': 'SUB', 'value': 'test-session-cookie', 'domain': '.weibo.cn',
                 'path': '/', 'expires': -1, 'httpOnly': True, 'secure': True, 'sameSite': 'Lax'}]
     context.cookies.return_value = cookies
@@ -283,3 +286,112 @@ def test_xueqiu_identity_restriction_stops_instead_of_retrying(browser_client):
 def test_missing_display_is_actionable():
     code, message = browser_error(RuntimeError('Missing X server or $DISPLAY'))
     assert code == 'display_unavailable' and 'Xvfb' in message
+
+
+def test_normal_login_cannot_start_another_window_and_expiry_overrides_old_success(browser_client):
+    _, service = browser_client
+    service.monitor.update_config({'weibo_cookie': 'SUB=private'}, verified_platform='weibo')
+    put_state(service, state='success', image=False)
+    with patch('app.services.social_browser.threading.Thread') as thread:
+        assert service.start('weibo')['session']['state'] == 'normal'
+        thread.assert_not_called()
+    with service.monitor.db() as db:
+        cookie = service.monitor.config(db)['weibo_cookie']
+    service.monitor.record_login_result('weibo', cookie, 'expired')
+    assert service.status('weibo')['session']['state'] == 'expired'
+    assert BrowserLogin(service.settings, service.monitor).status('weibo')['session']['state'] == 'expired'
+
+
+def test_duplicate_start_returns_existing_job(browser_client):
+    _, service = browser_client
+    put_state(service)
+    with patch('app.services.social_browser.threading.Thread') as thread:
+        assert service.start('weibo')['id'] == 'a' * 32
+        thread.assert_not_called()
+
+
+def test_logout_clears_only_target_credentials_and_old_fetch_cannot_revive(browser_client):
+    client, service = browser_client
+    monitor = service.monitor
+    monitor.update_config({'weibo_cookie': 'SUB=secret', 'xueqiu_cookie': 'other'}, verified_platform='weibo')
+    with monitor.db() as db:
+        old = monitor.config(db)['weibo_cookie']
+    profile = service.profiles / 'weibo'
+    profile.mkdir()
+    (profile / 'cookies.enc').write_bytes(b'encrypted')
+    (profile / 'old-browser-storage').write_bytes(b'old')
+    put_state(service, state='success')
+    response = client.post(BASE + '/weibo/logout', json={})
+    assert response.status_code == 200
+    assert response.json()['session']['state'] == 'logged_out'
+    assert not profile.exists()
+    assert not monitor.overview()['weibo_cookie_configured']
+    assert monitor.overview()['xueqiu_cookie_configured']
+    assert monitor.overview()['platforms']['weibo']['paused']
+    assert monitor.record_login_result('weibo', old, 'normal') is False
+    assert service.status('weibo')['session']['state'] == 'logged_out'
+    assert client.post(BASE + '/weibo/logout', json={}).status_code == 200
+
+
+def test_verified_scan_resumes_auth_pause_but_not_platform_restrictions(browser_client):
+    _, service = browser_client
+    service.monitor.pause_platform('weibo', '登录过期', 'login_expired')
+    service.monitor.update_config({'weibo_cookie': 'SUB=new'}, verified_platform='weibo')
+    assert not service.monitor.overview()['platforms']['weibo']['paused']
+    service.monitor.pause_platform('weibo', '平台验证', 'captcha')
+    service.monitor.update_config({'weibo_cookie': 'SUB=newer'}, verified_platform='weibo')
+    assert service.monitor.overview()['platforms']['weibo']['paused']
+
+
+def test_visitor_fetch_is_not_logged_in_and_changed_cookie_needs_check(browser_client):
+    _, service = browser_client
+    monitor = service.monitor
+    monitor.record_login_result('weibo', '', 'normal')
+    assert monitor.platform_login('weibo')['state'] == 'logged_out'
+    monitor.update_config({'weibo_cookie': 'SUB=one'}, verified_platform='weibo')
+    monitor.update_config({'weibo_cookie': 'SUB=two'})
+    assert monitor.platform_login('weibo')['state'] == 'unknown'
+
+
+def test_browser_always_uses_fresh_profile_without_restored_tabs(browser_client):
+    _, service = browser_client
+    playwright = MagicMock()
+    context = playwright.chromium.launch_persistent_context.return_value
+    context.cookies.return_value = []
+    with service.browser_context(playwright, 'weibo'):
+        first = playwright.chromium.launch_persistent_context.call_args.args[0]
+    with service.browser_context(playwright, 'weibo'):
+        second = playwright.chromium.launch_persistent_context.call_args.args[0]
+    assert first != second and first != str(service.profiles / 'weibo')
+    from pathlib import Path
+    assert not Path(first).exists() and not Path(second).exists()
+
+
+def test_logged_out_platform_does_not_restore_saved_cookies(browser_client):
+    _, service = browser_client
+    profile = service.profiles / 'weibo'
+    profile.mkdir()
+    service.write(profile / 'cookies.enc', b'[]')
+    playwright = MagicMock()
+    with service.browser_context(playwright, 'weibo') as context:
+        context.add_cookies.assert_not_called()
+
+
+@pytest.mark.parametrize('outcome,expected', [('success', 'normal'), ('network', 'normal'), ('expired', 'expired')])
+def test_monitor_cycle_updates_login_without_treating_network_as_expiry(browser_client, outcome, expected):
+    import httpx
+    from app.services.social_sources import PlatformIntervention
+    _, browser = browser_client
+    monitor = browser.monitor
+    monitor.add_author('weibo', '123', '测试')
+    monitor.update_config({'weibo_cookie': 'SUB=test', 'telegram_enabled': False, 'enabled': True},
+                          verified_platform='weibo' if outcome != 'success' else None)
+    author = monitor.overview()['authors'][0]
+    error = (httpx.ReadTimeout('network') if outcome == 'network' else
+             PlatformIntervention('过期', 'login_expired') if outcome == 'expired' else None)
+    with patch('app.services.social.night_time', return_value=False), \
+            patch.object(monitor, 'scheduled_author', side_effect=[(author, 'queue'), None]), \
+            patch.object(monitor, 'check_author', side_effect=error), \
+            patch.object(monitor, 'deliver_notifications'), patch.object(monitor, 'send_alerts'):
+        monitor.cycle()
+    assert monitor.platform_login('weibo')['state'] == expected

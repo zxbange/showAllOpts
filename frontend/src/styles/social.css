@@ -904,26 +904,6 @@
   padding-bottom: 20px;
   margin-bottom: 20px;
 }
-.social-page .social-browser-key {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: end;
-  gap: 12px;
-  margin: 18px 0 0;
-  max-width: 900px;
-}
-.social-page .social-browser-key label {
-  display: grid;
-  gap: 8px;
-  flex: 1 1 240px;
-}
-.social-page .social-browser-key input {
-  width: 100%;
-  min-height: 40px;
-  padding: 8px 12px;
-  border: 1px solid #d7d5cf;
-  border-radius: 8px;
-}
 .social-page .social-browser-cards {
   display: grid;
   gap: 16px;

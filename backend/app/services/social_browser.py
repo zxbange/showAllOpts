@@ -4,6 +4,8 @@ import logging
 import os
 import re
 import threading
+import shutil
+import tempfile
 import time
 from urllib.parse import urlsplit
 import uuid
@@ -19,7 +21,7 @@ HOSTS = {
     'weibo': ('weibo.com', 'weibo.cn', 'sina.com.cn', 'sina.cn', 'sinaimg.cn', 'sinajs.cn'),
     'xueqiu': ('xueqiu.com', 'imedao.com', 'qq.com', 'qpic.cn', 'gtimg.com', 'geetest.com'),
 }
-ACTIVE = {'starting', 'waiting', 'verification'}
+ACTIVE = {'starting', 'waiting', 'verification', 'cancelling'}
 LIFETIME = 360
 WIDTH, HEIGHT = 1100, 800
 logger = logging.getLogger(__name__)
@@ -117,8 +119,40 @@ class BrowserLogin:
         result = self.raw_status(platform)
         if result['state'] in ACTIVE and (result['expires_at'] <= time.time()
                                          or result.get('updated_at', 0) < time.time() - 70):
-            return dict(result, state='expired', message='登录窗口已超时或服务已重启，请重新打开', image=False)
-        return result
+            result = dict(result, state='expired', message='扫码已超时，请重新扫码', image=False)
+        if result['state'] in ACTIVE:
+            pending = self.read(self.path(platform, 'command'))
+            command = json.loads(pending) if pending else {}
+            if command.get('id') == result.get('id') and command.get('action') == 'cancel':
+                result = dict(result, state='cancelling', message='正在关闭扫码窗口…', image=False)
+        login = self.monitor.platform_login(platform)
+        # Compatibility for credentials verified before monitor-derived state existed.
+        if login['state'] == 'unknown' and 'source' not in login and result['state'] == 'success':
+            login = dict(state='normal', checked_at=result.get('updated_at'), source='scan')
+        return dict(result, session=login)
+
+    def logout(self, platform):
+        lease = portalocker.Lock(str(self.path(platform, 'lock')), timeout=0)
+        try:
+            lease.acquire()
+        except portalocker.exceptions.LockException:
+            raise ValueError('请先取消正在进行的扫码登录') from None
+        try:
+            self.monitor.update_config({platform + '_cookie': ''})
+            self.monitor.platform_state(platform, paused=True, reason='已退出平台登录', reason_code='logged_out',
+                                        retry_at=0, failures=0, incident_id=None, alert_sent_at='manual')
+            profile = self.profiles / platform
+            # Remove only this platform's local browser credentials, never a resolved external path.
+            if profile.is_symlink() or profile.resolve().parent != self.profiles.resolve():
+                raise ValueError('浏览器凭据目录异常，请检查服务目录')
+            if profile.exists():
+                shutil.rmtree(profile)
+            for kind in ('image', 'command'):
+                self.path(platform, kind).unlink(missing_ok=True)
+            self.save(platform, {}, state='idle', message='未登录', image=False)
+            return self.status(platform)
+        finally:
+            lease.release()
 
     def active(self, platform):
         return self.status(platform)['state'] in ACTIVE
@@ -128,10 +162,16 @@ class BrowserLogin:
         self.write(self.path(platform, 'state'), json.dumps(record, ensure_ascii=False).encode())
 
     def start(self, platform):
+        current = self.status(platform)
+        if current['state'] in ACTIVE or current['session']['state'] == 'normal':
+            return current
         lease = portalocker.Lock(str(self.path(platform, 'lock')), timeout=0)
         try:
             lease.acquire()
         except portalocker.exceptions.LockException:
+            current = self.status(platform)
+            if current['state'] in ACTIVE:
+                return current
             raise ValueError('该平台已有登录窗口，请先完成或取消') from None
         state = {'id': uuid.uuid4().hex, 'state': 'starting', 'message': '正在打开官方登录页',
                  'expires_at': time.time() + LIFETIME, 'image': False, 'revision': 0}
@@ -160,7 +200,7 @@ class BrowserLogin:
                 raise ValueError('上一操作仍在处理中，请稍后再试')
             self.write(self.path(platform, 'command'), json.dumps({
                 'id': job_id, 'action': action, 'x': x, 'y': y}).encode())
-        return state
+        return self.status(platform)
 
     def command(self, platform):
         with portalocker.Lock(str(self.path(platform, 'commands.lock')), timeout=2):
@@ -223,19 +263,21 @@ class BrowserLogin:
                    'accept_downloads': False, 'service_workers': 'block'}
         if self.settings.social_browser_channel:
             options['channel'] = self.settings.social_browser_channel
-        context = playwright.chromium.launch_persistent_context(str(profile), **options)
-        try:
-            snapshot = self.read(profile / 'cookies.enc')
-            if snapshot:
-                # Chromium discards session-only cookies on a clean exit. Restore their
-                # original expiry attributes explicitly; the platform still controls validity.
-                context.add_cookies(json.loads(snapshot))
-            yield context
-        finally:
+        # A fresh profile avoids restoring multiple old tabs/windows. Only encrypted
+        # cookies survive; localStorage and browser history are discarded at close.
+        with tempfile.TemporaryDirectory(prefix=platform + '-', dir=self.profiles) as temporary:
+            context = playwright.chromium.launch_persistent_context(temporary, **options)
             try:
-                self.write(profile / 'cookies.enc', json.dumps(context.cookies()).encode())
+                snapshot = self.read(profile / 'cookies.enc')
+                if snapshot and self.monitor.platform_login(platform)['state'] not in ('expired', 'restricted', 'logged_out'):
+                    context.add_cookies(json.loads(snapshot))
+                yield context
             finally:
-                context.close()
+                try:
+                    if self.monitor.platform_login(platform)['state'] == 'normal':
+                        self.write(profile / 'cookies.enc', json.dumps(context.cookies()).encode())
+                finally:
+                    context.close()
 
     def run(self, platform, state, lease):
         stage = '启动浏览器'
@@ -304,9 +346,9 @@ class BrowserLogin:
                                 pending = self.read(self.path(platform, 'command'))
                                 cancelled = pending and json.loads(pending).get('action') == 'cancel'
                                 if not cancelled and not self.stopping.is_set() and time.time() < state['expires_at']:
-                                    self.monitor.update_config({platform + '_cookie': credential})
+                                    self.monitor.update_config({platform + '_cookie': credential}, verified_platform=platform)
                                     self.save(platform, state, state='success', image=False,
-                                              message='登录已验证，凭据已加密保存。若平台此前已暂停，请点击平台的“恢复监控”')
+                                              message='登录正常')
                                     return
                             continue
                     verification = any(word in text for word in ('请输入验证码', '请完成安全验证', '拖动滑块'))

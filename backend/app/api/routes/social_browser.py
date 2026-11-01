@@ -37,6 +37,15 @@ def start(platform: Platform, response: Response, service=Depends(login_service)
         raise HTTPException(409, str(error)) from None
 
 
+@router.post('/{platform}/logout')
+def logout(platform: Platform, response: Response, service=Depends(login_service)):
+    response.headers['Cache-Control'] = 'no-store'
+    try:
+        return service.logout(platform)
+    except ValueError as error:
+        raise HTTPException(409, str(error)) from None
+
+
 @router.post('/{platform}/action')
 def action(platform: Platform, payload: Action, response: Response, service=Depends(login_service)):
     response.headers['Cache-Control'] = 'no-store'

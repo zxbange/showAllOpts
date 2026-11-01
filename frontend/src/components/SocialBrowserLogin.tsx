@@ -7,11 +7,23 @@ type LoginState = {
   state: string
   message: string
   image?: boolean
-  revision?: number
-  expires_at?: number
+  session?: { state: string; checked_at?: string | number | null }
 }
+const platforms = ['weibo', 'xueqiu'] as const
+const label = (platform: Platform) => (platform === 'weibo' ? '微博' : '雪球')
 const active = (state?: LoginState) =>
-  !!state && ['starting', 'waiting', 'verification'].includes(state.state)
+  !!state && ['starting', 'waiting', 'verification', 'cancelling'].includes(state.state)
+const normal = (state?: LoginState) => state?.session?.state === 'normal'
+const sessionMessage = (state?: LoginState) => {
+  if (!state) return '正在读取登录状态…'
+  if (active(state)) return state.message
+  if (normal(state)) return '登录正常'
+  if (state.session?.state === 'expired') return '登录已失效，请重新扫码'
+  if (state.session?.state === 'restricted') return '平台访问受限，请检查账号或扫码处理'
+  if (['error', 'blocked', 'expired'].includes(state.state)) return state.message
+  if (state.session?.state === 'unknown') return '已有登录凭据，等待下一次监控验证'
+  return '未登录'
+}
 
 export function SocialBrowserLogin({
   available,
@@ -20,51 +32,53 @@ export function SocialBrowserLogin({
   available: boolean
   onSaved: () => void
 }) {
-  const [unlocked, setUnlocked] = useState(false)
   const [error, setError] = useState('')
   const [pending, setPending] = useState(false)
   const [states, setStates] = useState<Partial<Record<Platform, LoginState>>>({})
   const [images, setImages] = useState<Partial<Record<Platform, string>>>({})
   const imageUrls = useRef<Partial<Record<Platform, string>>>({})
+  const pendingRef = useRef(false)
+  const epoch = useRef(0)
   const saved = useRef(new Set<string>())
   const onSavedRef = useRef(onSaved)
   onSavedRef.current = onSaved
 
-  useEffect(
-    () => () => {
-      Object.values(imageUrls.current).forEach((url) => URL.revokeObjectURL(url))
-    },
-    [],
-  )
-
+  function clearImages() {
+    Object.values(imageUrls.current).forEach((url) => URL.revokeObjectURL(url))
+    imageUrls.current = {}
+    setImages({})
+  }
   async function request(platform: Platform, path: string, body?: unknown, signal?: AbortSignal) {
     const response = await apiFetch(`/api/v1/social-monitor/browser/${platform}${path}`, {
       method: body === undefined ? 'GET' : 'POST',
-      headers: { 'Content-Type': 'application/json', 'X-App-Client': 'browser' },
+      headers: { 'Content-Type': 'application/json' },
       cache: 'no-store',
       signal,
       ...(body === undefined ? {} : { body: JSON.stringify(body) }),
     })
     if (!response.ok) {
-      if (response.status === 403) setUnlocked(false)
       const result = await response.json().catch(() => null)
-      throw new Error(typeof result?.detail === 'string' ? result.detail : '登录窗口请求失败')
+      throw new Error(typeof result?.detail === 'string' ? result.detail : '平台登录请求失败')
     }
     return response
   }
 
   useEffect(() => {
-    if (!unlocked) return
+    if (!available) return
     const abort = new AbortController()
     let timer: ReturnType<typeof setTimeout>
     const poll = async () => {
+      const version = epoch.current
+      const stale = () => abort.signal.aborted || version !== epoch.current || pendingRef.current
+      let scanning = false
       try {
-        if (!document.hidden) {
-          for (const platform of ['weibo', 'xueqiu'] as const) {
+        if (!document.hidden && !pendingRef.current) {
+          for (const platform of platforms) {
             const state: LoginState = await (
               await request(platform, '/status', undefined, abort.signal)
             ).json()
-            if (abort.signal.aborted) return
+            if (stale()) return
+            scanning ||= active(state)
             setStates((current) => ({ ...current, [platform]: state }))
             if (state.state === 'success' && state.id && !saved.current.has(state.id)) {
               saved.current.add(state.id)
@@ -79,7 +93,7 @@ export function SocialBrowserLogin({
                 abort.signal,
               )
               const blob = await response.blob()
-              if (abort.signal.aborted) return
+              if (stale()) return
               next = URL.createObjectURL(blob)
             }
             const previous = imageUrls.current[platform]
@@ -87,140 +101,116 @@ export function SocialBrowserLogin({
             setImages((current) => ({ ...current, [platform]: next }))
             if (previous) URL.revokeObjectURL(previous)
           }
+          setError('')
         }
       } catch (err) {
-        if (abort.signal.aborted) return
-        setError(err instanceof Error ? err.message : '无法读取登录状态')
+        if (!stale()) setError(err instanceof Error ? err.message : '无法读取登录状态')
+      } finally {
+        if (!abort.signal.aborted)
+          timer = setTimeout(() => void poll(), scanning || pendingRef.current ? 1500 : 4000)
       }
-      if (!abort.signal.aborted) timer = setTimeout(() => void poll(), 2500)
     }
     void poll()
     return () => {
       abort.abort()
       clearTimeout(timer)
+      Object.values(imageUrls.current).forEach((url) => URL.revokeObjectURL(url))
+      imageUrls.current = {}
     }
-    // Poll only while the administrator has opened the login view.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [unlocked])
+  }, [available])
 
   async function run(
     platform: Platform,
-    action: 'start' | 'cancel' | 'check' | 'reload' | 'click',
+    action: 'start' | 'cancel' | 'logout' | 'click',
     x?: number,
     y?: number,
   ) {
-    if (pending) return
+    if (pendingRef.current) return
+    if (action === 'logout' && !window.confirm(`退出${label(platform)}登录并暂停该平台监控？`))
+      return
+    pendingRef.current = true
+    epoch.current++
     setPending(true)
     setError('')
+    clearImages()
     try {
-      const response = await request(
-        platform,
-        action === 'start' ? '/start' : '/action',
-        action === 'start' ? {} : { id: states[platform]?.id, action, x, y },
-      )
-      const state: LoginState = await response.json()
+      const direct = action === 'start' || action === 'logout'
+      const state: LoginState = await (
+        await request(
+          platform,
+          direct ? `/${action}` : '/action',
+          direct ? {} : { id: states[platform]?.id, action, x, y },
+        )
+      ).json()
       setStates((current) => ({ ...current, [platform]: state }))
+      if (action === 'logout') onSavedRef.current()
     } catch (err) {
       setError(err instanceof Error ? err.message : '登录操作失败')
     } finally {
+      pendingRef.current = false
       setPending(false)
     }
   }
 
+  const scanning = platforms.some((platform) => active(states[platform]))
   return (
     <div className="social-browser-login">
       {!available ? (
-        <p className="social-muted">请先在服务器安装 Chromium 后重启服务。</p>
+        <p className="social-muted">平台登录暂不可用，请检查服务状态。</p>
       ) : (
         <>
-          <form
-            className="social-browser-key"
-            onSubmit={(event) => {
-              event.preventDefault()
-              setError('')
-              setUnlocked(true)
-            }}
-          >
-            {unlocked ? (
-              <button
-                className="button"
-                type="button"
-                onClick={() => {
-                  setUnlocked(false)
-                  setStates({})
-                  setImages({})
-                  setError('')
-                  Object.values(imageUrls.current).forEach((url) => URL.revokeObjectURL(url))
-                  imageUrls.current = {}
-                }}
-              >
-                隐藏登录窗口
-              </button>
-            ) : (
-              <button className="button" type="submit">
-                查看登录状态
-              </button>
-            )}
-          </form>
           {error && (
             <p role="alert" className="social-error">
               {error}
             </p>
           )}
-          {unlocked && (
-            <div className="social-browser-cards">
-              {(['weibo', 'xueqiu'] as const).map((platform) => (
+          <div className="social-browser-cards">
+            {platforms.map((platform) => {
+              const state = states[platform]
+              return (
                 <article className="social-browser-card" key={platform}>
-                  <h4>{platform === 'weibo' ? '微博' : '雪球'}</h4>
-                  <p role="status">{states[platform]?.message || '正在读取登录状态…'}</p>
+                  <h4>{label(platform)}</h4>
+                  <p role="status">{sessionMessage(state)}</p>
                   <div className="social-actions">
-                    <button
-                      className="button"
-                      type="button"
-                      disabled={pending || active(states[platform])}
-                      onClick={() => void run(platform, 'start')}
-                    >
-                      打开扫码登录
-                    </button>
-                    {active(states[platform]) && (
-                      <>
-                        <button
-                          className="button"
-                          type="button"
-                          disabled={pending}
-                          onClick={() => void run(platform, 'check')}
-                        >
-                          检查登录结果
-                        </button>
-                        <button
-                          className="button"
-                          type="button"
-                          disabled={pending}
-                          onClick={() => void run(platform, 'reload')}
-                        >
-                          刷新登录页
-                        </button>
-                        <button
-                          className="button"
-                          type="button"
-                          disabled={pending}
-                          onClick={() => void run(platform, 'cancel')}
-                        >
-                          取消登录
-                        </button>
-                      </>
+                    {active(state) ? (
+                      <button
+                        className="button"
+                        type="button"
+                        disabled={pending || state?.state === 'cancelling'}
+                        onClick={() => void run(platform, 'cancel')}
+                      >
+                        {state?.state === 'cancelling' ? '正在关闭…' : '取消扫码'}
+                      </button>
+                    ) : normal(state) ? (
+                      <button
+                        className="button"
+                        type="button"
+                        disabled={pending}
+                        onClick={() => void run(platform, 'logout')}
+                      >
+                        退出登录
+                      </button>
+                    ) : (
+                      <button
+                        className="button"
+                        type="button"
+                        disabled={pending || scanning || !state}
+                        onClick={() => void run(platform, 'start')}
+                      >
+                        扫码登录
+                      </button>
                     )}
                   </div>
-                  {images[platform] && active(states[platform]) && (
+                  {images[platform] && active(state) && (
                     <>
                       <p className="social-muted">
-                        可点击画面中的扫码入口。请用手机应用扫描二维码并确认；不支持在画面中输入密码或拖动滑块。
+                        使用手机扫码并确认，完成后会自动收起。可点击画面中的官方扫码入口。
                       </p>
                       <button
                         type="button"
                         className="social-browser-screen"
                         disabled={pending}
-                        aria-label={`操作${platform === 'weibo' ? '微博' : '雪球'}官方登录画面`}
+                        aria-label={`操作${label(platform)}官方登录画面`}
                         onClick={(event) => {
                           const rect = event.currentTarget.getBoundingClientRect()
                           void run(
@@ -245,16 +235,16 @@ export function SocialBrowserLogin({
                       >
                         <img
                           src={images[platform]}
-                          alt={`${platform === 'weibo' ? '微博' : '雪球'}官方登录画面`}
+                          alt={`${label(platform)}官方登录画面`}
                           draggable={false}
                         />
                       </button>
                     </>
                   )}
                 </article>
-              ))}
-            </div>
-          )}
+              )
+            })}
+          </div>
         </>
       )}
     </div>

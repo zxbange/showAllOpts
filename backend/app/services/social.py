@@ -143,7 +143,7 @@ class SocialMonitor(NotificationMixin, CubeMonitorMixin):
     def write_config(self, db, value):
         db.execute('UPDATE config SET payload=? WHERE id=1', (json.dumps(value),))
 
-    def update_config(self, changes):
+    def update_config(self, changes, *, verified_platform=None):
         with self.db() as db:
             db.execute('BEGIN IMMEDIATE')
             config = self.config(db)
@@ -171,7 +171,19 @@ class SocialMonitor(NotificationMixin, CubeMonitorMixin):
                 raise ValueError('飞书签名密钥不能超过 512 个字符。')
             for key in ('token', 'chat_id', 'weibo_cookie', 'xueqiu_cookie', 'feishu_webhook', 'feishu_secret'):
                 if changes.get(key) is not None:
-                    config[key] = self.encode(changes[key].strip())
+                    value = changes[key].strip()
+                    config[key] = self.encode(value)
+                    if key in ('weibo_cookie', 'xueqiu_cookie'):
+                        platform = key.removesuffix('_cookie')
+                        state = config.setdefault('platforms', {}).setdefault(platform, {})
+                        state['login'] = dict(state='normal' if value and verified_platform == platform else
+                                              'unknown' if value else 'logged_out',
+                                              checked_at=now() if verified_platform == platform else None,
+                                              source='scan' if verified_platform == platform else 'config')
+                        if verified_platform == platform and state.get('reason_code') in ('login_expired', 'login_redirect', 'logged_out'):
+                            state.update(paused=False, reason=None, reason_code=None, retry_at=0, failures=0,
+                                         http_status=None, incident_id=None, alert_sent_at=None)
+                            config.get('platform_queues', {}).pop(platform, None)
             for channel in enabled_channels(config):
                 if changes.get('enabled', config['enabled']) is True or changes.get(channel + '_enabled') is True:
                     if channel == 'telegram' and (not config['token'] or not config['chat_id']):
@@ -192,6 +204,34 @@ class SocialMonitor(NotificationMixin, CubeMonitorMixin):
             self.skip_disabled_deliveries(db, config)
             self.write_config(db, config)
         self.save_next_check()
+
+    def record_login_result(self, platform, expected_cookie, state):
+        # A response to old credentials must not revive a logged-out or replaced session.
+        with self.db() as db:
+            db.execute('BEGIN IMMEDIATE')
+            config = self.config(db)
+            if config[platform + '_cookie'] != expected_cookie:
+                return False
+            target = config.setdefault('platforms', {}).setdefault(platform, {})
+            if expected_cookie:
+                target['login'] = dict(state=state, checked_at=now(), source='monitor')
+            if state == 'normal' and not target.get('paused'):
+                target.update(failures=0, retry_at=0, reason=None, reason_code=None, http_status=None)
+            self.write_config(db, config)
+            return True
+
+    def platform_login(self, platform):
+        with self.db() as db:
+            config = self.config(db)
+        state = config.get('platforms', {}).get(platform, {})
+        if not config[platform + '_cookie']:
+            return dict(state='logged_out', checked_at=None)
+        login = dict(state.get('login', {'state': 'unknown', 'checked_at': None}))
+        if state.get('paused') and state.get('reason_code') in ('login_expired', 'login_redirect'):
+            login['state'] = 'expired'
+        elif state.get('paused') and state.get('reason_code') != 'logged_out':
+            login['state'] = 'restricted'
+        return login
 
     def overview(self):
         with self.db() as db:
@@ -347,10 +387,12 @@ class SocialMonitor(NotificationMixin, CubeMonitorMixin):
             self.write_config(db, config)
             return dict(state)
 
-    def pause_platform(self, platform, reason, reason_code='platform_restricted', http_status=None):
+    def pause_platform(self, platform, reason, reason_code='platform_restricted', http_status=None, expected_cookie=None):
         with self.db() as db:
             db.execute('BEGIN IMMEDIATE')
             config = self.config(db)
+            if expected_cookie is not None and config[platform + '_cookie'] != expected_cookie:
+                return
             state = config.setdefault('platforms', {}).setdefault(platform, {})
             if not state.get('paused'):
                 state.update(paused=True, reason=reason, paused_at=now(), incident_id=uuid.uuid4().hex,
@@ -719,9 +761,13 @@ class SocialMonitor(NotificationMixin, CubeMonitorMixin):
                     self.check_cube(author, current, fetch_cube_rebalances)
                 else:
                     self.check_author(author, current)
-                self.platform_state(author['platform'], failures=0, retry_at=0, reason=None, reason_code=None, http_status=None)
+                self.record_login_result(platform, current[platform + '_cookie'], 'normal')
             except PlatformIntervention as error:
-                self.pause_platform(author['platform'], str(error), error.reason_code, error.http_status)
+                if not self.record_login_result(platform, current[platform + '_cookie'],
+                                                'expired' if error.reason_code in ('login_expired', 'login_redirect') else 'restricted'):
+                    continue
+                self.pause_platform(author['platform'], str(error), error.reason_code, error.http_status,
+                                    expected_cookie=current[platform + '_cookie'])
                 with self.db() as db:
                     db.execute('BEGIN IMMEDIATE')
                     if self.active_task(db, author):
