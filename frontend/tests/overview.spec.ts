@@ -135,7 +135,7 @@ test('shared module cards stay available while loading and after failures', asyn
   for (const [path, count] of [
     ['etf-shares', 2],
     ['dividend-selection', 2],
-    ['short-term', 5],
+    ['short-term', 3], // Two strategies plus the win-rate validation entry.
   ] as const) {
     let release!: () => void
     const response = new Promise<void>((resolve) => {
