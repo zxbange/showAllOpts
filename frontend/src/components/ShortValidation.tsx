@@ -13,6 +13,7 @@ type Metric = Record<string, string | number | null>
 type Job = {
   id: string
   methods: string[]
+  horizons?: number[]
   start: string
   end: string
   observed: string
@@ -259,6 +260,10 @@ function ValidationPanel({ adminKey }: { adminKey: ValidationAuth }) {
   const [methods, setMethods] = useState<string[]>(Object.keys(choices))
   const [start, setStart] = useState('2024-01-01')
   const [end, setEnd] = useState('')
+  const [horizons, setHorizons] = useState(['1', '2', '3'])
+  const validHorizons =
+    horizons.every((value) => /^\d+$/.test(value) && Number(value) >= 1 && Number(value) <= 120) &&
+    new Set(horizons.map(Number)).size === horizons.length
   const [jobs, setJobs] = useState<Job[]>([])
   const [deleting, setDeleting] = useState<Job | null>(null)
   const deletedIds = useRef(new Set<string>())
@@ -331,7 +336,6 @@ function ValidationPanel({ adminKey }: { adminKey: ValidationAuth }) {
             <div className="validation-card-heading">
               <Database size={19} aria-hidden="true" />
               <h3>01 数据库连接</h3>
-              <span>后台加密保存</span>
             </div>
             <ValidationSourceEditor
               ref={sourceEditor}
@@ -345,17 +349,56 @@ function ValidationPanel({ adminKey }: { adminKey: ValidationAuth }) {
               <SlidersHorizontal size={19} aria-hidden="true" />
               <h3>02 策略与日期</h3>
             </div>
-            <details className="validation-disclosure validation-methodology">
-              <summary>统计口径与数据说明</summary>
-              <p>
-                新任务的验证截止日同时限制信号日期与收益观察日期，截止日之后的收盘价不参与统计；尚未到期的收益期限计为待观察。
-                两策略统一沪深股票池、基础过滤、后复权价格与原始成交量。按 T 收盘比较 T+1/2/3
-                交易日收盘，严格上涨计胜，持平计入分母；各期限仅计有效样本，停牌、缺行情及待观察单列。这是形态统计，非逐笔实盘回测，不含费用，不代表可成交收益。
+            <fieldset className="validation-periods">
+              <legend>验证周期</legend>
+              <p className="validation-hint">
+                信号日为第0天，比较之后第N个交易日收盘涨跌。填写1～3个周期，每个1～120个交易日。
               </p>
-              <p>
-                沿用原90日形态窗口；统一股票池与复权口径可能使信号不同于生产选股。新任务按静态源分批读取、边算边提交，不再预先复制全部行情。重试跳过已提交股票，重读未提交部分；任务期间请保持源历史数据不变，若历史数据修订请新建任务。旧冻结任务仍复用已保存输入。
-              </p>
-            </details>
+              <div className="validation-period-inputs">
+                {horizons.map((value, index) => (
+                  <div className="validation-period" key={index}>
+                    <label>
+                      周期{index + 1}
+                      <input
+                        type="number"
+                        min={1}
+                        max={120}
+                        step={1}
+                        aria-label={`验证周期${index + 1}`}
+                        value={value}
+                        onChange={(event) =>
+                          setHorizons((old) =>
+                            old.map((item, i) => (i === index ? event.target.value : item)),
+                          )
+                        }
+                      />
+                    </label>
+                    <button
+                      type="button"
+                      className="button button-quiet"
+                      aria-label={`删除周期${index + 1}`}
+                      disabled={horizons.length === 1}
+                      onClick={() => setHorizons((old) => old.filter((_, i) => i !== index))}
+                    >
+                      删除
+                    </button>
+                  </div>
+                ))}
+              </div>
+              <button
+                type="button"
+                className="button button-quiet"
+                disabled={horizons.length === 3}
+                onClick={() => setHorizons((old) => [...old, ''])}
+              >
+                添加周期
+              </button>
+              {!validHorizons && (
+                <p className="validation-feedback" role="alert">
+                  请填写1～120的整数，周期不能重复。
+                </p>
+              )}
+            </fieldset>
             <fieldset className="validation-strategies">
               <legend>选择统计策略（可多选）</legend>
               {Object.entries(choices).map(([id, label]) => (
@@ -409,7 +452,9 @@ function ValidationPanel({ adminKey }: { adminKey: ValidationAuth }) {
             <div className="validation-start">
               <button
                 className="button button-primary"
-                disabled={busy || !methods.length || !start || (!!end && start > end)}
+                disabled={
+                  busy || !methods.length || !validHorizons || !start || (!!end && start > end)
+                }
                 onClick={async () => {
                   if (starting.current) return
                   starting.current = true
@@ -428,6 +473,7 @@ function ValidationPanel({ adminKey }: { adminKey: ValidationAuth }) {
                     }
                     const accepted = await operate('', {
                       methods,
+                      horizons: horizons.map(Number),
                       start,
                       end: end || null,
                       request_id: requestId,
@@ -488,6 +534,7 @@ function ValidationPanel({ adminKey }: { adminKey: ValidationAuth }) {
           <p className="validation-hint">
             {job.start} 至 {job.end || '最新可用日'}
             {job.version === 'four-close-v2' && ' · 信号与收益均截至验证截止日'}
+            {' · 验证 ' + (job.horizons ?? [1, 2, 3]).map((day) => `T+${day}`).join(' / ')}
           </p>
           {job.status !== 'completed' && (
             <div className="validation-progress">
@@ -621,7 +668,11 @@ function ValidationPanel({ adminKey }: { adminKey: ValidationAuth }) {
                   部分策略/期限有效样本不足30，样本偏少，统计不稳定；“—”表示无有效样本，不能视为零胜率。
                 </p>
               )}
-              <ValidationResults summary={job.summary} windows={job.windows} />
+              <ValidationResults
+                summary={job.summary}
+                windows={job.windows}
+                horizons={job.horizons}
+              />
             </>
           )}
         </article>

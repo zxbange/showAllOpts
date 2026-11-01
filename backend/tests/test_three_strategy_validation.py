@@ -117,6 +117,26 @@ def test_empty_results(mod, monkeypatch, tmp_path):
     assert result.summary['胜率(%)'].isna().all()
 
 
+def test_custom_period_change_reuses_selections_and_refreshes_missing_outcomes(mod, monkeypatch, tmp_path):
+    days, calls, run = setup(mod, monkeypatch, tmp_path)
+    run()
+    monkeypatch.setattr(mod, 'HORIZONS', (2, 4, 120))
+    monkeypatch.setattr(mod, 'collect_selections', lambda *a, **kw: pytest.fail('must reuse selections'))
+    before = len(calls)
+    result = run()
+    assert result.summary['后续交易日'].tolist() == [2, 4, 120]
+    assert result.summary['有效样本'].tolist() == [3, 1, 0]
+    assert result.windows.empty
+    assert not (result.output_dir / '三日窗口汇总.csv').exists()
+    assert len(calls) > before
+    before = len(calls)
+    run()
+    assert len(calls) == before
+    monkeypatch.setattr(mod, 'HORIZONS', (121,))
+    with pytest.raises(ValueError, match='HORIZONS'):
+        run()
+
+
 def test_before_close_excludes_today(mod, monkeypatch, tmp_path):
     _, _, run = setup(mod, monkeypatch, tmp_path)
     monkeypatch.setattr(mod, 'china_now', lambda: dt.datetime(2024, 1, 8, 15, 59))

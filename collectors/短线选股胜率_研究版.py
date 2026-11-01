@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""聚宽独立研究：补票龙入选后第2/4/10个交易日的收盘表现。
+"""聚宽独立研究：补票龙默认观察第2/4/10个交易日，HORIZONS可改为1～120日。
 进度条展示采集，保留每日选股结果及胜率统计；不生成CSV、不连接业务数据库、不下单。
 """
 import builtins
@@ -26,7 +26,7 @@ PRICE_BATCH_SIZE = 50
 FUNDAMENTAL_BATCH_SIZE = 1000
 USE_CACHE = True  # 保存研究进度；重跑只补未完成部分
 CACHE_DIR = 'short_term_winrate_cache'
-HORIZONS = (2, 4, 10)
+HORIZONS = (2, 4, 10)  # 可改为1至3个不重复的整数，各1～120个交易日
 METHODS = {'bukou': '补票龙'}
 RULE_VERSION = 'bukou_v3_nonst_cap30'
 CACHE_VERSION = 'bukou_returns_v2'
@@ -569,6 +569,10 @@ def show_results(result):
 def run(start_date=START_DATE, end_date=END_DATE, as_of_date=AS_OF_DATE,
         price_batch_size=PRICE_BATCH_SIZE, use_cache=USE_CACHE, cache_dir=CACHE_DIR,
         api_namespace=None, show=True):
+    if (not isinstance(HORIZONS, (list, tuple)) or not 1 <= len(HORIZONS) <= 3
+            or builtins.any(type(h) is not builtins.int or not 1 <= h <= 120 for h in HORIZONS)
+            or len(set(HORIZONS)) != len(HORIZONS)):
+        raise ValueError('HORIZONS须为1至3个不重复的整数，每个1至120个交易日。')
     for value, cap, name in ((price_batch_size, 100, 'PRICE_BATCH_SIZE'),
                              (FUNDAMENTAL_BATCH_SIZE, 1000, 'FUNDAMENTAL_BATCH_SIZE')):
         if isinstance(value, builtins.bool) or not isinstance(value, builtins.int) or not 1 <= value <= cap:

@@ -5,7 +5,6 @@ import json
 import socket
 import queue
 import threading
-import ssl
 import uuid
 
 import pymysql
@@ -121,7 +120,7 @@ class ValidationSources:
 
     @staticmethod
     def public(ident, revision, config):
-        return dict(id=ident, revision=revision, **{k: v for k, v in config.items() if k != 'password'}, password_set=bool(config.get('password')))
+        return dict(id=ident, revision=revision, **{k: v for k, v in config.items() if k not in ('password', 'tls', 'ca_pem')}, password_set=bool(config.get('password')))
 
     def list(self):
         self.cipher()
@@ -133,15 +132,13 @@ class ValidationSources:
 
     @staticmethod
     def canonical(config):
-        # DNS names are case-insensitive. Keep trailing dots, credentials, database
-        # case and certificate text exact: TLS identity and server semantics can differ.
+        # Ignore retired transport options in existing encrypted configurations.
+        # Keep database and credential case exact; DNS names are case-insensitive.
         result = dict(config)
         result['host'] = result['host'].lower()
         result['port'] = int(result['port'])
-        result.setdefault('tls', 'verify')
-        result.setdefault('ca_pem', '')
-        if result['tls'] not in ('verify', 'required', 'disabled', 'preferred') or result['ca_pem'] is None:
-            raise SourceError('连接配置格式无效，请检查TLS选项和CA证书')
+        result.pop('tls', None)
+        result.pop('ca_pem', None)
         return result
 
     @classmethod
@@ -223,9 +220,8 @@ class ValidationSources:
 
     def freeze_service(self):
         s = self.settings
-        # Match the service's PyMySQL default: prefer TLS, without requiring it.
         return self.save(dict(name='服务默认数据库', host=s.db_host, port=s.db_port, database=s.db_name,
-                              username=s.db_user, password=s.db_password.get_secret_value(), tls='preferred', ca_pem=''), 'service')
+                              username=s.db_user, password=s.db_password.get_secret_value()), 'service')
 
     @contextmanager
     def engine(self, ref):
@@ -241,20 +237,12 @@ class ValidationSources:
             sock, connection = None, None
             try:
                 address = self.allowed(config)
-                context = None
-                if config['tls'] not in ('disabled', 'preferred'):
-                    context = ssl.create_default_context(cadata=config['ca_pem'] or None)
-                    if config['tls'] == 'required':
-                        context.check_hostname = False
-                        context.verify_mode = ssl.CERT_NONE
                 connection = pymysql.connect(host=config['host'], port=config['port'],
                     user=config['username'], password=config['password'], database=config['database'],
                     charset='utf8mb4', connect_timeout=8, read_timeout=20, write_timeout=20,
-                    ssl=context, ssl_disabled=config['tls'] == 'disabled', defer_connect=True, autocommit=False)
+                    ssl_disabled=True, defer_connect=True, autocommit=False)
                 sock = socket.create_connection((address, config['port']), timeout=8)
                 connection.connect(sock=sock)
-                if context is not None and not isinstance(connection._sock, ssl.SSLSocket):
-                    raise ValueError('TLS negotiation failed')
                 return connection
             except Exception:
                 if connection is not None:
@@ -264,7 +252,7 @@ class ValidationSources:
                         pass
                 if sock is not None:
                     sock.close()
-                raise SourceError('连接失败：请检查允许目标、网络、账户、库名和TLS证书；详细凭证不会返回') from None
+                raise SourceError('连接失败：请检查允许目标、网络、账户和库名；详细凭证不会返回') from None
         return create_engine('mysql+pymysql://', creator=connect, hide_parameters=True, pool_pre_ping=True,
                              pool_size=1, max_overflow=0)
 

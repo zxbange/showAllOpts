@@ -153,6 +153,22 @@ def test_failure_after_selection_resumes_without_scanning_again(mod, monkeypatch
     assert len(calls['selected']) == 1 and result.summary['有效样本'].sum() == 3
 
 
+def test_custom_periods_reuse_selections_and_add_outcomes(mod, monkeypatch, tmp_path):
+    days, calls, apis, run = setup_apis(mod, monkeypatch, tmp_path)
+    run(days[0], days[10])
+    monkeypatch.setattr(mod, 'HORIZONS', (1, 7, 120))
+    result = run(days[0], days[10])
+    assert len(calls['selected']) == 1
+    assert result.details['观察期限（交易日）'].tolist() == [1, 7, 120]
+    assert result.details['观察日'].tolist() == [str(days[1]), str(days[7]), None]
+    count = len(calls['prices'])
+    run(days[0], days[10])
+    assert len(calls['prices']) == count
+    monkeypatch.setattr(mod, 'HORIZONS', (0,))
+    with pytest.raises(ValueError, match='HORIZONS'):
+        run(days[0], days[10])
+
+
 def test_missing_prices_are_not_zero_returns_and_retry_next_run(mod, monkeypatch, tmp_path):
     days, calls, apis, run = setup_apis(mod, monkeypatch, tmp_path)
     fetch = apis['get_price']

@@ -102,11 +102,9 @@ for (const state of ['unpaired', 'configuration', 'running', 'completed'] as con
       await expect(page.getByLabel('数据库端口', { exact: true })).toBeFocused()
       await page.keyboard.press('Tab')
       await expect(page.getByLabel('数据库名', { exact: true })).toBeFocused()
-      const advanced = page.locator('summary').filter({ hasText: '连接安全选项' })
-      await advanced.focus()
-      await page.keyboard.press('Enter')
-      await page.getByLabel('数据库TLS').selectOption('required')
-      await expect(page.getByLabel('数据库CA证书', { exact: true })).toBeVisible()
+      await expect(page.getByLabel('数据库TLS')).toHaveCount(0)
+      await expect(page.getByLabel('数据库CA证书', { exact: true })).toHaveCount(0)
+      await expect(page.getByLabel('验证周期1')).toBeVisible()
     }
     if (state === 'running') {
       await expect(page.getByRole('progressbar', { name: '冻结输入' })).toHaveAttribute(

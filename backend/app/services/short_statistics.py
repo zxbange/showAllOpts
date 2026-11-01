@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""本地只读MySQL：五策略统一入口，自2024-01-01起统计后续1/2/3交易日表现。
+"""本地只读MySQL：五策略统一入口，默认统计后续1/2/3交易日，--horizons可改为1～120日。
 
 在本地 Python 运行本文件；默认读取同项目“本地专用/本地统计”下的私有配置，
 也可用 --config 指定配置。独立复制使用时仍可填写顶部 DB_CONFIG。
@@ -332,13 +332,13 @@ def pattern_candidates(frame, params):
     return result
 
 
-def forward_outcomes(frame):
+def forward_outcomes(frame, horizons=(1, 2, 3)):
     """先按市场日历重建索引再shift；停牌和缺行绝不让观察日顺延。"""
     c = frame[RETURN_PRICE_FIELD]
     dates = pd.Series(frame.index, index=frame.index)
     present = frame['close'] > 0
     result = pd.DataFrame(index=frame.index)
-    for horizon in (1, 2, 3):
+    for horizon in horizons:
         prefix = 'd' + str(horizon)
         target = dates.shift(-horizon)
         close = c.shift(-horizon)
@@ -355,7 +355,7 @@ def forward_outcomes(frame):
     return result
 
 
-def stock_samples(code, bars, universe, calendar, start, end, params, selected=None):
+def stock_samples(code, bars, universe, calendar, start, end, params, selected=None, horizons=(1, 2, 3)):
     bars = dated_frame(bars, '股票行情').set_index('trade_date').reindex(calendar)
     universe = dated_frame(universe, '股票快照').set_index('trade_date').reindex(calendar)
     numeric = ['open', 'high', 'low', 'close', 'adj_open', 'adj_high', 'adj_low', 'adj_close',
@@ -371,7 +371,7 @@ def stock_samples(code, bars, universe, calendar, start, end, params, selected=N
         if '超跌后止跌反弹' in selected:
             candidates['超跌后止跌反弹'] = oversold_pattern(bars, params).fillna(False)
             candidates['超跌后止跌反弹_anchor'] = pd.NaT
-    outcomes = forward_outcomes(bars)
+    outcomes = forward_outcomes(bars, horizons)
     result = pd.concat([candidates, outcomes], axis=1)
     result['code'], result['signal_date'], result['signal_close'] = code, result.index, bars[RETURN_PRICE_FIELD]
     result['signal_raw_close'], result['signal_adj_close'] = bars['close'], c
@@ -399,11 +399,11 @@ def select_signals(samples, params, strategies=None):
     return result.sort_values(['signal_date', 'strategy', 'code']).reset_index(drop=True)
 
 
-def summary_table(details, strategies=None):
+def summary_table(details, strategies=None, horizons=(1, 2, 3)):
     rows = []
     for method in (STRATEGIES if strategies is None else strategies):
         group = details[details['strategy'] == method]
-        for horizon in (1, 2, 3):
+        for horizon in horizons:
             prefix = 'd' + str(horizon)
             status_col, return_col = prefix + '_status', prefix + '_return_pct'
             valid = group[status_col].eq('有效') & np.isfinite(group[return_col])
@@ -424,7 +424,9 @@ def summary_table(details, strategies=None):
     return pd.DataFrame(rows)
 
 
-def window_summary(details, strategies=None):
+def window_summary(details, strategies=None, horizons=(1, 2, 3)):
+    if tuple(horizons) != (1, 2, 3):
+        return pd.DataFrame()
     rows = []
     for method in (STRATEGIES if strategies is None else strategies):
         group = details[details['strategy'] == method]
@@ -673,7 +675,12 @@ def add_bukou_candidates(code, samples, bars, universe, calendar, start, end, pa
 
 def run(start_date=START_DATE, end_date=END_DATE, as_of=AS_OF_DATE, output_dir=OUTPUT_DIR,
         engine=None, params=None, tls_verify=None, show_progress=PROGRESS_ENABLED,
-        db_config=None, tls_ca_pem=None, strategies=None):
+        db_config=None, tls_ca_pem=None, strategies=None, horizons=(1, 2, 3)):
+    if (not isinstance(horizons, (list, tuple)) or not 1 <= len(horizons) <= 3
+            or any(type(h) is not int or not 1 <= h <= 120 for h in horizons)
+            or len(set(horizons)) != len(horizons)):
+        raise ValueError('验证周期须填写1至3个不重复的整数，每个范围为1至120个交易日')
+    horizons = sorted(horizons)
     chosen = resolve_strategies(strategies)
     p = dict(PARAMS, **(params or {}))
     owned = engine is None
@@ -720,7 +727,7 @@ def run(start_date=START_DATE, end_date=END_DATE, as_of=AS_OF_DATE, output_dir=O
                 for stock_pos, code in enumerate(batch, 1):
                     progress.update(detail='计算 ' + code)
                     frame, quality = stock_samples(code, bar_groups.get(code, bars.iloc[:0]),
-                        universe_groups.get(code, universe.iloc[:0]), calendar, start, end, p)
+                        universe_groups.get(code, universe.iloc[:0]), calendar, start, end, p, horizons=horizons)
                     if need_bukou:
                         frame = add_bukou_candidates(code, frame, bar_groups.get(code, bars.iloc[:0]),
                             universe_groups.get(code, universe.iloc[:0]), calendar, start, end, p, selector)
@@ -734,11 +741,11 @@ def run(start_date=START_DATE, end_date=END_DATE, as_of=AS_OF_DATE, output_dir=O
             details = details[details['strategy'].isin(chosen)]
             if details.duplicated(["signal_date", "strategy", "code"]).any():
                 raise ValueError("同策略同日同股出现重复样本")
-            summary, windows = summary_table(details, chosen), window_summary(details, chosen)
+            summary, windows = summary_table(details, chosen, horizons), window_summary(details, chosen, horizons)
             monthly = []
             for month in pd.period_range(start, end, freq='M'):
                 group = details[details['signal_date'].dt.to_period('M') == month]
-                item = summary_table(group, chosen)
+                item = summary_table(group, chosen, horizons)
                 item.insert(0, '信号月份', str(month))
                 monthly.append(item)
             destination = Path(output_dir) / (dt.datetime.utcnow()+dt.timedelta(hours=8)).strftime('%Y%m%d_%H%M%S_%f')
@@ -746,6 +753,8 @@ def run(start_date=START_DATE, end_date=END_DATE, as_of=AS_OF_DATE, output_dir=O
             outputs = {'收盘胜率汇总.csv': summary, '三日窗口汇总.csv': windows,
                 '策略信号明细.csv': details, '按月收盘胜率.csv': pd.concat(monthly, ignore_index=True),
                 '数据覆盖.csv': pd.DataFrame(coverage)}
+            if tuple(horizons) != (1, 2, 3):
+                outputs.pop('三日窗口汇总.csv')
             progress.phase('导出本地结果', total=len(outputs)+1)
             for written, (filename, frame) in enumerate(outputs.items(), 1):
                 progress.update(detail=filename)
@@ -753,7 +762,7 @@ def run(start_date=START_DATE, end_date=END_DATE, as_of=AS_OF_DATE, output_dir=O
                 progress.update(done=written)
             metadata = dict(version=SCRIPT_VERSION, signal_start=str(start.date()), signal_end=str(end.date()),
                 observed_through=str(observed.date()), warmup_start=str(calendar[0].date()),
-                params=p, default_rules=RULES, return_price_field=RETURN_PRICE_FIELD, strategies=chosen,
+                params=p, default_rules=RULES, return_price_field=RETURN_PRICE_FIELD, strategies=chosen, horizons=horizons,
                 shared_base_samples=sum(item["base_samples"] for item in coverage),
                 shape_history_rows={"补票龙": 60},
                 validation_notice=VALIDATION_NOTICE,
@@ -768,7 +777,8 @@ def run(start_date=START_DATE, end_date=END_DATE, as_of=AS_OF_DATE, output_dir=O
             progress.update(done=len(outputs)+1, detail='运行参数.json')
         visible = ['策略', '后续交易日', '触发样本', '有效样本', '胜率(%)', '平均收益(%)', '待观察', '停牌样本', '行情缺失']
         print(summary[visible].to_string(index=False, na_rep='--', float_format=lambda value: '{:.2f}'.format(value)))
-        print('\n三日窗口统计：\n' + windows.to_string(index=False, na_rep='--', float_format=lambda value: '{:.2f}'.format(value)))
+        if not windows.empty:
+            print('\n三日窗口统计：\n' + windows.to_string(index=False, na_rep='--', float_format=lambda value: '{:.2f}'.format(value)))
         print('\n结果目录：' + str(destination.resolve()))
         return dict(summary=summary, windows=windows, details=details, output_dir=destination)
     finally:
@@ -786,6 +796,7 @@ def main(argv=None):
     parser.add_argument('--output', default=OUTPUT_DIR, help='本地结果目录')
     parser.add_argument('--config', help='私有 JSON 配置；相对路径以本脚本所在目录为基准')
     parser.add_argument('--no-progress', action='store_true', help='关闭动态进度显示')
+    parser.add_argument('--horizons', nargs='+', type=int, default=[1, 2, 3], help='1至3个不重复的验证周期，每个1至120个交易日，例如2 10 120')
     tls = parser.add_mutually_exclusive_group()
     tls.add_argument('--tls-verify', dest='tls_verify', action='store_true', help='验证服务器证书及身份')
     tls.add_argument('--no-tls-verify', dest='tls_verify', action='store_false',
@@ -801,7 +812,7 @@ def main(argv=None):
         verify = settings['DB_TLS_VERIFY'] if args.tls_verify is None else args.tls_verify
         run(args.start, args.end, args.as_of, args.output, tls_verify=verify,
             show_progress=PROGRESS_ENABLED and not args.no_progress,
-            db_config=settings['DB_CONFIG'], tls_ca_pem=settings['DB_TLS_CA_PEM'], strategies=args.strategies)
+            db_config=settings['DB_CONFIG'], tls_ca_pem=settings['DB_TLS_CA_PEM'], strategies=args.strategies, horizons=args.horizons)
         return 0
     except Exception as exc:
         message = '{}: {}'.format(type(exc).__name__, exc)

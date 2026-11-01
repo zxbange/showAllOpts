@@ -44,6 +44,62 @@ async function screenshot(page: Page, name: string) {
     animations: 'disabled',
   })
 }
+
+test('custom periods validate boundaries, submit and render only requested results', async ({
+  page,
+}) => {
+  await mock(page)
+  const startButton = page.getByRole('button', { name: '开始验证', exact: true })
+  await expect(page.getByText('请输入数据库密码。', { exact: true })).toHaveCount(0)
+  await expect(page.getByText('后台加密保存', { exact: true })).toHaveCount(0)
+  await expect(page.getByText('统计口径与数据说明', { exact: true })).toHaveCount(0)
+  await expect(page.getByLabel('数据库TLS')).toHaveCount(0)
+  await expect(page.getByRole('button', { name: '添加周期' })).toBeDisabled()
+  for (const invalid of ['0', '121', '1.5', '']) {
+    await page.getByLabel('验证周期1', { exact: true }).fill(invalid)
+    await expect(startButton).toBeDisabled()
+  }
+  await page.getByLabel('验证周期1', { exact: true }).fill('2')
+  await expect(startButton).toBeDisabled() // Duplicate second period.
+  await page.getByLabel('验证周期1', { exact: true }).fill('120')
+  await page.getByRole('button', { name: '删除周期3' }).click()
+  await page.getByRole('button', { name: '删除周期2' }).click()
+  await expect(page.getByRole('button', { name: '删除周期1' })).toBeDisabled()
+  await page.getByRole('button', { name: '添加周期' }).click()
+  await expect(startButton).toBeDisabled()
+  await page.getByLabel('验证周期2', { exact: true }).fill('7')
+  await expect(startButton).toBeEnabled()
+  let payload: Record<string, unknown> | undefined
+  const completed = {
+    ...job('completed'),
+    horizons: [7, 120],
+    windows: [],
+    summary: [7, 120].map((day) => ({
+      策略: 'bukou',
+      后续交易日: day,
+      有效样本: 100,
+      '胜率(%)': day === 7 ? 61 : 72,
+      '平均收益(%)': 5,
+      '中位收益(%)': 4,
+    })),
+  }
+  await page.route('**/validation/jobs', async (route) => {
+    if (route.request().method() !== 'POST')
+      return route.fulfill({ json: { jobs: payload ? [completed] : [] } })
+    payload = route.request().postDataJSON()
+    return route.fulfill({ json: completed })
+  })
+  await startButton.click()
+  await expect.poll(() => payload?.horizons).toEqual([120, 7])
+  await expect(page.getByRole('button', { name: 'T+7', exact: true })).toBeVisible()
+  await page.getByRole('button', { name: 'T+120', exact: true }).click()
+  await expect(page.getByRole('region', { name: 'T+120策略对比' })).toContainText('72')
+  await expect(page.getByRole('button', { name: 'T+1', exact: true })).toHaveCount(0)
+  await expect(page.getByText('三日窗口统计', { exact: true })).toHaveCount(0)
+  await page.reload()
+  await expect(page.getByRole('button', { name: 'T+120', exact: true })).toBeVisible()
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
+})
 test('two dates submit one cutoff and cards adapt to extra strategies', async ({ page }, info) => {
   await mock(page)
   await expect(page.locator('input[type=date]')).toHaveCount(2)

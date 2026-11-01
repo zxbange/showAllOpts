@@ -46,8 +46,17 @@ function Metrics({ rows, columns, label }: { rows: Metric[]; columns?: string[];
     </div>
   )
 }
-export function ValidationResults({ summary, windows }: { summary: Metric[]; windows: Metric[] }) {
-  const [horizon, setHorizon] = useState(1)
+export function ValidationResults({
+  summary,
+  windows,
+  horizons = [1, 2, 3],
+}: {
+  summary: Metric[]
+  windows: Metric[]
+  horizons?: number[]
+}) {
+  const [selected, setHorizon] = useState(horizons[0])
+  const horizon = horizons.includes(selected) ? selected : horizons[0]
   return (
     <div className="validation-results">
       <div className="validation-results-heading">
@@ -56,7 +65,7 @@ export function ValidationResults({ summary, windows }: { summary: Metric[]; win
           <p>以信号日收盘为基准，各期限独立统计有效样本。</p>
         </div>
         <div className="validation-horizons" role="group" aria-label="结果观察期限">
-          {[1, 2, 3].map((day) => (
+          {horizons.map((day) => (
             <button
               type="button"
               key={day}
@@ -83,13 +92,15 @@ export function ValidationResults({ summary, windows }: { summary: Metric[]; win
         </p>
         <Metrics rows={summary} label="全部期限完整统计" />
       </details>
-      <details className="validation-disclosure">
-        <summary>三日窗口统计</summary>
-        <p className="validation-hint">
-          仅使用完整三日样本，统计任一收盘上涨率与最好、最差收盘收益均值。
-        </p>
-        <Metrics rows={windows} label="三日窗口统计" />
-      </details>
+      {windows.length > 0 && (
+        <details className="validation-disclosure">
+          <summary>三日窗口统计</summary>
+          <p className="validation-hint">
+            仅使用完整三日样本，统计任一收盘上涨率与最好、最差收盘收益均值。
+          </p>
+          <Metrics rows={windows} label="三日窗口统计" />
+        </details>
+      )}
     </div>
   )
 }

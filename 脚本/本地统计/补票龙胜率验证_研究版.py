@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""聚宽独立研究：补票龙：按超短线四策略口径统计后续1/2/3日收盘表现。
+"""聚宽独立研究：补票龙，默认统计后续1/2/3日收盘表现，HORIZONS可改为1～120日。
 进度条展示采集，保留每日选股结果及胜率统计；导出CSV，不连接业务数据库、不下单。
 """
 import builtins
@@ -25,7 +25,7 @@ PRICE_BATCH_SIZE = 50
 FUNDAMENTAL_BATCH_SIZE = 1000
 USE_CACHE = True  # 保存研究进度；重跑只补未完成部分
 CACHE_DIR = 'bukou_validation_cache'
-HORIZONS = (1, 2, 3)
+HORIZONS = (1, 2, 3)  # 可改为1至3个不重复的整数，各1～120个交易日
 METHODS = {'bukou': '补票龙'}
 RULE_VERSION = 'bukou_v3_nonst_cap30'
 CACHE_VERSION = 'bukou_close_v2'
@@ -416,13 +416,13 @@ RETURN_PRICE_FIELD = 'adj_close'
 STRATEGIES = list(METHODS.values())
 OUTPUT_DIR = '补票龙验证结果'
 
-def forward_outcomes(frame):
+def forward_outcomes(frame, horizons=(1, 2, 3)):
     """先按市场日历重建索引再shift；停牌和缺行绝不让观察日顺延。"""
     c = frame[RETURN_PRICE_FIELD]
     dates = pd.Series(frame.index, index=frame.index)
     present = frame['close'] > 0
     result = pd.DataFrame(index=frame.index)
-    for horizon in (1, 2, 3):
+    for horizon in horizons:
         prefix = 'd' + str(horizon)
         target = dates.shift(-horizon)
         close = c.shift(-horizon)
@@ -439,11 +439,11 @@ def forward_outcomes(frame):
     return result
 
 
-def summary_table(details, strategies=None):
+def summary_table(details, strategies=None, horizons=(1, 2, 3)):
     rows = []
     for method in (STRATEGIES if strategies is None else strategies):
         group = details[details['strategy'] == method]
-        for horizon in (1, 2, 3):
+        for horizon in horizons:
             prefix = 'd' + str(horizon)
             status_col, return_col = prefix + '_status', prefix + '_return_pct'
             valid = group[status_col].eq('有效') & np.isfinite(group[return_col])
@@ -464,7 +464,9 @@ def summary_table(details, strategies=None):
     return pd.DataFrame(rows)
 
 
-def window_summary(details, strategies=None):
+def window_summary(details, strategies=None, horizons=(1, 2, 3)):
+    if tuple(horizons) != (1, 2, 3):
+        return pd.DataFrame()
     rows = []
     for method in (STRATEGIES if strategies is None else strategies):
         group = details[details['strategy'] == method]
@@ -488,7 +490,7 @@ def collect_forward(apis, record, calendar, folder, batch_size, progress):
         saved = record['outcomes'].get(stock['code'])
         # 同一观察范围内完整结果可复用；缺行情重试、窗口延长重算。
         if (saved and saved.get('through') == calendar[-1].isoformat()
-                and all(saved['row'].get('d{}_status'.format(h)) != '缺少行情' for h in HORIZONS)):
+                and all(saved['row'].get('d{}_status'.format(h)) in ('有效', '停牌', '待观察') for h in HORIZONS)):
             continue
         needed.append(stock['code'])
     for offset, batch in enumerate(chunks(needed, batch_size)):
@@ -515,7 +517,7 @@ def collect_forward(apis, record, calendar, folder, batch_size, progress):
             # 无效数值按缺失处理，避免产生无穷收益；原统计输入也要求有效基准。
             bars.replace([np.inf, -np.inf], np.nan, inplace=True)
             bars.loc[~bars['paused'].isin([0, 1]), 'paused'] = np.nan
-            outcome = forward_outcomes(bars).iloc[0].to_dict()
+            outcome = forward_outcomes(bars, HORIZONS).iloc[0].to_dict()
             base = finite(bars['adj_close'].iloc[0])
             if base is None or base <= 0 or not (bars['close'].iloc[0] > 0):
                 for h in HORIZONS:
@@ -543,6 +545,10 @@ def collect_forward(apis, record, calendar, folder, batch_size, progress):
 def run(start_date=START_DATE, end_date=END_DATE, as_of_date=AS_OF_DATE,
         price_batch_size=PRICE_BATCH_SIZE, use_cache=USE_CACHE, cache_dir=CACHE_DIR,
         output_dir=OUTPUT_DIR, api_namespace=None, show=True):
+    if (not isinstance(HORIZONS, (list, tuple)) or not 1 <= len(HORIZONS) <= 3
+            or builtins.any(type(h) is not builtins.int or not 1 <= h <= 120 for h in HORIZONS)
+            or len(set(HORIZONS)) != len(HORIZONS)):
+        raise ValueError('HORIZONS须为1至3个不重复的整数，每个1至120个交易日。')
     if isinstance(price_batch_size, builtins.bool) or not isinstance(price_batch_size, builtins.int) or not 1 <= price_batch_size <= 100:
         raise ValueError('PRICE_BATCH_SIZE 必须为1至100的整数。')
     apis = resolve_apis(api_namespace)
@@ -569,7 +575,7 @@ def run(start_date=START_DATE, end_date=END_DATE, as_of_date=AS_OF_DATE,
             if record is None:
                 record = collect_selections(apis, selector, day, price_batch_size, progress.update)
                 save_checkpoint(folder, record)
-            collect_forward(apis, record, days[i:i+4], folder, price_batch_size, progress)
+            collect_forward(apis, record, days[i:i+builtins.max(HORIZONS)+1], folder, price_batch_size, progress)
             for stock in record['selected']:
                 outcome = record['outcomes'][stock['code']]['row']
                 for method in stock['methods']:
@@ -589,10 +595,10 @@ def run(start_date=START_DATE, end_date=END_DATE, as_of_date=AS_OF_DATE,
     details = details.sort_values(['signal_date', 'strategy', 'code']).reset_index(drop=True)
     if details.duplicated(['strategy', 'signal_date', 'code']).any():
         raise ValueError('同策略同日同股出现重复样本。')
-    summary, windows = summary_table(details), window_summary(details)
+    summary, windows = summary_table(details, horizons=HORIZONS), window_summary(details, horizons=HORIZONS)
     monthly = []
     for month in pd.period_range(start, selected_days[-1], freq='M'):
-        item = summary_table(details[details['signal_date'].dt.to_period('M') == month])
+        item = summary_table(details[details['signal_date'].dt.to_period('M') == month], horizons=HORIZONS)
         item.insert(0, '信号月份', str(month))
         monthly.append(item)
     destination = Path(output_dir) / china_now().strftime('%Y%m%d_%H%M%S_%f')
@@ -600,6 +606,8 @@ def run(start_date=START_DATE, end_date=END_DATE, as_of_date=AS_OF_DATE,
     outputs = {'收盘胜率汇总.csv': summary, '三日窗口汇总.csv': windows,
                '策略信号明细.csv': details, '按月收盘胜率.csv': pd.concat(monthly, ignore_index=True),
                '数据覆盖.csv': pd.DataFrame(daily)}
+    if tuple(HORIZONS) != (1, 2, 3):
+        outputs.pop('三日窗口汇总.csv')
     for filename, frame in outputs.items():
         frame.to_csv(str(destination / filename), index=False, encoding='utf-8-sig')
     metadata = dict(start_date=str(start), first_signal_day=str(selected_days[0]), end_date=str(selected_days[-1]),

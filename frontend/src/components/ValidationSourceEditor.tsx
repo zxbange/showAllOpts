@@ -7,8 +7,6 @@ type Source = SourceRef & {
   port: number
   database: string
   username: string
-  tls: string
-  ca_pem: string
   password_set: boolean
 }
 const empty = {
@@ -17,9 +15,14 @@ const empty = {
   port: 3306,
   database: '',
   username: '',
-  tls: 'verify',
-  ca_pem: '',
 }
+const sourceForm = ({ name, host, port, database, username }: typeof empty) => ({
+  name,
+  host,
+  port,
+  database,
+  username,
+})
 export type SourceEditorHandle = { prepare: () => Promise<SourceRef | null> }
 export const ValidationSourceEditor = forwardRef<
   SourceEditorHandle,
@@ -36,7 +39,7 @@ export const ValidationSourceEditor = forwardRef<
   const original = sources.find((s) => s.id === editing?.id && s.revision === editing.revision)
   const unchangedConnection =
     !!original &&
-    (['name', 'host', 'port', 'database', 'username', 'tls', 'ca_pem'] as const).every((field) =>
+    (['name', 'host', 'port', 'database', 'username'] as const).every((field) =>
       field === 'host'
         ? original[field].toLowerCase() === form[field].toLowerCase()
         : original[field] === form[field],
@@ -107,7 +110,7 @@ export const ValidationSourceEditor = forwardRef<
         onSelect({ id: result.id, revision: result.revision })
         setPassword('')
         setDirty(false)
-        setMessage('配置已加密保存并选用；已有任务继续使用启动时的连接信息。')
+        setMessage('配置已保存并选用。')
         return { id: result.id, revision: result.revision }
       } else {
         await validationRequest(adminKey, '/sources/test', body)
@@ -141,7 +144,7 @@ export const ValidationSourceEditor = forwardRef<
               setDirty(false)
               setPassword('')
               setEditing(source ? { id: source.id, revision: source.revision } : null)
-              setForm(source ?? empty)
+              setForm(sourceForm(source ?? empty))
             }}
           >
             <option value="">{paired ? '填写新数据库连接' : '服务默认数据库'}</option>
@@ -161,7 +164,7 @@ export const ValidationSourceEditor = forwardRef<
               (s) => s.id === selected?.id && s.revision === selected?.revision,
             )
             if (source) {
-              setForm(source)
+              setForm(sourceForm(source))
               setEditing({ id: source.id, revision: source.revision })
               setPassword('')
               clearTest()
@@ -218,7 +221,7 @@ export const ValidationSourceEditor = forwardRef<
               type="password"
               autoComplete="new-password"
               placeholder={savedPassword ? '********' : undefined}
-              aria-describedby="validation-password-help"
+              aria-describedby={savedPassword ? 'validation-password-help' : undefined}
               value={password}
               onChange={(e) => {
                 clearTest()
@@ -226,44 +229,13 @@ export const ValidationSourceEditor = forwardRef<
                 setPassword(e.target.value)
               }}
             />
-            <small id="validation-password-help">
-              {savedPassword
-                ? '******** 表示已保存密码；输入可替换，清空则保留原密码。'
-                : '请输入数据库密码。'}
-            </small>
+            {savedPassword && (
+              <small id="validation-password-help">
+                ******** 表示已保存密码；输入可替换，清空则保留原密码。
+              </small>
+            )}
           </label>
         </div>
-        <details className="validation-disclosure validation-tls">
-          <summary>连接安全选项 · TLS 与 CA 证书</summary>
-          <label>
-            TLS
-            <select
-              aria-label="数据库TLS"
-              value={form.tls}
-              onChange={(e) => {
-                clearTest()
-                setDirty(true)
-                setForm((old) => ({ ...old, tls: e.target.value }))
-              }}
-            >
-              <option value="verify">加密并校验证书和身份（推荐）</option>
-              <option value="required">加密但不校验证书</option>
-              <option value="disabled">不使用TLS（仅可信网络）</option>
-            </select>
-          </label>
-          <label>
-            可选CA证书
-            <textarea
-              aria-label="数据库CA证书"
-              value={form.ca_pem}
-              onChange={(e) => {
-                clearTest()
-                setDirty(true)
-                setForm((old) => ({ ...old, ca_pem: e.target.value }))
-              }}
-            />
-          </label>
-        </details>
         <div className="short-controls validation-source-actions">
           <button
             className={'button validation-probe probe-' + testState}

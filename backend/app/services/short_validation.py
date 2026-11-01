@@ -36,6 +36,7 @@ BATCH_SIZE = 20
 AUTO_RETRY_LIMIT = 5
 AUTO_RETRY_SECONDS = 60
 STATIC_MODE = 'static-batch-v1'
+DEFAULT_HORIZONS = (1, 2, 3)
 BAR_COLUMNS = 'trade_date, code, open, high, low, close, adj_open, adj_high, adj_low, adj_close, volume, money, paused, high_limit, low_limit'
 UNIVERSE_COLUMNS = 'trade_date, code, display_name, listed_date, eligible, is_st, market_cap'
 
@@ -146,7 +147,13 @@ class ValidationJobs:
             raise KeyError(ident)
         return json.loads(row[0])
 
-    def create(self, methods, start, end=None, observed=None, request_id=None, source=None, input_mode=STATIC_MODE):
+    def create(self, methods, start, end=None, observed=None, request_id=None, source=None, input_mode=STATIC_MODE, horizons=None):
+        horizons = list(DEFAULT_HORIZONS) if horizons is None else horizons
+        if (not isinstance(horizons, (list, tuple)) or not 1 <= len(horizons) <= 3
+                or any(type(h) is not int or not 1 <= h <= 120 for h in horizons)
+                or len(set(horizons)) != len(horizons)):
+            raise ValueError('验证周期须填写1至3个不重复的整数，每个范围为1至120个交易日')
+        horizons = sorted(horizons)
         if self.sources is not None:
             if source is None:
                 source = self.sources.freeze_service()
@@ -156,7 +163,7 @@ class ValidationJobs:
             raise ValueError('不支持的输入模式')
         # Older clients may still submit observed; it must never extend a new task.
         observed = end
-        params = dict(input_mode=input_mode, source=source, methods=sorted(set(methods)), start=str(start), end=str(end) if end else None, observed=str(observed) if observed else None, version=VERSION)
+        params = dict(input_mode=input_mode, source=source, methods=sorted(set(methods)), horizons=horizons, start=str(start), end=str(end) if end else None, observed=str(observed) if observed else None, version=VERSION)
         if not params['methods'] or any(m not in METHODS for m in params['methods']):
             raise ValueError('请选择至少一种支持的策略')
         today = china_today()
@@ -548,7 +555,7 @@ class ValidationJobs:
             return
         if not job['base_samples']:
             raise ValueError('没有可用基础样本；请检查预热、行情与历史快照，不能当作零胜率')
-        summary, windows = self.summarize(ident, [METHODS[m] for m in job['methods']])
+        summary, windows = self.summarize(ident, [METHODS[m] for m in job['methods']], job.get('horizons', DEFAULT_HORIZONS))
         with self.db() as db:
             db.execute('BEGIN IMMEDIATE')
             current = self.get(ident, db)
@@ -619,10 +626,11 @@ class ValidationJobs:
 
     def compute_stock(self, job, code, bars, universe, calendar):
         ident = job['id']
+        horizons = job.get('horizons', DEFAULT_HORIZONS)
         with self.timed(job, 'compute'):
             selected = [METHODS[m] for m in job['methods']]
             start, end = pd.Timestamp(job['start']), pd.Timestamp(job['end'])
-            samples, quality = stats.stock_samples(code, bars, universe, calendar, start, end, stats.PARAMS, selected=selected)
+            samples, quality = stats.stock_samples(code, bars, universe, calendar, start, end, stats.PARAMS, selected=selected, horizons=horizons)
             patterns = [m for m in job['methods'] if m != 'oversold']
             if patterns:
                 def activity(day):
@@ -648,17 +656,18 @@ class ValidationJobs:
             for sample in details.to_dict('records'):
                 day, strategy = str(sample['signal_date']), sample['strategy']
                 values = []
-                for h in (1, 2, 3):
+                for h in horizons:
                     value = sample[f'd{h}_return_pct']
                     value = float(value) if pd.notna(value) and np.isfinite(value) else None
                     status = sample[f'd{h}_status']
                     db.execute('INSERT INTO outcomes VALUES (?,?,?,?,?,?,?)',
                                (ident, code, day, strategy, h, value, status))
                     values.append(value if status == '有效' else None)
-                complete = all(v is not None for v in values)
-                db.execute('INSERT INTO windows VALUES (?,?,?,?,?,?,?)',
-                    (ident, code, day, strategy, max(values) if complete else None,
-                     min(values) if complete else None, int(max(values)>0) if complete else None))
+                if tuple(horizons) == DEFAULT_HORIZONS:
+                    complete = all(v is not None for v in values)
+                    db.execute('INSERT INTO windows VALUES (?,?,?,?,?,?,?)',
+                        (ident, code, day, strategy, max(values) if complete else None,
+                         min(values) if complete else None, int(max(values)>0) if complete else None))
             if current['done'] != job['codes'].index(code):
                 raise ValueError('任务断点冲突，请重试')
             current['timings'] = dict(job.get('timings', {}))
@@ -669,12 +678,12 @@ class ValidationJobs:
             self.save(db, current)
         return True
 
-    def summarize(self, ident, methods):
+    def summarize(self, ident, methods, horizons=DEFAULT_HORIZONS):
         """SQLite performs aggregation and median sorting on disk; no all-stock concat."""
         summary, windows = [], []
         with self.db() as db:
             for method in methods:
-                for h in (1, 2, 3):
+                for h in horizons:
                     where = "job=? AND strategy=? AND horizon=?"
                     args = (ident, method, h)
                     total, stocks, pending, paused, missing = db.execute(f"""SELECT count(*),count(DISTINCT code),
@@ -690,6 +699,8 @@ class ValidationJobs:
                         '上涨次数':wins,'持平次数':flat,'下跌次数':losses,'胜率(%)':wins/count*100 if count else None,
                         '平均收益(%)':mean,'中位收益(%)':median,'最差收益(%)':low,'最好收益(%)':high,
                         '待观察':pending,'其余不可统计':total-count-pending,'停牌样本':paused,'行情缺失':missing})
+                if tuple(horizons) != DEFAULT_HORIZONS:
+                    continue
                 total, count, win, best, worst = db.execute("""SELECT count(*),count(win),avg(win)*100,avg(best),avg(worst)
                     FROM windows WHERE job=? AND strategy=?""", (ident,method)).fetchone()
                 windows.append({'策略':method,'触发样本':total,'完整三日样本':count,

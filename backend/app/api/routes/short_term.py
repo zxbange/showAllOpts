@@ -34,6 +34,7 @@ class SourceRef(BaseModel):
 
 class ValidationRequest(BaseModel):
     methods: list[Literal['bukou', 'oversold']] = Field(min_length=1, max_length=2)
+    horizons: list[Annotated[int, Field(strict=True, ge=1, le=120)]] = Field(default_factory=lambda: [1, 2, 3], min_length=1, max_length=3)
     start: date = date(2024, 1, 1)
     end: date | None = None
     observed: date | None = Field(default=None, deprecated=True, description="兼容旧客户端；新任务忽略此字段，以end作为统一截止")
@@ -48,8 +49,6 @@ class ConnectionInput(BaseModel):
     database: str = Field(min_length=1, max_length=128)
     username: str = Field(min_length=1, max_length=128)
     password: SecretStr | None = None
-    tls: Literal['verify', 'required', 'disabled'] = 'verify'
-    ca_pem: str = Field(default='', max_length=32768)
     id: str | None = Field(default=None, pattern=r'^[0-9a-f]{32}$')
     revision: int | None = Field(default=None, ge=1)
 
@@ -197,7 +196,7 @@ def create_validation(body: ValidationRequest, request: Request, service=Depends
         source = body.source.model_dump() if body.source else None
         if getattr(request.state, 'validation_paired', False) and (source is None or source['id'] == 'service'):
             raise ValueError('请先填写并保存要验证的数据库连接')
-        return public_job(service.create(body.methods, body.start, body.end, None, body.request_id, source), service)
+        return public_job(service.create(body.methods, body.start, body.end, None, body.request_id, source, horizons=body.horizons), service)
     except ValueError as exc:
         raise HTTPException(422, str(exc)) from None
 
@@ -241,7 +240,7 @@ async def connection_input(request, service):
         if body.password is not None and len(body.password.get_secret_value()) > 4096:
             raise ValueError()
     except Exception:
-        raise HTTPException(422, '连接配置格式无效，请检查必填项、端口和TLS选项；敏感内容不会返回') from None
+        raise HTTPException(422, '连接配置格式无效，请检查必填项和端口；敏感内容不会返回') from None
     config = body.model_dump(exclude={'id', 'revision', 'password'})
     config['password'] = body.password.get_secret_value() if body.password is not None else None
     if config['password'] is None:

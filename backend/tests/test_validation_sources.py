@@ -26,7 +26,7 @@ def secure(tmp_path):
 
 @pytest.fixture
 def config():
-    return dict(name='研究库',host='db.example',port=3306,database='private-db',username='private-user',password='unique-private-password',tls='verify',ca_pem='')
+    return dict(name='研究库',host='db.example',port=3306,database='private-db',username='private-user',password='unique-private-password')
 
 def auth(client):client.headers['Authorization']='Bearer '+'a'*40
 
@@ -82,7 +82,7 @@ def test_special_targets_denied(secure,config,monkeypatch,address):
     monkeypatch.setattr(socket,'getaddrinfo',lambda *a,**kw:[(socket.AF_INET,socket.SOCK_STREAM,6,'',(address,3306))])
     with pytest.raises(SourceError):sources.allowed(config)
 
-def test_allowlist_socket_pinning_and_no_tls_downgrade(secure,config,monkeypatch):
+def test_allowlist_socket_pinning_and_disabled_tls_including_legacy_config(secure,config,monkeypatch):
     _,sources,_,_=secure
     resolve=Mock(return_value=[(socket.AF_INET,socket.SOCK_STREAM,6,'',('10.1.2.3',3306))]);monkeypatch.setattr(socket,'getaddrinfo',resolve)
     with pytest.raises(SourceError):sources.allowed({**config,'host':'not-allowed.example'})
@@ -95,9 +95,10 @@ def test_allowlist_socket_pinning_and_no_tls_downgrade(secure,config,monkeypatch
     dial.assert_called_once_with(('10.1.2.3',3306),timeout=8)
     assert connect.call_args.kwargs['host']=='db.example' and connect.call_args.kwargs['ssl_disabled']
     conn.connect.assert_called_once_with(sock=sock);engine.dispose()
-    engine=sources.build_engine(config)
-    with pytest.raises(SourceError):engine.pool._creator()
-    assert not connect.call_args.kwargs['ssl_disabled']
+    engine=sources.build_engine({**config,'tls':'verify','ca_pem':'old certificate'})
+    assert engine.pool._creator() is conn
+    assert connect.call_args.kwargs['ssl_disabled'] is True
+    assert 'ssl' not in connect.call_args.kwargs
     engine.dispose()
 
 def test_dns_timeout_bounded(secure,config,monkeypatch):
@@ -146,14 +147,6 @@ def test_cancel_queued_crash_recovery_preserves_completed(setup):
     assert restarted.get(job['id'])['status']=='cancelled'
     fresh=restarted.create(['oversold'],calendar[170].date(),None,None,request_id='new');result=finish(restarted,fresh['id'])
     assert result['status']=='completed' and restarted.action(fresh['id'],'cancel')==result
-
-def test_tls_required_rejects_server_before_authentication():
-    import ssl,pymysql
-    conn=pymysql.connect(host='db.example',user='test',password='not-sent',ssl=ssl.create_default_context(),defer_connect=True)
-    conn.server_version='8.0.0';conn.server_capabilities=0;conn.write_packet=Mock()
-    with pytest.raises(pymysql.err.OperationalError):conn._request_authentication()
-    conn.write_packet.assert_not_called()
-
 
 def test_default_source_is_frozen_and_new_settings_create_new_version(secure):
     jobs,sources,settings,_=secure
@@ -256,22 +249,24 @@ def test_concurrent_equal_edits_and_new_names(secure, config):
 
 
 @pytest.mark.parametrize('change', [dict(database='PRIVATE-DB'), dict(username='PRIVATE-USER'),
-    dict(password='unique-private-password '), dict(tls='required'), dict(ca_pem='certificate')])
+    dict(password='unique-private-password ')])
 def test_semantic_changes_remain_distinct(secure, config, change):
     _, sources, _, _ = secure
     first = sources.save(config)
     assert sources.save({**config, **change}, first['id'], 1)['revision'] == 2
 
 
-def test_tls_defaults_invalid_null_and_named_task(secure, config):
+def test_retired_tls_fields_ignored_and_named_task_preserved(secure, config):
     _, sources, _, client = secure
     auth(client)
     first = sources.save(config)
     body = {**config, **first}
-    body.pop('tls'); body.pop('ca_pem')
     assert client.post('/short-term/validation/sources/save', json=body).json()['revision'] == 1
     for value in (None, '', 'VERIFY'):
-        assert client.post('/short-term/validation/sources/save', json={**body, 'tls': value}).status_code == 422
+        response = client.post('/short-term/validation/sources/save', json={**body, 'tls': value, 'ca_pem': 'legacy'})
+        assert response.status_code == 200
+        assert response.json()['revision'] == 1
+        assert 'tls' not in response.json() and 'ca_pem' not in response.json()
     task = client.post('/short-term/validation/jobs', json={'methods': ['oversold'], 'source': first}).json()
     assert task['source_name'] == config['name']
     sources.save({**config, 'name': '重命名'}, first['id'], 1)
@@ -293,7 +288,7 @@ def test_preexisting_duplicate_names_can_save_unchanged(secure, config):
 
 
 @pytest.mark.parametrize('change', [dict(name='新名称'), dict(host='127.0.0.1'), dict(port=3307),
-    dict(database='another'), dict(username='another'), dict(tls='disabled'), dict(ca_pem='new CA')])
+    dict(database='another'), dict(username='another')])
 def test_changed_connection_never_reuses_saved_secret_for_probe_or_save(secure, config, monkeypatch, change):
     _, sources, _, client = secure
     auth(client)
