@@ -12,6 +12,27 @@ from app.services.short_validation import ValidationJobs
 from test_short_validation import setup, finish
 
 
+@pytest.mark.parametrize('horizons', [None, [120, 7]])
+def test_api_persists_default_and_custom_periods(setup, horizons):
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from app.api.routes.short_term import router, validation_admin
+
+    jobs, _, _, calendar = setup
+    app = FastAPI()
+    app.include_router(router, prefix='/api/v1')
+    app.dependency_overrides[validation_admin] = lambda: jobs
+    body = {'methods': ['oversold'], 'start': str(calendar[170].date())}
+    if horizons is not None:
+        body['horizons'] = horizons
+    with TestClient(app) as client:
+        response = client.post('/api/v1/short-term/validation/jobs', json=body)
+    assert response.status_code == 200, response.text
+    expected = sorted(horizons) if horizons is not None else [1, 2, 3]
+    assert response.json()['horizons'] == expected
+    assert jobs.get(response.json()['id'])['horizons'] == expected
+
+
 @pytest.mark.parametrize('horizons', [[], [0], [121], [1, 2, 3, 4], [True], [1.5], ['2']])
 def test_invalid_horizons_rejected_at_api_and_service(setup, horizons):
     jobs, _, _, calendar = setup

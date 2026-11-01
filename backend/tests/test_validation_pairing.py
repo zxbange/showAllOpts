@@ -38,7 +38,8 @@ def login(access, client, confirmed=True):
     return code, response
 
 
-def test_no_config_pair_save_start_logout(paired, config, monkeypatch):
+@pytest.mark.parametrize('horizons', [None, [7, 120]])
+def test_no_config_pair_save_start_logout(paired, config, monkeypatch, horizons):
     jobs, settings, access, client = paired
     assert client.get(BASE+'/access').json()['mode'] == 'pair'
     assert not access.root.exists()
@@ -55,14 +56,17 @@ def test_no_config_pair_save_start_logout(paired, config, monkeypatch):
     assert config['password'].encode() not in (jobs.root/'jobs.sqlite3').read_bytes()
     assert (settings.log_path/'short-validation-secrets/source.key').exists()
     calls=[]
-    def create(*args):
-        calls.append(args)
-        return {'id':'job1','status':'queued','source':args[-1]}
+    def create(*args, horizons):
+        calls.append((args, horizons))
+        return {'id':'job1','status':'queued','source':args[-1], 'horizons':horizons}
     monkeypatch.setattr(jobs,'create',create)
     body={'methods':['bukou','oversold'],'start':'2024-01-01','source':{'id':ref.json()['id'],'revision':1}}
+    if horizons is not None:
+        body['horizons'] = horizons
     assert client.post(BASE+'/jobs',json=body).status_code == 200
-    assert calls[0][0] == ['bukou','oversold']
-    assert calls[0][-1] == body['source']
+    assert calls[0][0][0] == ['bukou','oversold']
+    assert calls[0][0][-1] == body['source']
+    assert calls[0][1] == (horizons if horizons is not None else [1, 2, 3])
     assert client.post(BASE+'/jobs',json={'methods':['bukou']}).status_code == 422
     assert client.post(BASE+'/logout',json={}).status_code == 200
     assert client.get(BASE+'/jobs').status_code == 401
