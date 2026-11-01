@@ -67,6 +67,12 @@ AUTH_ALLOW_HTTP=false
 
 Nginx 必须保留 `Host`（含端口）并覆盖 `X-Forwarded-Proto`、`X-Forwarded-For`。Uvicorn 仅信任本机反向代理；不得把 `FORWARDED_ALLOW_IPS` 设置为 `*` 并暴露后端到公网。模板已包含这些代理头。此配置是浏览器到网站的 HTTPS，不改变既有研究数据库连接方式。
 
+## GitHub 自动部署的检查地址
+
+HTTPS 验证通过后，还需把服务器 `/etc/showallopts-deploy.json` 中的 `DEPLOY_WEB_URL` 改为 `https://119.28.106.127`，保留 `NODE_BIN` 原值、文件的 root 所有权和 0644 权限。使用 `sudoedit /etc/showallopts-deploy.json` 修改即可，不要重新运行首次 SSH 安装脚本。
+
+自动部署会拒绝健康检查重定向，因此不能继续使用会跳转的 `http://119.28.106.127:8081`。手动部署也应使用 `bash deploy.sh --web-url https://119.28.106.127`。只在 HTTPS 已经可访问、证书验证通过后切换检查地址。
+
 ## 自动续期与自动加载修复
 
 无需等到过期：每小时检查一次，由 Certbot 判断是否进入续期窗口。已过期时也会尝试续期。没有使用 `--force-renewal`，不会每小时重复申请证书。网络临时失败后，下次检查自动重试。
