@@ -29,7 +29,7 @@ class EarningsService:
         result.industries = self.repository.industries(target)
         total, rows = self.repository.listing(target, search, industry, source, sort, direction, page, page_size)
         result.total = total
-        result.items = [StockSummary.model_validate(row) for row in rows]
+        result.items = self.repository.enrich([StockSummary.model_validate(row) for row in rows])
         return result
 
     def detail(self, period, code):
@@ -37,4 +37,4 @@ class EarningsService:
         row = self.repository.detail(period, code)
         if row is None:
             raise HTTPException(404, '该季度没有这只股票的入选记录。')
-        return StockDetail.model_validate(row)
+        return self.repository.enrich([StockDetail.model_validate(row)])[0]

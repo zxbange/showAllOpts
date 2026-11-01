@@ -6,7 +6,14 @@ import { getEarningsOverview } from '../api/client'
 import { useResource } from '../hooks/useResource'
 import { EmptyState, ErrorState, LoadingState } from '../components/States'
 import { StatCard } from '../components/StatCard'
-import { decimal, percent, quarter, sourceNames } from '../lib/earnings'
+import {
+  decimal,
+  percent,
+  quarter,
+  sourceNames,
+  signedPercent,
+  earningsReturnClass,
+} from '../lib/earnings'
 import '../styles/earnings.css'
 
 export function EarningsPage() {
@@ -208,7 +215,10 @@ export function EarningsPage() {
                 <div className="panel-heading">
                   <div>
                     <h2>本期入选股票</h2>
-                    <p>利润增幅取触发信号的公告；预告显示增幅下限，估值为截止日快照。</p>
+                    <p>
+                      断层日涨幅对比前收盘；距今涨幅对比断层日收盘，使用同口径前复权价。保留近 5
+                      年财季。
+                    </p>
                   </div>
                   <span className="heading-tag">{data.total} 只</span>
                 </div>
@@ -216,7 +226,7 @@ export function EarningsPage() {
                   className="earnings-table-scroll"
                   tabIndex={0}
                   role="region"
-                  aria-label="净利润断层股票表，可横向滚动"
+                  aria-label="净利润断层股票表，可滚动查看"
                 >
                   <table className="earnings-table">
                     <thead>
@@ -225,6 +235,8 @@ export function EarningsPage() {
                         <th>信号日期 / 来源</th>
                         <th>归母净利同比</th>
                         <th>高开幅度</th>
+                        <th>断层日涨幅</th>
+                        <th>距今涨幅</th>
                         <th>总市值 / 流通市值（亿）</th>
                         <th>PE（TTM） / PB</th>
                       </tr>
@@ -242,6 +254,16 @@ export function EarningsPage() {
                             </Link>
                             <small>{s.code}</small>
                             <span className="earnings-chip">{s.industry_name ?? '行业未提供'}</span>
+                            {(s.selected_periods?.length ?? 0) > 1 && (
+                              <div className="earnings-repeat">
+                                <span className="earnings-hit">
+                                  近5年入选 {s.selected_periods!.length} 季
+                                </span>
+                                <small className="earnings-periods">
+                                  {s.selected_periods!.map(quarter).join('、')}
+                                </small>
+                              </div>
+                            )}
                           </td>
                           <td>
                             {s.signal_date}
@@ -257,6 +279,17 @@ export function EarningsPage() {
                             </small>
                           </td>
                           <td className="earnings-positive">+{percent(s.open_gap_pct)}</td>
+                          <td className={earningsReturnClass(s.close_change_pct)}>
+                            {signedPercent(s.close_change_pct)}
+                          </td>
+                          <td className={earningsReturnClass(s.since_signal_pct)}>
+                            {signedPercent(s.since_signal_pct)}
+                            <small>
+                              {s.latest_price_date
+                                ? `截至 ${s.latest_price_date}`
+                                : '待采集最新收盘'}
+                            </small>
+                          </td>
                           <td>
                             {decimal(s.market_cap)}
                             <small>{decimal(s.circulating_market_cap)}</small>
@@ -269,25 +302,6 @@ export function EarningsPage() {
                       ))}
                     </tbody>
                   </table>
-                </div>
-                <div className="earnings-pagination">
-                  <span>
-                    第 {data.page} / {Math.max(1, Math.ceil(data.total / data.page_size))} 页
-                  </span>
-                  <button
-                    className="button button-quiet"
-                    disabled={data.page <= 1}
-                    onClick={() => change('page', String(data.page - 1))}
-                  >
-                    上一页
-                  </button>
-                  <button
-                    className="button button-quiet"
-                    disabled={data.page * data.page_size >= data.total}
-                    onClick={() => change('page', String(data.page + 1))}
-                  >
-                    下一页
-                  </button>
                 </div>
               </section>
             )}

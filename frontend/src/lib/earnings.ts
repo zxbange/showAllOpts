@@ -8,6 +8,10 @@ export const decimal = (n: number | null | undefined, digits = 2) =>
     ? '—'
     : n.toLocaleString('zh-CN', { minimumFractionDigits: digits, maximumFractionDigits: digits })
 export const percent = (n: number | null | undefined) => (n == null ? '—' : decimal(n) + '%')
+export const signedPercent = (n: number | null | undefined) =>
+  n == null ? '—' : (n > 0 ? '+' : '') + percent(n)
+export const earningsReturnClass = (n: number | null | undefined) =>
+  n == null || n === 0 ? '' : n > 0 ? 'earnings-positive' : 'earnings-negative'
 export const quarter = (period: string) =>
   period.slice(0, 4) + ' 年 Q' + Math.ceil(Number(period.slice(5, 7)) / 3)
 export const industryLevel = (level: string | null) =>

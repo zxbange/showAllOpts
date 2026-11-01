@@ -1,5 +1,5 @@
 import { PageHeader } from '../components/PageHeader'
-import { useCallback, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import {
   CalendarDays,
   RefreshCw,
@@ -8,6 +8,8 @@ import {
   Layers3,
   CheckCheck,
   Info,
+  X,
+  ChartColumn,
 } from 'lucide-react'
 import { getGrowthOverview } from '../api/client'
 import { useResource } from '../hooks/useResource'
@@ -81,7 +83,54 @@ function ProfitBars({ reports, label }: { reports: GrowthReport[]; label: string
   )
 }
 
-function StockCard({ stock }: { stock: GrowthItem }) {
+function GrowthChartsDialog({ stock, onClose }: { stock: GrowthItem; onClose: () => void }) {
+  const dialog = useRef<HTMLDialogElement>(null)
+  useEffect(() => {
+    const element = dialog.current!
+    const opener = document.activeElement as HTMLElement | null
+    const overflow = document.body.style.overflow
+    document.body.style.overflow = 'hidden'
+    element.showModal()
+    return () => {
+      element.close()
+      document.body.style.overflow = overflow
+      if (opener?.isConnected) opener.focus()
+    }
+  }, [])
+  return (
+    <dialog
+      ref={dialog}
+      className="growth-chart-dialog"
+      aria-labelledby="growth-chart-title"
+      onCancel={(event) => {
+        event.preventDefault()
+        onClose()
+      }}
+    >
+      <div className="growth-dialog-heading">
+        <div>
+          <h2 id="growth-chart-title">{stock.name} · 利润柱状图</h2>
+          <p>{stock.code} · 各类报告最近三期归母净利润，单位：亿元</p>
+        </div>
+        <button
+          type="button"
+          className="button button-quiet icon-button"
+          aria-label="关闭利润柱状图"
+          onClick={onClose}
+        >
+          <X size={18} />
+        </button>
+      </div>
+      <div className="growth-charts">
+        {groups.map(([key, name]) => (
+          <ProfitBars key={key} reports={stock.reports[key]} label={name} />
+        ))}
+      </div>
+    </dialog>
+  )
+}
+
+function StockCard({ stock, onCharts }: { stock: GrowthItem; onCharts: () => void }) {
   return (
     <article className="growth-stock panel">
       <div className="growth-stock-heading">
@@ -109,11 +158,14 @@ function StockCard({ stock }: { stock: GrowthItem }) {
         <span>
           总市值 <b>{number(stock.market_cap)} 亿</b>
         </span>
-      </div>
-      <div className="growth-charts">
-        {groups.map(([key, name]) => (
-          <ProfitBars key={key} reports={stock.reports[key]} label={name} />
-        ))}
+        <button
+          type="button"
+          className="button button-quiet growth-chart-button"
+          onClick={onCharts}
+          aria-label={`查看${stock.name}利润柱状图`}
+        >
+          <ChartColumn size={16} /> 查看柱状图
+        </button>
       </div>
       <details className="growth-evidence">
         <summary>查看 12 期财报与 16 项增长率</summary>
@@ -162,15 +214,18 @@ function StockCard({ stock }: { stock: GrowthItem }) {
 
 export function GrowthPage() {
   const [search, setSearch] = useState('')
-  const [page, setPage] = useState(1)
+  const [chartStock, setChartStock] = useState<GrowthItem | null>(null)
+  const results = useRef<HTMLDivElement>(null)
   const loader = useCallback((signal: AbortSignal) => getGrowthOverview(signal), [])
   const { data, error, loading, reload } = useResource(loader)
   const term = search.trim().toLowerCase()
   const items = (data?.items ?? []).filter((s) =>
     [s.code, s.name, s.industry_name ?? ''].some((v) => v.toLowerCase().includes(term)),
   )
-  const pages = Math.max(1, Math.ceil(items.length / 20)),
-    current = Math.min(page, pages)
+  useEffect(() => {
+    if (results.current) results.current.scrollTop = 0
+    setChartStock(null)
+  }, [search, data])
   return (
     <div className="page-enter growth-page">
       <PageHeader>
@@ -255,7 +310,6 @@ export function GrowthPage() {
                 value={search}
                 onChange={(e) => {
                   setSearch(e.target.value)
-                  setPage(1)
                 }}
               />
             </label>
@@ -272,32 +326,20 @@ export function GrowthPage() {
               description="请尝试其他股票代码、名称或行业。"
             />
           ) : (
-            <div className="growth-list">
-              {items.slice((current - 1) * 20, current * 20).map((s) => (
-                <StockCard key={s.code} stock={s} />
+            <div
+              ref={results}
+              className="growth-list"
+              role="region"
+              tabIndex={0}
+              aria-label="高增长股票列表，可滚动查看"
+            >
+              {items.map((s) => (
+                <StockCard key={s.code} stock={s} onCharts={() => setChartStock(s)} />
               ))}
             </div>
           )}
-          {pages > 1 && (
-            <nav className="growth-pagination" aria-label="高增长分页">
-              <button
-                className="button button-quiet"
-                disabled={current <= 1}
-                onClick={() => setPage(current - 1)}
-              >
-                上一页
-              </button>
-              <span>
-                {current} / {pages}
-              </span>
-              <button
-                className="button button-quiet"
-                disabled={current >= pages}
-                onClick={() => setPage(current + 1)}
-              >
-                下一页
-              </button>
-            </nav>
+          {chartStock && (
+            <GrowthChartsDialog stock={chartStock} onClose={() => setChartStock(null)} />
           )}
           <section className="method-card">
             <span className="method-icon">

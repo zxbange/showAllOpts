@@ -6,7 +6,14 @@ import { getEarningsDetail } from '../api/client'
 import { useResource } from '../hooks/useResource'
 import { EmptyState, ErrorState, LoadingState } from '../components/States'
 import { EarningsChart } from '../components/EarningsChart'
-import { decimal, industryLevel, percent, quarter, sourceNames } from '../lib/earnings'
+import {
+  decimal,
+  industryLevel,
+  percent,
+  quarter,
+  sourceNames,
+  signedPercent,
+} from '../lib/earnings'
 import '../styles/earnings.css'
 
 export function EarningsDetailPage() {
@@ -60,6 +67,8 @@ export function EarningsDetailPage() {
                 ['PE（TTM）', decimal(data.pe_ttm)],
                 ['PB', decimal(data.pb)],
                 ['高开幅度', percent(data.open_gap_pct)],
+                ['断层日涨幅', signedPercent(data.close_change_pct)],
+                ['距今涨幅', signedPercent(data.since_signal_pct)],
               ].map(([label, value]) => (
                 <div key={label}>
                   <small>{label}</small>
@@ -70,8 +79,22 @@ export function EarningsDetailPage() {
             <p className="earnings-note">
               利润增幅依据：{sourceNames[data.signal_source]} · {data.profit_basis}
               {data.signal_source === 'forecast' ? ' · 预告下限' : ''}。估值日期：
-              {data.valuation_date}。
+              {data.valuation_date}。收盘表现截至：{data.latest_price_date ?? '待采集'}。
             </p>
+            {(data.selected_periods?.length ?? 0) > 1 && (
+              <div className="earnings-repeat">
+                <strong>近5年入选 {data.selected_periods!.length} 季：</strong>
+                {data.selected_periods!.map((p) => (
+                  <Link
+                    className="earnings-chip"
+                    key={p}
+                    to={`/earnings-gap/stocks/${encodeURIComponent(data.code)}?period=${p}`}
+                  >
+                    {quarter(p)}
+                  </Link>
+                ))}
+              </div>
+            )}
             <section className="panel">
               <div className="panel-heading">
                 <div>

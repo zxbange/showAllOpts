@@ -1,6 +1,6 @@
-from sqlalchemy import func, select
+from sqlalchemy import func, inspect, select
 from sqlalchemy.orm import load_only
-from app.models.earnings import EarningsRun, EarningsStock
+from app.models.earnings import EarningsRun, EarningsStock, EarningsPerformance
 
 SUMMARY_COLUMNS = [c for c in EarningsStock.__table__.columns.keys() if c not in ('events', 'prices', 'analysis', 'analysis_basis')]
 
@@ -41,3 +41,25 @@ class EarningsRepository:
 
     def detail(self, period, code):
         return self.session.get(EarningsStock, (period, code))
+
+    def enrich(self, items):
+        if not items:
+            return items
+        codes = {item.code for item in items}
+        periods = {}
+        for code, period in self.session.execute(select(EarningsStock.code, EarningsStock.report_period)
+                .where(EarningsStock.code.in_(codes)).order_by(EarningsStock.report_period.desc())):
+            periods.setdefault(code, []).append(period)
+        performance = {}
+        if inspect(self.session.connection()).has_table(EarningsPerformance.__tablename__):
+            performance = {(row.report_period, row.code): row for row in self.session.scalars(
+                select(EarningsPerformance).where(EarningsPerformance.code.in_(codes),
+                    EarningsPerformance.report_period.in_({item.report_period for item in items})))}
+        for item in items:
+            item.close_change_pct = ((1 + item.open_gap_pct / 100) * (1 + item.intraday_pct / 100) - 1) * 100
+            item.selected_periods = periods.get(item.code, [])
+            current = performance.get((item.report_period, item.code))
+            if current and current.signal_date == item.signal_date:
+                item.since_signal_pct = float(current.since_signal_pct)
+                item.latest_price_date = current.latest_date
+        return items

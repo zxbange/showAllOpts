@@ -13,6 +13,10 @@ export interface EarningsStock {
   net_profit: number | null
   open_gap_pct: number
   intraday_pct: number
+  close_change_pct?: number | null
+  since_signal_pct?: number | null
+  latest_price_date?: string | null
+  selected_periods?: string[]
   market_cap: number | null
   circulating_market_cap: number | null
   pe_ttm: number | null

@@ -76,6 +76,8 @@
 .earnings-table-scroll {
   overflow: auto;
   max-width: 100%;
+  height: clamp(360px, 60vh, 720px);
+  scrollbar-gutter: stable;
 }
 .earnings-table {
   width: 100%;
@@ -84,6 +86,9 @@
   text-align: left;
 }
 .earnings-table th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
   padding: 16px 18px;
   background: #fcf8f3;
   color: var(--muted);
@@ -136,18 +141,20 @@
   color: var(--accent);
   font-variant-numeric: tabular-nums;
 }
-.earnings-pagination {
-  display: flex;
-  align-items: center;
-  justify-content: flex-end;
-  gap: 10px;
-  padding: 18px 22px;
-  border-top: 1px solid var(--border);
-  font-size: 12px;
-  color: var(--muted);
+.earnings-negative {
+  color: #187968;
+  font-variant-numeric: tabular-nums;
 }
-.earnings-pagination > span {
-  margin-right: auto;
+.earnings-table small.earnings-periods {
+  white-space: normal;
+  min-width: 160px;
+  max-width: 260px;
+}
+.earnings-repeat {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
 }
 .earnings-back {
   display: flex;
@@ -159,7 +166,8 @@
 }
 .earnings-detail-metrics {
   display: grid;
-  grid-template-columns: repeat(6, 1fr);
+  grid-template-columns: repeat(4, 1fr);
+  row-gap: 20px;
   background: white;
   border: 1px solid var(--border);
   border-radius: 14px;

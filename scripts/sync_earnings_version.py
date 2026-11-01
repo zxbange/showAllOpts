@@ -4,8 +4,8 @@ ROOT = Path(__file__).resolve().parents[1]
 START, END = '# BEGIN SHARED EARNINGS VERSION', '# END SHARED EARNINGS VERSION'
 
 
-def sync(check=False):
-    source = (ROOT/'collector_rules/earnings_version.py').read_text(encoding='utf-8')
+def sync_block(source_name, START, END, check):
+    source = (ROOT/'collector_rules'/source_name).read_text(encoding='utf-8')
     block = source[source.index(START):source.index(END)+len(END)]
     for name in ('净利润断层_数据库版.py', '策略批量采集_数据库版.py'):
         path = ROOT/'collectors'/name
@@ -19,6 +19,11 @@ def sync(check=False):
             assert result == text, name
         else:
             path.write_text(result, encoding='utf-8')
+
+
+def sync(check=False):
+    sync_block('earnings_version.py', START, END, check)
+    sync_block('earnings_followup.py', '# BEGIN SHARED EARNINGS FOLLOWUP', '# END SHARED EARNINGS FOLLOWUP', check)
 
 
 if __name__ == '__main__':

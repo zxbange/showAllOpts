@@ -15,6 +15,10 @@ const stock = {
   net_profit: 120000000,
   open_gap_pct: 4,
   intraday_pct: 1,
+  close_change_pct: 5.04,
+  since_signal_pct: -2.5,
+  latest_price_date: '2026-10-30',
+  selected_periods: ['2026-09-30', '2026-06-30'],
   market_cap: 123.45,
   circulating_market_cap: 80,
   pe_ttm: 18,
@@ -60,15 +64,13 @@ const overview = {
     rule_version: 'announcement-open-v1',
   },
   industries: [{ code: '801001', name: '专用设备' }],
-  total: 31,
+  total: 1,
   page: 1,
   page_size: 30,
   items: [stock],
 }
 
-test('earnings entry, filters, pagination, detail and mobile layout', async ({
-  page,
-}, testInfo) => {
+test('earnings entry, filters, scrolling, detail and mobile layout', async ({ page }, testInfo) => {
   const errors: string[] = []
   const requests: URL[] = []
   page.on('pageerror', (e) => errors.push(e.message))
@@ -83,7 +85,13 @@ test('earnings entry, filters, pagination, detail and mobile layout', async ({
   await expect(page.getByRole('heading', { level: 1 })).toContainText('净利润断层')
   await expect(page.getByRole('link', { name: stock.name })).toBeVisible()
   await expect(page.getByRole('columnheader', { name: '断层原因分析' })).toHaveCount(0)
-  await expect(page.getByRole('columnheader')).toHaveCount(6)
+  await expect(page.getByRole('columnheader')).toHaveCount(8)
+  await expect(page.getByRole('columnheader', { name: '断层日涨幅' })).toBeVisible()
+  await expect(page.getByRole('cell', { name: '+5.04%', exact: true })).toBeVisible()
+  await expect(page.getByRole('cell', { name: '-2.50% 截至 2026-10-30' })).toBeVisible()
+  await expect(page.getByText('近5年入选 2 季', { exact: true })).toBeVisible()
+  await page.getByLabel('报告季度').selectOption('2026-06-30')
+  await expect.poll(() => requests.at(-1)?.searchParams.get('period')).toBe('2026-06-30')
   await page.getByLabel('细分行业', { exact: true }).selectOption('801001')
   await expect.poll(() => requests.at(-1)?.searchParams.get('industry')).toBe('801001')
   await page.getByLabel('排序', { exact: true }).selectOption('profit_yoy')
@@ -91,8 +99,7 @@ test('earnings entry, filters, pagination, detail and mobile layout', async ({
   await page.getByLabel('股票搜索', { exact: true }).fill('示例')
   await page.getByRole('button', { name: '搜索股票', exact: true }).click()
   await expect.poll(() => requests.at(-1)?.searchParams.get('search')).toBe('示例')
-  await page.getByRole('button', { name: '下一页', exact: true }).click()
-  await expect(page.getByText('第 2 / 2 页')).toBeVisible()
+  await expect(page.getByRole('button', { name: '下一页', exact: true })).toHaveCount(0)
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(
     true,
   )
@@ -142,6 +149,50 @@ test('earnings no collection, zero results, filtered empty and retry', async ({ 
   mode = 'zero'
   await page.getByRole('button', { name: '重新加载' }).click()
   await expect(page.getByText('本季度暂未出现符合条件的股票')).toBeVisible()
+})
+
+test('earnings fills the scroll list beyond the first response and retries incomplete loads', async ({
+  page,
+}) => {
+  const items = Array.from({ length: 102 }, (_, index) => ({
+    ...stock,
+    code: `${600000 + index}.XSHG`,
+    name: `股票${index + 1}`,
+  }))
+  let fail = true
+  const calls: number[] = []
+  await page.route('**/api/v1/earnings-gap/stocks?*', (route) => {
+    const params = new URL(route.request().url()).searchParams
+    const current = Number(params.get('page'))
+    calls.push(current)
+    if (fail && current === 2)
+      return route.fulfill({ status: 503, json: { detail: '读取未完成，请重试' } })
+    return route.fulfill({
+      json: {
+        ...overview,
+        total: items.length,
+        page_size: 100,
+        page: current,
+        items: items.slice((current - 1) * 100, current * 100),
+      },
+    })
+  })
+  await page.goto('/earnings-gap')
+  await expect(page.getByRole('alert')).toContainText('读取未完成，请重试')
+  await expect(page.locator('.earnings-table tbody tr')).toHaveCount(0)
+  // StrictMode may start and abort an extra first-page request on mount.
+  expect(calls.slice(-2)).toEqual([1, 2])
+  calls.length = 0
+  fail = false
+  await page.getByRole('button', { name: '刷新净利润断层' }).click()
+  await expect(page.locator('.earnings-table tbody tr')).toHaveCount(102)
+  expect(calls).toEqual([1, 2])
+  await expect(page.getByRole('button', { name: '下一页', exact: true })).toHaveCount(0)
+  const list = page.getByRole('region', { name: '净利润断层股票表，可滚动查看' })
+  await list.hover()
+  await page.mouse.wheel(0, 30000)
+  await expect.poll(() => list.evaluate((element) => element.scrollTop)).toBeGreaterThan(0)
+  await expect(page.getByRole('link', { name: '股票102', exact: true })).toBeInViewport()
 })
 
 test('detail failure keeps the shared header and module navigation', async ({ page }) => {

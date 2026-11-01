@@ -61,8 +61,26 @@ test('growth evidence, charts, search and responsive layout', async ({ page }, i
   await page.goto('/high-growth')
   await expect(page.locator('.growth-stock')).toHaveCount(2)
   await expect(page.getByRole('img', { name: '年报最近三期归母净利润', exact: true })).toHaveCount(
-    2,
+    0,
   )
+  const charts = page.getByRole('button', { name: '查看示例科技利润柱状图' })
+  await charts.click()
+  const dialog = page.getByRole('dialog', { name: '示例科技 · 利润柱状图' })
+  await expect(dialog).toBeVisible()
+  await expect(dialog.locator('svg[role="img"]')).toHaveCount(4)
+  await expect(dialog.locator('.growth-mini strong')).toHaveText([
+    'Q1 · 一季度',
+    'Q2 · 半年报',
+    'Q3 · 前三季',
+    '年报',
+  ])
+  await expect(dialog.locator('.growth-bar-value').first()).toHaveText('1.00')
+  await page.keyboard.press('Escape')
+  await expect(dialog).toHaveCount(0)
+  await expect(charts).toBeFocused()
+  await charts.click()
+  await page.getByRole('button', { name: '关闭利润柱状图' }).click()
+  await expect(dialog).toHaveCount(0)
   await expect(page.locator('.growth-stock').first()).toContainText('28.50')
   await page.locator('.growth-evidence summary').first().click()
   await expect(page.locator('.growth-evidence').first().locator('tbody tr')).toHaveCount(12)
@@ -106,4 +124,28 @@ test('growth empty and failure states', async ({ page }) => {
   mode = 2
   await page.getByRole('button', { name: '刷新高增长', exact: true }).click()
   await expect(page.getByRole('alert')).toContainText('暂时无法读取数据')
+})
+
+test('growth has one compact scroll list beyond twenty stocks', async ({ page }) => {
+  const items = Array.from({ length: 28 }, (_, index) => ({
+    ...fixture.items[0],
+    code: `${600000 + index}.XSHG`,
+    rank: index + 1,
+    name: `增长股票${index + 1}`,
+  }))
+  await page.route('**/api/v1/cache/status', (route) =>
+    route.fulfill({ json: { enabled: false, modules: [] } }),
+  )
+  await page.route('**/api/v1/high-growth/latest', (route) =>
+    route.fulfill({ json: { ...fixture, items } }),
+  )
+  await page.goto('/high-growth')
+  await expect(page.locator('.growth-stock')).toHaveCount(28)
+  await expect(page.locator('.growth-charts')).toHaveCount(0)
+  await expect(page.getByRole('button', { name: '下一页', exact: true })).toHaveCount(0)
+  const list = page.getByRole('region', { name: '高增长股票列表，可滚动查看' })
+  await list.hover()
+  await page.mouse.wheel(0, 20000)
+  await expect.poll(() => list.evaluate((element) => element.scrollTop)).toBeGreaterThan(0)
+  await expect(page.getByRole('button', { name: '查看增长股票28利润柱状图' })).toBeInViewport()
 })

@@ -371,6 +371,7 @@ def test_insert_only_earnings_rolls_back_new_rows_and_metadata(c):
 
 
 def test_insert_only_earnings_skips_fetching_already_saved_stocks(c):
+    import pandas as pd
     a=record(c); b=record(c,code='600002.XSHG'); day=a['valuation_date']
     c.env['save_results'](c.Session,a['report_period'],day,2,[a],skip_existing=True)
     c.env['china_now']=lambda:dt.datetime(2026,10,17,17)
@@ -384,11 +385,17 @@ def test_insert_only_earnings_skips_fetching_already_saved_stocks(c):
         return []
     c.env['fetch_events']=fetch
     c.env['screen']=lambda codes,*args:[b]
+    price_calls = []
+    def prices(code, **kwargs):
+        price_calls.append(code)
+        return pd.DataFrame({'close': [10, 11], 'paused': [0, 0]}, index=pd.to_datetime(['2026-10-15', '2026-10-16']))
+    c.env['get_price'] = prices
     result=c.env['run'](skip_existing=True)
     assert seen==[[b['code']]] and [r['code'] for r in result]==[b['code']]
     c.env['fetch_events']=lambda *args:pytest.fail('already saved')
     c.env['screen']=lambda *args:pytest.fail('already saved')
     assert c.env['run'](skip_existing=True)==[]
+    assert price_calls == [a['code'], b['code']]  # Same-day followup is idempotent too.
 
 
 def test_quarter_revision_append_noop_and_rebuild(c):

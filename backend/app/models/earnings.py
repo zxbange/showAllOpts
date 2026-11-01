@@ -44,3 +44,16 @@ class EarningsStock(Base):
     analysis_basis = deferred(Column(String(32), nullable=False, default=''))
     events = Column(JSON, nullable=False)
     prices = Column(JSON, nullable=False)
+
+
+class EarningsPerformance(Base):
+    __tablename__ = 'earnings_gap_performance'
+    report_period = Column(Date, primary_key=True)
+    code = Column(String(16), primary_key=True)
+    signal_date = Column(Date, nullable=False)
+    as_of_date = Column(Date, nullable=False)
+    latest_date = Column(Date, nullable=False)
+    signal_close = Column(Numeric(24, 8), nullable=False)
+    latest_close = Column(Numeric(24, 8), nullable=False)
+    since_signal_pct = Column(Numeric(24, 6), nullable=False)
+    updated_at = Column(DateTime, nullable=False)

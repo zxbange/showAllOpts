@@ -66,9 +66,42 @@ def test_read_only_queries_and_no_large_payload_in_listing(client,session,engine
         response=client.get('/api/v1/earnings-gap/stocks?period=2026-09-30')
     finally: event.remove(engine,'before_cursor_execute',capture)
     assert response.status_code==200
-    assert all(q.lstrip().startswith('SELECT') for q in statements)
-    assert len(statements)==5
-    assert 'earnings_gap_stock.events' not in statements[-1]
-    assert 'earnings_gap_stock.prices' not in statements[-1]
-    assert 'LIMIT' in statements[-1]
-    assert 'earnings_gap_stock.analysis' not in statements[-1]
+    assert all(q.lstrip().startswith(('SELECT', 'PRAGMA')) for q in statements)
+    assert len(statements) <= 9  # Fixed batch enrichment, never per-stock queries.
+    listing = next(q for q in statements if 'earnings_gap_stock.name' in q)
+    assert 'earnings_gap_stock.events' not in listing
+    assert 'earnings_gap_stock.prices' not in listing
+    assert 'LIMIT' in listing
+    assert 'earnings_gap_stock.analysis' not in listing
+
+
+def test_returns_repeated_quarters_and_latest_close_with_legacy_compatibility(client, session):
+    from app.models.earnings import EarningsPerformance
+    seed(session, intraday_pct=5)
+    seed(session, period=date(2026, 6, 30))
+    url = '/api/v1/earnings-gap/stocks?period=2026-09-30'
+    item = client.get(url).json()['items'][0]
+    assert item['close_change_pct'] == pytest.approx(9.2)
+    assert item['selected_periods'] == ['2026-09-30', '2026-06-30']
+    assert item['since_signal_pct'] is None and item['latest_price_date'] is None
+    session.add(EarningsPerformance(report_period=P, code=item['code'], signal_date=date(2026, 10, 15),
+        as_of_date=date(2026, 10, 30), latest_date=date(2026, 10, 29), signal_close=10,
+        latest_close=9, since_signal_pct=-10, updated_at=datetime(2026, 10, 30, 17)))
+    session.commit()
+    item = client.get(url).json()['items'][0]
+    assert item['since_signal_pct'] == -10 and item['latest_price_date'] == '2026-10-29'
+    detail = client.get('/api/v1/earnings-gap/stocks/600001.XSHG?period=2026-09-30').json()
+    assert detail['selected_periods'] == item['selected_periods']
+    assert detail['since_signal_pct'] == -10
+    session.query(EarningsPerformance).update({'signal_date': date(2026, 10, 14)})
+    session.commit()
+    assert client.get(url).json()['items'][0]['since_signal_pct'] is None
+
+
+def test_legacy_cache_without_performance_table_still_renders(client, session, engine):
+    from app.models.earnings import EarningsPerformance
+    seed(session)
+    EarningsPerformance.__table__.drop(engine)
+    data = client.get('/api/v1/earnings-gap/stocks?period=2026-09-30').json()
+    assert data['items'][0]['close_change_pct'] == pytest.approx(4)
+    assert data['items'][0]['since_signal_pct'] is None

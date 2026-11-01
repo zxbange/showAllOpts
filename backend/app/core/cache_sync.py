@@ -190,5 +190,8 @@ def sync_tables(source, target, tables, module, incremental, notes=None):
                 else:
                     sync_history(source, target, table)
                 report('数据表完成 ' + table.name, percent=100)
+    if module == 'earnings-gap':
+        from app.core.earnings_sync import sync_performance
+        sync_performance(source, target)
     report('提交本地数据', percent=90)
     return sum(target.scalar(select(func.count()).select_from(table)) for table in tables)

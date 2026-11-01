@@ -112,7 +112,9 @@ def test_earnings_only_downloads_changed_quarters_and_tracks_membership(cached, 
         assert len(details) == 1 and details[0][1][:-2] == (str(current),)
         statements.clear()
         cache.refresh('earnings-gap', background=False)
-        assert len(statements) == 4  # Add source header/count completeness checks.
+        assert len(statements) == 5  # Quarter checks plus the small daily performance version scan.
+        assert sum('earnings_gap_performance.updated_at' in sql for sql, _ in statements) == 1
+        assert all('earnings_gap_performance.latest_close' not in sql for sql, _ in statements)
         assert all('earnings_gap_stock.events' not in sql for sql, _ in statements)
     finally: event.remove(engine, 'before_cursor_execute', capture)
     assert_matches(cache, session, 'earnings-gap')
@@ -135,6 +137,33 @@ def test_dividend_replacement_drops_removed_stocks_and_updates_same_key(cached, 
     session.commit()
     cache.refresh('dividend-selection', background=False)
     assert_matches(cache, session, 'dividend-selection')
+
+
+def test_earnings_daily_returns_sync_without_recopied_signal_json(cached, session, engine):
+    from app.models.earnings import EarningsPerformance
+    _, cache = cached
+    cache.refresh('earnings-gap', background=False)
+    stock = session.query(EarningsStock).first()
+    session.add(EarningsPerformance(report_period=stock.report_period, code=stock.code,
+        signal_date=stock.signal_date, as_of_date=date(2026, 10, 30), latest_date=date(2026, 10, 30),
+        signal_close=10, latest_close=12, since_signal_pct=20, updated_at=datetime(2026, 10, 30, 17)))
+    session.commit()
+    statements = []
+    def capture(conn, cursor, sql, *args):
+        statements.append(sql)
+    event.listen(engine, 'before_cursor_execute', capture)
+    try:
+        cache.refresh('earnings-gap', background=False)
+    finally:
+        event.remove(engine, 'before_cursor_execute', capture)
+    assert not any('earnings_gap_stock.events' in sql for sql in statements)
+    with cache.session('earnings-gap') as local:
+        assert local.query(EarningsPerformance).one().since_signal_pct == 20
+    session.query(EarningsPerformance).delete()
+    session.commit()
+    cache.refresh('earnings-gap', background=False)
+    with cache.session('earnings-gap') as local:
+        assert local.query(EarningsPerformance).count() == 0
 
 
 def test_interrupted_incremental_transfer_does_not_publish_partial_changes(cached, session, engine):

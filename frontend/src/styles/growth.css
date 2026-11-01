@@ -55,10 +55,15 @@
 }
 .growth-list {
   display: grid;
-  gap: 20px;
+  gap: 10px;
+  height: clamp(360px, 60vh, 720px);
+  overflow: auto;
+  scrollbar-gutter: stable;
+  align-content: start;
+  grid-auto-rows: max-content;
 }
 .growth-stock {
-  padding: 25px 28px 0;
+  padding: 14px 20px 0;
   overflow: hidden;
   transition:
     border-color 0.2s,
@@ -84,8 +89,8 @@
 .growth-rank {
   display: grid;
   place-items: center;
-  width: 46px;
-  height: 46px;
+  width: 36px;
+  height: 36px;
   border-radius: 14px;
   background: #f8e8df;
   color: #c04434;
@@ -94,7 +99,7 @@
   flex-shrink: 0;
 }
 .growth-identity h2 {
-  font-size: 20px;
+  font-size: 18px;
   margin: 0 0 5px;
 }
 .growth-identity span:not(.growth-rank) {
@@ -112,7 +117,7 @@
   font-size: 13px;
 }
 .growth-annual strong {
-  font-size: 26px;
+  font-size: 22px;
   color: #c04434;
   font-variant-numeric: tabular-nums;
 }
@@ -120,7 +125,8 @@
   display: flex;
   gap: 22px;
   flex-wrap: wrap;
-  margin: 20px 0;
+  margin: 8px 0;
+  align-items: center;
   font-size: 13px;
   color: var(--muted);
 }
@@ -186,7 +192,7 @@
 }
 .growth-evidence summary {
   cursor: pointer;
-  padding: 14px 0;
+  padding: 10px 0;
   color: var(--muted);
   font-size: 13px;
 }
@@ -224,12 +230,44 @@
 .growth-evidence td:first-child {
   text-align: left;
 }
-.growth-pagination {
+.growth-dialog-heading {
   display: flex;
-  justify-content: center;
-  align-items: center;
-  gap: 20px;
-  margin: 22px 0;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 16px;
+  margin-bottom: 20px;
+}
+.growth-dialog-heading h2 {
+  margin: 0;
+  font-size: 21px;
+}
+.growth-dialog-heading p {
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.7;
+}
+.growth-chart-button {
+  margin-left: auto;
+}
+.growth-chart-dialog {
+  width: min(1000px, calc(100vw - 32px));
+  max-width: calc(100vw - 32px);
+  max-height: 85vh;
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: 18px;
+  padding: 22px;
+  color: var(--text);
+  background: var(--surface);
+}
+.growth-chart-dialog::backdrop {
+  background: #201a1666;
+}
+.growth-chart-dialog .growth-charts {
+  padding-bottom: 0;
+}
+.growth-dialog-heading > button {
+  flex-shrink: 0;
 }
 .growth-page .method-card {
   margin-top: 26px;
@@ -243,7 +281,7 @@
     width: 100%;
   }
   .growth-stock {
-    padding: 18px 16px 0;
+    padding: 12px 14px 0;
   }
   .growth-stock-heading {
     align-items: flex-start;

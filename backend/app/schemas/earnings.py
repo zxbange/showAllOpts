@@ -29,6 +29,10 @@ class StockSummary(BaseModel):
     net_profit: float | None
     open_gap_pct: float
     intraday_pct: float
+    close_change_pct: float | None = None
+    since_signal_pct: float | None = None
+    latest_price_date: date | None = None
+    selected_periods: list[date] = Field(default_factory=list)
     market_cap: float | None
     circulating_market_cap: float | None
     pe_ttm: float | None

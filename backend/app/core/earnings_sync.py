@@ -12,6 +12,18 @@ VERSION = Table('earnings_sync_head', MetaData(),
                 Column('revision', BigInteger, nullable=False))
 
 
+def sync_performance(source, target):
+    """Optional small daily results; keep legacy snapshot/cache namespaces usable."""
+    from app.models.earnings import EarningsPerformance
+    from app.core.cache_sync import sync_history
+    table = EarningsPerformance.__table__
+    table.create(target, checkfirst=True)
+    if inspect(source).has_table(table.name):
+        sync_history(source, target, table)
+    else:
+        target.execute(table.delete())
+
+
 def sync_quarters(source, target, tables, incremental):
     """Return False for legacy sources; callers retain full reconciliation compatibility."""
     head, stocks = tables

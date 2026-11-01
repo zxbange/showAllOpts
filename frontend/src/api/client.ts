@@ -76,8 +76,30 @@ export const getETFHistory = (group: string, days: number, signal?: AbortSignal)
     signal,
   )
 
-export const getEarningsOverview = (query: string, signal?: AbortSignal) =>
-  request<EarningsOverview>('/earnings-gap/stocks?' + query, signal)
+export async function getEarningsOverview(query: string, signal?: AbortSignal) {
+  const params = new URLSearchParams(query)
+  params.set('page', '1')
+  params.set('page_size', '100')
+  const result = await request<EarningsOverview>('/earnings-gap/stocks?' + params, signal)
+  const items = [...result.items]
+  const codes = new Set(items.map((item) => item.code))
+  for (let page = 2; items.length < result.total; page++) {
+    params.set('page', String(page))
+    const next = await request<EarningsOverview>('/earnings-gap/stocks?' + params, signal)
+    if (
+      !next.items.length ||
+      next.page !== page ||
+      next.total !== result.total ||
+      next.target_period !== result.target_period ||
+      next.run?.updated_at !== result.run?.updated_at ||
+      next.items.some((item) => codes.has(item.code))
+    )
+      throw new Error('名单在读取时发生变化，请刷新后重试。')
+    next.items.forEach((item) => codes.add(item.code))
+    items.push(...next.items)
+  }
+  return { ...result, items }
+}
 export const getEarningsDetail = (code: string, period: string, signal?: AbortSignal) =>
   request<EarningsDetail>(
     '/earnings-gap/stocks/' + encodeURIComponent(code) + '?' + new URLSearchParams({ period }),
