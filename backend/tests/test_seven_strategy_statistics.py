@@ -21,7 +21,7 @@ spec.loader.exec_module(impact)
 def test_three_production_function_ast_parity():
     local = ast.parse((ROOT/'backend/app/services/short_statistics.py').read_text())
     prod = ast.parse((ROOT/'collectors/短线选股_数据库版.py').read_text())
-    factory = next(n for n in local.body if isinstance(n,ast.FunctionDef) and n.name=='make_three_selector')
+    factory = next(n for n in local.body if isinstance(n,ast.FunctionDef) and n.name=='make_bukou_selector')
     original = next(n for n in prod.body if isinstance(n,ast.FunctionDef) and n.name=='_short_term_strategy')
     originals = {n.name: ast.dump(n) for n in original.body if isinstance(n,(ast.FunctionDef,ast.ClassDef))}
     class Normalize(ast.NodeTransformer):
@@ -34,28 +34,22 @@ def test_three_production_function_ast_parity():
             assert ast.dump(Normalize().visit(node)) == originals[node.name]
 
 
-def test_rounding_prevents_naive_post_substitution():
-    # Original round(pre_close*1.1, 2) is not invariant under scaling.
-    pre, scale = 10.005, 3
-    assert round(pre*1.1,2)*scale != round(pre*scale*1.1,2)
-
-
 def test_cli_list_and_legacy_entry_need_no_config():
-    for filename in ('七策略胜率统计_本地版.py','超短线四策略胜率统计_本地版.py'):
+    for filename in ('短线五策略胜率统计_本地版.py','超短线四策略胜率统计_本地版.py'):
         result = subprocess.run([sys.executable, str(ROOT/'脚本/本地统计'/filename), '--list-strategies'],
                                 capture_output=True,text=True,check=True)
-        assert len(result.stdout.splitlines()) == 7
+        assert len(result.stdout.splitlines()) == 5
 
 
 @pytest.mark.parametrize('paths,expected', [
-    (['脚本/本地统计/七策略胜率统计_本地版.py'],False),
-    (['docs/seven-strategy-statistics.md','backend/tests/test_seven_strategy_statistics.py'],False),
-    (['脚本/本地统计/七策略胜率统计_本地版.py','backend/app/main.py'],True),
+    (['脚本/本地统计/短线五策略胜率统计_本地版.py'],False),
+    (['docs/short-statistics.md','backend/tests/test_seven_strategy_statistics.py'],False),
+    (['脚本/本地统计/短线五策略胜率统计_本地版.py','backend/app/main.py'],True),
     (['scripts/deploy.py'],False), (['scripts/sync_oversold_rules.py'],False),
     (['strategy_rules/oversold.py'],True), (['frontend/package-lock.json'],True),
     (['backend/requirements.lock.txt'],True), (['.github/workflows/deploy.yml'],True),
     (['脚本/本地统计/unknown.py'],False), ([],True),
-    (['脚本/本地统计/七策略胜率统计_本地版.py','renamed_runtime.py'],True),
+    (['脚本/本地统计/短线五策略胜率统计_本地版.py','renamed_runtime.py'],True),
 ])
 def test_impact_paths(paths, expected):
     assert impact.requires_deployment(paths) is expected
@@ -73,7 +67,7 @@ def test_real_git_research_diff_then_mixed_diff(tmp_path):
     git('init','-q');git('config','user.email','test@example.invalid');git('config','user.name','Test')
     (tmp_path/'README').write_text('base')
     git('add','.');git('commit','-qm','base');base=git('rev-parse','HEAD')
-    target=tmp_path/'docs/seven-strategy-statistics.md';target.parent.mkdir();target.write_text('research')
+    target=tmp_path/'docs/short-statistics.md';target.parent.mkdir();target.write_text('research')
     git('add','.');git('commit','-qm','research');head=git('rev-parse','HEAD')
     assert impact.compare(base,head,tmp_path)[0] is False
     (tmp_path/'README').write_text('runtime change')
@@ -95,8 +89,11 @@ def test_workflow_keeps_ci_and_manual_deploy():
 def db():
     engine=create_engine('sqlite:///:memory:')
     calendar=pd.bdate_range(end='2023-12-29',periods=160).append(pd.bdate_range('2024-01-02','2024-01-08'))
-    frame=prices([10.]*158+[11.,11.2,11.3,11.4,11.3,11.4,11.5],calendar)
-    frame.loc[calendar[159:],'low']=11.1
+    values=np.linspace(80,104,len(calendar))
+    values[157:]=[104,105,103,106,105,105,105,105]
+    frame=prices(values,calendar)
+    frame['low']=frame['adj_low']=values-.1
+    frame.loc[calendar[145],['low','adj_low']]=80
     database(engine,frame)
     yield engine,calendar
     engine.dispose()
@@ -107,19 +104,19 @@ def test_existing_three_tables_only_all_seven_and_notice(db,tmp_path,capsys):
     statements=[]
     event.listen(engine,'before_cursor_execute',lambda conn,cursor,sql,*args: statements.append(sql))
     result=m.run(engine=engine,strategies='all',output_dir=tmp_path,show_progress=False)
-    assert len(result['summary'])==21
-    details=result['details'][result['details'].strategy=='红悬停龙']
+    assert len(result['summary'])==15
+    details=result['details'][result['details'].strategy=='补票龙']
     assert details.signal_date.tolist()==[calendar[160]]
-    assert details.iloc[0].d1_return_pct==pytest.approx((11.4/11.3-1)*100)
+    assert details.iloc[0].d1_return_pct==pytest.approx((105/106-1)*100)
     assert all(sql.lstrip().upper().startswith('SELECT') for sql in statements)
     assert all('short_research' not in sql and 'short_term_stock' not in sql for sql in statements)
     assert '统一四策略数据口径的验证' in capsys.readouterr().out
     meta=json.loads((result['output_dir']/'运行参数.json').read_text())
-    assert '不是原三策略生产信号的精确复现' in meta['validation_notice']
+    assert '统一股票池与复权口径可能使信号不同于生产选股' in meta['validation_notice']
     assert 'dbpassword' not in str(meta)
 
 
-@pytest.mark.parametrize('choice,count', [('红悬停',3),(['红悬停','蓄力龙'],6),('three',9),('four',12),('all',21)])
+@pytest.mark.parametrize('choice,count', [('补票龙',3),(['补票龙','超跌后止跌反弹'],6),('bukou',3),('four',12),('all',15)])
 def test_choose_single_multiple_all(db,tmp_path,choice,count):
     result=m.run(engine=db[0],strategies=choice,output_dir=tmp_path,show_progress=False)
     assert len(result['summary'])==count
@@ -128,10 +125,10 @@ def test_choose_single_multiple_all(db,tmp_path,choice,count):
 
 def test_no_future_data_and_maturity(db,tmp_path):
     engine,calendar=db
-    first=m.run(engine=engine,strategies='three',end_date='2024-01-02',as_of='2024-01-03',output_dir=tmp_path,show_progress=False)
+    first=m.run(engine=engine,strategies='bukou',end_date='2024-01-02',as_of='2024-01-03',output_dir=tmp_path,show_progress=False)
     with engine.begin() as conn:
         conn.execute(text("UPDATE ultra_research_bar SET adj_close=999999, adj_open=999999 WHERE trade_date>'2024-01-02'"))
-    second=m.run(engine=engine,strategies='three',end_date='2024-01-02',as_of='2024-01-05',output_dir=tmp_path,show_progress=False)
+    second=m.run(engine=engine,strategies='bukou',end_date='2024-01-02',as_of='2024-01-05',output_dir=tmp_path,show_progress=False)
     assert first['details'].signal_date.tolist()==second['details'].signal_date.tolist()==[calendar[160]]
     assert first['details'].iloc[0].d2_status=='待观察'
     assert second['details'].iloc[0].d2_status=='有效'
@@ -143,7 +140,7 @@ def test_three_uses_four_universe_filters(db,tmp_path,column,value):
     with engine.begin() as conn:
         conn.execute(text('UPDATE ultra_research_universe SET {}=:value'.format(column)),{'value':value})
     with pytest.raises(ValueError,match='合格股票快照|基础样本'):
-        m.run(engine=engine,strategies='three',output_dir=tmp_path,show_progress=False)
+        m.run(engine=engine,strategies='bukou',output_dir=tmp_path,show_progress=False)
 
 
 @pytest.mark.parametrize('column,value',[('paused',1),('money',49999999),('volume',0)])
@@ -151,7 +148,7 @@ def test_three_uses_four_signal_eligibility(db,tmp_path,column,value):
     engine,_=db
     with engine.begin() as conn:
         conn.execute(text("UPDATE ultra_research_bar SET {}=:value WHERE trade_date='2024-01-02'".format(column)),{'value':value})
-    result=m.run(engine=engine,strategies='three',output_dir=tmp_path,show_progress=False)
+    result=m.run(engine=engine,strategies='bukou',output_dir=tmp_path,show_progress=False)
     assert result['details'].empty
 
 
@@ -159,9 +156,9 @@ def test_uses_post_prices_not_unadjusted_prices(db,tmp_path):
     engine,_=db
     with engine.begin() as conn:
         conn.execute(text('UPDATE ultra_research_bar SET open=1,high=1,low=1,close=1'))
-    result=m.run(engine=engine,strategies='红悬停',output_dir=tmp_path,show_progress=False)
+    result=m.run(engine=engine,strategies='补票龙',output_dir=tmp_path,show_progress=False)
     assert len(result['details'])==1
-    assert result['details'].iloc[0].signal_close==11.3
+    assert result['details'].iloc[0].signal_close==106
     assert result['details'].iloc[0].signal_raw_close==1
 
 
@@ -181,7 +178,7 @@ def test_missing_90_day_context_is_not_silently_shortened(db,tmp_path):
     with engine.begin() as conn:
         conn.execute(text('DELETE FROM ultra_research_bar WHERE trade_date=:day'),{'day':calendar[80].date()})
     with pytest.raises(ValueError,match='预热行情缺失'):
-        m.run(engine=engine,strategies='three',output_dir=tmp_path,show_progress=False)
+        m.run(engine=engine,strategies='bukou',output_dir=tmp_path,show_progress=False)
 
 
 def test_four_scope_excludes_outside_market(db,tmp_path):
@@ -197,7 +194,7 @@ def test_observation_missing_paused_and_strict_denominators(db,tmp_path):
     with engine.begin() as conn:
         conn.execute(text("UPDATE ultra_research_bar SET paused=1 WHERE trade_date='2024-01-03'"))
         conn.execute(text("DELETE FROM ultra_research_bar WHERE trade_date='2024-01-04'"))
-    result=m.run(engine=engine,strategies='红悬停',end_date='2024-01-02',output_dir=tmp_path,show_progress=False)
+    result=m.run(engine=engine,strategies='补票龙',end_date='2024-01-02',output_dir=tmp_path,show_progress=False)
     assert result['summary']['有效样本'].tolist()==[0,0,1]
     assert result['details'].iloc[0].d1_status=='停牌'
     assert result['details'].iloc[0].d2_status=='缺少行情'
@@ -238,12 +235,12 @@ def test_all_seven_share_real_pool_and_denominator(db,tmp_path,monkeypatch,field
             candidates[name]=True
         return candidates
     monkeypatch.setattr(m,'pattern_candidates',every_pattern)
-    monkeypatch.setattr(m,'make_three_selector',lambda:SimpleNamespace(evaluate=lambda frame,code:list(m.THREE_METHODS)))
+    monkeypatch.setattr(m,'make_bukou_selector',lambda:SimpleNamespace(evaluate=lambda frame,code:list(m.PATTERN_METHODS)))
     with engine.begin() as conn:
         conn.execute(text("UPDATE {} SET {}=:value WHERE trade_date='2024-01-02'".format(table,field)),{'value':value})
     result=m.run(engine=engine,strategies='all',params={'strength_quantile':0},output_dir=tmp_path,show_progress=False)
     groups=[g.signal_date.tolist() for _,g in result['details'].groupby('strategy')]
-    assert len(groups)==7 and all(dates==list(calendar[161:]) for dates in groups)
+    assert len(groups)==5 and all(dates==list(calendar[161:]) for dates in groups)
     # All signals deliberately identical: actual production summary code must yield equal denominators.
     denominators=[g['有效样本'].tolist() for _,g in result['summary'].groupby('策略')]
     assert all(counts==[3,2,1] for counts in denominators)
@@ -263,7 +260,7 @@ def test_real_git_rename_delete_and_nonancestor(tmp_path):
     def git(*args):
         return subprocess.check_output(['git',*args],cwd=tmp_path,stderr=subprocess.DEVNULL).decode().strip()
     git('init','-q');git('config','user.email','test@example.invalid');git('config','user.name','Test')
-    a=tmp_path/'docs/seven-strategy-statistics.md';a.parent.mkdir();a.write_text('research')
+    a=tmp_path/'docs/short-statistics.md';a.parent.mkdir();a.write_text('research')
     runtime=tmp_path/'runtime.py';runtime.write_text('runtime')
     def commit():
         git('add','.');git('commit','-qm','test');return git('rev-parse','HEAD')

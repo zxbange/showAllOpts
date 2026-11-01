@@ -8,9 +8,9 @@ from test_cache import cached
 
 def seed(session):
     for day in (date(2026, 10, 21), date(2026, 10, 22)):
-        session.add(ShortTermRun(trade_date=day, payload={'counts': {'bukou': 7, 'redhover': 0, 'xuli': 1}}, updated_at=datetime(2026,10,22)))
+        session.add(ShortTermRun(trade_date=day, payload={'counts': {'bukou': 7}}, updated_at=datetime(2026,10,22)))
         for i in range(7):
-            session.add(ShortTermStock(trade_date=day, code=str(i), payload={'name': str(i), 'methods': ['bukou'] + (['xuli'] if i == 0 else []), 'bars': []}, updated_at=datetime(2026,10,22)))
+            session.add(ShortTermStock(trade_date=day, code=str(i), payload={'name': str(i), 'methods': ['bukou'], 'bars': []}, updated_at=datetime(2026,10,22)))
     session.commit()
 
 
@@ -21,8 +21,8 @@ def test_method_dates_pagination_and_empty(client, session):
     data = client.get(path).json()
     assert data['trade_date'] == '2026-10-22' and data['total'] == 7 and len(data['items']) == 6
     assert len(client.get(path+'?offset=6').json()['items']) == 1
-    assert client.get(path+'?method=redhover').json()['items'] == []
-    assert client.get(path+'?method=xuli&day=2026-10-21').json()['total'] == 1
+    assert client.get(path+'?method=oversold').json()['items'] == []
+    assert client.get(path+'?method=bukou&day=2026-10-21').json()['total'] == 7
     assert client.get(path+'?method=oversold').status_code == 200
     assert 'oversold' not in client.get(path+'?method=oversold').json()['counts']
     assert client.get(path+'?method=wrong').status_code == 422
@@ -109,4 +109,4 @@ def test_six_signal_dates_use_latest_quotes_without_changing_signal_membership(c
     assert old['items'][0]['quote_close'] == 12.
     assert old['items'][0]['bars'][-1]['date'] == latest
     assert client.get(path + '?day=2026-10-16').status_code == 404
-    assert client.get(path + '?day=2026-10-19&method=xuli').json()['items'] == []
+    assert client.get(path + '?day=2026-10-19&method=oversold').json()['items'] == []

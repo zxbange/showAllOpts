@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""七策略旧入口：保留命令行兼容，统计实现由程序共用。请保留完整项目目录。"""
+"""五策略统计入口：保留命令行兼容，统计实现由程序共用。请保留完整项目目录。"""
 import importlib.util
 from pathlib import Path
 

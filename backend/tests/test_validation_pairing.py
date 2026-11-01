@@ -59,9 +59,9 @@ def test_no_config_pair_save_start_logout(paired, config, monkeypatch):
         calls.append(args)
         return {'id':'job1','status':'queued','source':args[-1]}
     monkeypatch.setattr(jobs,'create',create)
-    body={'methods':['bukou','xuli'],'start':'2024-01-01','source':{'id':ref.json()['id'],'revision':1}}
+    body={'methods':['bukou','oversold'],'start':'2024-01-01','source':{'id':ref.json()['id'],'revision':1}}
     assert client.post(BASE+'/jobs',json=body).status_code == 200
-    assert calls[0][0] == ['bukou','xuli']
+    assert calls[0][0] == ['bukou','oversold']
     assert calls[0][-1] == body['source']
     assert client.post(BASE+'/jobs',json={'methods':['bukou']}).status_code == 422
     assert client.post(BASE+'/logout',json={}).status_code == 200

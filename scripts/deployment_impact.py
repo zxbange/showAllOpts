@@ -8,13 +8,13 @@ import subprocess
 # User-approved directory scope plus previously approved independent docs/tests.
 NO_DEPLOY_PREFIXES = ('脚本/', 'scripts/')
 NO_DEPLOY_PATHS = frozenset({
-    '脚本/本地统计/七策略胜率统计_本地版.py',
+    '脚本/本地统计/短线五策略胜率统计_本地版.py',
     '脚本/本地统计/超短线四策略胜率统计_本地版.py',
-    '脚本/本地统计/短线三策略胜率验证_研究版.py',
+    '脚本/本地统计/补票龙胜率验证_研究版.py',
     '脚本/本地统计/数据库配置.example.json',
-    'docs/seven-strategy-statistics.md',
+    'docs/short-statistics.md',
     'docs/ultra-short-statistics.md',
-    'docs/short-term-three-validation.md',
+    'docs/bukou-validation.md',
     'docs/short-term-winrate.md',
     '脚本/脚本使用说明.md',
     'backend/tests/test_seven_strategy_statistics.py',

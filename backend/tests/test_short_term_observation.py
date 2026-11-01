@@ -77,12 +77,12 @@ def observation(mod, monkeypatch):
 
 def seed_window(o):
     days = o.calendar[95:101]
-    o.save(days[0], [('600001.XSHG', ['bukou', 'redhover']), ('600003.XSHG', ['oversold'])])
-    o.save(days[1], [('600002.XSHG', ['xuli'])])
+    o.save(days[0], [('600001.XSHG', ['bukou', 'oversold']), ('600003.XSHG', ['oversold'])])
+    o.save(days[1], [('600002.XSHG', ['bukou'])])
     o.save(days[2], [('600001.XSHG', ['oversold'])])
     o.save(days[3])
     o.save(days[4])
-    o.save(days[5], [('600001.XSHG', ['redhover'])], current=True)
+    o.save(days[5], [('600001.XSHG', ['oversold'])], current=True)
     o.price_calls.clear()
     return days
 

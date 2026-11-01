@@ -30,7 +30,7 @@ from app.services.momentum import china_today
 logger = logging.getLogger(__name__)
 VERSION = 'four-close-v2'
 SUPPORTED_VERSIONS = {'four-close-v1', VERSION}
-METHODS = {'bukou': '补票龙', 'redhover': '红悬停龙', 'xuli': '蓄力龙', 'oversold': '超跌后止跌反弹'}
+METHODS = {'bukou': '补票龙', 'oversold': '超跌后止跌反弹'}
 MAX_ROWS = 4000
 BATCH_SIZE = 20
 AUTO_RETRY_LIMIT = 5
@@ -204,6 +204,8 @@ class ValidationJobs:
                 if job['status'] in ('cancelled', 'cancelling'):
                     raise ValueError('已取消或正在取消的任务不能继续，请新建任务')
                 if job['status'] in ('failed', 'paused', 'retry_wait'):
+                    if any(method not in METHODS for method in job['methods']):
+                        raise ValueError('任务包含已停用策略，请选择当前策略创建新任务')
                     if job['version'] not in SUPPORTED_VERSIONS:
                         raise ValueError('算法版本已变化，请创建新任务')
                     job['generation'] += 1
@@ -367,6 +369,8 @@ class ValidationJobs:
             timer.start()
             job['_phase'] = 'source_config'
             try:
+                if any(method not in METHODS for method in job['methods']):
+                    raise ValueError('任务包含已停用策略，请选择当前策略创建新任务')
                 if job['version'] not in SUPPORTED_VERSIONS:
                     raise ValueError('任务算法版本已变化，请创建新任务')
                 if job.get('input_mode') not in (None, 'frozen', STATIC_MODE):
@@ -619,13 +623,13 @@ class ValidationJobs:
             selected = [METHODS[m] for m in job['methods']]
             start, end = pd.Timestamp(job['start']), pd.Timestamp(job['end'])
             samples, quality = stats.stock_samples(code, bars, universe, calendar, start, end, stats.PARAMS, selected=selected)
-            three = [m for m in job['methods'] if m != 'oversold']
-            if three:
+            patterns = [m for m in job['methods'] if m != 'oversold']
+            if patterns:
                 def activity(day):
                     if not self.stage(ident, '计算 '+code+' / '+str(day.date()), job['generation']):
                         raise InterruptedError('任务已暂停')
-                samples = stats.add_three_candidates(code, samples, bars, universe, calendar, start, end, stats.PARAMS,
-                                                     stats.make_three_selector(three), activity=activity)
+                samples = stats.add_bukou_candidates(code, samples, bars, universe, calendar, start, end, stats.PARAMS,
+                                                     stats.make_bukou_selector(patterns), activity=activity)
             pieces = []
             for method in selected:
                 part = samples.loc[samples[method]].copy()

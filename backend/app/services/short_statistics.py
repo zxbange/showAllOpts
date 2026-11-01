@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""本地只读MySQL：七策略统一入口，自2024-01-01起统计后续1/2/3交易日表现。
+"""本地只读MySQL：五策略统一入口，自2024-01-01起统计后续1/2/3交易日表现。
 
 在本地 Python 运行本文件；默认读取同项目“本地专用/本地统计”下的私有配置，
 也可用 --config 指定配置。独立复制使用时仍可填写顶部 DB_CONFIG。
@@ -34,7 +34,7 @@ DB_CONFIG = {
 }
 DB_TLS_VERIFY = True
 DB_TLS_CA_PEM = ''
-SCRIPT_VERSION = '2026-10-29.1-seven'
+SCRIPT_VERSION = '2026-11-01.1-five'
 DEFAULT_CONFIG_PATH = Path(__file__).resolve().parents[3] / '脚本/本地专用/本地统计/超短线四策略胜率统计配置.json'
 PROGRESS_ENABLED = True
 RETURN_PRICE_FIELD = 'adj_close'  # 同口径后复权收盘价；改为close可统计未复权价格
@@ -478,10 +478,9 @@ def load_plan(engine, start, end=None, as_of=None, warmup_days=WARMUP_DAYS, hard
     return start, end, observed, calendar
 
 
-def make_three_selector(selected=None):
-    selected = set(selected or ('bukou', 'redhover', 'xuli'))
+def make_bukou_selector(selected=None):
     """与业务采集脚本保持相同选股函数；不依赖外部策略文件。"""
-    RISE_THRESHOLD, VOLUME_ENLARGE_T2, VOLUME_SHRINK_T1, VOLUME_ENLARGE_T = 3.0, 1.2, 0.8, 1.2
+    selected = set(selected or ('bukou',))
     def compute_bbi(df):
         ma3 = df["close"].rolling(3).mean()
         ma6 = df["close"].rolling(6).mean()
@@ -562,139 +561,22 @@ def make_three_selector(selected=None):
                     picks.append(code)
             return picks
 
-    def get_limit_rate(ts_code: str) -> builtins.float:
-        """根据股票代码判断涨停阈值（10%/20%/30%）"""
-        code = ts_code.upper()
-        if code.startswith("300") or code.startswith("301") or code.startswith("688"):
-            return 0.20
-        if code.startswith("9"):
-            return 0.30
-        return 0.10
-
-    def is_limit_up(ts_code: str, pct_chg: builtins.float) -> builtins.bool:
-        """判断是否涨停（根据板块不同阈值）"""
-        rate = get_limit_rate(ts_code)
-        threshold = 9.5 if rate == 0.10 else (19.5 if rate == 0.20 else 29.5)
-        return pct_chg >= threshold
-
-    def analyze_stock(df, ts_code):
-        if len(df) < 3:
-            return None
-
-        row_t2 = df.iloc[-3]
-        row_t1 = df.iloc[-2]
-        row_t = df.iloc[-1]
-
-        # 1. T-2日必须涨停
-        if not is_limit_up(ts_code, row_t2["pct_chg"]):
-            return None
-
-        # 计算T-2涨停价
-        rate_t2 = get_limit_rate(ts_code)
-        t2_limit_price = builtins.round(row_t2["pre_close"] * (1 + rate_t2), 2)
-
-        # 2. T-1日条件（不限是否涨停，只看最低价）
-        if row_t1["low"] < t2_limit_price:
-            return None
-
-        # 3. T日条件（未涨停 + 低价过涨停价）
-        if is_limit_up(ts_code, row_t["pct_chg"]):
-            return None
-        if row_t["low"] < t2_limit_price:
-            return None
-
-        return True
-
-    def analyze_one(code, df):
-        """
-        分析单只股票是否满足蓄力龙条件
-        df: 按date升序排列的日K线数据（最后一行=T日）
-        需要至少65个交易日（算MA60）
-        """
-        if df is None or len(df) < 65:
-            return False
-
-        # 取最近65个交易日
-        df = df.tail(65).copy().reset_index(drop=True)
-
-        if len(df) < 5:
-            return False
-
-        day_t3  = df.iloc[-4]  # T-3
-        day_t2  = df.iloc[-3]  # T-2
-        day_t1  = df.iloc[-2]  # T-1
-        day_t   = df.iloc[-1]  # T
-
-        # ---- 条件1: T-2日阳线 + 涨幅 > 3% + 放量 ----
-        t2_pct   = builtins.float(day_t2['pct_chg'])
-        t2_open  = builtins.float(day_t2['open'])
-        t2_close = builtins.float(day_t2['close'])
-        t2_vol   = builtins.float(day_t2['volume'])
-        t3_vol   = builtins.float(day_t3['volume'])
-
-        cond1_ok = (
-            t2_close > t2_open and                          # 阳线
-            t2_pct > RISE_THRESHOLD and                     # 涨幅>3%
-            t2_vol > t3_vol * VOLUME_ENLARGE_T2            # 放量>1.2倍
-        )
-
-        # ---- 条件2: T-1日阴线 + 收盘>T-2开盘 + 跌幅<4% + 缩量 ----
-        t1_pct   = builtins.float(day_t1['pct_chg'])
-        t1_open  = builtins.float(day_t1['open'])
-        t1_close = builtins.float(day_t1['close'])
-        t1_vol   = builtins.float(day_t1['volume'])
-
-        cond2_ok = (
-            t1_close < t1_open and                           # 阴线（收<开）
-            t1_close > t2_open and                            # 收盘>T-2开盘价
-            -4.0 < t1_pct < 0 and                             # 跌幅低于4%（-4% < 跌幅 < 0）
-            t1_vol < t2_vol * VOLUME_SHRINK_T1               # 缩量<0.8倍
-        )
-
-        # ---- 条件3: T日阳线 + 收盘>T-2收盘 + 涨幅>3% + 放量 ----
-        t_pct   = builtins.float(day_t['pct_chg'])
-        t_open  = builtins.float(day_t['open'])
-        t_close = builtins.float(day_t['close'])
-        t_vol   = builtins.float(day_t['volume'])
-
-        cond3_ok = (
-            t_close > t_open and                            # 阳线
-            t_close > t2_close and                          # 收盘>T-2收盘价
-            t_pct > RISE_THRESHOLD and                       # 涨幅>3%
-            t_vol > t1_vol * VOLUME_ENLARGE_T               # 放量>1.2倍
-        )
-
-        # ---- 条件4: 均线多头（MA10>MA20>MA30>MA60） ----
-        closes = df['close'].values.astype(builtins.float)
-        ma10 = closes[-10:].mean() if len(closes) >= 10 else 0
-        ma20 = closes[-20:].mean() if len(closes) >= 20 else 0
-        ma30 = closes[-30:].mean() if len(closes) >= 30 else 0
-        ma60 = closes[-60:].mean() if len(closes) >= 60 else 0
-
-        cond4_ok = ma10 > ma20 > ma30 > ma60
-
-        return cond1_ok and cond2_ok and cond3_ok and cond4_ok
 
     def evaluate(history, code, is_st=False):
-        # Keep original strategy windows: BBI tail 60, xuli tail 65.
+        # 补票龙保持原60日计算窗口。
         matched = []
         if 'bukou' in selected and bbi_selector.select(history['date'].iloc[-1], {code: history}):
             matched.append('bukou')
-        if 'redhover' in selected and not is_st and analyze_stock(history, code):
-            matched.append('redhover')
-        if 'xuli' in selected and analyze_one(code, history):
-            matched.append('xuli')
         return matched
 
     bbi_selector = BBIShortLongSelector()
     return SimpleNamespace(evaluate=evaluate)
 
 
-THREE_METHODS = {'redhover': '红悬停龙', 'xuli': '蓄力龙', 'bukou': '补票龙'}
-ALL_STRATEGIES = STRATEGIES + list(THREE_METHODS.values())
-VALIDATION_NOTICE = ('统一四策略数据口径的验证：七策略共用四策略沪深股票池、基础过滤、后复权价格及收盘表现口径。'
-    '三个短线形态保留原条件和阈值，但复权基准、红悬停价格取整及股票池改变可能使信号不同于原生产选股；'
-    '本结果不是原三策略生产信号的精确复现。')
+PATTERN_METHODS = {'bukou': '补票龙'}
+ALL_STRATEGIES = STRATEGIES + list(PATTERN_METHODS.values())
+VALIDATION_NOTICE = ('统一四策略数据口径的验证：五种策略共用沪深股票池、基础过滤、后复权价格及收盘表现口径。'
+    '补票龙保留原形态条件，但统一股票池与复权口径可能使信号不同于生产选股。')
 
 
 def four_stock(code):
@@ -708,8 +590,7 @@ def resolve_strategies(values=None):
         return list(STRATEGIES)  # compatible four-strategy library API
     if isinstance(values, str):
         values = [values]
-    aliases = {'four': STRATEGIES, 'three': list(THREE_METHODS.values()), 'all': ALL_STRATEGIES,
-               '红悬停': ['红悬停龙']}
+    aliases = {'four': STRATEGIES, 'bukou': list(PATTERN_METHODS.values()), 'all': ALL_STRATEGIES}
     selected = []
     for value in values:
         for token in value.replace('，', ',').split(','):
@@ -746,12 +627,12 @@ def validate_schema(engine):
                      'paused', 'high_limit', 'low_limit'])
 
 
-def add_three_candidates(code, samples, bars, universe, calendar, start, end, params, selector, activity=None):
+def add_bukou_candidates(code, samples, bars, universe, calendar, start, end, params, selector, activity=None):
     """Evaluate unchanged short-term formulas on the same post-adjusted data and base pool."""
     result = samples.copy()
     history = dated_frame(bars, '股票行情').set_index('trade_date').reindex(calendar)
     snapshots = dated_frame(universe, '股票快照').set_index('trade_date').reindex(calendar)
-    for name in THREE_METHODS.values():
+    for name in PATTERN_METHODS.values():
         result[name] = False
         result[name + '_anchor'] = pd.NaT
     # Missing data must not masquerade as an untriggered pattern, including gaps
@@ -770,23 +651,23 @@ def add_three_candidates(code, samples, bars, universe, calendar, start, end, pa
         expected = calendar[max(0, position-89):position+1]
         expected = expected[expected >= listed]
         if len(expected) < 90 or len(window) != len(expected):
-            raise ValueError('{} {} 缺少三策略90交易日预热窗口。'.format(day.date(), code))
+            raise ValueError('{} {} 缺少补票龙90交易日预热窗口。'.format(day.date(), code))
         frame = pd.DataFrame(index=window.index)
         for name in ('open', 'high', 'low', 'close'):
             frame[name] = pd.to_numeric(window['adj_' + name], errors='coerce')
             if not (np.isfinite(frame[name]) & (frame[name] > 0)).all():
-                raise ValueError('{} {} 三策略预热行情缺失或无效：adj_{}；不输出部分统计。'.format(
+                raise ValueError('{} {} 补票龙预热行情缺失或无效：adj_{}；不输出部分统计。'.format(
                     day.date(), code, name))
         frame['volume'] = pd.to_numeric(window['volume'], errors='coerce')
         if not (np.isfinite(frame['volume']) & (frame['volume'] >= 0)).all():
-            raise ValueError('{} 三策略预热成交量缺失或无效。'.format(day.date()))
+            raise ValueError('{} 补票龙预热成交量缺失或无效。'.format(day.date()))
         if day not in result.index:
             continue  # The remaining four-strategy base filters rejected this signal day.
         frame['date'] = frame.index.date
         frame['pre_close'] = frame['close'].shift(1)
         frame['pct_chg'] = (frame['close']/frame['pre_close']-1)*100
         for key in selector.evaluate(frame, code):
-            result.loc[day, THREE_METHODS[key]] = True
+            result.loc[day, PATTERN_METHODS[key]] = True
     return result
 
 
@@ -796,7 +677,7 @@ def run(start_date=START_DATE, end_date=END_DATE, as_of=AS_OF_DATE, output_dir=O
     chosen = resolve_strategies(strategies)
     p = dict(PARAMS, **(params or {}))
     owned = engine is None
-    print('七策略收盘胜率统计 v' + SCRIPT_VERSION)
+    print('五策略收盘胜率统计 v' + SCRIPT_VERSION)
     print(VALIDATION_NOTICE, flush=True)
     try:
         with StatisticsProgress(enabled=show_progress) as progress:
@@ -819,8 +700,8 @@ def run(start_date=START_DATE, end_date=END_DATE, as_of=AS_OF_DATE, output_dir=O
             if not codes:
                 raise ValueError('研究区间没有合格股票快照，请检查采集进度和日期')
             frames, coverage = [], []
-            need_three = any(name in THREE_METHODS.values() for name in chosen)
-            selector = make_three_selector() if need_three else None
+            need_bukou = any(name in PATTERN_METHODS.values() for name in chosen)
+            selector = make_bukou_selector() if need_bukou else None
             progress.write('信号区间 {} ~ {}；观察截至 {}；股票{}只。'.format(
                 start.date(), end.date(), observed.date(), len(codes)))
             progress.phase('读取行情/计算策略', total=len(codes))
@@ -840,8 +721,8 @@ def run(start_date=START_DATE, end_date=END_DATE, as_of=AS_OF_DATE, output_dir=O
                     progress.update(detail='计算 ' + code)
                     frame, quality = stock_samples(code, bar_groups.get(code, bars.iloc[:0]),
                         universe_groups.get(code, universe.iloc[:0]), calendar, start, end, p)
-                    if need_three:
-                        frame = add_three_candidates(code, frame, bar_groups.get(code, bars.iloc[:0]),
+                    if need_bukou:
+                        frame = add_bukou_candidates(code, frame, bar_groups.get(code, bars.iloc[:0]),
                             universe_groups.get(code, universe.iloc[:0]), calendar, start, end, p, selector)
                     frames.append(frame)
                     coverage.append(quality)
@@ -874,7 +755,7 @@ def run(start_date=START_DATE, end_date=END_DATE, as_of=AS_OF_DATE, output_dir=O
                 observed_through=str(observed.date()), warmup_start=str(calendar[0].date()),
                 params=p, default_rules=RULES, return_price_field=RETURN_PRICE_FIELD, strategies=chosen,
                 shared_base_samples=sum(item["base_samples"] for item in coverage),
-                shape_history_rows={"红悬停龙": 4, "蓄力龙": 65, "补票龙": 60},
+                shape_history_rows={"补票龙": 60},
                 validation_notice=VALIDATION_NOTICE,
                 signal_source="ultra_research_*已有行情重算；非历史已存候选信号",
                 short_pattern_price="adj_open/adj_high/adj_low/adj_close（后复权）",
@@ -897,8 +778,8 @@ def run(start_date=START_DATE, end_date=END_DATE, as_of=AS_OF_DATE, output_dir=O
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--strategies', nargs='+', default=['four'], help='中文策略名、four、three或all；可空格分隔多个，默认four兼容旧入口')
-    parser.add_argument('--list-strategies', action='store_true', help='列出七个策略后退出，不连接数据库')
+    parser.add_argument('--strategies', nargs='+', default=['four'], help='中文策略名、four、bukou或all；可空格分隔多个，默认four兼容旧入口')
+    parser.add_argument('--list-strategies', action='store_true', help='列出五个策略后退出，不连接数据库')
     parser.add_argument('--start', default=START_DATE, help='信号开始日期，默认2024-01-01')
     parser.add_argument('--end', default=END_DATE, help='信号截止日，默认数据库最新已收盘日')
     parser.add_argument('--as-of', default=AS_OF_DATE, help='观察截止日，可晚于信号截止日')

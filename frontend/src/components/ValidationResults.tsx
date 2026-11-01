@@ -3,8 +3,6 @@ import { useState } from 'react'
 type Metric = Record<string, string | number | null>
 const names: Record<string, string> = {
   bukou: '补票龙',
-  redhover: '红悬停',
-  xuli: '蓄力龙',
   oversold: '超跌后止跌反弹',
 }
 const display = (value: string | number | null | undefined) =>

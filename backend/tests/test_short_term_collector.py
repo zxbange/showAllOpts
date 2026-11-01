@@ -28,7 +28,7 @@ def ns(mod):
     return mod._short_term_strategy({}, mod.DB_CONFIG)
 
 def complete_meta(ns, bukou=0):
-    return {'rule_version': ns.RULE_VERSION, 'counts': {'bukou': bukou, 'redhover': 0, 'xuli': 0, 'oversold': 0}}
+    return {'rule_version': ns.RULE_VERSION, 'counts': {'bukou': bukou, 'oversold': 0}}
 
 def history():
     close = np.linspace(10, 20, 90)
@@ -42,20 +42,10 @@ def history():
     df['pct_chg'] = (df.close / df.pre_close - 1) * 100
     return df
 
-def test_original_thresholds_and_warmup(ns):
-    frame = history()
-    assert ns.analyze_one('600001.XSHG', frame)
-    frame.loc[88, 'pct_chg'] = -4
-    assert not ns.analyze_one('600001.XSHG', frame)
+def test_chart_warmup(ns):
     bars = ns.chart_bars(history())
     assert len(bars) == 30
     assert bars[0]['ma']['60'] == pytest.approx(history().close.iloc[1:61].mean())
-    red = pd.DataFrame({'date': pd.bdate_range('2026-01-01', periods=3),
-        'pre_close': [10, 11, 11.2], 'pct_chg': [10, 1.82, .89],
-        'low': [10, 11, 11], 'volume': [100, 50, 60]})
-    assert ns.analyze_stock(red, '600001.XSHG')  # Actual original code has no 1.5x volume filter.
-    red.loc[2, 'pct_chg'] = 9.5
-    assert ns.analyze_stock(red, '600001.XSHG') is None
 
 def test_schema_and_factory_parity(ns):
     from app.models.short_term import ShortTermRun, ShortTermStock
@@ -116,6 +106,12 @@ def test_missing_price_dates_fail_instead_of_partial_success(ns):
 def test_collect_scans_and_enriches_selected_stock(mod, market_cap, is_st, included):
     from types import SimpleNamespace
     frame = history().rename(columns={'date': 'time'})
+    frame['close'] = np.linspace(80, 104, 90)
+    frame.loc[86:, 'close'] = [104, 105, 103, 106]
+    frame['open'] = frame.close - .1
+    frame['low'] = frame.close - .1
+    frame.loc[75, 'low'] = 80
+    frame['high'] = frame.close + .2
     frame['code'] = '600001.XSHG'
     days = [d.date() for d in frame.time]
     class Field:
@@ -133,7 +129,7 @@ def test_collect_scans_and_enriches_selected_stock(mod, market_cap, is_st, inclu
     if not included:
         assert stocks == [] and meta['evaluated_count'] == 0
         return
-    assert meta['counts']['xuli'] == 1 and len(stocks) == 1
+    assert meta['counts']['bukou'] == 1 and len(stocks) == 1
     assert stocks[0]['industry'] == '测试行业' and stocks[0]['pe'] == 12
     assert len(stocks[0]['bars']) == 30 and stocks[0]['bars'][0]['ma']['60'] is not None
 

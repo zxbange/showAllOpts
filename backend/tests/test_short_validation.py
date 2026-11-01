@@ -42,6 +42,23 @@ def test_float_lossless():
     assert stats.forward_outcomes(restored).iloc[0].d1_win==1
 
 
+def test_retired_job_cannot_retry_or_execute(setup):
+    jobs, _, _, calendar = setup
+    job = create(jobs, calendar)
+    with jobs.db() as db:
+        job.update(methods=['retired_pattern'], status='paused')
+        jobs.save(db, job)
+    with pytest.raises(ValueError, match='已停用策略'):
+        jobs.action(job['id'], 'retry')
+    with jobs.db() as db:
+        job.update(status='queued')
+        jobs.save(db, job)
+    jobs.tick()
+    failed = jobs.get(job['id'])
+    assert failed['status'] == 'failed' and '已停用策略' in failed['error']
+    assert failed['done'] == 0
+
+
 def test_create_uses_china_day_for_validation_and_idempotency(setup, monkeypatch):
     from app.services import short_validation as module
     jobs, _, _, _ = setup
@@ -106,20 +123,20 @@ def test_duplicate_lock_cancel_and_restart(setup):
 def test_only_selected_formulas_and_multi_equals_single(setup,monkeypatch):
     jobs,_,_,calendar=setup
     monkeypatch.setattr(stats,'pattern_candidates',lambda *a:pytest.fail('unselected legacy patterns'))
-    selector=stats.make_three_selector;called=[]
+    selector=stats.make_bukou_selector;called=[]
     def selected(keys): called.append(keys);return selector(keys)
-    monkeypatch.setattr(stats,'make_three_selector',selected)
+    monkeypatch.setattr(stats,'make_bukou_selector',selected)
     one=finish(jobs,create(jobs,calendar)['id'])
     assert not called and one['status']=='completed',one
-    multi=finish(jobs,create(jobs,calendar,['oversold','xuli'])['id'])
-    assert called==[['xuli']]
+    multi=finish(jobs,create(jobs,calendar,['oversold','bukou'])['id'])
+    assert called==[['bukou']]
     assert multi['status']=='completed',multi
     assert [r for r in multi['summary'] if r['策略']=='超跌后止跌反弹']==one['summary']
 
 def test_missing_and_future(setup):
     jobs,_,engine,calendar=setup
     with engine.begin() as db: db.exec_driver_sql('UPDATE ultra_research_bar SET adj_close=NULL WHERE trade_date=?',(str(calendar[175].date()),))
-    failed=finish(jobs,create(jobs,calendar,['xuli'])['id'])
+    failed=finish(jobs,create(jobs,calendar,['bukou'])['id'])
     assert failed['status']=='failed' and not failed['summary'],failed
     with pytest.raises(ValueError):jobs.create(['oversold'],date(2024,1,1),date(2099,1,1),date(2099,1,1))
     with pytest.raises(ValueError):create(jobs,calendar,['unknown'])
@@ -169,7 +186,7 @@ def test_api_validation_idempotency_and_no_credential_exposure(setup):
 def test_cli_exit_code_for_missing_config(tmp_path):
     import subprocess,sys
     from pathlib import Path
-    entry=Path(__file__).resolve().parents[2]/'脚本/本地统计/七策略胜率统计_本地版.py'
+    entry=Path(__file__).resolve().parents[2]/'脚本/本地统计/短线五策略胜率统计_本地版.py'
     result=subprocess.run([sys.executable,str(entry),'--config',str(tmp_path/'missing.json')],capture_output=True,text=True)
     assert result.returncode==1
 

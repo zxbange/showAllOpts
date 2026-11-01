@@ -181,7 +181,7 @@ def test_static_source_version_is_bound_and_no_unselected_strategies(setup, conf
         seen.append(jobs.sources.get(reference['id'], reference['revision'])['database'])
         yield engine
     monkeypatch.setattr(jobs.sources, 'engine', source)
-    monkeypatch.setattr(module.stats, 'make_three_selector', lambda *a: pytest.fail('unselected three strategies'))
+    monkeypatch.setattr(module.stats, 'make_bukou_selector', lambda *a: pytest.fail('unselected three strategies'))
     job = jobs.create(['oversold'], calendar[170].date(), calendar[190].date(), calendar[195].date(), source=ref)
     jobs.sources.save({**config, 'database':'changed'}, ref['id'], 1)
     assert finish(jobs, job['id'])['status'] == 'completed'
@@ -219,7 +219,7 @@ def test_static_future_rows_do_not_change_results_and_missing_data_fails(setup):
     assert values(jobs, first['id']) == values(jobs, second['id'])
     with engine.begin() as conn:
         conn.execute(text('UPDATE ultra_research_bar SET adj_close=NULL WHERE trade_date=:day'), {'day':calendar[175].date()})
-    third = new(jobs, calendar, 'missing', ['xuli'])
+    third = new(jobs, calendar, 'missing', ['bukou'])
     result = finish(jobs, third['id'])
     assert result['status'] == 'failed' and not result['summary']
 

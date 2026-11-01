@@ -82,7 +82,7 @@ def modules():
         'id': 'etf-momentum', 'name': 'ETF动量热度',
         'description': '收盘动量热力排名与基金历史走势。',
         'path': '/etf-momentum', 'status': 'available',
-    }, {'id': 'institution-ownership', 'name': '个股机构持仓', 'description': '机构披露持仓、股东户数与社保新进。', 'path': '/institution-ownership', 'status': 'available'}, {'id': 'short-term', 'name': '短线选股', 'description': '补票龙、红悬停龙、蓄力龙与30日K线。', 'path': '/short-term', 'status': 'available'}]}
+    }, {'id': 'institution-ownership', 'name': '个股机构持仓', 'description': '机构披露持仓、股东户数与社保新进。', 'path': '/institution-ownership', 'status': 'available'}, {'id': 'short-term', 'name': '短线选股', 'description': '补票龙、超跌后止跌反弹与30日K线。', 'path': '/short-term', 'status': 'available'}]}
 
 
     catalogue['modules'].append({

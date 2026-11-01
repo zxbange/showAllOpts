@@ -1,7 +1,7 @@
 import { expect, test } from '@playwright/test'
 import { mkdir } from 'node:fs/promises'
 
-const summary = ['bukou', 'redhover', 'xuli', 'oversold'].flatMap((strategy, i) =>
+const summary = ['bukou', 'oversold'].flatMap((strategy, i) =>
   [1, 2, 3].map((h) => ({
     策略: strategy,
     后续交易日: h,
@@ -22,7 +22,7 @@ const summary = ['bukou', 'redhover', 'xuli', 'oversold'].flatMap((strategy, i) 
     行情缺失: 10,
   })),
 )
-const windows = ['bukou', 'redhover', 'xuli', 'oversold'].map((strategy) => ({
+const windows = ['bukou', 'oversold'].map((strategy) => ({
   策略: strategy,
   触发样本: 240,
   完整三日样本: 210,
@@ -53,7 +53,7 @@ for (const state of ['unpaired', 'configuration', 'running', 'completed'] as con
             ? [
                 {
                   id: 'visual-job',
-                  methods: ['bukou', 'redhover', 'xuli', 'oversold'],
+                  methods: ['bukou', 'oversold'],
                   start: '2024-01-01',
                   end: '2026-09-30',
                   observed: '2026-10-09',

@@ -12,7 +12,7 @@ router = APIRouter(prefix='/short-term', tags=['短线选股'])
 
 @router.get('/latest', response_model=ShortTermOverview)
 def latest(session: Annotated[Session, Depends(get_session)], day: date | None = None,
-           method: Literal['bukou', 'redhover', 'xuli', 'oversold'] = 'bukou',
+           method: Literal['bukou', 'oversold'] = 'bukou',
            offset: int = Query(0, ge=0), limit: int = Query(6, ge=1, le=24)):
     return ShortTermService(ShortTermRepository(session)).overview(day, method, offset, limit)
 
@@ -33,7 +33,7 @@ class SourceRef(BaseModel):
 
 
 class ValidationRequest(BaseModel):
-    methods: list[Literal['bukou', 'redhover', 'xuli', 'oversold']] = Field(min_length=1, max_length=4)
+    methods: list[Literal['bukou', 'oversold']] = Field(min_length=1, max_length=2)
     start: date = date(2024, 1, 1)
     end: date | None = None
     observed: date | None = Field(default=None, deprecated=True, description="兼容旧客户端；新任务忽略此字段，以end作为统一截止")

@@ -1,4 +1,4 @@
-export type ShortMethod = 'bukou' | 'redhover' | 'xuli' | 'oversold'
+export type ShortMethod = 'bukou' | 'oversold'
 export interface ShortBar {
   date: string
   open: number

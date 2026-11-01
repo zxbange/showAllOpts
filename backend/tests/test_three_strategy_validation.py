@@ -12,7 +12,7 @@ import pandas as pd
 import pytest
 
 ROOT = Path(__file__).resolve().parents[2]
-SOURCE = ROOT / '脚本/本地统计/短线三策略胜率验证_研究版.py'
+SOURCE = ROOT / '脚本/本地统计/补票龙胜率验证_研究版.py'
 ORIGINAL = ROOT / 'backend/app/services/short_statistics.py'
 
 
@@ -93,9 +93,9 @@ def test_default_holiday_maturity_cache_and_independent_methods(mod, monkeypatch
     days, calls, run = setup(mod, monkeypatch, tmp_path)
     result = run()
     assert mod.START_DATE == '2024-01-01'
-    assert len(result.details) == 15
+    assert len(result.details) == 5
     assert result.details.signal_date.min() == pd.Timestamp('2024-01-02')
-    assert len(result.summary) == 9
+    assert len(result.summary) == 3
     assert result.summary.iloc[:3]['有效样本'].tolist() == [4, 3, 2]
     assert result.summary.iloc[:3]['待观察'].tolist() == [1, 2, 3]
     assert set(c['fq'] for c in calls) == {None, 'post'}
@@ -126,7 +126,7 @@ def test_before_close_excludes_today(mod, monkeypatch, tmp_path):
 
 def test_collect_missing_paused_and_resume(mod, monkeypatch, tmp_path):
     days = [d.date() for d in pd.bdate_range('2024-01-02', periods=4)]
-    record = dict(day=str(days[0]), outcomes={}, selected=[dict(code='A', methods=['xuli'])])
+    record = dict(day=str(days[0]), outcomes={}, selected=[dict(code='A', methods=['bukou'])])
     calls = []
     missing = [True]
     def prices(codes, **kw):
@@ -151,7 +151,7 @@ def test_corrupt_duplicate_checkpoint_rejected(mod, tmp_path):
     import json
     day = dt.date(2024, 1, 2)
     record = dict(version=mod.CACHE_VERSION, rule_version=mod.RULE_VERSION, day=str(day),
-                  outcomes={}, selected=[dict(code='A', methods=['xuli', 'xuli'])])
+                  outcomes={}, selected=[dict(code='A', methods=['bukou', 'bukou'])])
     (tmp_path/(str(day)+'.json')).write_text(json.dumps(record))
     with pytest.raises(ValueError, match='重复'):
         mod.read_checkpoint(tmp_path, day)

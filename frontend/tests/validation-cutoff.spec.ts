@@ -85,7 +85,7 @@ test('two dates submit one cutoff and cards adapt to extra strategies', async ({
       el.append(label)
     }
   })
-  await expect(page.locator('.validation-strategies > label')).toHaveCount(9)
+  await expect(page.locator('.validation-strategies > label')).toHaveCount(7)
   await layout()
   expect(
     await page
@@ -106,7 +106,7 @@ test('two dates submit one cutoff and cards adapt to extra strategies', async ({
   expect(payload).toMatchObject({
     start: '2026-09-01',
     end: '2026-09-30',
-    methods: ['bukou', 'redhover', 'xuli', 'oversold'],
+    methods: ['bukou', 'oversold'],
   })
   expect(payload).not.toHaveProperty('observed')
   await expect(page.getByText('信号与收益均截至验证截止日', { exact: false })).toBeVisible()

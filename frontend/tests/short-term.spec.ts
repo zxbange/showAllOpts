@@ -18,7 +18,7 @@ const bars = Array.from({ length: 30 }, (_, i) => ({
   },
 }))
 
-test('six signal dates keep their own stocks while all four charts show latest quotes', async ({
+test('six signal dates keep their own stocks while both charts show latest quotes', async ({
   page,
 }, info) => {
   const errors: string[] = []
@@ -40,7 +40,7 @@ test('six signal dates keep their own stocks while all four charts show latest q
         trade_date: day,
         dates,
         method,
-        counts: { bukou: 1, redhover: 1, xuli: 1, oversold: 1 },
+        counts: { bukou: 1, oversold: 1 },
         meta: { universe_count: 5000, quotes_as_of: dates[0] },
         total: 1,
         offset: 0,
@@ -72,7 +72,7 @@ test('six signal dates keep their own stocks while all four charts show latest q
   await expect(page.getByLabel('短线选股日期').locator('option')).toHaveCount(6)
   await expect(page.getByRole('heading', { name: '当日股票 600001.XSHG' })).toBeVisible()
   await page.getByLabel('短线选股日期').selectOption(dates[5])
-  for (const name of ['补票龙', '红悬停龙', '蓄力龙', '超跌后止跌反弹']) {
+  for (const name of ['补票龙', '超跌后止跌反弹']) {
     await page.getByRole('link', { name: new RegExp(name) }).click()
     await expect(page.getByLabel('短线选股日期')).toHaveValue(dates[5])
     await expect(page.getByRole('heading', { name: '观察股票 600001.XSHG' })).toBeVisible()
@@ -106,13 +106,13 @@ test('short term tabs, dates, candles and pagination', async ({ page }, info) =>
         trade_date: params.get('day') || '2026-09-30',
         dates: ['2026-09-30', '2026-09-29', '2026-09-28'],
         method,
-        counts: { bukou: 7, redhover: 0, xuli: 1, oversold: 1 },
+        counts: { bukou: 7, oversold: 1 },
         meta: { universe_count: 5100 },
-        total: method === 'redhover' ? 0 : method === 'bukou' ? 7 : 1,
+        total: method === 'oversold' && !params.get('day') ? 0 : method === 'bukou' ? 7 : 1,
         offset,
         limit: 6,
         items:
-          method === 'redhover'
+          method === 'oversold' && !params.get('day')
             ? []
             : [
                 {
@@ -137,10 +137,10 @@ test('short term tabs, dates, candles and pagination', async ({ page }, info) =>
   await expect(page.getByRole('img', { name: /形态示例近30个交易日/ })).toBeVisible()
   await page.getByRole('button', { name: '下一页', exact: true }).click()
   await expect(page.getByRole('heading', { name: '下一页股票 600001.XSHG' })).toBeVisible()
-  await page.getByRole('link', { name: /红悬停龙/ }).click()
+  await page.getByRole('link', { name: /超跌后止跌反弹/ }).click()
   await expect(page.getByRole('heading', { name: '本日暂无符合条件的股票' })).toBeVisible()
-  await page.getByRole('link', { name: /蓄力龙/ }).click()
-  await expect(page.getByRole('link', { name: /蓄力龙/ })).toHaveAttribute('aria-current', 'page')
+  await page.getByRole('link', { name: /补票龙/ }).click()
+  await expect(page.getByRole('link', { name: /补票龙/ })).toHaveAttribute('aria-current', 'page')
   await expect(page.getByRole('img', { name: /形态示例近30个交易日/ })).toBeVisible()
   await page.getByLabel('短线选股日期').selectOption('2026-09-29')
   await expect(page.locator('.short-summary')).toContainText('2026-09-29')

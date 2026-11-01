@@ -41,7 +41,7 @@ type Job = {
   summary: Metric[]
   windows: Metric[]
 }
-const choices = { bukou: '补票龙', redhover: '红悬停', xuli: '蓄力龙', oversold: '超跌后止跌反弹' }
+const choices = { bukou: '补票龙', oversold: '超跌后止跌反弹' }
 const statuses: Record<string, string> = {
   queued: '等待',
   retry_wait: '等待重试',
@@ -349,11 +349,11 @@ function ValidationPanel({ adminKey }: { adminKey: ValidationAuth }) {
               <summary>统计口径与数据说明</summary>
               <p>
                 新任务的验证截止日同时限制信号日期与收益观察日期，截止日之后的收盘价不参与统计；尚未到期的收益期限计为待观察。
-                四策略统一沪深股票池、基础过滤、后复权价格与原始成交量。按 T 收盘比较 T+1/2/3
+                两策略统一沪深股票池、基础过滤、后复权价格与原始成交量。按 T 收盘比较 T+1/2/3
                 交易日收盘，严格上涨计胜，持平计入分母；各期限仅计有效样本，停牌、缺行情及待观察单列。这是形态统计，非逐笔实盘回测，不含费用，不代表可成交收益。
               </p>
               <p>
-                沿用原90日形态窗口；红悬停的价格取整与统一股票池可能使信号不同于生产选股。新任务按静态源分批读取、边算边提交，不再预先复制全部行情。重试跳过已提交股票，重读未提交部分；任务期间请保持源历史数据不变，若历史数据修订请新建任务。旧冻结任务仍复用已保存输入。
+                沿用原90日形态窗口；统一股票池与复权口径可能使信号不同于生产选股。新任务按静态源分批读取、边算边提交，不再预先复制全部行情。重试跳过已提交股票，重读未提交部分；任务期间请保持源历史数据不变，若历史数据修订请新建任务。旧冻结任务仍复用已保存输入。
               </p>
             </details>
             <fieldset className="validation-strategies">
@@ -377,8 +377,6 @@ function ValidationPanel({ adminKey }: { adminKey: ValidationAuth }) {
                         (
                           {
                             bukou: '趋势回踩再起',
-                            redhover: '涨停后的承接',
-                            xuli: '缩量后放量突破',
                             oversold: '超跌后的收盘确认',
                           } as Record<string, string>
                         )[id]
@@ -478,7 +476,10 @@ function ValidationPanel({ adminKey }: { adminKey: ValidationAuth }) {
         <article className="validation-job" key={job.id} data-status={job.status}>
           <div className="validation-job-heading">
             <h3>
-              {job.methods.map((m) => choices[m as keyof typeof choices]).join(' · ')} —{' '}
+              {job.methods
+                .map((m) => choices[m as keyof typeof choices] ?? '已停用策略')
+                .join(' · ')}{' '}
+              —{' '}
               <span className={'validation-status status-' + job.status}>
                 {statuses[job.status] || job.status}
               </span>
@@ -628,7 +629,7 @@ function ValidationPanel({ adminKey }: { adminKey: ValidationAuth }) {
       {deleting && (
         <ValidationDeleteDialog
           id={deleting.id}
-          description={`${deleting.methods.map((m) => choices[m as keyof typeof choices]).join(' · ')} · ${deleting.start} 至 ${deleting.end || '最新可用日'}`}
+          description={`${deleting.methods.map((m) => choices[m as keyof typeof choices] ?? '已停用策略').join(' · ')} · ${deleting.start} 至 ${deleting.end || '最新可用日'}`}
           adminKey={adminKey}
           onBusy={setBusy}
           onClose={() => {

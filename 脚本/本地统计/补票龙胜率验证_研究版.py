@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""聚宽独立研究：短线三策略：按超短线四策略口径统计后续1/2/3日收盘表现。
+"""聚宽独立研究：补票龙：按超短线四策略口径统计后续1/2/3日收盘表现。
 进度条展示采集，保留每日选股结果及胜率统计；导出CSV，不连接业务数据库、不下单。
 """
 import builtins
@@ -24,11 +24,11 @@ AS_OF_DATE = None  # 后续表现观察截止日；可以晚于END_DATE
 PRICE_BATCH_SIZE = 50
 FUNDAMENTAL_BATCH_SIZE = 1000
 USE_CACHE = True  # 保存研究进度；重跑只补未完成部分
-CACHE_DIR = 'short_term_three_validation_cache'
+CACHE_DIR = 'bukou_validation_cache'
 HORIZONS = (1, 2, 3)
-METHODS = {'bukou': '补票龙', 'redhover': '红悬停龙', 'xuli': '蓄力龙'}
-RULE_VERSION = 'stock_three_patterns_v2_nonst_cap30'
-CACHE_VERSION = 'short_three_close_v1'
+METHODS = {'bukou': '补票龙'}
+RULE_VERSION = 'bukou_v3_nonst_cap30'
+CACHE_VERSION = 'bukou_close_v2'
 API_NAMES = ('get_all_securities', 'get_trade_days', 'get_price', 'get_extras',
              'get_fundamentals', 'query', 'valuation')
 
@@ -181,7 +181,6 @@ def checked_calendar(raw, start=None, end=None):
 def make_selector(apis):
     """与业务采集脚本保持相同选股函数；不依赖外部策略文件。"""
     get_extras = apis['get_extras']
-    RISE_THRESHOLD, VOLUME_ENLARGE_T2, VOLUME_SHRINK_T1, VOLUME_ENLARGE_T = 3.0, 1.2, 0.8, 1.2
     def compute_bbi(df):
         ma3 = df["close"].rolling(3).mean()
         ma6 = df["close"].rolling(6).mean()
@@ -262,128 +261,12 @@ def make_selector(apis):
                     picks.append(code)
             return picks
 
-    def get_limit_rate(ts_code: str) -> builtins.float:
-        """根据股票代码判断涨停阈值（10%/20%/30%）"""
-        code = ts_code.upper()
-        if code.startswith("300") or code.startswith("301") or code.startswith("688"):
-            return 0.20
-        if code.startswith("9"):
-            return 0.30
-        return 0.10
-
-    def is_limit_up(ts_code: str, pct_chg: builtins.float) -> builtins.bool:
-        """判断是否涨停（根据板块不同阈值）"""
-        rate = get_limit_rate(ts_code)
-        threshold = 9.5 if rate == 0.10 else (19.5 if rate == 0.20 else 29.5)
-        return pct_chg >= threshold
-
-    def analyze_stock(df, ts_code):
-        if len(df) < 3:
-            return None
-
-        row_t2 = df.iloc[-3]
-        row_t1 = df.iloc[-2]
-        row_t = df.iloc[-1]
-
-        # 1. T-2日必须涨停
-        if not is_limit_up(ts_code, row_t2["pct_chg"]):
-            return None
-
-        # 计算T-2涨停价
-        rate_t2 = get_limit_rate(ts_code)
-        t2_limit_price = builtins.round(row_t2["pre_close"] * (1 + rate_t2), 2)
-
-        # 2. T-1日条件（不限是否涨停，只看最低价）
-        if row_t1["low"] < t2_limit_price:
-            return None
-
-        # 3. T日条件（未涨停 + 低价过涨停价）
-        if is_limit_up(ts_code, row_t["pct_chg"]):
-            return None
-        if row_t["low"] < t2_limit_price:
-            return None
-
-        return True
-
-    def analyze_one(code, df):
-        """
-        分析单只股票是否满足蓄力龙条件
-        df: 按date升序排列的日K线数据（最后一行=T日）
-        需要至少65个交易日（算MA60）
-        """
-        if df is None or len(df) < 65:
-            return False
-
-        # 取最近65个交易日
-        df = df.tail(65).copy().reset_index(drop=True)
-
-        if len(df) < 5:
-            return False
-
-        day_t3  = df.iloc[-4]  # T-3
-        day_t2  = df.iloc[-3]  # T-2
-        day_t1  = df.iloc[-2]  # T-1
-        day_t   = df.iloc[-1]  # T
-
-        # ---- 条件1: T-2日阳线 + 涨幅 > 3% + 放量 ----
-        t2_pct   = builtins.float(day_t2['pct_chg'])
-        t2_open  = builtins.float(day_t2['open'])
-        t2_close = builtins.float(day_t2['close'])
-        t2_vol   = builtins.float(day_t2['volume'])
-        t3_vol   = builtins.float(day_t3['volume'])
-
-        cond1_ok = (
-            t2_close > t2_open and                          # 阳线
-            t2_pct > RISE_THRESHOLD and                     # 涨幅>3%
-            t2_vol > t3_vol * VOLUME_ENLARGE_T2            # 放量>1.2倍
-        )
-
-        # ---- 条件2: T-1日阴线 + 收盘>T-2开盘 + 跌幅<4% + 缩量 ----
-        t1_pct   = builtins.float(day_t1['pct_chg'])
-        t1_open  = builtins.float(day_t1['open'])
-        t1_close = builtins.float(day_t1['close'])
-        t1_vol   = builtins.float(day_t1['volume'])
-
-        cond2_ok = (
-            t1_close < t1_open and                           # 阴线（收<开）
-            t1_close > t2_open and                            # 收盘>T-2开盘价
-            -4.0 < t1_pct < 0 and                             # 跌幅低于4%（-4% < 跌幅 < 0）
-            t1_vol < t2_vol * VOLUME_SHRINK_T1               # 缩量<0.8倍
-        )
-
-        # ---- 条件3: T日阳线 + 收盘>T-2收盘 + 涨幅>3% + 放量 ----
-        t_pct   = builtins.float(day_t['pct_chg'])
-        t_open  = builtins.float(day_t['open'])
-        t_close = builtins.float(day_t['close'])
-        t_vol   = builtins.float(day_t['volume'])
-
-        cond3_ok = (
-            t_close > t_open and                            # 阳线
-            t_close > t2_close and                          # 收盘>T-2收盘价
-            t_pct > RISE_THRESHOLD and                       # 涨幅>3%
-            t_vol > t1_vol * VOLUME_ENLARGE_T               # 放量>1.2倍
-        )
-
-        # ---- 条件4: 均线多头（MA10>MA20>MA30>MA60） ----
-        closes = df['close'].values.astype(builtins.float)
-        ma10 = closes[-10:].mean() if len(closes) >= 10 else 0
-        ma20 = closes[-20:].mean() if len(closes) >= 20 else 0
-        ma30 = closes[-30:].mean() if len(closes) >= 30 else 0
-        ma60 = closes[-60:].mean() if len(closes) >= 60 else 0
-
-        cond4_ok = ma10 > ma20 > ma30 > ma60
-
-        return cond1_ok and cond2_ok and cond3_ok and cond4_ok
 
     def evaluate(history, code, is_st=False):
-        # Keep original strategy windows: BBI tail 60, xuli tail 65.
+        # 补票龙保持原60日计算窗口。
         matched = []
         if bbi_selector.select(history['date'].iloc[-1], {code: history}):
             matched.append('bukou')
-        if not is_st and analyze_stock(history, code):
-            matched.append('redhover')
-        if analyze_one(code, history):
-            matched.append('xuli')
         return matched
 
     def clean_history(raw, code, days, listing):
@@ -531,7 +414,7 @@ def save_checkpoint(folder, record):
 
 RETURN_PRICE_FIELD = 'adj_close'
 STRATEGIES = list(METHODS.values())
-OUTPUT_DIR = '短线三策略验证结果'
+OUTPUT_DIR = '补票龙验证结果'
 
 def forward_outcomes(frame):
     """先按市场日历重建索引再shift；停牌和缺行绝不让观察日顺延。"""
@@ -724,7 +607,7 @@ def run(start_date=START_DATE, end_date=END_DATE, as_of_date=AS_OF_DATE,
                     signal_price='pre', return_price='post', horizons=list(HORIZONS), warmup_trade_days=90,
                     limitations=['信号日收盘为基准，不代表可成交买入；不含费用、滑点及涨跌停成交模拟',
                                  '停牌、缺少行情、待观察不进入有效分母；持平进入分母不计胜',
-                                 '历史当日股票池、非ST、总市值至少30亿元；保持三策略原生产规则',
+                                 '历史当日股票池、非ST、总市值至少30亿元；保持补票龙原生产规则',
                                  '信号日停牌未额外排除，沿用生产策略；未添加四策略特有股票池限制',
                                  '有效缓存不自动修订，更换CACHE_DIR可重采；勿并发写入同目录'])
     (destination / '运行参数.json').write_text(json.dumps(metadata, ensure_ascii=False, indent=2), encoding='utf-8')

@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""聚宽研究：短线四种形态；信号日后跟踪5个交易日，更新30日K线，不下单。"""
+"""聚宽研究：补票龙与超跌后止跌反弹；信号日后跟踪5个交易日，更新30日K线，不下单。"""
 import builtins
 import datetime
 import json
@@ -317,15 +317,15 @@ def _safe_error(exc, config):
 
 
 def _short_term_strategy(_apis, _config):
-    """四种形态按信号日保存；保留当天及前5个交易日，行情持续更新。"""
+    """两种形态按信号日保存；保留当天及前5个交易日，行情持续更新。"""
     settings = strategy_settings('短线选股')
     if settings['batch_size'] > 100:
         raise ValueError('短线选股 batch_size 不得超过100，避免行情请求过大。')
     get_all_securities, get_trade_days, get_price, get_extras, get_industry, get_fundamentals, query, valuation = [
         _apis.get(k) for k in ('get_all_securities', 'get_trade_days', 'get_price', 'get_extras', 'get_industry', 'get_fundamentals', 'query', 'valuation')]
-    METHODS = {'bukou': '补票龙', 'redhover': '红悬停龙', 'xuli': '蓄力龙', 'oversold': '超跌后止跌反弹'}
+    METHODS = {'bukou': '补票龙', 'oversold': '超跌后止跌反弹'}
     MA_PERIODS = (5, 10, 20, 30, 60)
-    RULE_VERSION = 'stock_four_patterns_v3_oversold'
+    RULE_VERSION = 'stock_patterns_v4_bukou_oversold'
     WATCH_VERSION, OBSERVATION_DAYS = 1, 5
     Base = declarative_base()
 
@@ -342,7 +342,6 @@ def _short_term_strategy(_apis, _config):
         payload = Column(JSON, nullable=False)
         updated_at = Column(DateTime, nullable=False)
 
-    RISE_THRESHOLD, VOLUME_ENLARGE_T2, VOLUME_SHRINK_T1, VOLUME_ENLARGE_T = 3.0, 1.2, 0.8, 1.2
 
     def compute_bbi(df):
         ma3 = df["close"].rolling(3).mean()
@@ -424,133 +423,16 @@ def _short_term_strategy(_apis, _config):
                     picks.append(code)
             return picks
 
-    def get_limit_rate(ts_code: str) -> float:
-        """根据股票代码判断涨停阈值（10%/20%/30%）"""
-        code = ts_code.upper()
-        if code.startswith("300") or code.startswith("301") or code.startswith("688"):
-            return 0.20
-        if code.startswith("9"):
-            return 0.30
-        return 0.10
-
-    def is_limit_up(ts_code: str, pct_chg: float) -> bool:
-        """判断是否涨停（根据板块不同阈值）"""
-        rate = get_limit_rate(ts_code)
-        threshold = 9.5 if rate == 0.10 else (19.5 if rate == 0.20 else 29.5)
-        return pct_chg >= threshold
-
-    def analyze_stock(df, ts_code):
-        if len(df) < 3:
-            return None
-
-        row_t2 = df.iloc[-3]
-        row_t1 = df.iloc[-2]
-        row_t = df.iloc[-1]
-
-        # 1. T-2日必须涨停
-        if not is_limit_up(ts_code, row_t2["pct_chg"]):
-            return None
-
-        # 计算T-2涨停价
-        rate_t2 = get_limit_rate(ts_code)
-        t2_limit_price = round(row_t2["pre_close"] * (1 + rate_t2), 2)
-
-        # 2. T-1日条件（不限是否涨停，只看最低价）
-        if row_t1["low"] < t2_limit_price:
-            return None
-
-        # 3. T日条件（未涨停 + 低价过涨停价）
-        if is_limit_up(ts_code, row_t["pct_chg"]):
-            return None
-        if row_t["low"] < t2_limit_price:
-            return None
-
-        return True
-
-
-    def analyze_one(code, df):
-        """
-        分析单只股票是否满足蓄力龙条件
-        df: 按date升序排列的日K线数据（最后一行=T日）
-        需要至少65个交易日（算MA60）
-        """
-        if df is None or len(df) < 65:
-            return False
-
-        # 取最近65个交易日
-        df = df.tail(65).copy().reset_index(drop=True)
-
-        if len(df) < 5:
-            return False
-
-        day_t3  = df.iloc[-4]  # T-3
-        day_t2  = df.iloc[-3]  # T-2
-        day_t1  = df.iloc[-2]  # T-1
-        day_t   = df.iloc[-1]  # T
-
-        # ---- 条件1: T-2日阳线 + 涨幅 > 3% + 放量 ----
-        t2_pct   = float(day_t2['pct_chg'])
-        t2_open  = float(day_t2['open'])
-        t2_close = float(day_t2['close'])
-        t2_vol   = float(day_t2['volume'])
-        t3_vol   = float(day_t3['volume'])
-
-        cond1_ok = (
-            t2_close > t2_open and                          # 阳线
-            t2_pct > RISE_THRESHOLD and                     # 涨幅>3%
-            t2_vol > t3_vol * VOLUME_ENLARGE_T2            # 放量>1.2倍
-        )
-
-        # ---- 条件2: T-1日阴线 + 收盘>T-2开盘 + 跌幅<4% + 缩量 ----
-        t1_pct   = float(day_t1['pct_chg'])
-        t1_open  = float(day_t1['open'])
-        t1_close = float(day_t1['close'])
-        t1_vol   = float(day_t1['volume'])
-
-        cond2_ok = (
-            t1_close < t1_open and                           # 阴线（收<开）
-            t1_close > t2_open and                            # 收盘>T-2开盘价
-            -4.0 < t1_pct < 0 and                             # 跌幅低于4%（-4% < 跌幅 < 0）
-            t1_vol < t2_vol * VOLUME_SHRINK_T1               # 缩量<0.8倍
-        )
-
-        # ---- 条件3: T日阳线 + 收盘>T-2收盘 + 涨幅>3% + 放量 ----
-        t_pct   = float(day_t['pct_chg'])
-        t_open  = float(day_t['open'])
-        t_close = float(day_t['close'])
-        t_vol   = float(day_t['volume'])
-
-        cond3_ok = (
-            t_close > t_open and                            # 阳线
-            t_close > t2_close and                          # 收盘>T-2收盘价
-            t_pct > RISE_THRESHOLD and                       # 涨幅>3%
-            t_vol > t1_vol * VOLUME_ENLARGE_T               # 放量>1.2倍
-        )
-
-        # ---- 条件4: 均线多头（MA10>MA20>MA30>MA60） ----
-        closes = df['close'].values.astype(float)
-        ma10 = closes[-10:].mean() if len(closes) >= 10 else 0
-        ma20 = closes[-20:].mean() if len(closes) >= 20 else 0
-        ma30 = closes[-30:].mean() if len(closes) >= 30 else 0
-        ma60 = closes[-60:].mean() if len(closes) >= 60 else 0
-
-        cond4_ok = ma10 > ma20 > ma30 > ma60
-
-        return cond1_ok and cond2_ok and cond3_ok and cond4_ok
 
     finite = _float_number
 
     bbi_selector = BBIShortLongSelector()
 
     def evaluate(history, code, is_st=False):
-        # Keep original strategy windows: BBI tail 60, xuli tail 65.
+        # 补票龙保持原60日计算窗口。
         matched = []
         if bbi_selector.select(history['date'].iloc[-1], {code: history}):
             matched.append('bukou')
-        if not is_st and analyze_stock(history, code):
-            matched.append('redhover')
-        if analyze_one(code, history):
-            matched.append('xuli')
         return matched
 
     def rebound_history(raw, adjusted, code, days, listing):
@@ -742,6 +624,43 @@ def _short_term_strategy(_apis, _config):
         methods = (row[0] for row in session.query(ShortTermStock.payload['methods']).filter_by(trade_date=head.trade_date))
         return counts_match(head.payload, methods)
 
+    def migrate_methods(session):
+        """Prune retired memberships without re-running unchanged signal rules."""
+        for head in session.query(ShortTermRun).order_by(ShortTermRun.trade_date).with_for_update():
+            meta = head.payload
+            if not isinstance(meta, dict) or meta.get('rule_version') != 'stock_four_patterns_v3_oversold':
+                continue
+            counts = meta.get('counts', {})
+            if not isinstance(counts, dict) or not builtins.all(type(v) is int and v >= 0 for v in counts.values()):
+                continue
+            records = session.query(ShortTermStock).filter_by(trade_date=head.trade_date).all()
+            actual = {key: 0 for key in counts}
+            valid = builtins.all(key in counts for key in METHODS)
+            for record in records:
+                values = record.payload.get('methods')
+                if not isinstance(values, list) or not values or not builtins.all(isinstance(v, str) for v in values) or len(set(values)) != len(values):
+                    valid = False
+                    break
+                for value in values:
+                    if value not in actual:
+                        valid = False
+                        break
+                    actual[value] += 1
+            if not valid or actual != counts:
+                continue  # Incomplete snapshots must still be repaired by normal collection.
+            stamp = china_now()
+            for record in records:
+                methods = [value for value in record.payload['methods'] if value in METHODS]
+                if not methods:
+                    session.delete(record)
+                elif methods != record.payload['methods']:
+                    record.payload = dict(record.payload, methods=methods)
+                    record.updated_at = stamp
+            head.payload = dict(meta, rule_version=RULE_VERSION,
+                                counts={key: counts[key] for key in METHODS}, snapshot_revision=uuid.uuid4().hex)
+            head.updated_at = stamp
+        session.flush()
+
     def save_day(Session, day, meta, records):
         if not complete_meta(meta) or not counts_match(meta, (r.get('methods') for r in records)):
             raise ValueError('短线快照计数或明细不完整，拒绝写入；不能把未计算策略补为零。')
@@ -850,6 +769,7 @@ def _short_term_strategy(_apis, _config):
             with session_scope(Session) as session:
                 for model in (ShortTermStock, ShortTermRun):
                     session.query(model).filter(model.trade_date < keep_days[0]).delete(synchronize_session=False)
+                migrate_methods(session)
                 session.commit()
                 existing = set(r.trade_date for r in session.query(ShortTermRun).all()
                                if complete_day(session, r))

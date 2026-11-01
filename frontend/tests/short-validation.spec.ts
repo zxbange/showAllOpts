@@ -68,9 +68,9 @@ test('select strategies, resume failure, refresh durable task and show unavailab
   await page.goto('/short-term/validation')
   await unlock(page)
   const panel = page.getByRole('region', { name: '短线胜率验证' })
-  await expect(panel.getByRole('checkbox')).toHaveCount(4)
-  await panel.getByRole('checkbox', { name: '红悬停', exact: true }).uncheck()
-  await panel.getByRole('checkbox', { name: '蓄力龙', exact: true }).uncheck()
+  await expect(panel.getByRole('checkbox')).toHaveCount(2)
+  await panel.getByRole('checkbox', { name: '超跌后止跌反弹', exact: true }).uncheck()
+  await panel.getByRole('checkbox', { name: '超跌后止跌反弹', exact: true }).check()
   await panel.getByRole('button', { name: '开始验证', exact: true }).click()
   await expect(panel.getByRole('alert')).toContainText('MYSQL_2013')
   await expect(panel.getByRole('alert')).toContainText('断点保留')
@@ -104,7 +104,7 @@ test('empty selection blocks submission', async ({ page }) => {
   await page.goto('/short-term/validation')
   await unlock(page)
   const panel = page.getByRole('region', { name: '短线胜率验证' })
-  await expect(panel.getByRole('checkbox')).toHaveCount(4)
+  await expect(panel.getByRole('checkbox')).toHaveCount(2)
   for (const box of await panel.getByRole('checkbox').all()) await box.uncheck()
   await expect(panel.getByRole('button', { name: '开始验证', exact: true })).toBeDisabled()
 })
@@ -115,8 +115,8 @@ test('validation has its own peer page and supports reload, deep link and back',
   await page.route('**/api/v1/short-term/latest?*', (r) =>
     r.fulfill({ json: { trade_date: null, dates: [], counts: {}, stocks: [], total: 0 } }),
   )
-  await page.goto('/short-term?method=xuli')
-  await expect(page.getByRole('link', { name: '蓄力龙', exact: true })).toHaveAttribute(
+  await page.goto('/short-term?method=bukou')
+  await expect(page.getByRole('link', { name: '补票龙', exact: true })).toHaveAttribute(
     'aria-current',
     'page',
   )
@@ -131,8 +131,8 @@ test('validation has its own peer page and supports reload, deep link and back',
   await page.reload()
   await expect(page.getByLabel('验证管理密钥')).toBeVisible()
   await page.goBack()
-  await expect(page).toHaveURL(/method=xuli$/)
-  await expect(page.getByRole('link', { name: '蓄力龙', exact: true })).toHaveAttribute(
+  await expect(page).toHaveURL(/method=bukou$/)
+  await expect(page.getByRole('link', { name: '补票龙', exact: true })).toHaveAttribute(
     'aria-current',
     'page',
   )

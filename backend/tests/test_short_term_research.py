@@ -24,14 +24,14 @@ def mod(monkeypatch):
     return module
 
 
-def record(mod, day, codes=('600001.XSHG',), methods=('xuli',)):
+def record(mod, day, codes=('600001.XSHG',), methods=('bukou',)):
     return dict(version=mod.CACHE_VERSION, rule_version=mod.RULE_VERSION, day=day.isoformat(),
                 universe_count=len(codes), evaluated_count=len(codes), outcomes={},
                 selected=[dict(code=c, name='测试股票', market_cap=30, methods=list(methods),
                                selection_close=999, end_date=None) for c in codes])
 
 
-def setup_apis(mod, monkeypatch, tmp_path, end='2026-07-21', methods=('xuli',)):
+def setup_apis(mod, monkeypatch, tmp_path, end='2026-07-21', methods=('bukou',)):
     days = [d.date() for d in pd.bdate_range('2026-07-01', end)]
     calls = {'selected': [], 'prices': []}
     def select(apis, selector, day, size, progress=None):
@@ -104,24 +104,24 @@ def test_winrate_denominator_flat_missing_pending_and_fifty(mod):
     assert row['有效样本'] == 4 and row['上涨次数'] == 2 and row['持平次数'] == 1
     assert row['胜率（%）'] == 50 and row['超过50%'] == '否'
     assert row['总入选次数'] == 6 and row['待观察'] == row['数据缺失'] == 1
-    assert row['停牌估值样本'] == 1 and len(summary) == 9
+    assert row['停牌估值样本'] == 1 and len(summary) == 3
     assert distribution.iloc[0]['涨幅>10%'] == 0
-    assert pd.isna(summary.iloc[-1]['胜率（%）'])
+    assert pd.isna(summary.iloc[1]['胜率（%）'])
 
 
 def test_trade_day_offsets_repeat_signals_cross_strategy_and_paired_prices(mod, monkeypatch, tmp_path):
-    days, calls, apis, run = setup_apis(mod, monkeypatch, tmp_path, methods=('bukou', 'xuli'))
+    days, calls, apis, run = setup_apis(mod, monkeypatch, tmp_path, methods=('bukou',))
     result = run(days[1], days[10])
-    assert len(calls['selected']) == 2 and len(result.details) == 12
-    first = result.details[(result.details['策略'] == '蓄力龙') & (result.details['入选日'] == str(days[0]))]
+    assert len(calls['selected']) == 2 and len(result.details) == 6
+    first = result.details[(result.details['策略'] == '补票龙') & (result.details['入选日'] == str(days[0]))]
     assert list(first['观察日']) == [str(days[2]), str(days[4]), str(days[10])]
     assert list(first['涨跌幅（%）']) == [2, 4, 10]
     assert list(first['入选日收盘价（前复权）']) == [100, 100, 100]  # cached selection_close=999 is never the denominator.
-    xuli = result.summary[result.summary['策略'] == '蓄力龙']
-    assert list(xuli['总入选次数']) == [2, 2, 2]
-    assert list(xuli['有效样本']) == [2, 2, 1]
-    assert list(xuli['待观察']) == [0, 0, 1]
-    assert list(xuli['胜率（%）']) == [100, 100, 100]
+    bukou = result.summary[result.summary['策略'] == '补票龙']
+    assert list(bukou['总入选次数']) == [2, 2, 2]
+    assert list(bukou['有效样本']) == [2, 2, 1]
+    assert list(bukou['待观察']) == [0, 0, 1]
+    assert list(bukou['胜率（%）']) == [100, 100, 100]
     assert days[4] - days[0] == dt.timedelta(days=6)  # Weekend does not count.
     assert not list(tmp_path.rglob('*.csv'))
 
@@ -135,7 +135,7 @@ def test_resume_skips_completed_selections_and_only_matures_new_horizons(mod, mo
     assert len(calls['selected']) == len(calls['prices']) == 1
     later = run(days[0], days[10])
     assert len(calls['selected']) == 1 and len(calls['prices']) == 2
-    assert list(later.summary[later.summary['策略'] == '蓄力龙']['有效样本']) == [1, 1, 1]
+    assert list(later.summary[later.summary['策略'] == '补票龙']['有效样本']) == [1, 1, 1]
     earlier = run(days[0], days[2])  # Future cached observations must not leak into an earlier as-of.
     pd.testing.assert_frame_equal(first.summary, earlier.summary)
     assert len(calls['prices']) == 2
@@ -161,7 +161,7 @@ def test_missing_prices_are_not_zero_returns_and_retry_next_run(mod, monkeypatch
         return frame[frame.time != days[2]]
     apis['get_price'] = missing
     first = run(days[0], days[10])
-    row = first.summary[first.summary['策略'] == '蓄力龙'].iloc[0]
+    row = first.summary[first.summary['策略'] == '补票龙'].iloc[0]
     assert row['数据缺失'] == 1 and row['有效样本'] == 0 and pd.isna(row['胜率（%）'])
     apis['get_price'] = fetch
     second = run(days[0], days[10])
@@ -193,7 +193,7 @@ def test_zero_selection_days_are_cached_and_summary_still_has_nine_rows(mod, mon
     result = run(days[1], days[10])
     run(days[1], days[10])
     assert len(count) == 2 and not calls['prices']
-    assert len(result.summary) == 9 and result.summary['胜率（%）'].isna().all()
+    assert len(result.summary) == 3 and result.summary['胜率（%）'].isna().all()
     assert result.details.empty
     mod.show_results(result)
 
@@ -238,11 +238,11 @@ def test_real_historical_selection_st_cap_filter_and_warmup(mod):
         def filter(self, codes): return codes
     def prices(batch, **kwargs):
         requests.append((batch, kwargs))
-        close = np.linspace(10, 20, 90)
-        close[-4:] = [20, 21, 20.5, 21.5]
+        close = np.linspace(80, 104, 90)
+        close[-4:] = [104, 105, 103, 106]
         frame = pd.DataFrame(dict(time=dates, close=close, open=close-.1,
-                                 low=close-.2, high=close+.2, volume=100.))
-        frame.loc[87, 'open'], frame.loc[88, 'open'] = 20, 21
+                                 low=close-.1, high=close+.2, volume=100.))
+        frame.loc[75, 'low'] = 80
         frame.loc[87:, 'volume'] = [130, 80, 130]
         return pd.concat([frame.assign(code=code) for code in batch], ignore_index=True)
     def securities(**kwargs):
@@ -260,7 +260,7 @@ def test_real_historical_selection_st_cap_filter_and_warmup(mod):
     rec = mod.collect_selections(apis, mod.make_selector(apis), day, 50)
     assert rec['evaluated_count'] == 2
     assert [s['code'] for s in rec['selected']] == [codes[0], codes[3]]
-    assert all('xuli' in s['methods'] for s in rec['selected'])
+    assert all('bukou' in s['methods'] for s in rec['selected'])
     assert requests[0][0] == [codes[0], codes[3]]
     assert requests[0][1]['start_date'] == dates[0] and requests[0][1]['end_date'] == day
     assert requests[0][1]['fq'] == 'pre'
@@ -359,11 +359,11 @@ def test_pasted_notebook_with_numpy_names_runs_real_selection_and_resumes(mod, m
         if 'open' in kwargs['fields']:
             calls['signal_prices'] += 1
             assert kwargs['end_date'] == day
-            close = np.linspace(10, 20, 90)
-            close[-4:] = [20, 21, 20.5, 21.5]
+            close = np.linspace(80, 104, 90)
+            close[-4:] = [104, 105, 103, 106]
             frame = pd.DataFrame(dict(time=past, code=code, close=close, open=close-.1,
-                                     low=close-.2, high=close+.2, volume=100.))
-            frame.loc[87, 'open'], frame.loc[88, 'open'] = 20, 21
+                                     low=close-.1, high=close+.2, volume=100.))
+            frame.loc[75, 'low'] = 80
             frame.loc[87:, 'volume'] = [130, 80, 130]
             return frame
         calls['forward_prices'] += 1
@@ -385,10 +385,10 @@ def test_pasted_notebook_with_numpy_names_runs_real_selection_and_resumes(mod, m
     namespace['china_now'] = lambda: dt.datetime(2026, 10, 24, 18)
     options = dict(start_date=day, end_date=day, as_of_date=future[-1], cache_dir=str(tmp_path), show=False)
     result = namespace['run'](**options)
-    xuli = result.summary[result.summary['策略'] == '蓄力龙']
-    assert list(xuli['胜率（%）']) == [100, 100, 100]
-    assert list(xuli['超过50%']) == ['是', '是', '是']
-    assert result.daily_counts.iloc[0]['蓄力龙'] == 1
+    bukou = result.summary[result.summary['策略'] == '补票龙']
+    assert list(bukou['胜率（%）']) == [100, 100, 100]
+    assert list(bukou['超过50%']) == ['是', '是', '是']
+    assert result.daily_counts.iloc[0]['补票龙'] == 1
     assert calls == {'stock_pool': 1, 'signal_prices': 1, 'forward_prices': 1}
     namespace['show_results'](result)
     again = namespace['run'](**options)

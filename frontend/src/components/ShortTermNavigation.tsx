@@ -1,4 +1,4 @@
-import { ArrowUpRight, Waves, Flame, Zap, ChartNoAxesCombined } from 'lucide-react'
+import { ArrowUpRight, Waves, ChartNoAxesCombined } from 'lucide-react'
 import { ModuleSwitch } from './ModuleSwitch'
 import type { ShortMethod } from '../types/shortTerm'
 
@@ -9,20 +9,6 @@ export const methods = [
     subtitle: '趋势中的回踩再起',
     icon: Waves,
     note: 'BBI向上 · 长RSV强势 · 短RSV回落再上行 · DIF为正',
-  },
-  {
-    id: 'redhover' as ShortMethod,
-    name: '红悬停龙',
-    subtitle: '涨停后的高位承接',
-    icon: Flame,
-    note: '两日前涨停 · 后两日低点不低于该涨停价 · 当日未涨停',
-  },
-  {
-    id: 'xuli' as ShortMethod,
-    name: '蓄力龙',
-    subtitle: '缩量整理后的突破',
-    icon: Zap,
-    note: '阳—阴—阳 · 缩量回撤后放量 · MA10 > MA20 > MA30 > MA60',
   },
   {
     id: 'oversold' as ShortMethod,
