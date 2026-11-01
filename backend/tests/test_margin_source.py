@@ -209,6 +209,44 @@ def test_fetch_point_returns_percentage_and_provenance():
     assert point == dict(date='2026-10-26', ratio=255.6273, source_url=REPORT_URL)
 
 
+def test_official_attachment_directory_listing_and_redirect_download():
+    # Observed on the live official index: the October 28 report uses attachDir,
+    # while neighboring reports still use articleFileDir.
+    day = date(2026, 10, 28)
+    attachment = source.ORIGIN + '/cmsmc/attachDir/2026/10/2026102908000008247.xlsx'
+    content = listing([day, DAY]).replace(
+        b'/cmsmc/articleFileDir/sample-2026-10-28.xlsx', attachment.encode())
+    reports, _ = source.parse_listing(content, source.INDEX_URL)
+    assert reports[0] == source.MarginReport(day, attachment)
+    assert source.safe_report_url(attachment) == attachment
+    visited = []
+
+    def response(request):
+        visited.append(str(request.url))
+        if str(request.url) == REPORT_URL:
+            return httpx.Response(302, headers={'location': attachment})
+        assert str(request.url) == attachment
+        return httpx.Response(200, content=workbook(day=day))
+
+    with httpx.Client(transport=httpx.MockTransport(response)) as client:
+        assert source.fetch_point(client, reports[0])['date'] == day.isoformat()
+        assert source.fetch_point(client, source.MarginReport(day, REPORT_URL))['ratio'] == pytest.approx(255.6273)
+    assert visited == [attachment, REPORT_URL, attachment]
+
+
+@pytest.mark.parametrize('path', [
+    '/cmsmc/attachDir/2026/10/a.pdf',
+    '/cmsmc/attachDir/2026/10/a.html',
+    '/cmsmc/attachDir/2026/10/a.xlsx?download=1',
+    '/cmsmc/attachDir/%2e%2e/other/a.xlsx',
+    '/cmsmc/attachDirOther/a.xlsx',
+])
+def test_attachment_directory_does_not_bypass_report_url_checks(path):
+    with httpx.Client(transport=httpx.MockTransport(lambda request: pytest.fail('unsafe request'))) as client:
+        with pytest.raises(source.MarginSourceError):
+            source.fetch_point(client, source.MarginReport(DAY, source.ORIGIN + path))
+
+
 def test_http_errors_and_oversized_responses_are_explicit():
     for response in [httpx.Response(503), httpx.Response(200, headers={'content-length': str(source.MAX_FILE_BYTES+1)})]:
         with httpx.Client(transport=httpx.MockTransport(lambda request: response)) as client:

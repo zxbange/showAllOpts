@@ -135,7 +135,8 @@ def _safe_url(url, kind):
     if kind in ('report', 'catalog_report'):
         # Legacy PDFs are catalog metadata only, never accepted for downloading.
         extensions = ('.xlsx', '.xls', '.pdf') if kind == 'catalog_report' else ('.xlsx', '.xls')
-        valid = path.startswith('/cmsmc/articleFileDir/') and path.lower().endswith(extensions)
+        # CSData publishes daily workbooks in both CMS attachment directories.
+        valid = path.startswith(('/cmsmc/articleFileDir/', '/cmsmc/attachDir/')) and path.lower().endswith(extensions)
     else:
         valid = any(path.startswith(prefix) and re.fullmatch(r'(?:index|[a-zA-Z0-9]+-\d+)\.html', path[len(prefix):])
                     for prefix in LIST_PATHS)
