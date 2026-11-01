@@ -1,4 +1,4 @@
-import { expect, test } from '@playwright/test'
+import { expect, test } from './fixtures'
 
 test('three short-term links share layout across routes and history', async ({ page }, info) => {
   await page.route('**/api/v1/**', (r) =>
@@ -145,7 +145,8 @@ test('counts distinguish loading, error, no snapshot and missing strategy', asyn
   const numbers = nav.locator('.module-card-count b')
   await expect(nav.getByTitle('数量加载中')).toHaveCount(2)
   await expect(numbers).toHaveText(['—', '—'])
-  await expect(page.getByLabel('一次性配对码')).toBeVisible()
+  await expect(page.getByRole('region', { name: '短线胜率验证' })).toBeVisible()
+  await expect(page.getByLabel('一次性配对码')).toHaveCount(0)
   release()
   await expect(nav.getByTitle('数量加载失败')).toHaveCount(2)
   await expect(numbers).toHaveText(['—', '—'])

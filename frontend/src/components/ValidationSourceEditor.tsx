@@ -27,11 +27,11 @@ export type SourceEditorHandle = { prepare: () => Promise<SourceRef | null> }
 export const ValidationSourceEditor = forwardRef<
   SourceEditorHandle,
   {
-    adminKey: ValidationAuth
+    auth: ValidationAuth
     selected: SourceRef | null
     onSelect: (source: SourceRef | null) => void
   }
->(function ValidationSourceEditor({ adminKey, selected, onSelect }, ref) {
+>(function ValidationSourceEditor({ auth, selected, onSelect }, ref) {
   const [sources, setSources] = useState<Source[]>([])
   const [form, setForm] = useState(empty)
   const [editing, setEditing] = useState<SourceRef | null>(null)
@@ -62,11 +62,10 @@ export const ValidationSourceEditor = forwardRef<
     return () => {
       requestGeneration.current++
     }
-  }, [selected?.id, selected?.revision, adminKey])
-  const paired = typeof adminKey !== 'string'
+  }, [selected?.id, selected?.revision, auth])
   useImperativeHandle(ref, () => ({
     prepare: async () => {
-      if (dirty || (paired && !selected)) {
+      if (dirty || !selected) {
         const result = await submit('save', true)
         if (!result) throw new Error('请先填写数据库连接信息')
         return result
@@ -76,9 +75,9 @@ export const ValidationSourceEditor = forwardRef<
   }))
   useEffect(() => {
     let active = true
-    validationRequest<{ sources: Source[] }>(adminKey, '/sources')
+    validationRequest<{ sources: Source[] }>(auth, '/sources')
       .then((data) => {
-        if (!Array.isArray(data.sources)) throw new Error('配置列表响应异常，请重新解锁')
+        if (!Array.isArray(data.sources)) throw new Error('配置列表响应异常，请刷新重试')
         if (active) setSources(data.sources)
       })
       .catch((e) => {
@@ -87,7 +86,7 @@ export const ValidationSourceEditor = forwardRef<
     return () => {
       active = false
     }
-  }, [adminKey])
+  }, [auth])
   async function submit(action: 'save' | 'test', rethrow = false): Promise<SourceRef | undefined> {
     if (inFlight.current) {
       if (rethrow) throw new Error('请等待当前连接操作完成')
@@ -104,7 +103,7 @@ export const ValidationSourceEditor = forwardRef<
         throw new Error('数据库名称或连接信息已变更，请重新输入密码')
       const body = { ...form, ...(editing || {}), password: editing && !password ? null : password }
       if (action === 'save') {
-        const result = await validationRequest<Source>(adminKey, '/sources/save', body)
+        const result = await validationRequest<Source>(auth, '/sources/save', body)
         setSources((old) => [result, ...old.filter((s) => s.id !== result.id)])
         setEditing({ id: result.id, revision: result.revision })
         onSelect({ id: result.id, revision: result.revision })
@@ -113,7 +112,7 @@ export const ValidationSourceEditor = forwardRef<
         setMessage('配置已保存并选用。')
         return { id: result.id, revision: result.revision }
       } else {
-        await validationRequest(adminKey, '/sources/test', body)
+        await validationRequest(auth, '/sources/test', body)
         if (generation === requestGeneration.current) setTestState('success')
       }
     } catch (e) {
@@ -147,7 +146,7 @@ export const ValidationSourceEditor = forwardRef<
               setForm(sourceForm(source ?? empty))
             }}
           >
-            <option value="">{paired ? '填写新数据库连接' : '服务默认数据库'}</option>
+            <option value="">填写新数据库连接</option>
             {sources.map((s) => (
               <option key={s.id} value={`${s.id}:${s.revision}`}>
                 {s.name}
@@ -174,7 +173,7 @@ export const ValidationSourceEditor = forwardRef<
           编辑所选配置
         </button>
       </div>
-      <details className="validation-connection" open={paired || undefined}>
+      <details className="validation-connection" open>
         <summary>新增或编辑数据库配置</summary>
         <div className="validation-source-fields">
           {(['name', 'host', 'port', 'database', 'username'] as const).map((field) => (

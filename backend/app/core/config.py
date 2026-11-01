@@ -56,6 +56,10 @@ class Settings(BaseSettings):
             raise ConfigurationError('Cannot read the selected configuration file. Check permissions and UTF-8 encoding.') from None
 
     app_name: str = 'ShowAllOpts API'
+    auth_allow_http: bool = False
+    auth_public_origin: str = ''
+    # Retired access settings: parsed only to redact secrets from old configuration/logs.
+    # They never authorize access; all routes use accounts and AUTH_* settings.
     validation_allow_http: bool = False
     validation_admin_key: SecretStr = SecretStr('')
     validation_encryption_key: SecretStr = SecretStr('')

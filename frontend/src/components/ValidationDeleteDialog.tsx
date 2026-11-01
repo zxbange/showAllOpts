@@ -4,14 +4,14 @@ import { validationRequest, type ValidationAuth } from '../api/validation'
 export function ValidationDeleteDialog({
   id,
   description,
-  adminKey,
+  auth,
   onClose,
   onDeleted,
   onBusy,
 }: {
   id: string
   description: string
-  adminKey: ValidationAuth
+  auth: ValidationAuth
   onClose: () => void
   onDeleted: () => void
   onBusy: (busy: boolean) => void
@@ -38,7 +38,7 @@ export function ValidationDeleteDialog({
     onBusy(true)
     setError('')
     try {
-      await validationRequest(adminKey, '/jobs/' + id + '/delete', {})
+      await validationRequest(auth, '/jobs/' + id + '/delete', {})
       // Remove modal inertness before the parent restores keyboard focus.
       dialog.current?.close()
       onDeleted()

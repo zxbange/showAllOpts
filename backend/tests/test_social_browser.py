@@ -8,6 +8,7 @@ from fastapi.testclient import TestClient
 
 from app.core.config import Settings
 from app.main import create_app
+from account_helpers import PASSWORD, sign_in
 from app.services.social_browser import BrowserLogin, allowed_url, authenticated_xueqiu, browser_error, LoginRestricted
 
 
@@ -34,29 +35,24 @@ BASE = '/api/v1/social-monitor/browser'
 def browser_client(engine, tmp_path):
     settings = Settings(_env_file=None, log_dir=tmp_path, cache_enabled=False,
                         social_worker_enabled=False, social_browser_login_key=KEY)
-    with TestClient(create_app(settings, engine)) as client:
+    with TestClient(create_app(settings, engine), base_url='https://testserver') as client:
+        client.app.state.accounts.create('admin', PASSWORD, bootstrap=True)
+        sign_in(client)
         yield client, client.app.state.social_browser
 
 
-def test_browser_endpoints_require_key_but_old_monitor_remains_public(browser_client):
+def test_browser_endpoints_require_account_and_reject_old_key(browser_client):
     client, service = browser_client
-    assert client.get('/api/v1/social-monitor/status').status_code == 200
+    assert client.get(BASE + '/weibo/status').json()['state'] == 'idle'
     assert client.get('/api/v1/social-monitor/status').json()['browser_login_available']
+    client.cookies.clear()
     for method, suffix, body in [('GET', '/status', None), ('POST', '/start', {}),
                                   ('POST', '/action', {'id': 'a' * 32, 'action': 'cancel'}),
                                   ('GET', '/image/' + 'a' * 32, None)]:
-        response = client.request(method, BASE + '/weibo' + suffix, json=body)
-        assert response.status_code == 403
-        assert client.request(method, BASE + '/weibo' + suffix, json=body,
-                              headers={'X-Browser-Login-Key': 'wrong'}).status_code == 403
-    response = client.get(BASE + '/weibo/status', headers={'X-Browser-Login-Key': KEY})
-    assert response.json()['state'] == 'idle'
-    assert response.headers['cache-control'] == 'no-store'
-    assert KEY not in response.text
-
-
-def test_unconfigured_login_is_disabled(client):
-    assert client.get(BASE + '/weibo/status').status_code == 503
+        response = client.request(method, BASE + '/weibo' + suffix, json=body,
+                                  headers={'X-Browser-Login-Key': KEY})
+        assert response.status_code == 401
+    assert client.get('/api/v1/social-monitor/status').status_code == 401
 
 
 def test_only_official_origins_allowed():

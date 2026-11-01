@@ -1,4 +1,4 @@
-import { expect, test, type Route } from '@playwright/test'
+import { expect, test, type Route } from './fixtures'
 const stock = { code: '600001.XSHG', name: '示例科技', industry: '半导体' }
 const fixture = {
   stock,

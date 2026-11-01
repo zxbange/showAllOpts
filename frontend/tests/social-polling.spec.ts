@@ -1,4 +1,4 @@
-import { expect, test } from '@playwright/test'
+import { expect, test } from './fixtures'
 
 test('configure a random polling range without losing edits during status refresh', async ({
   page,

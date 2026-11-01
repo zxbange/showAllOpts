@@ -1,3 +1,4 @@
+import { useAuth } from '../components/AccountAccess'
 import { useCallback, useState } from 'react'
 import { usePolling } from '../hooks/usePolling'
 import { socialRequest as api } from '../api/social'
@@ -151,6 +152,8 @@ function authorState(author: Author, status: Status) {
 }
 
 export function SocialMonitorPage() {
+  const admin = useAuth().session?.user?.role === 'admin'
+  const visibleViews = admin ? views : views.filter((item) => item.id !== 'settings')
   const [view, setView] = useState<View>('feed')
   const [status, setStatus] = useState<Status | null>(null)
   const [feed, setFeed] = useState<Feed>({ total: 0, page: 1, items: [] })
@@ -323,7 +326,7 @@ export function SocialMonitorPage() {
               </p>
               <button
                 className="button button-primary"
-                disabled={busy}
+                disabled={busy || !admin}
                 onClick={() => void action(refresh)}
               >
                 重新加载
@@ -416,7 +419,7 @@ export function SocialMonitorPage() {
             </p>
           </div>
           <button
-            disabled={busy}
+            disabled={busy || !admin}
             className="button button-primary"
             onClick={() =>
               void action(async () => {
@@ -499,7 +502,7 @@ export function SocialMonitorPage() {
                   请在通知设置中重新扫码登录，完成平台验证后再恢复。
                 </p>
                 <button
-                  disabled={busy}
+                  disabled={busy || !admin}
                   className="button"
                   onClick={() =>
                     void action(async () => {
@@ -520,24 +523,24 @@ export function SocialMonitorPage() {
         role="tablist"
         aria-label="博主监控分区"
         onKeyDown={(event) => {
-          const index = views.findIndex((item) => item.id === view)
+          const index = visibleViews.findIndex((item) => item.id === view)
           const next =
             event.key === 'ArrowRight'
-              ? (index + 1) % views.length
+              ? (index + 1) % visibleViews.length
               : event.key === 'ArrowLeft'
-                ? (index + views.length - 1) % views.length
+                ? (index + visibleViews.length - 1) % visibleViews.length
                 : event.key === 'Home'
                   ? 0
                   : event.key === 'End'
-                    ? views.length - 1
+                    ? visibleViews.length - 1
                     : -1
           if (next < 0) return
           event.preventDefault()
-          setView(views[next].id)
-          document.getElementById(`social-tab-${views[next].id}`)?.focus()
+          setView(visibleViews[next].id)
+          document.getElementById(`social-tab-${visibleViews[next].id}`)?.focus()
         }}
       >
-        {views.map((item) => (
+        {visibleViews.map((item) => (
           <button
             key={item.id}
             id={`social-tab-${item.id}`}

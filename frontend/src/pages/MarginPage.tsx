@@ -1,3 +1,4 @@
+import { useAuth } from '../components/AccountAccess'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import {
   CalendarDays,
@@ -26,6 +27,7 @@ const message = (error: unknown) =>
     : '暂时无法连接数据服务，请稍后重试。'
 
 export function MarginPage() {
+  const admin = useAuth().session?.user?.role === 'admin'
   const [data, setData] = useState<MarginHistory | null>(null)
   const [status, setStatus] = useState<MarginStatus | null>(null)
   const currentStatus = useRef<MarginStatus | null>(null)
@@ -169,7 +171,7 @@ export function MarginPage() {
               <button
                 className="button button-quiet"
                 onClick={() => void act('cancel')}
-                disabled={busy || cancelling}
+                disabled={busy || cancelling || !admin}
               >
                 <Square size={15} />
                 {cancelling ? '正在停止…' : '停止采集'}
@@ -178,7 +180,7 @@ export function MarginPage() {
               <button
                 className="button button-primary"
                 onClick={() => void act('refresh')}
-                disabled={busy || loading}
+                disabled={busy || loading || !admin}
               >
                 <Download size={16} />
                 {busy ? '正在启动…' : latest ? '更新数据' : '采集历史数据'}

@@ -1,4 +1,4 @@
-﻿import { expect, test } from '@playwright/test'
+﻿import { expect, test } from './fixtures'
 
 const points = Array.from({ length: 50 }, (_, i) => ({
   date: new Date(Date.UTC(2026, 7, 1 + i)).toISOString().slice(0, 10),
@@ -46,7 +46,10 @@ test('overview to breadth, cycles, chart modes and range on desktop/mobile', asy
   })
   await page.goto('/')
   await page.getByRole('link', { name: '进入微盘观察', exact: true }).click()
-  await page.getByRole('navigation', { name: '微盘观察模块切换' }).getByRole('link', { name: '微盘新高新低', exact: true }).click()
+  await page
+    .getByRole('navigation', { name: '微盘观察模块切换' })
+    .getByRole('link', { name: '微盘新高新低', exact: true })
+    .click()
   await expect(page.getByRole('heading', { level: 1 })).toContainText('微盘新高新低')
   await expect(page.locator('.breadth-period')).toHaveCount(4)
   await expect(page.locator('.breadth-chart canvas')).toHaveCount(2)

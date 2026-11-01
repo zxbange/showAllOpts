@@ -1,4 +1,4 @@
-import { expect, test } from '@playwright/test'
+import { expect, test } from './fixtures'
 test.beforeEach(async ({ page }) => {
   await page.route('**/api/v1/short-term/validation/jobs', (r) => r.fulfill({ json: { jobs: [] } }))
 })

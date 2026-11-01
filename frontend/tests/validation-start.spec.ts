@@ -1,8 +1,7 @@
-import { expect, test, type Page } from '@playwright/test'
+import { expect, test, type Page } from './fixtures'
 
 async function unlock(page: Page) {
-  await page.getByLabel('验证管理密钥').fill('mock-key')
-  await page.getByRole('button', { name: '解锁验证管理' }).click()
+  await expect(page.getByRole('region', { name: '短线胜率验证' })).toBeVisible()
 }
 async function openSetup(page: Page) {
   const setup = page.locator('.validation-setup')

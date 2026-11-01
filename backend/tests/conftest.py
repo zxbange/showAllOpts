@@ -11,6 +11,24 @@ from app.main import create_app
 from app.models.momentum import Base
 
 
+@pytest.fixture(autouse=True)
+def authenticated_domain_tests(request, monkeypatch):
+    # Security suites explicitly log in (or stay anonymous). Existing domain suites
+    # exercise the same real session middleware after a test administrator logs in.
+    if request.node.path.name in {
+        'test_accounts.py', 'test_validation_pairing.py', 'test_validation_sources.py',
+        'test_validation_delete.py', 'test_validation_keys.py', 'test_social_browser.py',
+    }:
+        return
+    from account_helpers import domain_session
+    enter = TestClient.__enter__
+    def authenticated(client):
+        result = enter(client)
+        domain_session(client)
+        return result
+    monkeypatch.setattr(TestClient, '__enter__', authenticated)
+
+
 @pytest.fixture
 def engine():
     database = create_engine('sqlite://', connect_args={'check_same_thread': False}, poolclass=StaticPool)

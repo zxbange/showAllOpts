@@ -1,5 +1,6 @@
 import { useEffect, useState, useRef } from 'react'
-import { ShieldCheck, LockKeyhole, Play, Database, SlidersHorizontal, History } from 'lucide-react'
+import { Play, Database, SlidersHorizontal, History } from 'lucide-react'
+import { useAuth } from './AccountAccess'
 import { ValidationResults } from './ValidationResults'
 import { ValidationDeleteDialog } from './ValidationDeleteDialog'
 import { validationRequest, type ValidationAuth } from '../api/validation'
@@ -90,168 +91,12 @@ function ExecutionTime({ job }: { job: Job }) {
 }
 
 export function ShortValidation() {
-  const [key, setKey] = useState('')
-  const [unlocked, setUnlocked] = useState<ValidationAuth | null>(null)
-  const [mode, setMode] = useState<'pair' | 'legacy' | null>(null)
-  const [message, setMessage] = useState('')
-  const [allowHttp, setAllowHttp] = useState(false)
-  const [confirmed, setConfirmed] = useState(false)
-  const pairing = useRef(false)
-  const [pairBusy, setPairBusy] = useState(false)
-  const usingHttp = window.location.protocol === 'http:'
-  const transportAllowed =
-    window.location.protocol === 'https:' ||
-    (usingHttp && (mode === 'pair' ? confirmed : allowHttp))
-  useEffect(() => {
-    let active = true
-    fetch('/api/v1/short-term/validation/access', {
-      cache: 'no-store',
-      credentials: 'same-origin',
-      headers: { 'X-Validation-Origin': window.location.origin },
-      redirect: 'error',
-    })
-      .then((r) => {
-        if (!r.ok) throw new Error('无法读取验证管理状态')
-        return r.json()
-      })
-      .then((data) => {
-        if (!active) return
-        setMode(data.mode === 'pair' ? 'pair' : 'legacy')
-        setAllowHttp(data.https_required === false)
-        if (data.authenticated && typeof data.csrf_token === 'string') {
-          setUnlocked({ csrf: data.csrf_token })
-          setConfirmed(true)
-        }
-      })
-      .catch(() => {
-        if (active) setMessage('无法读取验证管理状态，请刷新后重试')
-      })
-    const expired = () => {
-      setUnlocked(null)
-      setKey('')
-      setMessage('会话已过期，请在终端领取新码并重新配对。')
-    }
-    window.addEventListener('validation-session-expired', expired)
-    return () => {
-      active = false
-      window.removeEventListener('validation-session-expired', expired)
-    }
-  }, [])
-  if (unlocked)
-    return (
-      <>
-        <ValidationPanel adminKey={unlocked} />
-        {message && <p role="alert">{message}</p>}
-      </>
-    )
-  return (
-    <section className="short-validation validation-pair-card" aria-label="验证管理登录">
-      <div className="validation-pair-heading">
-        <span className="validation-icon">
-          <ShieldCheck size={25} aria-hidden="true" />
-        </span>
-        <span className="validation-eyebrow">站主验证 · 一次配对</span>
-      </div>
-      <h2>
-        {mode === 'pair'
-          ? '连接你的研究工作台'
-          : mode === 'legacy'
-            ? '解锁验证管理'
-            : '正在读取访问状态'}
-      </h2>
-      {mode === 'pair' ? (
-        <>
-          <p>
-            站主在服务器项目目录、使用API服务账户运行以下命令，领取10分钟有效的一次性配对码。无需编辑服务器配置。
-          </p>
-          <div className="validation-command">
-            <span>01 · 在服务器终端领取配对码</span>
-            <pre>
-              APP_ENV_FILE=config/app.config backend/.venv/bin/python backend/validation_pair.py
-              --origin {window.location.origin}
-            </pre>
-          </div>
-          <details className="validation-disclosure">
-            <summary>会话有效期与重新配对</summary>
-            <p>
-              命令使用现有部署的配置路径。配对码不要发送到聊天；会话最多8小时，刷新后保留。注销、过期或更换浏览器时重新领取；终端加
-              --revoke-sessions 可撤销所有旧会话。
-            </p>
-          </details>
-        </>
-      ) : mode === 'legacy' ? (
-        <p>当前沿用既有管理密钥模式，不能通过配对码绕过。管理密钥仅保留在页面内存。</p>
-      ) : (
-        <p className="validation-hint">正在确认会话，请稍候。</p>
-      )}
-      {usingHttp && mode === 'pair' && (
-        <label className="validation-consent">
-          <input
-            type="checkbox"
-            checked={confirmed}
-            onChange={(e) => setConfirmed(e.target.checked)}
-          />
-          我确认在HTTP上由本人操作并接受明文传输风险
-        </label>
-      )}
-      {!transportAllowed && mode === 'legacy' && (
-        <p role="alert">请通过HTTPS访问后再输入管理密钥或数据库凭证。</p>
-      )}
-      <div className="validation-pair-action">
-        <label>
-          {mode === 'pair' ? '一次性配对码' : '验证管理密钥'}
-          <input
-            aria-label={mode === 'pair' ? '一次性配对码' : '验证管理密钥'}
-            type="password"
-            autoComplete="off"
-            disabled={!mode || !transportAllowed}
-            value={key}
-            onChange={(e) => setKey(e.target.value)}
-          />
-        </label>
-        <button
-          className="button button-primary"
-          disabled={pairBusy || !key || !transportAllowed || !mode}
-          onClick={async () => {
-            if (pairing.current) return
-            pairing.current = true
-            setPairBusy(true)
-            try {
-              if (mode === 'pair') {
-                const result = await validationRequest<{ csrf_token: string }>(
-                  { csrf: '' },
-                  '/pair',
-                  { code: key, http_confirmed: confirmed },
-                )
-                setUnlocked({ csrf: result.csrf_token })
-              } else {
-                await validationRequest(key, '/jobs')
-                setUnlocked(key)
-              }
-              setKey('')
-              setMessage('')
-            } catch (e) {
-              setKey('')
-              setMessage(e instanceof Error ? e.message : '验证失败')
-            } finally {
-              pairing.current = false
-              setPairBusy(false)
-            }
-          }}
-        >
-          <LockKeyhole size={16} aria-hidden="true" />
-          {pairBusy ? '正在确认…' : mode === 'pair' ? '配对并进入' : '解锁验证管理'}
-        </button>
-      </div>
-      {message && (
-        <p className="validation-feedback" role="alert">
-          {message}
-        </p>
-      )}
-    </section>
-  )
+  const { session } = useAuth()
+  if (session?.user?.role !== 'admin')
+    return <p className="state-panel">胜率验证仅管理员可使用。</p>
+  return <ValidationPanel auth={{ csrf: session.csrf_token ?? '' }} />
 }
-function ValidationPanel({ adminKey }: { adminKey: ValidationAuth }) {
+function ValidationPanel({ auth }: { auth: ValidationAuth }) {
   const sourceEditor = useRef<SourceEditorHandle>(null)
   const starting = useRef(false)
   const firstPoll = useRef(true)
@@ -276,7 +121,7 @@ function ValidationPanel({ adminKey }: { adminKey: ValidationAuth }) {
     let timer: ReturnType<typeof setTimeout>
     const poll = async () => {
       try {
-        const data = await validationRequest<{ jobs: Job[] }>(adminKey, '/jobs')
+        const data = await validationRequest<{ jobs: Job[] }>(auth, '/jobs')
         if (!Array.isArray(data.jobs)) throw new Error('任务响应格式异常，请刷新后重试')
         if (active) {
           // Ignore a GET begun before a successful deletion returned.
@@ -298,12 +143,12 @@ function ValidationPanel({ adminKey }: { adminKey: ValidationAuth }) {
       active = false
       clearTimeout(timer)
     }
-  }, [adminKey])
+  }, [auth])
   async function operate(path: string, body: unknown) {
     setBusy(true)
     setError('')
     try {
-      const job = await validationRequest<Job>(adminKey, '/jobs' + path, body)
+      const job = await validationRequest<Job>(auth, '/jobs' + path, body)
       if (!deletedIds.current.has(job.id))
         setJobs((old) => [job, ...old.filter((j) => j.id !== job.id)])
       if (!path) setSetupOpen(false)
@@ -339,7 +184,7 @@ function ValidationPanel({ adminKey }: { adminKey: ValidationAuth }) {
             </div>
             <ValidationSourceEditor
               ref={sourceEditor}
-              adminKey={adminKey}
+              auth={auth}
               selected={source}
               onSelect={setSource}
             />
@@ -681,7 +526,7 @@ function ValidationPanel({ adminKey }: { adminKey: ValidationAuth }) {
         <ValidationDeleteDialog
           id={deleting.id}
           description={`${deleting.methods.map((m) => choices[m as keyof typeof choices] ?? '已停用策略').join(' · ')} · ${deleting.start} 至 ${deleting.end || '最新可用日'}`}
-          adminKey={adminKey}
+          auth={auth}
           onBusy={setBusy}
           onClose={() => {
             setDeleting(null)

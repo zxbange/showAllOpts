@@ -87,7 +87,7 @@ class BrowserLogin:
 
     @property
     def available(self):
-        return len(self.settings.social_browser_login_key.get_secret_value()) >= 24
+        return True  # Access is enforced by the unified administrator session.
 
     def path(self, platform, kind):
         if platform not in PLATFORMS:
@@ -128,8 +128,6 @@ class BrowserLogin:
         self.write(self.path(platform, 'state'), json.dumps(record, ensure_ascii=False).encode())
 
     def start(self, platform):
-        if not self.available:
-            raise ValueError('请先在服务器私有配置中设置至少 24 位的 SOCIAL_BROWSER_LOGIN_KEY')
         lease = portalocker.Lock(str(self.path(platform, 'lock')), timeout=0)
         try:
             lease.acquire()

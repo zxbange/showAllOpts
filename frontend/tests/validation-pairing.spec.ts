@@ -1,9 +1,8 @@
-import { expect, test } from '@playwright/test'
+import { expect, test } from './fixtures'
 
-test('pair, enter database, select strategies and start directly; refresh, pause and cancel', async ({
+test('account session, enter database, select strategies and start directly; refresh, pause and cancel', async ({
   page,
 }) => {
-  let authenticated = false
   let saved: Record<string, unknown> | null = null
   let job: Record<string, unknown> | null = null
   let saves = 0
@@ -13,29 +12,9 @@ test('pair, enter database, select strategies and start directly; refresh, pause
   )
   await page.route('**/api/v1/short-term/validation/**', async (r) => {
     const path = new URL(r.request().url()).pathname
-    if (path.endsWith('/access'))
-      return r.fulfill({
-        json: {
-          mode: 'pair',
-          authenticated,
-          https_required: false,
-          ...(authenticated ? { csrf_token: 'page-csrf' } : {}),
-        },
-      })
-    expect(r.request().headers()['x-validation-client']).toBe('browser')
     expect(r.request().headers().authorization).toBeUndefined()
-    if (path.endsWith('/pair')) {
-      expect(r.request().postDataJSON()).toEqual({
-        code: 'one-time-console-code',
-        http_confirmed: true,
-      })
-      authenticated = true
-      return r.fulfill({ json: { csrf_token: 'page-csrf', expires_at: Date.now() / 1000 + 28800 } })
-    }
-    if (!authenticated)
-      return r.fulfill({ status: 401, json: { detail: '会话已失效，请重新配对' } })
     if (r.request().method() === 'POST')
-      expect(r.request().headers()['x-validation-csrf']).toBe('page-csrf')
+      expect(r.request().headers()['x-csrf-token']).toBe('test-csrf')
     if (path.endsWith('/sources')) return r.fulfill({ json: { sources: saved ? [saved] : [] } })
     if (path.endsWith('/sources/save')) {
       saves++
@@ -73,12 +52,7 @@ test('pair, enter database, select strategies and start directly; refresh, pause
     return r.fulfill({ json: { jobs: job ? [job] : [] } })
   })
   await page.goto('/short-term/validation')
-  await expect(page.getByText(/backend\/validation_pair.py --origin/)).toBeVisible()
-  await expect(page.getByLabel('一次性配对码')).toBeDisabled()
-  await page.getByLabel('我确认在HTTP上由本人操作并接受明文传输风险').check()
-  await page.getByLabel('一次性配对码').fill('one-time-console-code')
-  await page.getByRole('button', { name: '配对并进入' }).click()
-  await expect(page.getByText(/HTTP兼容模式已开启/)).toHaveCount(0)
+  await expect(page.getByLabel('一次性配对码')).toHaveCount(0)
   for (const [label, value] of [
     ['数据库地址', 'db.example'],
     ['数据库名', 'research'],
@@ -112,7 +86,7 @@ test('pair, enter database, select strategies and start directly; refresh, pause
   ).toBeVisible()
 })
 
-test('expired cookie clears form and returns to pairing without leaking inputs', async ({
+test('expired cookie clears form and returns to site login without leaking inputs', async ({
   page,
 }) => {
   await page.route('**/api/v1/**', (r) => r.fulfill({ json: { enabled: false, modules: [] } }))
@@ -128,7 +102,7 @@ test('expired cookie clears form and returns to pairing without leaking inputs',
     r.fulfill({ status: 401, json: { detail: '会话已失效，请重新配对' } }),
   )
   await page.goto('/short-term/validation')
-  await expect(page.getByLabel('一次性配对码')).toBeVisible()
+  await expect(page.getByRole('button', { name: '登录', exact: true })).toBeVisible()
   await expect(page.getByLabel('数据库密码', { exact: true })).toHaveCount(0)
-  await expect(page.getByText(/会话已过期/)).toBeVisible()
+  await expect(page.getByText(/登录已过期/)).toBeVisible()
 })

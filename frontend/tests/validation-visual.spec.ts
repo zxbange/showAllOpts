@@ -1,4 +1,4 @@
-import { expect, test } from '@playwright/test'
+import { expect, test } from './fixtures'
 import { mkdir } from 'node:fs/promises'
 
 const summary = ['bukou', 'oversold'].flatMap((strategy, i) =>
@@ -30,7 +30,7 @@ const windows = ['bukou', 'oversold'].map((strategy) => ({
   '三日内最好收盘收益均值(%)': 3.21,
   '三日内最差收盘收益均值(%)': -1.23,
 }))
-for (const state of ['unpaired', 'configuration', 'running', 'completed'] as const) {
+for (const state of ['anonymous', 'configuration', 'running', 'completed'] as const) {
   test(`visual ${state}`, async ({ page }, info) => {
     await page.route('**/api/v1/**', (r) =>
       r.fulfill({ json: { enabled: false, modules: [], dates: [], counts: {} } }),
@@ -41,7 +41,7 @@ for (const state of ['unpaired', 'configuration', 'running', 'completed'] as con
         return r.fulfill({
           json: {
             mode: 'pair',
-            authenticated: state !== 'unpaired',
+            authenticated: state !== 'anonymous',
             csrf_token: 'mock-csrf',
             https_required: false,
           },
@@ -74,8 +74,15 @@ for (const state of ['unpaired', 'configuration', 'running', 'completed'] as con
         },
       })
     })
+    if (state === 'anonymous')
+      await page.route('**/api/auth/session', (r) =>
+        r.fulfill({
+          json: { user: null, configured: true, csrf_token: null, https_required: false },
+        }),
+      )
     await page.goto('/short-term/validation')
-    if (state === 'unpaired') await expect(page.getByLabel('一次性配对码')).toBeVisible()
+    if (state === 'anonymous')
+      await expect(page.getByRole('button', { name: '登录', exact: true })).toBeVisible()
     else if (state === 'configuration')
       await expect(page.getByLabel('数据库地址', { exact: true })).toBeVisible()
     else await expect(page.getByRole('heading', { name: /补票龙.*—/ })).toBeVisible()

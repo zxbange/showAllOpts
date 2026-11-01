@@ -1,4 +1,4 @@
-import { expect, test } from '@playwright/test'
+import { expect, test } from './fixtures'
 const reports = Object.fromEntries(
   [
     ['annual', '12-31'],

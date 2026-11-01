@@ -4,6 +4,8 @@ import { Layout } from './components/Layout'
 import { HomePage } from './pages/HomePage'
 import { MomentumPage } from './pages/MomentumPage'
 import { LoadingState } from './components/States'
+import { AccountAccess } from './components/AccountAccess'
+import { UsersPage } from './pages/UsersPage'
 
 const ShortValidationPage = lazy(() =>
   import('./pages/ShortValidationPage').then((m) => ({ default: m.ShortValidationPage })),
@@ -70,161 +72,164 @@ const EarningsDetailPage = lazy(() =>
 
 export default function App() {
   return (
-    <BrowserRouter>
-      <Routes>
-        <Route element={<Layout />}>
-          <Route index element={<HomePage />} />
-          <Route
-            path="social-monitor"
-            element={
-              <Suspense fallback={<LoadingState />}>
-                <SocialMonitorPage />
-              </Suspense>
-            }
-          />
-          <Route
-            path="short-term/validation"
-            element={
-              <Suspense fallback={<LoadingState />}>
-                <ShortValidationPage />
-              </Suspense>
-            }
-          />
-          <Route
-            path="short-term"
-            element={
-              <Suspense fallback={<LoadingState />}>
-                <ShortTermPage />
-              </Suspense>
-            }
-          />
-          <Route
-            path="institution-ownership"
-            element={
-              <Suspense fallback={<LoadingState />}>
-                <OwnershipPage />
-              </Suspense>
-            }
-          />
-          <Route
-            path="etf-momentum"
-            element={
-              <Suspense fallback={<LoadingState />}>
-                <ETFHeatPage />
-              </Suspense>
-            }
-          />
-          <Route
-            path="etf-momentum/funds/:code"
-            element={
-              <Suspense fallback={<LoadingState />}>
-                <ETFHeatDetailPage />
-              </Suspense>
-            }
-          />
-          <Route
-            path="high-growth"
-            element={
-              <Suspense fallback={<LoadingState />}>
-                <GrowthPage />
-              </Suspense>
-            }
-          />
-          <Route
-            path="dividend-selection"
-            element={
-              <Suspense fallback={<LoadingState />}>
-                <DividendPage />
-              </Suspense>
-            }
-          />
-          <Route
-            path="earnings-gap"
-            element={
-              <Suspense fallback={<LoadingState />}>
-                <EarningsPage />
-              </Suspense>
-            }
-          />
-          <Route
-            path="earnings-gap/stocks/:code"
-            element={
-              <Suspense fallback={<LoadingState />}>
-                <EarningsDetailPage />
-              </Suspense>
-            }
-          />
-          <Route
-            path="etf-shares"
-            element={
-              <Suspense fallback={<LoadingState />}>
-                <ETFPage />
-              </Suspense>
-            }
-          />
-          <Route
-            path="microcap-breadth"
-            element={
-              <Suspense fallback={<LoadingState />}>
-                <BreadthPage />
-              </Suspense>
-            }
-          />
-          <Route path="industry-momentum" element={<MomentumPage />} />
-          <Route
-            path="microcap-temperature"
-            element={
-              <Suspense fallback={<LoadingState />}>
-                <MicrocapPage />
-              </Suspense>
-            }
-          />
-          <Route
-            path="market-sentiment"
-            element={
-              <Suspense fallback={<LoadingState />}>
-                <SentimentPage />
-              </Suspense>
-            }
-          />
-          <Route
-            path="margin-guarantee"
-            element={
-              <Suspense fallback={<LoadingState />}>
-                <MarginPage />
-              </Suspense>
-            }
-          />
-          <Route
-            path="market-crowding"
-            element={
-              <Suspense fallback={<LoadingState />}>
-                <CrowdingPage />
-              </Suspense>
-            }
-          />
-          <Route
-            path="industry-momentum/industries/:code"
-            element={
-              <Suspense fallback={<LoadingState />}>
-                <IndustryPage />
-              </Suspense>
-            }
-          />
-          <Route
-            path="*"
-            element={
-              <div className="state-panel">
-                <h1>页面没有找到</h1>
-                <p>这个地址暂时没有对应的研究内容。</p>
-                <Link className="button button-primary" to="/">
-                  返回首页
-                </Link>
-              </div>
-            }
-          />
-        </Route>
-      </Routes>
-    </BrowserRouter>
+    <AccountAccess>
+      <BrowserRouter>
+        <Routes>
+          <Route element={<Layout />}>
+            <Route path="account" element={<UsersPage />} />
+            <Route index element={<HomePage />} />
+            <Route
+              path="social-monitor"
+              element={
+                <Suspense fallback={<LoadingState />}>
+                  <SocialMonitorPage />
+                </Suspense>
+              }
+            />
+            <Route
+              path="short-term/validation"
+              element={
+                <Suspense fallback={<LoadingState />}>
+                  <ShortValidationPage />
+                </Suspense>
+              }
+            />
+            <Route
+              path="short-term"
+              element={
+                <Suspense fallback={<LoadingState />}>
+                  <ShortTermPage />
+                </Suspense>
+              }
+            />
+            <Route
+              path="institution-ownership"
+              element={
+                <Suspense fallback={<LoadingState />}>
+                  <OwnershipPage />
+                </Suspense>
+              }
+            />
+            <Route
+              path="etf-momentum"
+              element={
+                <Suspense fallback={<LoadingState />}>
+                  <ETFHeatPage />
+                </Suspense>
+              }
+            />
+            <Route
+              path="etf-momentum/funds/:code"
+              element={
+                <Suspense fallback={<LoadingState />}>
+                  <ETFHeatDetailPage />
+                </Suspense>
+              }
+            />
+            <Route
+              path="high-growth"
+              element={
+                <Suspense fallback={<LoadingState />}>
+                  <GrowthPage />
+                </Suspense>
+              }
+            />
+            <Route
+              path="dividend-selection"
+              element={
+                <Suspense fallback={<LoadingState />}>
+                  <DividendPage />
+                </Suspense>
+              }
+            />
+            <Route
+              path="earnings-gap"
+              element={
+                <Suspense fallback={<LoadingState />}>
+                  <EarningsPage />
+                </Suspense>
+              }
+            />
+            <Route
+              path="earnings-gap/stocks/:code"
+              element={
+                <Suspense fallback={<LoadingState />}>
+                  <EarningsDetailPage />
+                </Suspense>
+              }
+            />
+            <Route
+              path="etf-shares"
+              element={
+                <Suspense fallback={<LoadingState />}>
+                  <ETFPage />
+                </Suspense>
+              }
+            />
+            <Route
+              path="microcap-breadth"
+              element={
+                <Suspense fallback={<LoadingState />}>
+                  <BreadthPage />
+                </Suspense>
+              }
+            />
+            <Route path="industry-momentum" element={<MomentumPage />} />
+            <Route
+              path="microcap-temperature"
+              element={
+                <Suspense fallback={<LoadingState />}>
+                  <MicrocapPage />
+                </Suspense>
+              }
+            />
+            <Route
+              path="market-sentiment"
+              element={
+                <Suspense fallback={<LoadingState />}>
+                  <SentimentPage />
+                </Suspense>
+              }
+            />
+            <Route
+              path="margin-guarantee"
+              element={
+                <Suspense fallback={<LoadingState />}>
+                  <MarginPage />
+                </Suspense>
+              }
+            />
+            <Route
+              path="market-crowding"
+              element={
+                <Suspense fallback={<LoadingState />}>
+                  <CrowdingPage />
+                </Suspense>
+              }
+            />
+            <Route
+              path="industry-momentum/industries/:code"
+              element={
+                <Suspense fallback={<LoadingState />}>
+                  <IndustryPage />
+                </Suspense>
+              }
+            />
+            <Route
+              path="*"
+              element={
+                <div className="state-panel">
+                  <h1>页面没有找到</h1>
+                  <p>这个地址暂时没有对应的研究内容。</p>
+                  <Link className="button button-primary" to="/">
+                    返回首页
+                  </Link>
+                </div>
+              }
+            />
+          </Route>
+        </Routes>
+      </BrowserRouter>
+    </AccountAccess>
   )
 }

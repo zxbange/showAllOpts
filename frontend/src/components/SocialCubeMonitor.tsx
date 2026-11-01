@@ -1,3 +1,4 @@
+import { useAuth } from './AccountAccess'
 import { useCallback, useEffect, useState } from 'react'
 import { usePolling } from '../hooks/usePolling'
 import { socialRequest as request } from '../api/social'
@@ -122,6 +123,7 @@ export function SocialCubeMonitor({
   platform?: PlatformState
   onChanged: () => Promise<void>
 }) {
+  const admin = useAuth().session?.user?.role === 'admin'
   const [url, setUrl] = useState('')
   const [name, setName] = useState('')
   const [filter, setFilter] = useState('')
@@ -232,7 +234,7 @@ export function SocialCubeMonitor({
             placeholder="ZH679918 或雪球组合链接"
             required
             maxLength={500}
-            disabled={busy}
+            disabled={busy || !admin}
           />
         </label>
         <label>
@@ -242,10 +244,10 @@ export function SocialCubeMonitor({
             onChange={(event) => setName(event.target.value)}
             placeholder="可选"
             maxLength={100}
-            disabled={busy}
+            disabled={busy || !admin}
           />
         </label>
-        <button className="button button-primary" disabled={busy}>
+        <button className="button button-primary" disabled={busy || !admin}>
           <Plus size={16} />
           添加组合
         </button>
@@ -276,7 +278,7 @@ export function SocialCubeMonitor({
               <div className="social-actions">
                 <button
                   className="button"
-                  disabled={busy}
+                  disabled={busy || !admin}
                   aria-label={`${cube.enabled ? '暂停' : '恢复'}组合 ${cube.symbol}`}
                   onClick={() =>
                     void action(
@@ -291,7 +293,7 @@ export function SocialCubeMonitor({
                 </button>
                 <button
                   className="button"
-                  disabled={busy}
+                  disabled={busy || !admin}
                   aria-label={`删除组合 ${cube.symbol}`}
                   onClick={() => {
                     if (!window.confirm(`删除 ${title} 的监控及本地调仓记录？`)) return

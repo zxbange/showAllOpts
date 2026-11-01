@@ -1,10 +1,11 @@
+import { apiFetch } from './http'
 /** Shared client for author and portfolio monitoring. */
 export async function socialRequest<T>(
   path: string,
   body?: unknown,
   signal?: AbortSignal,
 ): Promise<T> {
-  const response = await fetch(`/api/v1/social-monitor${path}`, {
+  const response = await apiFetch(`/api/v1/social-monitor${path}`, {
     method: body === undefined ? 'GET' : 'POST',
     headers: { 'Content-Type': 'application/json' },
     signal,

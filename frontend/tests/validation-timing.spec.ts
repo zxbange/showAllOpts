@@ -1,4 +1,4 @@
-import { expect, test } from '@playwright/test'
+import { expect, test } from './fixtures'
 
 test('execution time and task details across lifecycle', async ({ page }, info) => {
   let job: Record<string, unknown> = {

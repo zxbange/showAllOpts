@@ -1,3 +1,4 @@
+import { apiFetch } from './http'
 import type { SentimentHistory } from '../types/sentiment'
 import type { MarginHistory, MarginStatus } from '../types/margin'
 import type { SocialMode } from '../types/ownership'
@@ -13,7 +14,7 @@ import type { IndustryHistory, Module, Snapshot } from '../types/momentum'
 const API_BASE = '/api/v1'
 
 async function request<T>(path: string, signal?: AbortSignal): Promise<T> {
-  const response = await fetch(`${API_BASE}${path}`, {
+  const response = await apiFetch(`${API_BASE}${path}`, {
     signal,
     headers: { Accept: 'application/json' },
   })
@@ -55,7 +56,7 @@ export const getMarginStatus = (signal?: AbortSignal) =>
   request<MarginStatus>('/margin-guarantee/status', signal)
 
 export async function updateMargin(action: 'refresh' | 'cancel') {
-  const response = await fetch(`${API_BASE}/margin-guarantee/${action}`, { method: 'POST' })
+  const response = await apiFetch(`${API_BASE}/margin-guarantee/${action}`, { method: 'POST' })
   if (!response.ok) {
     const body = await response.json().catch(() => null)
     throw new Error(typeof body?.detail === 'string' ? body.detail : '操作未完成，请稍后重试。')
@@ -93,7 +94,7 @@ export const getCacheStatus = (signal?: AbortSignal) =>
   request<import('../types/cache').CacheStatus>('/cache/status', signal)
 
 export async function refreshCache(module: string | null, full = false) {
-  const response = await fetch(`${API_BASE}/cache/refresh`, {
+  const response = await apiFetch(`${API_BASE}/cache/refresh`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(full ? { module, full: true } : { module }),
@@ -133,7 +134,7 @@ export const getSocialEntries = (period: string, mode: SocialMode, signal?: Abor
   )
 
 export async function cancelCache(runId: string, module?: string) {
-  const response = await fetch(`${API_BASE}/cache/cancel`, {
+  const response = await apiFetch(`${API_BASE}/cache/cancel`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ run_id: runId, module }),
@@ -152,7 +153,7 @@ export const getShortTerm = (day: string, method: string, offset: number, signal
   )
 
 export async function saveCacheSchedule(dailyTime: string) {
-  const response = await fetch(`${API_BASE}/cache/schedule`, {
+  const response = await apiFetch(`${API_BASE}/cache/schedule`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ daily_time: dailyTime }),

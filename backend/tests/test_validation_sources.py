@@ -15,6 +15,7 @@ from app.services.short_validation import ValidationJobs
 from app.services.validation_sources import ValidationSources, SourceError
 from app.api.routes.short_term import router
 from test_short_validation import setup, create, finish
+from account_helpers import install_accounts, sign_in
 
 @pytest.fixture
 def secure(tmp_path):
@@ -22,13 +23,14 @@ def secure(tmp_path):
         validation_encryption_key=Fernet.generate_key().decode(),validation_allowed_targets=['db.example:3306','127.0.0.1:3306'])
     jobs=ValidationJobs(settings,create_engine('sqlite://'));jobs.sources=ValidationSources(jobs,settings)
     app=FastAPI();app.state.short_validation=jobs;app.include_router(router)
+    install_accounts(app, settings)
     with TestClient(app,base_url='https://testserver') as client:yield jobs,jobs.sources,settings,client
 
 @pytest.fixture
 def config():
     return dict(name='研究库',host='db.example',port=3306,database='private-db',username='private-user',password='unique-private-password')
 
-def auth(client):client.headers['Authorization']='Bearer '+'a'*40
+def auth(client):sign_in(client)
 
 def test_encryption_versions_and_no_echo(secure,config):
     jobs,sources,settings,client=secure;auth(client)
@@ -57,8 +59,8 @@ def test_bad_keys_block_reads_and_all_writes(secure,config):
 def test_permissions_https_invalid_payload_no_echo(secure,config,monkeypatch):
     _,sources,_,client=secure;probe=Mock();monkeypatch.setattr(sources,'test',probe)
     for path in ('/sources/save','/sources/test','/jobs'):
-        assert client.post('/short-term/validation'+path,json=config).status_code==403
-    assert client.get('/short-term/validation/sources').status_code==403
+        assert client.post('/short-term/validation'+path,json=config).status_code==401
+    assert client.get('/short-term/validation/sources').status_code==401
     auth(client)
     assert client.post('http://testserver/short-term/validation/sources/test',json=config).status_code==403
     for data in ({**config,'port':config['password']},{**config,'password':{'secret':config['password']}}):
@@ -178,32 +180,6 @@ def test_cancel_during_source_query_never_commits_input(setup):
     result=jobs.get(job['id']);assert result['status']=='cancelled' and result['captured']==0
     with jobs.db() as db:assert db.execute('SELECT count(*) FROM stocks').fetchone()[0]==0
 
-
-def test_http_opt_in_preserves_security(secure, config, monkeypatch):
-    jobs, sources, settings, client = secure
-    url = 'http://testserver/short-term/validation'
-    assert settings.validation_allow_http is False
-    assert client.get(url+'/access').json()['https_required'] is True
-    auth(client)
-    for headers in ({'X-Forwarded-Proto': 'https'}, {'Forwarded': 'proto=https'}):
-        assert client.get(url+'/jobs', headers=headers).status_code == 403
-    settings.validation_allow_http = True
-    assert client.get(url+'/access').json()['https_required'] is False
-    client.headers.pop('Authorization')
-    assert client.post(url+'/sources/save', json=config).status_code == 403
-    auth(client)
-    resolve = Mock(return_value=[(socket.AF_INET, socket.SOCK_STREAM, 6, '', ('10.1.2.3',3306))])
-    monkeypatch.setattr(socket, 'getaddrinfo', resolve)
-    assert client.post(url+'/sources/save', json={**config,'host':'unapproved.example'}).status_code == 409
-    assert not resolve.called
-    response = client.post(url+'/sources/save', json=config)
-    assert response.status_code == 200
-    assert config['password'] not in response.text
-    assert config['password'].encode() not in (jobs.root/'jobs.sqlite3').read_bytes()
-    settings.validation_encryption_key = SecretStr('invalid')
-    assert client.post(url+'/sources/save', json=config).status_code == 409
-    settings.validation_allow_http = False
-    assert client.get(url+'/jobs').status_code == 403
 
 
 def test_equal_config_saves_and_probe_do_not_version(secure, config, monkeypatch):

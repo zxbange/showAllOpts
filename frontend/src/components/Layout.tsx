@@ -2,9 +2,12 @@ import { useLayoutEffect, useRef } from 'react'
 import { ArrowUpRight, ChartNoAxesCombined, ChevronRight, House, Layers3 } from 'lucide-react'
 import { Link, NavLink, Outlet, useLocation } from 'react-router-dom'
 import { CacheControl } from './CacheControl'
+import { useAuth } from './AccountAccess'
+import { accountRequest } from '../api/http'
 import { researchModules, navigationModules, groupForPath } from '../lib/modules'
 
 export function Layout() {
+  const { session, signedOut } = useAuth()
   const location = useLocation()
   const navigation = useRef<HTMLElement>(null)
   useLayoutEffect(() => {
@@ -88,8 +91,24 @@ export function Layout() {
             </span>
           </div>
           <div className="topbar-right">
-            <CacheControl />
-            <span className="avatar">研</span>
+            {session?.user?.role === 'admin' && <CacheControl />}
+            <div className="account-menu">
+              <span className="account-name">{session?.user?.username}</span>
+              <Link to="/account">{session?.user?.role === 'admin' ? '用户管理' : '我的账号'}</Link>
+              <button
+                className="button button-quiet"
+                onClick={async () => {
+                  try {
+                    await accountRequest('/logout', {})
+                    signedOut()
+                  } catch {
+                    window.alert('退出失败，请重试')
+                  }
+                }}
+              >
+                退出
+              </button>
+            </div>
           </div>
         </header>
         <main id="main-content" className="main-content">

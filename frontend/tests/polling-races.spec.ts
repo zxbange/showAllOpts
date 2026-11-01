@@ -1,4 +1,4 @@
-import { expect, test, type Route } from '@playwright/test'
+import { expect, test, type Route } from './fixtures'
 
 test('a slow cache status response is not repeatedly cancelled by the polling timer', async ({
   page,

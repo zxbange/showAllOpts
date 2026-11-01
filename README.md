@@ -732,3 +732,7 @@ grep -E 'Cache ownership page|Cache read failed|Cache refresh retry' log/app.log
 ### 短线选股历史胜率研究
 
 在聚宽运行 [`collectors/短线选股胜率_研究版.py`](collectors/短线选股胜率_研究版.py)，从2026年7月1日起回放补票龙，直接展示第2、4、10个交易日的胜率与涨跌幅分布；不生成CSV、不写入业务数据库，支持按日断点续跑。说明见[短线胜率研究](docs/short-term-winrate.md)。
+
+## 全站账号与 HTTPS
+
+升级后需要创建首个管理员并通过 HTTPS 登录；普通用户只读，管理员管理用户、同步、监控配置和胜率验证。公网 IP 也支持证书，已提供自动续期与加载修复配置。首次部署步骤见 [账号与HTTPS配置](docs/账号与HTTPS配置.md)。旧页面使用密钥和配对入口不再生效，原加密数据库连接和统计结果保留。

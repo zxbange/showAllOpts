@@ -1,7 +1,6 @@
-import { expect, test, type Page } from '@playwright/test'
+import { expect, test, type Page } from './fixtures'
 async function unlock(page: Page) {
-  await page.getByLabel('验证管理密钥').fill('test-admin-key')
-  await page.getByRole('button', { name: '解锁验证管理' }).click()
+  await expect(page.getByRole('region', { name: '短线胜率验证' })).toBeVisible()
 }
 test.beforeEach(async ({ page }) => {
   await page.route('**/api/v1/short-term/validation/access', (r) =>
@@ -65,8 +64,19 @@ test('select strategies, resume failure, refresh durable task and show unavailab
     }
     return r.fulfill({ json: jobs[0] })
   })
+  await page.route('**/api/v1/short-term/validation/sources/save', (r) =>
+    r.fulfill({ json: { id: 'a'.repeat(32), revision: 1, password_set: true } }),
+  )
   await page.goto('/short-term/validation')
   await unlock(page)
+  for (const [label, value] of [
+    ['数据库地址', 'db.example'],
+    ['数据库名', 'research'],
+    ['数据库用户名', 'readonly'],
+    ['数据库密码', 'test-private-password'],
+  ]) {
+    await page.getByLabel(label, { exact: true }).fill(value)
+  }
   const panel = page.getByRole('region', { name: '短线胜率验证' })
   await expect(panel.getByRole('checkbox')).toHaveCount(2)
   await panel.getByRole('checkbox', { name: '超跌后止跌反弹', exact: true }).uncheck()
@@ -129,7 +139,7 @@ test('validation has its own peer page and supports reload, deep link and back',
     'page',
   )
   await page.reload()
-  await expect(page.getByLabel('验证管理密钥')).toBeVisible()
+  await expect(page.getByRole('region', { name: '短线胜率验证' })).toBeVisible()
   await page.goBack()
   await expect(page).toHaveURL(/method=bukou$/)
   await expect(page.getByRole('link', { name: '补票龙', exact: true })).toHaveAttribute(

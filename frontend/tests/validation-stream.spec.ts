@@ -1,4 +1,4 @@
-import { expect, test } from '@playwright/test'
+import { expect, test } from './fixtures'
 
 test('static task shows committed progress and timings; legacy freeze remains distinguishable', async ({
   page,

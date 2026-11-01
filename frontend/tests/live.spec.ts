@@ -1,4 +1,4 @@
-import { expect, test } from '@playwright/test'
+import { expect, test } from './fixtures'
 import fs from 'node:fs'
 
 test('real database: homepage, all industries, and yearly trend', async ({ page }, testInfo) => {

@@ -1,4 +1,4 @@
-import { expect, test } from '@playwright/test'
+import { expect, test } from './fixtures'
 
 const modules = [
   '行业动量',
@@ -183,23 +183,30 @@ test('per-module progress shows running rows and completed bar', async ({ page }
   await expect(page.getByRole('button', { name: '同步进行中…', exact: true })).toBeDisabled()
 })
 
-
 test('retry clears failure and manual stop waits for database boundary', async ({ page }) => {
   let running = false
   let cancelling = false
   const runId = 'a'.repeat(32)
-  await page.route('**/api/v1/cache/status', route => route.fulfill({ json: {
-    ...fixture, refreshing: running, run_id: running ? runId : null, cancelling,
-    modules: fixture.modules.map(m => ({ ...m,
-      error: running ? null : '同步失败，保留上次成功数据。',
-      progress: { status: running ? 'running' : 'failed', stage: '读取数据', percent: 20 },
-    })),
-  } }))
-  await page.route('**/api/v1/cache/refresh', async route => {
+  await page.route('**/api/v1/cache/status', (route) =>
+    route.fulfill({
+      json: {
+        ...fixture,
+        refreshing: running,
+        run_id: running ? runId : null,
+        cancelling,
+        modules: fixture.modules.map((m) => ({
+          ...m,
+          error: running ? null : '同步失败，保留上次成功数据。',
+          progress: { status: running ? 'running' : 'failed', stage: '读取数据', percent: 20 },
+        })),
+      },
+    }),
+  )
+  await page.route('**/api/v1/cache/refresh', async (route) => {
     running = true
     await route.fulfill({ status: 202, json: { accepted: true } })
   })
-  await page.route('**/api/v1/cache/cancel', async route => {
+  await page.route('**/api/v1/cache/cancel', async (route) => {
     expect(route.request().postDataJSON()).toEqual({ run_id: runId, module: 'industry-momentum' })
     cancelling = true
     await route.fulfill({ status: 202, json: { accepted: true } })
@@ -215,17 +222,24 @@ test('retry clears failure and manual stop waits for database boundary', async (
   await expect(page.getByText('正在等待当前数据库操作结束；保留成功快照和续传断点。')).toBeVisible()
 })
 
-
 test('individual row stop targets only that module', async ({ page }) => {
   let cancelled: string | null = null
   const runId = 'b'.repeat(32)
-  await page.route('**/api/v1/cache/status', route => route.fulfill({ json: {
-    ...fixture, refreshing: true, run_id: runId,
-    modules: fixture.modules.map((m, i) => ({ ...m, cancelling: cancelled === m.id,
-      progress: { status: i === 0 ? 'running' : 'waiting', stage: '同步中', percent: 10 },
-    })),
-  } }))
-  await page.route('**/api/v1/cache/cancel', async route => {
+  await page.route('**/api/v1/cache/status', (route) =>
+    route.fulfill({
+      json: {
+        ...fixture,
+        refreshing: true,
+        run_id: runId,
+        modules: fixture.modules.map((m, i) => ({
+          ...m,
+          cancelling: cancelled === m.id,
+          progress: { status: i === 0 ? 'running' : 'waiting', stage: '同步中', percent: 10 },
+        })),
+      },
+    }),
+  )
+  await page.route('**/api/v1/cache/cancel', async (route) => {
     expect(route.request().postDataJSON()).toEqual({ run_id: runId, module: 'market-crowding' })
     cancelled = 'market-crowding'
     await route.fulfill({ status: 202, json: { accepted: true } })
@@ -238,11 +252,15 @@ test('individual row stop targets only that module', async ({ page }) => {
   await expect(page.getByText('已请求停止该模块，保留成功数据和断点；其余模块继续。')).toBeVisible()
 })
 
-test('full history repair is explicit, scoped, and resets to daily sync after acceptance', async ({ page }) => {
+test('full history repair is explicit, scoped, and resets to daily sync after acceptance', async ({
+  page,
+}) => {
   let running = false
   const posted: unknown[] = []
-  await page.route('**/api/v1/cache/status', route => route.fulfill({ json: { ...fixture, refreshing: running } }))
-  await page.route('**/api/v1/cache/refresh', async route => {
+  await page.route('**/api/v1/cache/status', (route) =>
+    route.fulfill({ json: { ...fixture, refreshing: running } }),
+  )
+  await page.route('**/api/v1/cache/refresh', async (route) => {
     posted.push(route.request().postDataJSON())
     running = true
     await route.fulfill({ status: 202, json: { accepted: true } })
@@ -253,7 +271,9 @@ test('full history repair is explicit, scoped, and resets to daily sync after ac
   await expect(mode).toHaveValue('incremental')
   await page.getByLabel('同步范围', { exact: true }).selectOption('industry-momentum')
   await mode.selectOption('full')
-  await expect(page.getByText('将重新下载所选模块的全部保留数据，耗时较长；仅重建本地缓存，不修改源数据库。')).toBeVisible()
+  await expect(
+    page.getByText('将重新下载所选模块的全部保留数据，耗时较长；仅重建本地缓存，不修改源数据库。'),
+  ).toBeVisible()
   await page.getByRole('button', { name: '立即同步', exact: true }).click()
   await expect.poll(() => posted.length).toBe(1)
   expect(posted[0]).toEqual({ module: 'industry-momentum', full: true })
@@ -265,10 +285,12 @@ test('full history repair is explicit, scoped, and resets to daily sync after ac
   expect(posted).toHaveLength(1)
 })
 
-test('rejected history repair can retry or return to daily sync without submitting on selection', async ({ page }) => {
+test('rejected history repair can retry or return to daily sync without submitting on selection', async ({
+  page,
+}) => {
   const posted: unknown[] = []
-  await page.route('**/api/v1/cache/status', route => route.fulfill({ json: fixture }))
-  await page.route('**/api/v1/cache/refresh', route => {
+  await page.route('**/api/v1/cache/status', (route) => route.fulfill({ json: fixture }))
+  await page.route('**/api/v1/cache/refresh', (route) => {
     posted.push(route.request().postDataJSON())
     return route.fulfill({ status: 409, json: { detail: '已有同步任务正在执行，请等待完成。' } })
   })

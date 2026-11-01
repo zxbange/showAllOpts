@@ -1,0 +1,104 @@
+.account-screen {
+  min-height: 100dvh;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+}
+.account-card,
+.account-panel {
+  background: var(--surface, #fff);
+  border: 1px solid var(--border, #ead9cb);
+  border-radius: 20px;
+  padding: 28px;
+}
+.account-card {
+  width: min(100%, 440px);
+}
+.account-card h1 {
+  font-size: 28px;
+  margin: 0 0 12px;
+}
+.account-card p,
+.account-panel p {
+  line-height: 1.6;
+}
+.account-card form,
+.account-panel form {
+  display: grid;
+  gap: 16px;
+}
+.account-card label,
+.account-panel label {
+  display: grid;
+  gap: 8px;
+  font-size: 14px;
+}
+.account-card input,
+.account-panel input,
+.account-panel select {
+  min-width: 0;
+  width: 100%;
+  padding: 11px;
+  border: 1px solid #d8c5b5;
+  border-radius: 8px;
+  background: #fff;
+  color: #352e28;
+  font: inherit;
+}
+.account-error {
+  color: #ad3029;
+}
+.account-setup code {
+  display: block;
+  overflow-wrap: anywhere;
+  padding: 12px;
+  background: #f6f0e9;
+  line-height: 1.6;
+}
+.accounts-page {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  min-width: 0;
+  gap: 20px;
+}
+.account-panel {
+  min-width: 0;
+  max-width: 100%;
+}
+.account-panel h2 {
+  font-size: 19px;
+  margin: 0 0 20px;
+}
+.account-panel form {
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 200px), 1fr));
+  align-items: end;
+}
+.account-table {
+  overflow-x: auto;
+}
+.account-table table {
+  width: 100%;
+  border-collapse: collapse;
+  white-space: nowrap;
+}
+.account-table th,
+.account-table td {
+  padding: 12px;
+  border-bottom: 1px solid #ead9cb;
+  text-align: left;
+}
+.account-menu {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+}
+@media (max-width: 600px) {
+  .account-card,
+  .account-panel {
+    padding: 20px;
+  }
+  .account-menu .account-name {
+    display: none;
+  }
+}

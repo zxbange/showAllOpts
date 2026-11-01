@@ -1,4 +1,4 @@
-import { expect, test, type Page } from '@playwright/test'
+import { expect, test, type Page } from './fixtures'
 import { mkdir } from 'node:fs/promises'
 const job = (status = 'failed', version = 'four-close-v2') => ({
   id: 'cutoff-job',

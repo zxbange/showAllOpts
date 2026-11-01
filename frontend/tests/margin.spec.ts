@@ -1,4 +1,4 @@
-import { expect, test } from '@playwright/test'
+import { expect, test } from './fixtures'
 import type { MarginHistory, MarginStatus } from '../src/types/margin'
 
 const status: MarginStatus = {

@@ -1,7 +1,12 @@
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { beforeEach, afterEach, describe, expect, it, vi } from 'vitest'
 import { refreshCache, saveCacheSchedule } from './client'
 
 afterEach(() => vi.unstubAllGlobals())
+beforeEach(() =>
+  vi.stubGlobal('window', {
+    location: { href: 'https://test.example/', origin: 'https://test.example' },
+  }),
+)
 
 describe('cache sync requests', () => {
   it('keeps daily synchronization default and sends full only when explicitly requested', async () => {
@@ -38,11 +43,11 @@ it('saves a clock preference separately from refresh and reports validation fail
   await expect(saveCacheSchedule('07:00')).resolves.toEqual(plan)
   expect(fetcher.mock.calls[0]).toEqual([
     '/api/v1/cache/schedule',
-    {
+    expect.objectContaining({
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: expect.any(Headers),
       body: '{"daily_time":"07:00"}',
-    },
+    }),
   ])
   await expect(saveCacheSchedule('bad')).rejects.toThrow('无法保存同步时间')
   expect(fetcher).toHaveBeenCalledTimes(2)

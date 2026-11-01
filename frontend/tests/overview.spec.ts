@@ -1,4 +1,4 @@
-import { expect, test } from '@playwright/test'
+import { expect, test } from './fixtures'
 
 test('overview directory is independent of database, searchable and categorized', async ({
   page,
@@ -159,7 +159,7 @@ test('shared module cards stay available while loading and after failures', asyn
     }
     await expect(page.locator('.state-panel[role=alert]')).toContainText('测试加载失败')
     await expect(cards).toHaveCount(count)
-    await page.unrouteAll({ behavior: 'wait' })
+    await page.unroute('**/api/v1/**')
   }
 })
 

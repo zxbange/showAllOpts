@@ -1,4 +1,4 @@
-﻿import { expect, test } from '@playwright/test'
+﻿import { expect, test } from './fixtures'
 
 const points = [0.19, 0.2, 0.8, 0.81, 0.196].map((ratio, i) => ({
   date: `2026-10-${19 + i}`,

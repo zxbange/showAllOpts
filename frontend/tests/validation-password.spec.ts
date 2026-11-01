@@ -1,4 +1,4 @@
-import { expect, test } from '@playwright/test'
+import { expect, test } from './fixtures'
 
 test('saved password indicator preserves secrets; probe and start use named connection', async ({
   page,

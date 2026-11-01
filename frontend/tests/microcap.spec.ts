@@ -1,4 +1,4 @@
-import { expect, test } from '@playwright/test'
+import { expect, test } from './fixtures'
 
 const points = [0.3, 0.5, 0.4, 0.6].map((score, i) => ({
   date: `2026-10-${String(1 + i * 5).padStart(2, '0')}`,

@@ -1,12 +1,11 @@
 # Local: backend/.env. Production: config/app.config in the project root.
 # Set APP_ENV_FILE in the process environment, NOT inside this file.
 APP_NAME=ShowAllOpts API
-# Background polling for the social monitor; page access does not require login.
+# Background polling for the social monitor; all pages require site login.
 SOCIAL_WORKER_ENABLED=true
 # 中证两融担保比例独立采集，每天北京时间20:00；启动不立即下载。
 MARGIN_WORKER_ENABLED=true
-# Optional server-side QR login; generate your own private key with at least 24 characters.
-SOCIAL_BROWSER_LOGIN_KEY=
+# Server-side QR login requires an administrator session.
 SOCIAL_BROWSER_CHANNEL=
 SOCIAL_BROWSER_HEADLESS=true
 DB_HOST=127.0.0.1
@@ -32,3 +31,7 @@ CACHE_SYNC_ATTEMPTS=3
 
 # Compress ownership JSON in MySQL query results; stored data remains unchanged.
 CACHE_OWNERSHIP_COMPRESSION=true
+
+# Site accounts: public access requires HTTPS; see docs/账号与HTTPS配置.md
+AUTH_ALLOW_HTTP=false
+AUTH_PUBLIC_ORIGIN=

@@ -1,4 +1,4 @@
-import { expect, test } from '@playwright/test'
+import { expect, test } from './fixtures'
 const funds = [
   ['518880.XSHG', '黄金ETF', '商品ETF', 1.2345, true],
   ['513100.XSHG', '纳指ETF', '跨境ETF', 0.41, false],
@@ -118,13 +118,23 @@ test('ETF heat retry and empty states', async ({ page }) => {
   await expect(page.getByRole('heading', { name: '暂无ETF热度数据' })).toBeVisible()
 })
 
-
 test('empty scores explain missing data instead of appearing as zero', async ({ page }) => {
-  await page.route('**/api/v1/cache/status', (r) => r.fulfill({ json: { enabled: false, modules: [] } }))
-  await page.route('**/api/v1/etf-momentum/latest', (r) => r.fulfill({ json: {
-    trade_date: '2026-10-20',
-    items: items.map((i) => ({ ...i, score: null, rank: null, details: { status: 'missing', reason: '有效价格不足26期或当日停牌' } })),
-  } }))
+  await page.route('**/api/v1/cache/status', (r) =>
+    r.fulfill({ json: { enabled: false, modules: [] } }),
+  )
+  await page.route('**/api/v1/etf-momentum/latest', (r) =>
+    r.fulfill({
+      json: {
+        trade_date: '2026-10-20',
+        items: items.map((i) => ({
+          ...i,
+          score: null,
+          rank: null,
+          details: { status: 'missing', reason: '有效价格不足26期或当日停牌' },
+        })),
+      },
+    }),
+  )
   await page.goto('/etf-momentum')
   await expect(page.getByRole('status')).toContainText('热度缺失，并非零分')
   await expect(page.getByText('有效价格不足26期或当日停牌').first()).toBeVisible()

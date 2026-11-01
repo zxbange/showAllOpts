@@ -1,8 +1,8 @@
-import hmac
 from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from pydantic import BaseModel, Field
+from app.api.routes.accounts import require_admin
 
 
 router = APIRouter(prefix='/social-monitor/browser', tags=['平台浏览器登录'])
@@ -10,13 +10,8 @@ Platform = Literal['weibo', 'xueqiu']
 
 
 def login_service(request: Request):
+    require_admin(request)
     service = request.app.state.social_browser
-    if not service.available:
-        raise HTTPException(503, '请先在服务器私有配置中设置至少 24 位的 SOCIAL_BROWSER_LOGIN_KEY')
-    supplied = request.headers.get('X-Browser-Login-Key', '')
-    expected = service.settings.social_browser_login_key.get_secret_value()
-    if not hmac.compare_digest(supplied.encode(), expected.encode()):
-        raise HTTPException(403, '浏览器登录管理密钥不正确')
     return service
 
 

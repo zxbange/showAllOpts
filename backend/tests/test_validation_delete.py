@@ -164,7 +164,7 @@ def test_api_auth_csrf_origin_idempotence_and_redacted_error(paired, monkeypatch
     path = BASE + '/jobs/example/delete'
     assert client.post(path, json={}).status_code in (401, 403)
     login(access, client)
-    for headers in ({'X-Validation-CSRF': 'wrong'}, {'Origin': 'http://evil.example'}, {'Origin': ''}):
+    for headers in ({'X-CSRF-Token': 'wrong'}, {'Origin': 'http://evil.example'}, {'Origin': ''}):
         assert client.post(path, json={}, headers=headers).status_code == 403
     for _ in range(2):
         response = client.post(path, json={})

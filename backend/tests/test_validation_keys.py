@@ -96,8 +96,9 @@ def test_symlink_directory_and_file_rejected(tmp_path):
 def test_legacy_database_import_and_public_access_has_no_side_effect(secure, config):
     jobs, sources, settings, client = secure
     directory = jobs.root.parent / 'short-validation-secrets'
-    response = client.get('/short-term/validation/access')
-    assert response.json()['encryption_automatic'] is True
+    response = client.get('/api/auth/session')
+    assert response.json()['user'] is None
+    assert client.get('/short-term/validation/access').status_code == 404
     assert not directory.exists()
     ref = sources.save(config)
     path = directory / 'source.key'
@@ -123,8 +124,9 @@ def test_non_posix_preserves_legacy_key_without_unsafe_file(tmp_path, monkeypatc
         module.persistent_cipher(tmp_path / 'jobs', '', validate)
 
 
-def test_access_reports_platform_capability(secure, monkeypatch):
+def test_retired_access_endpoint_cannot_bypass_account_login(secure, monkeypatch):
     import app.services.validation_keys as module
     _, _, _, client = secure
     monkeypatch.setattr(module, 'POSIX_KEY_STORAGE', False)
-    assert client.get('/short-term/validation/access').json()['encryption_automatic'] is False
+    assert client.get('/short-term/validation/access').status_code == 404
+    assert client.get('/short-term/validation/sources').status_code == 401

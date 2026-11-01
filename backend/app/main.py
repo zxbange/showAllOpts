@@ -20,6 +20,9 @@ from app.services.social_browser import BrowserLogin
 from app.services.margin_guarantee import MarginGuarantee
 from app.services.short_validation import ValidationJobs
 from app.services.validation_sources import ValidationSources
+from app.services.accounts import Accounts
+from app.api.routes.accounts import router as accounts_router, require_user
+from fastapi import Depends
 
 logger = logging.getLogger(__name__)
 
@@ -62,11 +65,21 @@ def create_app(settings: Settings | None = None, engine: Engine | None = None) -
             yield
         logger.info('Application shutdown complete')
 
-    application = FastAPI(title=settings.app_name, version='1.0.0', lifespan=lifespan)
+    application = FastAPI(title=settings.app_name, version='1.0.0', lifespan=lifespan,
+                          docs_url=None, redoc_url=None, openapi_url=None)
     application.state.cache = cache
+    application.state.accounts = Accounts(settings)
     application.state.session_factory = sessionmaker(bind=database, autoflush=False)
     application.add_middleware(CORSMiddleware, allow_origins=settings.cors_origins,
-                               allow_methods=['GET', 'POST'], allow_headers=['Content-Type', 'Authorization', 'X-Browser-Login-Key'])
+                               allow_methods=['GET', 'POST'], allow_headers=['Content-Type', 'X-CSRF-Token', 'X-App-Client'])
+
+    @application.middleware('http')
+    async def private_responses(request: Request, call_next):
+        response = await call_next(request)
+        response.headers['Cache-Control'] = 'no-store'
+        response.headers['X-Content-Type-Options'] = 'nosniff'
+        response.headers['Referrer-Policy'] = 'same-origin'
+        return response
 
     @application.exception_handler(CacheScheduleError)
     @application.exception_handler(CacheUnavailable)
@@ -84,7 +97,13 @@ def create_app(settings: Settings | None = None, engine: Engine | None = None) -
             'code': 'CACHE_READ_FAILED' if settings.cache_enabled else 'DATABASE_UNAVAILABLE',
         })
 
-    application.include_router(router)
+    # Health checks remain public; all data and operations require a session.
+    @application.get('/api/v1/health')
+    def health():
+        return {'status': 'ok', 'service': 'showallopts-api'}
+
+    application.include_router(accounts_router)
+    application.include_router(router, dependencies=[Depends(require_user)])
     return application
 
 

@@ -91,8 +91,3 @@ def modules():
         'path': '/social-monitor', 'status': 'available',
     })
     return catalogue
-
-
-@router.get('/health', tags=['状态'])
-def health():
-    return {'status': 'ok', 'service': 'showallopts-api'}

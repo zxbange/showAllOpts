@@ -1,4 +1,4 @@
-import { expect, test } from '@playwright/test'
+import { expect, test } from './fixtures'
 
 test('manage cube monitoring and inspect rebalances within the configured time window', async ({
   page,

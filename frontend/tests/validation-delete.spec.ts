@@ -1,4 +1,4 @@
-import { expect, test } from '@playwright/test'
+import { expect, test } from './fixtures'
 
 test('delete requires confirmation, handles conflicts, removes only selected job and survives refresh', async ({
   page,
@@ -35,7 +35,7 @@ test('delete requires confirmation, handles conflicts, removes only selected job
     if (path.endsWith('/delete')) {
       calls++
       expect(r.request().method()).toBe('POST')
-      expect(r.request().headers()['x-validation-csrf']).toBe('test-csrf')
+      expect(r.request().headers()['x-csrf-token']).toBe('test-csrf')
       expect(r.request().headers()['origin']).toBe('http://127.0.0.1:5173')
       if (conflict)
         return r.fulfill({ status: 409, json: { detail: '后台工作尚未退出，请稍后重试' } })

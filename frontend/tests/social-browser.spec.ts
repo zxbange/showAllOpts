@@ -1,4 +1,4 @@
-import { expect, test } from '@playwright/test'
+import { expect, test } from './fixtures'
 
 test('server login protects its requests and updates cookie status after confirmation', async ({
   page,
@@ -28,7 +28,8 @@ test('server login protects its requests and updates cookie status after confirm
       return route.fulfill({ status: 503, json: { detail: '测试只模拟监控模块' } })
     if (url.pathname.includes('/browser/')) {
       expect(url.search).not.toContain(key)
-      expect(request.headers()['x-browser-login-key']).toBe(key)
+      expect(request.headers()['x-browser-login-key']).toBeUndefined()
+      if (request.method() === 'POST') expect(request.headers()['x-csrf-token']).toBe('test-csrf')
       const platform = url.pathname.includes('/xueqiu/') ? 'xueqiu' : 'weibo'
       if (url.pathname.endsWith('/start')) {
         jobs[platform] = {
@@ -72,7 +73,6 @@ test('server login protects its requests and updates cookie status after confirm
   await page.goto('/social-monitor')
   await page.getByRole('tab', { name: '通知设置' }).click()
   await expect(page.getByRole('heading', { name: '扫码登录', exact: true })).toHaveCount(0)
-  await page.getByLabel('浏览器登录管理密钥', { exact: true }).fill(key)
   await page.getByRole('button', { name: '查看登录状态' }).click()
   const weibo = page
     .locator('.social-browser-card')
@@ -86,5 +86,5 @@ test('server login protects its requests and updates cookie status after confirm
   expect(await page.evaluate(() => JSON.stringify(localStorage))).not.toContain(key)
   expect(await page.evaluate(() => JSON.stringify(sessionStorage))).not.toContain(key)
   await page.getByRole('button', { name: '隐藏登录窗口' }).click()
-  await expect(page.getByLabel('浏览器登录管理密钥', { exact: true })).toHaveValue('')
+  await expect(page.getByLabel('浏览器登录管理密钥', { exact: true })).toHaveCount(0)
 })

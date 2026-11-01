@@ -1,0 +1,16 @@
+[Unit]
+Description=Renew ShowAllOpts IP certificate and verify Nginx
+Wants=network-online.target
+After=network-online.target nginx.service
+
+[Service]
+Type=oneshot
+User=root
+Environment=PATH=/opt/certbot/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+# Install a root-owned copy; never execute a deploy-user-writable script as root.
+# Replace the IP if the server changes.
+ExecStart=/usr/bin/python3 /usr/local/libexec/showallopts-certificate-maintenance --ip 119.28.106.127
+TimeoutStartSec=300
+UMask=0077
+PrivateTmp=true
+NoNewPrivileges=true

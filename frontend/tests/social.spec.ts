@@ -1,4 +1,4 @@
-import { expect, test } from '@playwright/test'
+import { expect, test } from './fixtures'
 
 test('initial loading failures can be retried without a login page', async ({ page }) => {
   let ready = false

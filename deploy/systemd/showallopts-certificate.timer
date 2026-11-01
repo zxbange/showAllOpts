@@ -1,0 +1,11 @@
+[Unit]
+Description=Hourly IP certificate renewal/recovery check
+
+[Timer]
+OnCalendar=hourly
+RandomizedDelaySec=300
+Persistent=true
+Unit=showallopts-certificate.service
+
+[Install]
+WantedBy=timers.target

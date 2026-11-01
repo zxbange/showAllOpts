@@ -1,3 +1,4 @@
+import { apiFetch } from '../api/http'
 import { useEffect, useRef, useState } from 'react'
 
 type Platform = 'weibo' | 'xueqiu'
@@ -19,7 +20,6 @@ export function SocialBrowserLogin({
   available: boolean
   onSaved: () => void
 }) {
-  const [key, setKey] = useState('')
   const [unlocked, setUnlocked] = useState(false)
   const [error, setError] = useState('')
   const [pending, setPending] = useState(false)
@@ -38,9 +38,9 @@ export function SocialBrowserLogin({
   )
 
   async function request(platform: Platform, path: string, body?: unknown, signal?: AbortSignal) {
-    const response = await fetch(`/api/v1/social-monitor/browser/${platform}${path}`, {
+    const response = await apiFetch(`/api/v1/social-monitor/browser/${platform}${path}`, {
       method: body === undefined ? 'GET' : 'POST',
-      headers: { 'Content-Type': 'application/json', 'X-Browser-Login-Key': key },
+      headers: { 'Content-Type': 'application/json', 'X-App-Client': 'browser' },
       cache: 'no-store',
       signal,
       ...(body === undefined ? {} : { body: JSON.stringify(body) }),
@@ -99,9 +99,9 @@ export function SocialBrowserLogin({
       abort.abort()
       clearTimeout(timer)
     }
-    // The management key remains in memory; changing it requires unlocking again.
+    // Poll only while the administrator has opened the login view.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [unlocked, key])
+  }, [unlocked])
 
   async function run(
     platform: Platform,
@@ -130,10 +130,7 @@ export function SocialBrowserLogin({
   return (
     <div className="social-browser-login">
       {!available ? (
-        <p className="social-muted">
-          请先在服务器私有配置中设置至少 24 位的 SOCIAL_BROWSER_LOGIN_KEY，并安装 Chromium
-          后重启服务。
-        </p>
+        <p className="social-muted">请先在服务器安装 Chromium 后重启服务。</p>
       ) : (
         <>
           <form
@@ -144,25 +141,12 @@ export function SocialBrowserLogin({
               setUnlocked(true)
             }}
           >
-            <label>
-              浏览器登录管理密钥
-              <input
-                type="password"
-                autoComplete="off"
-                value={key}
-                minLength={24}
-                required
-                disabled={unlocked}
-                onChange={(event) => setKey(event.target.value)}
-              />
-            </label>
             {unlocked ? (
               <button
                 className="button"
                 type="button"
                 onClick={() => {
                   setUnlocked(false)
-                  setKey('')
                   setStates({})
                   setImages({})
                   setError('')
