@@ -4,11 +4,11 @@ function stock(method: string, i: number) {
   return {
     method,
     rank: i + 1,
-    code: `${String(i + (method === 'classic' ? 1 : 10)).padStart(6, '0')}.XSHE`,
+    code: `${String(i + (method === 'classic' ? 1 : method === 'bank' ? 100 : 10)).padStart(6, '0')}.XSHE`,
     trade_date: '2026-10-16',
     name: `示例股票${i + 1}`,
     industry_code: 'test',
-    industry_name: i % 2 ? '银行' : '公用事业',
+    industry_name: method === 'bank' ? '银行' : '公用事业',
     industry_level: 'sw_l3',
     dividend_yield_1y: 8 - i * 0.1,
     dividend_ratio_3y: 20 - i * 0.2,
@@ -26,24 +26,29 @@ function stock(method: string, i: number) {
     publication_date: '2026-08-10',
   }
 }
-const groups = ['classic', 'value'].map((id) => ({
+const groups = ['classic', 'value', 'bank'].map((id) => ({
   id,
-  name: id === 'classic' ? '纯高股息' : '高股息低估值',
+  name:
+    id === 'classic'
+      ? '纯高股息'
+      : id === 'bank'
+        ? '高股息低估值（银行业）'
+        : '高股息低估值（非银行业）',
   ranking_field: id === 'classic' ? 'dividend_ratio_3y' : 'dividend_yield_1y',
-  candidates: 60,
-  items: Array.from({ length: 25 }, (_, i) => stock(id, i)),
+  candidates: id === 'classic' ? 60 : null,
+  items: Array.from({ length: id === 'bank' ? 10 : 25 }, (_, i) => stock(id, i)),
 }))
 const fixture = {
   snapshot: {
     trade_date: '2026-10-16',
     updated_at: '2026-10-16T17:30:00',
-    rule_version: 'dividend_top25_v1',
+    rule_version: 'dividend_split_bank_v3',
     universe_count: 5000,
     eligible_count: 4000,
     classic_candidates: 60,
     value_candidates: 60,
     classic_count: 25,
-    value_count: 25,
+    value_count: 35,
   },
   groups,
   overlap_codes: groups[0].items
@@ -64,10 +69,18 @@ test('dividend module switches rules, searches and shows overlap on desktop/mobi
   await expect(page.getByRole('heading', { level: 1 })).toContainText('高股息选股')
   await expect(page.locator('tbody tr')).toHaveCount(25)
   await expect(page.locator('tbody tr').first()).toContainText('20.00%')
-  await page.getByRole('button', { name: /高股息低估值/ }).click()
+  await expect(page.locator('.page-header .module-card')).toHaveCount(3)
+  await page.getByRole('button', { name: /高股息低估值（银行业）/ }).click()
+  await expect(page.locator('tbody tr')).toHaveCount(10)
+  await expect(
+    page.getByRole('heading', { name: '高股息低估值（银行业） · 前 10 名' }),
+  ).toBeVisible()
+  await expect(page.locator('tbody tr').first()).toContainText('000100.XSHE')
+  await page.getByRole('button', { name: /高股息低估值（非银行业）/ }).click()
+  await expect(page.locator('tbody tr')).toHaveCount(25)
   await expect(page.locator('thead th').nth(2)).toHaveText('近一年股息率')
   await expect(page.locator('tbody tr').first()).toContainText('000010.XSHE')
-  await page.getByRole('checkbox', { name: '只看两组共同入选' }).check()
+  await page.getByRole('checkbox', { name: '只看两种口径共同入选' }).check()
   await expect(page.locator('tbody tr')).toHaveCount(16)
   const search = page.getByRole('textbox', { name: '搜索高股息股票' })
   await search.fill('不存在')
@@ -75,7 +88,7 @@ test('dividend module switches rules, searches and shows overlap on desktop/mobi
   await search.fill('000010')
   await expect(page.locator('tbody tr')).toHaveCount(1)
   await search.fill('')
-  await page.getByRole('checkbox', { name: '只看两组共同入选' }).uncheck()
+  await page.getByRole('checkbox', { name: '只看两种口径共同入选' }).uncheck()
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(
     true,
   )
@@ -120,4 +133,22 @@ test('dividend uncollected, legitimate zero results and retry states', async ({ 
   mode = 'data'
   await page.getByRole('button', { name: '重新加载' }).click()
   await expect(page.locator('tbody tr')).toHaveCount(25)
+})
+
+test('legacy mixed results require collection before bank groups are shown', async ({ page }) => {
+  await page.route('**/api/v1/dividend-selection/latest', (route) =>
+    route.fulfill({
+      json: {
+        ...fixture,
+        requires_refresh: true,
+        groups: groups.map((g) => (g.id === 'classic' ? g : { ...g, items: [] })),
+      },
+    }),
+  )
+  await page.goto('/dividend-selection')
+  await expect(page.getByRole('status')).toContainText('当前为旧版混合名单')
+  await expect(page.locator('tbody tr')).toHaveCount(25)
+  await page.getByRole('button', { name: /高股息低估值（非银行业）/ }).click()
+  await expect(page.getByRole('heading', { name: '请更新分组名单' })).toBeVisible()
+  await expect(page.locator('tbody tr')).toHaveCount(0)
 })

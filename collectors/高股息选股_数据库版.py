@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""聚宽研究：高股息两组选股 Top25；完整单文件，只保留最新结果，不下单。"""
+"""聚宽研究：纯高股息25只、低估值非银行25只、低估值银行10只；仅保留最新结果。"""
 import builtins
 import datetime
 import json
@@ -357,7 +357,7 @@ def _safe_error(exc, config):
 
 
 def _dividend_strategy(_apis, _config):
-    """两组高股息 Top25；每次重算，事务替换最新快照，不下单。"""
+    """三组独立排名：纯高股息25、低估值非银行25、银行10；事务替换最新快照。"""
     settings = strategy_settings('高股息选股')
     get_all_securities, get_trade_days = _apis.get('get_all_securities'), _apis.get('get_trade_days')
     get_price, get_extras = _apis.get('get_price'), _apis.get('get_extras')
@@ -367,8 +367,9 @@ def _dividend_strategy(_apis, _config):
     if BATCH_SIZE > 3000 or PAGE_SIZE > 3000:
         raise ValueError('batch_size 和 page_size 不得超过 3000。')
     END_DATE = settings['end_date']
-    RULE_VERSION = 'dividend_top25_v2'
-    METHODS = ('classic', 'value')
+    RULE_VERSION = 'dividend_split_bank_v3'
+    METHODS = ('classic', 'value', 'bank')
+    LIMITS = dict(classic=25, value=25, bank=10)
     Base = declarative_base()
 
     class DividendSnapshot(Base):
@@ -535,7 +536,7 @@ def _dividend_strategy(_apis, _config):
                 raise ValueError('财务指标包含未来日期。')
         return result
 
-    def select(caps, cash, fundamentals):
+    def select(caps, cash, fundamentals, banks):
         # 比较使用未舍入值；相同分红比例按代码排序，结果稳定。
         ratios = {}
         for code, cap in caps.items():
@@ -559,19 +560,40 @@ def _dividend_strategy(_apis, _config):
         value = sorted((c for c in caps if number(caps[c]['pe_ratio']) is not None
                         and 0 < number(caps[c]['pe_ratio']) < 8 and ratios[c][0] > 4),
                        key=lambda c: (-ratios[c][0], c))
-        return dict(classic=classic[:25], value=value[:25]), ratios, dict(classic=len(classic), value=len(value))
+        nonbank = [code for code in value if code not in banks]
+        bank = [code for code in value if code in banks]
+        return dict(classic=classic[:25], value=nonbank[:25], bank=bank[:10]), ratios, dict(classic=len(classic), value=len(value))
+
+    def industries_for(codes, day):
+        industries, banks = {}, set()
+        for offset in _progress_items(range(0, len(codes), BATCH_SIZE), '行业分类批次'):
+            batch = codes[offset:offset+BATCH_SIZE]
+            result = get_industry(batch, date=day)
+            if not isinstance(result, dict) or set(result) != set(batch):
+                raise ValueError('行业查询未完整返回，保留原快照。')
+            for code in batch:
+                info = result[code]
+                first = info.get('sw_l1') if isinstance(info, dict) else None
+                if not isinstance(first, dict) or not first.get('industry_code'):
+                    raise ValueError('{} 申万一级行业缺失，无法判断银行分类。'.format(code))
+                if str(first['industry_code']) == '801780':
+                    banks.add(code)
+            industries.update(result)
+        return industries, banks
 
     def calculate(day):
         names, quotes, caps = universe(day)
         codes = sorted(caps)
         cash = dividends(codes, day)
         fundamentals = financials(codes, day)
-        selected, ratios, counts = select(caps, cash, fundamentals)
-        chosen = sorted(set(selected['classic']+selected['value']))
-        _progress_note('补充细分行业并生成两组 Top25')
-        industries = get_industry(chosen, date=day) if chosen else {}
-        if not isinstance(industries, dict) or set(chosen)-set(industries):
-            raise ValueError('入选股票行业查询未完整返回。')
+        # 分类前保留完整低估值候选，避免先截取混合前25导致非银行漏选。
+        preliminary, ratios, counts = select(caps, cash, fundamentals, set())
+        candidates = sorted(set(preliminary['classic']) | {
+            code for code in caps if number(caps[code]['pe_ratio']) is not None
+            and 0 < number(caps[code]['pe_ratio']) < 8 and ratios[code][0] > 4})
+        industries, banks = industries_for(candidates, day)
+        selected, ratios, counts = select(caps, cash, fundamentals, banks)
+        _progress_note('生成纯高股息25只、非银行25只、银行10只')
         records = []
         for method in METHODS:
             for rank, code in enumerate(selected[method], 1):
@@ -591,7 +613,7 @@ def _dividend_strategy(_apis, _config):
                     report_period=optional_date(fin.get('statDate')), publication_date=optional_date(fin.get('pubDate'))))
         meta = dict(trade_date=day, rule_version=RULE_VERSION, universe_count=len(names), eligible_count=len(caps),
                     classic_candidates=counts['classic'], value_candidates=counts['value'],
-                    classic_count=len(selected['classic']), value_count=len(selected['value']))
+                    classic_count=len(selected['classic']), value_count=len(selected['value'])+len(selected['bank']))
         return meta, records
 
     def save_latest(Session, meta, records):
@@ -599,11 +621,15 @@ def _dividend_strategy(_apis, _config):
             raise ValueError('同组股票重复。')
         for method in METHODS:
             group = [r for r in records if r['method'] == method]
-            if len(group) != meta[method+'_count'] or len(group) > 25 or sorted(r['rank'] for r in group) != list(range(1, len(group)+1)):
+            if len(group) > LIMITS[method] or sorted(r['rank'] for r in group) != list(range(1, len(group)+1)):
                 raise ValueError('数量或排名与快照不一致。')
+        if (builtins.sum(r['method'] == 'classic' for r in records) != meta['classic_count']
+                or builtins.sum(r['method'] in ('value', 'bank') for r in records) != meta['value_count']
+                or {r['code'] for r in records if r['method'] == 'value'} & {r['code'] for r in records if r['method'] == 'bank'}):
+            raise ValueError('分组数量或银行分类与快照不一致。')
         if builtins.any(r['method'] not in METHODS or r['trade_date'] != meta['trade_date'] for r in records):
             raise ValueError('方法或日期不一致。')
-        _progress_note('事务更新两组最新选股结果')
+        _progress_note('事务更新三组最新选股结果')
         return _replace_latest_snapshot(Session, DividendSnapshot, DividendStock, meta, records,
                                         RESULT_COLUMNS, META_COLUMNS, 'trade_date')
 
@@ -643,7 +669,7 @@ def run(**options):
 if __name__ == '__main__':
     try:
         dividend_df = run()
-        print('高股息选股：当前两组结果共 {} 条，数据库仅保留最新快照。'.format(len(dividend_df)))
+        print('高股息选股：当前三组结果共 {} 条，数据库仅保留最新快照。'.format(len(dividend_df)))
         if len(dividend_df):
             print(dividend_df.to_string(index=False))
     except Exception as exc:

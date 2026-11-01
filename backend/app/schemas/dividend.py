@@ -45,7 +45,7 @@ class DividendGroup(BaseModel):
     id: str
     name: str
     ranking_field: str
-    candidates: int = 0
+    candidates: int | None = None
     items: list[DividendItem] = Field(default_factory=list)
 
 
@@ -53,3 +53,4 @@ class DividendOverview(BaseModel):
     snapshot: DividendRun | None = None
     groups: list[DividendGroup]
     overlap_codes: list[str] = Field(default_factory=list)
+    requires_refresh: bool = False

@@ -72,7 +72,7 @@ def modules():
         'path': '/microcap-breadth', 'status': 'available',
     }, {
         'id': 'dividend-selection', 'name': '高股息选股',
-        'description': '两种高股息规则，各取前 25，只读展示最新选股结果。',
+        'description': '纯高股息前25只，低估值非银行前25只、银行前10只，展示最新结果。',
         'path': '/dividend-selection', 'status': 'available',
     }, {
         'id': 'high-growth', 'name': '高增长',

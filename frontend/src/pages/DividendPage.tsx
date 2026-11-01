@@ -35,6 +35,7 @@ export function DividendPage() {
       [s.code, s.name, s.industry_name ?? ''].some((v) => v.toLowerCase().includes(term)),
   )
   const classic = method === 'classic'
+  const limit = method === 'bank' ? 10 : 25
   const metric = (s: DividendItem) => (classic ? s.dividend_ratio_3y : s.dividend_yield_1y)
   const maxYield = Math.max(1, ...(group?.items ?? []).map(metric))
   return (
@@ -54,23 +55,29 @@ export function DividendPage() {
               },
               {
                 id: 'value',
-                name: '高股息低估值',
+                name: '高股息低估值（非银行业）',
                 description: '近一年股息率 > 4% · 0 < PE < 8',
+                icon: Coins,
+              },
+              {
+                id: 'bank',
+                name: '高股息低估值（银行业）',
+                description: '银行业独立排名 · 股息率前 10 只',
                 icon: Coins,
               },
             ].map((item) => ({
               ...item,
               count: data ? (data.groups.find((g) => g.id === item.id)?.items.length ?? 0) : '—',
-              countLabel: '/ 25 只',
+              countLabel: item.id === 'bank' ? '/ 10 只' : '/ 25 只',
             }))}
           />
         }
       >
         <div>
           <h1>
-            高股息选股 <span className="heading-tag">双策略 · 前25只</span>
+            高股息选股 <span className="heading-tag">三组独立排名</span>
           </h1>
-          <p>纯高股息与高股息低估值，两种口径各取前 25 只。</p>
+          <p>纯高股息取前 25 只；低估值按非银行、银行分别取前 25 只和前 10 只。</p>
         </div>
         <div className="heading-actions">
           <span className="date-badge">
@@ -98,12 +105,21 @@ export function DividendPage() {
         />
       ) : (
         <>
+          {data.requires_refresh && (
+            <p role="status" className="method-card">
+              当前为旧版混合名单。请运行新版高股息采集脚本并同步，生成银行与非银行的独立排名。
+            </p>
+          )}
           <div className="stats-grid">
             <StatCard
               label="本组入选"
               value={group?.items.length ?? 0}
               suffix="只"
-              note={'符合全部条件 ' + (group?.candidates ?? 0) + ' 只'}
+              note={
+                group?.candidates == null
+                  ? `本组最多 ${limit} 只`
+                  : `符合全部条件 ${group.candidates} 只`
+              }
               icon={<Layers3 size={18} />}
               accent
             />
@@ -115,10 +131,10 @@ export function DividendPage() {
               icon={<Coins size={18} />}
             />
             <StatCard
-              label="两组共同入选"
+              label="两种口径共同入选"
               value={data.overlap_codes.length}
               suffix="只"
-              note="同一股票可分别进入两组"
+              note="纯高股息与低估值名单的交集"
               icon={<Layers3 size={18} />}
             />
             <StatCard
@@ -132,10 +148,12 @@ export function DividendPage() {
           <section className="panel dividend-results">
             <div className="panel-heading">
               <div>
-                <h2>{group?.name} · 前 25 名</h2>
+                <h2>
+                  {group?.name} · 前 {limit} 名
+                </h2>
                 <p>
                   {classic ? '按三年累计分红比例降序' : '按近一年股息率降序'}，同值按代码排序。不足
-                  25 只不放宽条件。
+                  {limit} 只不放宽条件。
                 </p>
               </div>
               <span className="heading-tag">仅保留最新结果</span>
@@ -156,13 +174,18 @@ export function DividendPage() {
                   checked={overlapOnly}
                   onChange={(e) => setOverlapOnly(e.target.checked)}
                 />
-                只看两组共同入选
+                只看两种口径共同入选
               </label>
               <span>
                 展示 {items.length} / {group?.items.length ?? 0} 只
               </span>
             </div>
-            {!group?.items.length ? (
+            {data.requires_refresh && !classic ? (
+              <EmptyState
+                title="请更新分组名单"
+                description="旧版混合前25只无法还原两组独立排名，请重新采集并同步。"
+              />
+            ) : !group?.items.length ? (
               <EmptyState title="本组暂无符合条件的股票" description="本次无股票满足全部条件。" />
             ) : !items.length ? (
               <EmptyState
@@ -264,11 +287,11 @@ export function DividendPage() {
               </p>
               <p>
                 高股息低估值：按除息日统计近 365 天现金分红，要求股息率 &gt; 4%、0 &lt; PE &lt;
-                8，再按股息率取前
-                25；不附加第一组的成长条件。分红比例均以所选交易日总市值为分母，三年累计比例未年化。
+                8；按当日申万一级行业区分银行与非银行，分别按股息率取前 10 和前 25 只。
+                不附加纯高股息的成长条件。分红比例均以所选交易日总市值为分母，三年累计比例未年化。
               </p>
               <span>
-                两组均剔除 4、8 开头、ST 及名称含 ST、*、退的股票，保留科创板、停牌和涨跌停股票。
+                三组均剔除 4、8 开头、ST 及名称含 ST、*、退的股票，保留科创板、停牌和涨跌停股票。
                 财务数据取当日已披露值，报告期可能不同；停牌价使用填充值，缺失指标显示“—”。
               </span>
             </div>

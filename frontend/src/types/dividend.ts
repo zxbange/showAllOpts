@@ -26,10 +26,11 @@ export interface DividendGroup {
   id: string
   name: string
   ranking_field: string
-  candidates: number
+  candidates: number | null
   items: DividendItem[]
 }
 export interface DividendOverview {
+  requires_refresh?: boolean
   snapshot: {
     trade_date: string
     updated_at: string

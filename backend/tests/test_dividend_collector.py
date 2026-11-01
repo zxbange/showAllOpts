@@ -47,7 +47,7 @@ def ns(module):
 
 
 def meta(**changes):
-    return dict(dict(trade_date=DAY, rule_version='dividend_top25_v1', universe_count=5000, eligible_count=4000,
+    return dict(dict(trade_date=DAY, rule_version='dividend_split_bank_v3', universe_count=5000, eligible_count=4000,
                 classic_candidates=1, value_candidates=1, classic_count=1, value_count=1), **changes)
 
 
@@ -78,21 +78,64 @@ def test_top10_then_fundamentals_then_top25_and_tie_breaking(ns):
     caps={c:dict(market_cap=100,pe_ratio=7,pb_ratio=1) for c in reversed(codes)}
     cash={c:dict(cash_1y=Decimal(50000),cash_3y=Decimal(100000+i*100),has_3y=True) for i,c in enumerate(codes)}
     fin={c:dict(inc_total_revenue_year_on_year=10,inc_net_profit_year_on_year=20,inc_return=8) for c in codes}
-    selected,ratios,counts=ns.select(caps,cash,fin)
+    selected,ratios,counts=ns.select(caps,cash,fin,set())
     assert selected['classic']==list(reversed(codes))[:25]
     assert selected['value']==codes[:25]  # equal yield, code ascending
     assert counts==dict(classic=100,value=1000)
     assert ratios[codes[0]]==(Decimal(5),Decimal(10))
     # Failure of the top decile never admits lower-ranked stocks to make 25.
     for c in codes[-100:]:fin[c]['inc_net_profit_year_on_year']=8
-    assert ns.select(caps,cash,fin)[0]['classic']==[]
+    assert ns.select(caps,cash,fin,set())[0]['classic']==[]
+
+
+def test_bank_and_nonbank_rank_independently_before_limits(ns):
+    codes=['{:06d}.XSHE'.format(i) for i in range(100)]
+    caps={c:dict(market_cap=100,pe_ratio=7) for c in codes}
+    cash={c:dict(cash_1y=Decimal(50000),cash_3y=Decimal(0)) for c in codes}
+    selected,_,counts=ns.select(caps,cash,{},set(codes[:40]))
+    assert selected['bank']==codes[:10]
+    assert selected['value']==codes[40:65]
+    assert not set(selected['bank']) & set(selected['value'])
+    assert counts['value']==100
+    assert ns.select(caps,cash,{},set(codes))[0]['value']==[]
+
+
+def test_industry_uses_first_level_code_and_missing_classification_fails(module):
+    data={'a': {'sw_l1': {'industry_code':'801780','industry_name':'银行'},
+                'sw_l3': {'industry_code':'850701','industry_name':'城商行'}},
+          'b': {'sw_l1': {'industry_code':'801790','industry_name':'非银金融'}}}
+    ns=module._dividend_strategy({'get_industry':lambda codes,date:{c:data[c] for c in codes}},module.DB_CONFIG)
+    industries,banks=ns.industries_for(['a','b'],DAY)
+    assert banks=={'a'} and set(industries)=={'a','b'}
+    data['b']={}
+    with pytest.raises(ValueError,match='一级行业缺失'):
+        ns.industries_for(['a','b'],DAY)
+
+
+def test_three_group_write_limits_and_snapshot_replacement(ns):
+    engine=create_engine('sqlite://');ns.Base.metadata.create_all(engine);Session=sessionmaker(bind=engine)
+    try:
+        ns.save_latest(Session,meta(),[row(),row('value')])
+        data=[row('value',code=str(i),rank=i+1) for i in range(25)]
+        data += [row('bank',code=str(100+i),rank=i+1) for i in range(10)]
+        head=meta(classic_count=0,classic_candidates=0,value_count=35,value_candidates=60)
+        assert ns.save_latest(Session,head,data)
+        assert not ns.save_latest(Session,head,data)
+        with Session() as db:
+            assert db.query(ns.DividendStock).count()==35
+        with pytest.raises(ValueError):
+            ns.save_latest(Session,meta(value_count=36),data+[row('bank',code='bad',rank=11)])
+        with pytest.raises(ValueError,match='银行分类'):
+            ns.save_latest(Session,head,[dict(r,code='0') if r['method']=='bank' and r['rank']==1 else r for r in data])
+    finally:
+        engine.dispose()
 
 
 @pytest.mark.parametrize('pe,cash1,accepted', [(0,50000,False),(-1,50000,False),(8,50000,False),(7,40000,False),(7,40001,True)])
 def test_value_strict_boundaries_and_no_growth_requirement(ns,pe,cash1,accepted):
     caps={'a':dict(market_cap=100,pe_ratio=pe)}
     cash={'a':dict(cash_1y=Decimal(cash1),cash_3y=Decimal(0),has_3y=False)}
-    selected,_,_=ns.select(caps,cash,{})
+    selected,_,_=ns.select(caps,cash,{},set())
     assert selected['value']==(['a'] if accepted else [])
     assert selected['classic']==[]
 
@@ -102,9 +145,9 @@ def test_classic_growth_boundaries(ns,field,value):
     caps={str(i):dict(market_cap=100,pe_ratio=7) for i in range(10)}
     cash={str(i):dict(cash_1y=Decimal(0),cash_3y=Decimal(1000+i),has_3y=True) for i in range(10)}
     fin={'9':dict(inc_total_revenue_year_on_year=10,inc_net_profit_year_on_year=20,inc_return=8)}
-    assert ns.select(caps,cash,fin)[0]['classic']==['9']
+    assert ns.select(caps,cash,fin,set())[0]['classic']==['9']
     fin['9'][field]=value
-    assert ns.select(caps,cash,fin)[0]['classic']==[]
+    assert ns.select(caps,cash,fin,set())[0]['classic']==[]
 
 
 def test_latest_replacement_no_duplicates_unchanged_no_dml_and_empty_results(ns):
@@ -213,7 +256,7 @@ def test_end_to_end_source_dates_filters_recompute_and_failure_keeps_snapshot(mo
               get_trade_days=lambda end_date,count:[DAY],
               get_extras=lambda _,batch,**kw:SimpleNamespace(index=[DAY],columns=batch,iloc=[{c:c==codes[1] for c in batch}]),
               get_price=quote,get_fundamentals=fundamentals,
-              get_industry=lambda selected,date:{c:{'sw_l3':dict(industry_code='test',industry_name='测试行业')} for c in selected})
+              get_industry=lambda selected,date:{c:{'sw_l1':dict(industry_code='801010',industry_name='农林牧渔'), 'sw_l3':dict(industry_code='test',industry_name='测试行业')} for c in selected})
     ns=module._dividend_strategy(apis,module.DB_CONFIG)
     result=ns.run()
     assert len(result)==28  # 39 eligible -> top-decile 3 + value top25

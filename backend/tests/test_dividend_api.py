@@ -18,7 +18,7 @@ def seed(session,empty=False):
 
 def test_empty_uncollected_and_collected_zero_are_distinct(client,session):
     data=client.get('/api/v1/dividend-selection/latest').json()
-    assert data['snapshot'] is None and len(data['groups'])==2
+    assert data['snapshot'] is None and len(data['groups'])==3
     seed(session,empty=True)
     data=client.get('/api/v1/dividend-selection/latest').json()
     assert data['snapshot']['trade_date']=='2026-10-16' and all(not g['items'] for g in data['groups'])
@@ -47,3 +47,27 @@ def test_error_is_sanitized_and_module_registered(client,monkeypatch):
     response=client.get('/api/v1/dividend-selection/latest')
     assert response.status_code==503 and 'secret' not in response.text
     assert 'dividend-selection' in [m['id'] for m in client.get('/api/v1/modules').json()['modules']]
+
+
+def test_bank_group_and_overlap_with_either_value_group(client,session):
+    seed(session)
+    session.add(DividendStock(**row('bank', code='600000.XSHG')))
+    session.add(DividendStock(**row('classic', code='600000.XSHG', rank=2)))
+    session.commit()
+    data=client.get('/api/v1/dividend-selection/latest').json()
+    assert [g['id'] for g in data['groups']] == ['classic', 'value', 'bank']
+    assert data['groups'][2]['items'][0]['code'] == '600000.XSHG'
+    assert data['overlap_codes'] == ['000001.XSHE', '600000.XSHG']
+    assert data['requires_refresh'] is False
+    assert data['groups'][1]['candidates'] is None
+
+
+def test_legacy_mixed_top25_is_not_mislabeled_as_nonbank(client,session):
+    seed(session)
+    session.get(DividendSnapshot, 1).rule_version='dividend_top25_v2'
+    session.commit()
+    data=client.get('/api/v1/dividend-selection/latest').json()
+    assert data['requires_refresh'] is True
+    assert len(data['groups'][0]['items']) == 1
+    assert not data['groups'][1]['items'] and not data['groups'][2]['items']
+    assert not data['overlap_codes']

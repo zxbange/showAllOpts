@@ -106,7 +106,7 @@ Windows 集成测试创建随机本地端口的子进程和孙进程，分别验
 
 微盘新高新低使用 `microcap_breadth`，按 `(series_id, trade_date)` 唯一保存每日四周期数量。只新增续传，历史不清理；后端一次限量 SELECT，跳过成分股文本，按需计算比例和滚动指标。详见 [统计与部署说明](microcap-breadth.md)。
 
-高股息选股使用 `dividend_selection_snapshot` 和 `dividend_selection_stock`，由聚宽单文件每次重算并事务替换最新结果，不保留历史；这是其他采集模块增量规则的独立例外。网页通过一次只读 JOIN 查询展示两组 Top25，详情见 [高股息选股](dividend-selection.md)。
+高股息选股使用 `dividend_selection_snapshot` 和 `dividend_selection_stock`，由聚宽单文件每次重算并事务替换最新结果，不保留历史；这是其他采集模块增量规则的独立例外。网页通过一次只读 JOIN 展示纯高股息前25只、低估值非银行前25只及银行前10只，详情见 [高股息选股](dividend-selection.md)。
 
 
 ## 本地快照查询层
