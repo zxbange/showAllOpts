@@ -303,7 +303,7 @@ test('compact data precedes controls and history is isolated by Shanghai date', 
       const day=url.searchParams.get('day')!
       return route.fulfill({json:{days:['2026-11-02','2026-11-01'],next_before:null,events:[{id:day.endsWith('02')?2:1,strategy2:'模拟策略',name:day.endsWith('02')?'今日股票':'昨日股票',code:'000001',delta:'100',after:'200',before:'100',kind:'add',observed_at:day.endsWith('02')?'2026-11-01T16:05:00Z':'2026-11-01T07:00:00Z'}]}})
     }
-    return route.fulfill({json:{configured:true,enabled:false,baseline:true,version:1,rows:[{strategy2:'模拟策略',code:'000001',name:'模拟银行',amt:'200'}],window_open:false,trading_day:true,calendar_error:null,error:null,observed_at:'2026-11-01T16:05:00Z'}})
+    return route.fulfill({json:{configured:true,enabled:false,baseline:true,version:1,rows:['趋势策略','价值策略','反弹策略'].map(strategy2=>({strategy2,code:'000001',name:'模拟银行',amt:'200'})),window_open:false,trading_day:true,calendar_error:null,error:null,observed_at:'2026-11-01T16:05:00Z'}})
   })
   await page.goto('/personal-holdings')
   await page.getByLabel('记录日期',{exact:true}).fill('2026-11-02')
@@ -314,6 +314,8 @@ test('compact data precedes controls and history is isolated by Shanghai date', 
   await expect(page.getByRole('heading',{name:'2026-11-01 北京时间'})).toBeVisible()
   await expect(page.getByRole('cell',{name:'昨日股票 000001'})).toBeVisible()
   await expect(page.getByText('今日股票',{exact:true})).toHaveCount(0)
+  const columnCount=await page.locator('.holdings-groups').evaluate(el=>getComputedStyle(el).gridTemplateColumns.split(' ').length)
+  expect(columnCount).toBe(info.project.name==='desktop'?3:1)
   const positions=await page.getByRole('region',{name:'当前持仓',exact:true}).boundingBox()
   const history=await page.getByRole('region',{name:'仓位变动',exact:true}).boundingBox()
   const toolbar=await page.locator('.holdings-toolbar').boundingBox()
