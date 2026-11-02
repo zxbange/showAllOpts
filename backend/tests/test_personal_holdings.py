@@ -186,13 +186,15 @@ def test_admin_only_all_endpoints_csrf_no_password_echo(monitor):
     for path in paths:assert client.get('/api/v1/personal-holdings/'+path).status_code==401
     app.state.accounts.create('viewer',PASSWORD,'viewer',app.state.accounts.list()[0]['id']);sign_in(client,'viewer')
     for path in paths:assert client.get('/api/v1/personal-holdings/'+path).status_code==403
-    for path in ['start','stop','configuration','test']:
+    for path in ['start','stop','configuration','test','sync']:
         assert client.post('/api/v1/personal-holdings/'+path,json={}).status_code==403
     sign_in(client);assert client.get('/api/v1/personal-holdings/status').status_code==200
     assert 'test-secret-only' not in client.get('/api/v1/personal-holdings/configuration').text
     response=client.post('/api/v1/personal-holdings/configuration',json={'password':'secret-raw-invalid'})
     assert response.status_code==422 and 'secret-raw-invalid' not in response.text
+    assert client.post('/api/v1/personal-holdings/sync',json={'request_id':'a'*32}).status_code==200
     client.headers['X-CSRF-Token']='bad';assert client.post('/api/v1/personal-holdings/start',json={}).status_code==403
+    assert client.post('/api/v1/personal-holdings/sync',json={'request_id':'b'*32}).status_code==403
     sign_in(client);client.headers['Origin']='https://evil.test'
     assert client.post('/api/v1/personal-holdings/start',json={}).status_code==403
     client.close()
@@ -287,3 +289,90 @@ def test_interrupted_configuration_publication_does_not_trap_active_version(moni
     job.configure(dict(config,password='new-intended-secret'))
     assert job.state()['source']['revision']==3
     assert job.sources.get(job.state()['source']['id'],3)['password']=='new-intended-secret'
+
+
+@pytest.mark.parametrize('moment', [datetime(2026,11,2,12,tzinfo=timezone.utc), datetime(2026,11,1,2,tzinfo=timezone.utc), datetime(2027,1,4,2,tzinfo=timezone.utc)])
+def test_manual_outside_window_idempotent_and_persistent(monitor, moment):
+    job,source,now,config,counts,closed=monitor
+    now[0]=moment
+    replace(source,[row()])
+    assert not job.poll()
+    before=job.state()['next_poll']
+    job.request_sync('a'*32);job.request_sync('b'*32)
+    assert job.poll()
+    assert not job.status()['enabled'] and job.status()['baseline']
+    assert job.status()['manual']['status']=='completed'
+    assert job.state()['next_poll']==before and len(counts)==len(closed)==1
+    day=moment.astimezone(module.SHANGHAI).date().isoformat()
+    assert not job.history(day)['events']
+    job.request_sync('a'*32);job.request_sync('b'*32)
+    assert not job.poll() and len(counts)==1
+    replace(source,[row(amt='200')]);job.request_sync('c'*32)
+    restarted=PersonalHoldings(job.settings)
+    restarted.sources.build_engine=job.sources.build_engine
+    try:
+        assert restarted.poll()
+        assert restarted.history(day)['events'][0]['kind']=='add'
+    finally: restarted.stop()
+
+
+def test_manual_failure_and_config_fence(monitor, monkeypatch):
+    job,source,now,config,*_=monitor
+    replace(source,[row()]);job.request_sync('a'*32);assert job.poll()
+    now[0]+=timedelta(hours=10)
+    job.request_sync('b'*32)
+    original=job.read
+    def failed(*args): raise RuntimeError('private-secret-must-not-appear')
+    monkeypatch.setattr(job,'read',failed)
+    assert not job.poll()
+    assert job.status()['manual']['status']=='failed'
+    assert job.status()['rows'] and not job.history('2026-11-02')['events']
+    assert 'private-secret' not in str(job.status())
+    def changed(*args):
+        result=original(*args)
+        job.configure(dict(config,table='changed',password='new-test-secret'))
+        return result
+    monkeypatch.setattr(job,'read',changed)
+    job.request_sync('c'*32);assert not job.poll()
+    assert job.status()['manual']['status']=='cancelled'
+    assert not job.status()['baseline']
+
+
+def test_manual_automatic_leader_no_overlap(monitor):
+    job,source,now,config,counts,closed=monitor
+    job.set_enabled(True);replace(source,[row()]);assert job.poll()
+    next_poll=job.state()['next_poll']
+    other=PersonalHoldings(job.settings)
+    other.sources.build_engine=job.sources.build_engine
+    try:
+        other.request_sync('a'*32)
+        assert not other.poll()
+        replace(source,[row(amt='150')]);assert job.poll()
+        assert job.state()['next_poll']==next_poll and job.state()['enabled']
+        assert len(counts)==1 and not closed
+        assert len(job.history('2026-11-02')['events'])==1
+        assert not other.poll()
+    finally: other.stop()
+
+
+def test_manual_empty_snapshot_and_stop_fence(monitor, monkeypatch):
+    job,source,now,*_=monitor
+    job.set_enabled(True);replace(source,[row()]);assert job.poll()
+    now[0]+=timedelta(hours=10)
+    job.request_sync('a'*32);replace(source,[]);assert job.poll()
+    assert job.status()['enabled'] and not job.status()['rows']
+    assert job.history('2026-11-02')['events'][0]['kind']=='clear'
+    original=job.read
+    def stop_during_read(*args):
+        result=original(*args);job.set_enabled(False);return result
+    monkeypatch.setattr(job,'read',stop_during_read)
+    replace(source,[row()]);job.request_sync('b'*32)
+    assert not job.poll() and not job.status()['rows']
+    assert job.status()['manual']['status']=='cancelled'
+    assert len(job.history('2026-11-02')['events'])==1
+
+
+def test_manual_requires_saved_configuration(tmp_path):
+    job=PersonalHoldings(Settings(_env_file=None,log_dir=tmp_path/'log'))
+    with pytest.raises(HoldingsError,match='保存'):job.request_sync('a'*32)
+    assert not job.status()['configured']

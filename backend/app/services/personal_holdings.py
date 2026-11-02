@@ -52,6 +52,7 @@ class PersonalHoldings:
             db.execute('''CREATE TABLE IF NOT EXISTS holdings_events (
                 id INTEGER PRIMARY KEY AUTOINCREMENT, epoch TEXT NOT NULL, version INTEGER NOT NULL,
                 day TEXT NOT NULL, observed_at TEXT NOT NULL, payload TEXT NOT NULL)''')
+            db.execute('CREATE TABLE IF NOT EXISTS holdings_manual_requests (id TEXT PRIMARY KEY)')
             db.execute('CREATE INDEX IF NOT EXISTS holdings_events_day ON holdings_events(day,id)')
             db.execute('INSERT OR IGNORE INTO holdings_state VALUES(1,?)', (json.dumps(dict(
                 enabled=False, source=None, epoch=uuid.uuid4().hex, baseline=False, rows=[], version=0,
@@ -75,6 +76,9 @@ class PersonalHoldings:
         return json.loads(db.execute('SELECT payload FROM holdings_state WHERE id=1').fetchone()[0])
 
     def write(self, db, state):
+        previous = self.state(db)
+        if previous['epoch'] != state['epoch'] and (state.get('manual') or {}).get('status') == 'pending':
+            state['manual'] = dict(state['manual'], status='cancelled', error='配置或监控状态已变更，请重新同步')
         db.execute('UPDATE holdings_state SET payload=? WHERE id=1', (json.dumps(state, ensure_ascii=False),))
 
     def configuration(self):
@@ -124,6 +128,20 @@ class PersonalHoldings:
                                  checked_at=None, observed_at=None, error=None)
                     self.write(db, state)
         return self.configuration()
+
+    def request_sync(self, request_id):
+        # Durable intent: HTTP completion/navigation does not own the sampling work.
+        with self.db() as db:
+            db.execute('BEGIN IMMEDIATE')
+            state = self.state(db)
+            if not state['source']:
+                raise HoldingsError('请先保存数据库配置')
+            if not db.execute('SELECT 1 FROM holdings_manual_requests WHERE id=?', (request_id,)).fetchone():
+                db.execute('INSERT INTO holdings_manual_requests VALUES(?)', (request_id,))
+                if (state.get('manual') or {}).get('status') != 'pending':
+                    state['manual'] = dict(id=request_id, status='pending', error=None)
+                    self.write(db, state)
+        return self.status()
 
     def set_enabled(self, enabled):
         with self.db() as db:
@@ -209,7 +227,8 @@ class PersonalHoldings:
     def poll(self):
         moment = clock()
         state = self.state()
-        if self.stop_event.is_set() or not state['enabled'] or not in_window(moment):
+        manual = (state.get('manual') or {}).get('status') == 'pending'
+        if self.stop_event.is_set() or (not manual and (not state['enabled'] or not in_window(moment))):
             self.release()
             return False
         if self.lock is None:
@@ -224,13 +243,15 @@ class PersonalHoldings:
         with self.db() as db:
             db.execute('BEGIN IMMEDIATE')
             state = self.state(db)
-            if not state['enabled'] or not in_window(clock()):
+            manual = (state.get('manual') or {}).get('status') == 'pending'
+            if not manual and (not state['enabled'] or not in_window(clock())):
                 self.release()
                 return False
-            if state['next_poll'] > moment.timestamp():
+            if not manual and state['next_poll'] > moment.timestamp():
                 return False
-            state['next_poll'] = moment.timestamp()+INTERVAL
-            self.write(db, state)
+            if not manual:
+                state['next_poll'] = moment.timestamp()+INTERVAL
+                self.write(db, state)
         try:
             if self.source_ref != state['source']:
                 self.close_source()
@@ -245,8 +266,8 @@ class PersonalHoldings:
             with self.db() as db:
                 db.execute('BEGIN IMMEDIATE')
                 current = self.state(db)
-                if (self.stop_event.is_set() or not current['enabled'] or current['epoch'] != state['epoch']
-                        or not in_window(observed)):
+                if (self.stop_event.is_set() or current['epoch'] != state['epoch']
+                        or (not manual and (not current['enabled'] or not in_window(observed)))):
                     self.close_source()
                     return False
                 events = changes(current['rows'], snapshot) if current['baseline'] else []
@@ -257,7 +278,9 @@ class PersonalHoldings:
                                 observed.isoformat(), json.dumps(event, ensure_ascii=False)))
                 current.update(rows=snapshot, baseline=True, version=version,
                                observed_at=observed.isoformat(), checked_at=observed.isoformat(), error=None,
-                               next_poll=max(current['next_poll'], observed.timestamp()))
+                               next_poll=current['next_poll'] if manual else max(current['next_poll'], observed.timestamp()))
+                if manual:
+                    current['manual'] = dict(current['manual'], status='completed', error=None)
                 self.write(db, current)
             return True
         except Exception as error:
@@ -267,12 +290,18 @@ class PersonalHoldings:
             with self.db() as db:
                 db.execute('BEGIN IMMEDIATE')
                 current = self.state(db)
-                if current['epoch'] == state['epoch'] and current['enabled']:
-                    current.update(checked_at=clock().isoformat(), next_poll=clock().timestamp()+INTERVAL,
+                if current['epoch'] == state['epoch'] and (manual or current['enabled']):
+                    current.update(checked_at=clock().isoformat(), next_poll=current['next_poll'] if manual else clock().timestamp()+INTERVAL,
                                    error=str(error) if isinstance(error, (HoldingsError, SourceError)) else
                                    '读取或保存失败，保留上次持仓；下一轮自动重试')
+                    if manual:
+                        current['manual'] = dict(current['manual'], status='failed', error='同步失败，原持仓和历史保留，请重试')
+                        current['error'] = current['manual']['error']
                     self.write(db, current)
             return False
+        finally:
+            if manual and (not self.state()['enabled'] or not in_window(clock())):
+                self.release()
 
     def loop(self):
         try:

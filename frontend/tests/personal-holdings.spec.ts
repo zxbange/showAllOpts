@@ -256,3 +256,41 @@ test('pending stop suppresses background reads and late pre-operation status can
     releaseOld()
   }
 })
+
+test('manual sync outside trading window keeps monitoring off and survives navigation', async ({page}, info) => {
+  let manual: any = null
+  let calls = 0
+  let version = 0
+  const config = {host:'mock.db.test',port:3306,database:'mock',username:'reader',table:'positions',password_set:true}
+  await page.route('**/api/v1/personal-holdings/**', async route => {
+    const path = new URL(route.request().url()).pathname.split('/').pop()
+    if (path === 'configuration') return route.fulfill({json:config})
+    if (path === 'history') return route.fulfill({json:{days:[],events:[],next_before:null}})
+    if (path === 'sync') {
+      calls++
+      expect(route.request().headers()['x-csrf-token']).toBe('test-csrf')
+      expect(route.request().postDataJSON().request_id).toMatch(/^[a-f0-9-]+$/)
+      manual = {id:'mock',status:'pending',error:null}
+    }
+    return route.fulfill({json:{configured:true,enabled:false,baseline:version>0,version,
+      rows:version ? [{strategy2:'模拟策略',name:'模拟银行',code:'000001',amt:'100'}] : [],
+      window_open:false,trading_day:false,calendar_error:null,error:null,observed_at:null,manual}})
+  })
+  await page.goto('/personal-holdings')
+  await page.getByRole('button',{name:'立即同步',exact:true}).click()
+  await expect(page.getByRole('button',{name:'同步中…'})).toBeDisabled()
+  expect(calls).toBe(1)
+  await page.reload()
+  await expect(page.getByRole('button',{name:'同步中…'})).toBeDisabled()
+  manual.status='completed';version=1
+  await expect(page.getByRole('cell',{name:'000001',exact:true})).toBeVisible({timeout:10000})
+  await expect(page.getByRole('button',{name:'开始监控',exact:true})).toBeEnabled()
+  await expect(page.getByRole('status')).toContainText('同步完成')
+  expect(calls).toBe(1)
+  await page.screenshot({path:`/workspace/personal-holdings-preview/manual-${info.project.name}.png`,fullPage:true})
+  await page.getByRole('button',{name:'立即同步',exact:true}).click()
+  await expect(page.getByRole('button',{name:'同步中…'})).toBeDisabled()
+  expect(calls).toBe(2)
+  manual.status='completed'
+  await expect(page.getByRole('button',{name:'立即同步',exact:true})).toBeEnabled({timeout:10000})
+})

@@ -89,3 +89,12 @@ async def stop(monitor=Depends(service)):
 @router.get('/history')
 async def history(day: date, before: int | None = Query(default=None, ge=1), monitor=Depends(service)):
     return await safe_call(monitor.history, day.isoformat(), before)
+
+
+class SyncRequest(BaseModel):
+    request_id: str = Field(pattern=r'^[a-zA-Z0-9-]{16,64}$')
+
+
+@router.post('/sync')
+async def sync(body: SyncRequest, monitor=Depends(service)):
+    return await safe_call(monitor.request_sync, body.request_id)

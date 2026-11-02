@@ -16,6 +16,7 @@ type Event = {
   observed_at: string
 }
 type Status = {
+  manual?: { id: string; status: string; error: string | null }
   enabled: boolean
   configured: boolean
   baseline: boolean
@@ -92,6 +93,7 @@ function Holdings() {
   const [history, setHistory] = useState<History>({ days: [], events: [], next_before: null })
   const [historyError, setHistoryError] = useState('')
   const [loadingMore, setLoadingMore] = useState(false)
+  const syncId = useRef<string | null>(null)
   const generation = useRef(0)
   const mutating = useRef(false)
   const mounted = useRef(true)
@@ -137,7 +139,7 @@ function Holdings() {
         if (!controller.signal.aborted && token === generation.current)
           setPollError((err as Error).message)
       } finally {
-        if (!controller.signal.aborted) timer = setTimeout(poll, 15000)
+        if (!controller.signal.aborted) timer = setTimeout(poll, 2000)
       }
     }
     void poll()
@@ -171,7 +173,7 @@ function Holdings() {
     ['host', 'port', 'database', 'username', 'table'].every(
       (key) => config[key as keyof Config] === saved[key as keyof Config],
     )
-  async function operate(action: 'test' | 'configuration' | 'start' | 'stop') {
+  async function operate(action: 'test' | 'configuration' | 'start' | 'stop' | 'sync') {
     if (mutating.current) return
     mutating.current = true
     setBusy(true)
@@ -195,7 +197,12 @@ function Holdings() {
           setStatus(await request<Status>('/status'))
         }
       } else {
-        const result = await request<Status>('/' + action, {})
+        if (action === 'sync' && !syncId.current) syncId.current = crypto.randomUUID()
+        const result = await request<Status>(
+          '/' + action,
+          action === 'sync' ? { request_id: syncId.current } : {},
+        )
+        if (action === 'sync') syncId.current = null
         if (mounted.current) setStatus(result)
       }
     } catch (err) {
@@ -250,13 +257,35 @@ function Holdings() {
           <p>每15秒查询，包含午间。关页后后台继续；首次完整读取建立基准，不记买入。</p>
           <small>最近成功读取：{stamp(status?.observed_at ?? null)}</small>
         </div>
-        <button
-          className="button button-primary"
-          disabled={busy || !status?.configured}
-          onClick={() => void operate(status?.enabled ? 'stop' : 'start')}
-        >
-          {status?.enabled ? '停止监控' : '开始监控'}
-        </button>
+        <div className="holdings-actions">
+          <button
+            className="button"
+            disabled={
+              busy ||
+              !status?.configured ||
+              !unchangedTarget ||
+              passwordEdited ||
+              status?.manual?.status === 'pending'
+            }
+            onClick={() => void operate('sync')}
+          >
+            {status?.manual?.status === 'pending' ? '同步中…' : '立即同步'}
+          </button>
+          <button
+            className="button button-primary"
+            disabled={busy || !status?.configured}
+            onClick={() => void operate(status?.enabled ? 'stop' : 'start')}
+          >
+            {status?.enabled ? '停止监控' : '开始监控'}
+          </button>
+        </div>
+        <span role="status">
+          {status?.manual?.status === 'completed'
+            ? '同步完成'
+            : status?.manual?.status === 'cancelled'
+              ? status.manual.error
+              : ''}
+        </span>
       </section>
       {(error || pollError || status?.error || status?.calendar_error) && (
         <p className="holdings-error" role="alert">
