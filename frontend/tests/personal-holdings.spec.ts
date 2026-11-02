@@ -294,3 +294,33 @@ test('manual sync outside trading window keeps monitoring off and survives navig
   manual.status='completed'
   await expect(page.getByRole('button',{name:'立即同步',exact:true})).toBeEnabled({timeout:10000})
 })
+
+test('compact data precedes controls and history is isolated by Shanghai date', async ({page}, info) => {
+  await page.route('**/api/v1/personal-holdings/**', async route => {
+    const url=new URL(route.request().url())
+    if(url.pathname.endsWith('/configuration')) return route.fulfill({json:{host:'mock.test',port:3306,database:'mock',username:'reader',table:'positions',password_set:true}})
+    if(url.pathname.endsWith('/history')) {
+      const day=url.searchParams.get('day')!
+      return route.fulfill({json:{days:['2026-11-02','2026-11-01'],next_before:null,events:[{id:day.endsWith('02')?2:1,strategy2:'模拟策略',name:day.endsWith('02')?'今日股票':'昨日股票',code:'000001',delta:'100',after:'200',before:'100',kind:'add',observed_at:day.endsWith('02')?'2026-11-01T16:05:00Z':'2026-11-01T07:00:00Z'}]}})
+    }
+    return route.fulfill({json:{configured:true,enabled:false,baseline:true,version:1,rows:[{strategy2:'模拟策略',code:'000001',name:'模拟银行',amt:'200'}],window_open:false,trading_day:true,calendar_error:null,error:null,observed_at:'2026-11-01T16:05:00Z'}})
+  })
+  await page.goto('/personal-holdings')
+  await page.getByLabel('记录日期',{exact:true}).fill('2026-11-02')
+  await expect(page.getByRole('heading',{name:'2026-11-02 北京时间'})).toBeVisible()
+  await expect(page.getByRole('cell',{name:'今日股票 000001'})).toBeVisible()
+  await expect(page.getByRole('cell',{name:'00:05:00',exact:true})).toBeVisible()
+  await page.getByLabel('历史日期',{exact:true}).selectOption('2026-11-01')
+  await expect(page.getByRole('heading',{name:'2026-11-01 北京时间'})).toBeVisible()
+  await expect(page.getByRole('cell',{name:'昨日股票 000001'})).toBeVisible()
+  await expect(page.getByText('今日股票',{exact:true})).toHaveCount(0)
+  const positions=await page.getByRole('region',{name:'当前持仓',exact:true}).boundingBox()
+  const history=await page.getByRole('region',{name:'仓位变动',exact:true}).boundingBox()
+  const toolbar=await page.locator('.holdings-toolbar').boundingBox()
+  const config=await page.locator('.holdings-configuration').boundingBox()
+  expect(positions!.y).toBeLessThan(history!.y)
+  expect(history!.y+history!.height).toBeLessThanOrEqual(toolbar!.y)
+  expect(toolbar!.y+toolbar!.height).toBeLessThanOrEqual(config!.y)
+  expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true)
+  await page.screenshot({path:info.outputPath('compact.png'),fullPage:true})
+})

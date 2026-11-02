@@ -1,6 +1,6 @@
 .holdings-page {
   display: grid;
-  gap: 24px;
+  gap: 18px;
   min-width: 0;
 }
 .holdings-heading,
@@ -37,7 +37,7 @@
   border: 1px solid #e8ded3;
   border-radius: 18px;
   background: #fff;
-  padding: 24px;
+  padding: 16px;
   min-width: 0;
 }
 .holdings-configuration summary {
@@ -95,7 +95,7 @@
 .holdings-groups {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 18px;
+  gap: 12px;
 }
 .holdings-card h3 {
   margin: 0;
@@ -112,7 +112,7 @@
 }
 .holdings-page th,
 .holdings-page td {
-  padding: 14px 10px;
+  padding: 8px 10px;
   text-align: left;
   border-bottom: 1px solid #f0e9e2;
   white-space: nowrap;
@@ -141,7 +141,7 @@
   background: #edf5ef;
 }
 .holdings-empty {
-  padding: 20px 0;
+  padding: 10px 0;
 }
 @media (max-width: 700px) {
   .holdings-form,
@@ -149,7 +149,7 @@
     grid-template-columns: 1fr;
   }
   .holdings-card {
-    padding: 18px;
+    padding: 14px;
   }
   .holdings-toolbar {
     align-items: flex-start;
@@ -158,4 +158,40 @@
 .holdings-scroll:focus-visible {
   outline: 2px solid #257259;
   outline-offset: 3px;
+}
+
+.holdings-section-title h2 {
+  margin: 0;
+  font-size: 20px;
+}
+.holdings-section-title {
+  margin-bottom: 12px;
+}
+.holdings-card > header {
+  margin-bottom: 6px;
+}
+.holdings-card h3 {
+  font-size: 16px;
+}
+.holdings-history > p {
+  margin: 8px 0;
+  font-size: 13px;
+}
+.holdings-day {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  padding: 10px 12px;
+  margin: 14px 0 4px;
+  border-left: 3px solid #257259;
+  background: #f0f4ee;
+  border-radius: 4px;
+}
+.holdings-day small {
+  font-size: 12px;
+  font-weight: 400;
+}
+.holdings-toolbar .holdings-actions {
+  margin-top: 0;
+  flex-wrap: wrap;
 }

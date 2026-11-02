@@ -251,6 +251,145 @@ function Holdings() {
                   : '等待交易时段'}
         </span>
       </header>
+      <section aria-label="当前持仓">
+        <div className="holdings-section-title">
+          <h2>当前持仓</h2>
+          <span>
+            {groups.length} 个策略 · {status?.rows.length ?? 0} 项持仓
+          </span>
+        </div>
+        {!status?.baseline ? (
+          <p className="holdings-card">等待首次完整持仓快照。</p>
+        ) : groups.length === 0 ? (
+          <p className="holdings-card">当前无持仓（最近一次完整查询为空）。</p>
+        ) : (
+          <div className="holdings-groups">
+            {groups.map(([strategy, rows]) => (
+              <article className="holdings-card" key={strategy}>
+                <header>
+                  <h3>{strategy}</h3>
+                  <span>{rows.length} 只</span>
+                </header>
+                <div
+                  className="holdings-scroll"
+                  tabIndex={0}
+                  role="region"
+                  aria-label="持仓表格，可横向滚动"
+                >
+                  <table>
+                    <thead>
+                      <tr>
+                        <th>股票</th>
+                        <th>代码</th>
+                        <th>股数</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {rows.map((row) => (
+                        <tr key={row.code}>
+                          <td>{row.name}</td>
+                          <td>{row.code}</td>
+                          <td>{row.amt}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </article>
+            ))}
+          </div>
+        )}
+      </section>
+      <section className="holdings-card holdings-history" aria-label="仓位变动">
+        <div className="holdings-section-title">
+          <h2>仓位变动</h2>
+          <label>
+            记录日期{' '}
+            <input
+              aria-label="记录日期"
+              type="date"
+              value={day}
+              onChange={(event) => setDay(event.target.value)}
+            />
+          </label>
+        </div>
+        <p>记录的是两次完整快照间的净变化，不代表逐笔成交；时间为北京时间的实际检测时间。</p>
+        {history.days.length > 0 && (
+          <label>
+            历史日期{' '}
+            <select
+              aria-label="历史日期"
+              value={history.days.includes(day) ? day : ''}
+              onChange={(event) => {
+                if (event.target.value) setDay(event.target.value)
+              }}
+            >
+              <option value="">选择已有记录的日期</option>
+              {history.days.map((value) => (
+                <option key={value}>{value}</option>
+              ))}
+            </select>
+          </label>
+        )}
+        {historyError && (
+          <p role="alert" className="holdings-error">
+            {historyError}
+          </p>
+        )}
+        <h3 className="holdings-day">
+          {day} <small>北京时间</small>
+        </h3>
+        {!history.events.length ? (
+          <p className="holdings-empty">当天暂无仓位变动记录。</p>
+        ) : (
+          <div
+            className="holdings-scroll"
+            tabIndex={0}
+            role="region"
+            aria-label="持仓表格，可横向滚动"
+          >
+            <table>
+              <thead>
+                <tr>
+                  <th>检测时间</th>
+                  <th>策略</th>
+                  <th>股票 / 代码</th>
+                  <th>变动</th>
+                  <th>股数变化</th>
+                  <th>变化后</th>
+                </tr>
+              </thead>
+              <tbody>
+                {history.events.map((event) => (
+                  <tr key={event.id}>
+                    <td title={stamp(event.observed_at)}>
+                      {new Date(event.observed_at).toLocaleTimeString('zh-CN', {
+                        timeZone: 'Asia/Shanghai',
+                        hour12: false,
+                      })}
+                    </td>
+                    <td>{event.strategy2}</td>
+                    <td>
+                      {event.name}
+                      <small>{event.code}</small>
+                    </td>
+                    <td>
+                      <span className={'holdings-event ' + event.kind}>{names[event.kind]}</span>
+                    </td>
+                    <td>{event.delta.startsWith('-') ? event.delta : '+' + event.delta}</td>
+                    <td>{event.after}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+        {history.next_before && (
+          <button className="button" disabled={loadingMore} onClick={() => void more()}>
+            加载更多
+          </button>
+        )}
+      </section>
       <section className="holdings-toolbar">
         <div>
           <strong>交易日 09:25–15:10 · 北京时间</strong>
@@ -371,137 +510,6 @@ function Holdings() {
         </form>
         <small>更换数据源会停止监控并建立新基准，历史记录保留。保存后点击“开始监控”。</small>
       </details>
-      <section aria-label="当前持仓">
-        <div className="holdings-section-title">
-          <h2>当前持仓</h2>
-          <span>
-            {groups.length} 个策略 · {status?.rows.length ?? 0} 项持仓
-          </span>
-        </div>
-        {!status?.baseline ? (
-          <p className="holdings-card">等待首次完整持仓快照。</p>
-        ) : groups.length === 0 ? (
-          <p className="holdings-card">当前无持仓（最近一次完整查询为空）。</p>
-        ) : (
-          <div className="holdings-groups">
-            {groups.map(([strategy, rows]) => (
-              <article className="holdings-card" key={strategy}>
-                <header>
-                  <h3>{strategy}</h3>
-                  <span>{rows.length} 只</span>
-                </header>
-                <div
-                  className="holdings-scroll"
-                  tabIndex={0}
-                  role="region"
-                  aria-label="持仓表格，可横向滚动"
-                >
-                  <table>
-                    <thead>
-                      <tr>
-                        <th>股票</th>
-                        <th>代码</th>
-                        <th>股数</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {rows.map((row) => (
-                        <tr key={row.code}>
-                          <td>{row.name}</td>
-                          <td>{row.code}</td>
-                          <td>{row.amt}</td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              </article>
-            ))}
-          </div>
-        )}
-      </section>
-      <section className="holdings-card">
-        <div className="holdings-section-title">
-          <h2>仓位变动</h2>
-          <label>
-            记录日期{' '}
-            <input
-              aria-label="记录日期"
-              type="date"
-              value={day}
-              onChange={(event) => setDay(event.target.value)}
-            />
-          </label>
-        </div>
-        <p>记录的是两次完整快照间的净变化，不代表逐笔成交；时间为北京时间的实际检测时间。</p>
-        {history.days.length > 0 && (
-          <label>
-            历史日期{' '}
-            <select
-              aria-label="历史日期"
-              value={history.days.includes(day) ? day : ''}
-              onChange={(event) => {
-                if (event.target.value) setDay(event.target.value)
-              }}
-            >
-              <option value="">选择已有记录的日期</option>
-              {history.days.map((value) => (
-                <option key={value}>{value}</option>
-              ))}
-            </select>
-          </label>
-        )}
-        {historyError && (
-          <p role="alert" className="holdings-error">
-            {historyError}
-          </p>
-        )}
-        {!history.events.length ? (
-          <p className="holdings-empty">当天暂无仓位变动记录。</p>
-        ) : (
-          <div
-            className="holdings-scroll"
-            tabIndex={0}
-            role="region"
-            aria-label="持仓表格，可横向滚动"
-          >
-            <table>
-              <thead>
-                <tr>
-                  <th>检测时间</th>
-                  <th>策略</th>
-                  <th>股票 / 代码</th>
-                  <th>变动</th>
-                  <th>股数变化</th>
-                  <th>变化后</th>
-                </tr>
-              </thead>
-              <tbody>
-                {history.events.map((event) => (
-                  <tr key={event.id}>
-                    <td>{stamp(event.observed_at)}</td>
-                    <td>{event.strategy2}</td>
-                    <td>
-                      {event.name}
-                      <small>{event.code}</small>
-                    </td>
-                    <td>
-                      <span className={'holdings-event ' + event.kind}>{names[event.kind]}</span>
-                    </td>
-                    <td>{event.delta.startsWith('-') ? event.delta : '+' + event.delta}</td>
-                    <td>{event.after}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
-        {history.next_before && (
-          <button className="button" disabled={loadingMore} onClick={() => void more()}>
-            加载更多
-          </button>
-        )}
-      </section>
     </div>
   )
 }
