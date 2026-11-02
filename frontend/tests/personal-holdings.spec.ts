@@ -287,7 +287,7 @@ test('manual sync outside trading window keeps monitoring off and survives navig
   await expect(page.getByRole('button',{name:'开始监控',exact:true})).toBeEnabled()
   await expect(page.getByRole('status')).toContainText('同步完成')
   expect(calls).toBe(1)
-  await page.screenshot({path:`/workspace/personal-holdings-preview/manual-${info.project.name}.png`,fullPage:true})
+  await page.screenshot({path:info.outputPath('manual.png'),fullPage:true})
   await page.getByRole('button',{name:'立即同步',exact:true}).click()
   await expect(page.getByRole('button',{name:'同步中…'})).toBeDisabled()
   expect(calls).toBe(2)
