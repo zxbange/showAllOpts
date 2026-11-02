@@ -197,5 +197,32 @@
 }
 
 @media (min-width: 1200px) {
-  .holdings-groups { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .holdings-groups {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+.holdings-history-scroll {
+  max-height: clamp(240px, 50vh, 480px);
+  overflow: auto;
+  scrollbar-gutter: stable;
+}
+.holdings-history-scroll th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: #fcf8f3;
+}
+.holdings-history-scroll th,
+.holdings-history-scroll td {
+  padding: 6px 8px;
+  font-size: 13px;
+  line-height: 1.5;
+}
+.holdings-history-scroll .holdings-event {
+  padding: 2px 6px;
+}
+.holdings-toolbar > div > small {
+  display: block;
+  margin-top: 6px;
 }

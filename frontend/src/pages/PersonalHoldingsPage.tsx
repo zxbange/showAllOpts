@@ -237,7 +237,6 @@ function Holdings() {
         <div>
           <span className="eyebrow">管理员专属</span>
           <h1>个人持仓</h1>
-          <p>按策略查看持仓，保存每次观测到的仓位变化。</p>
         </div>
         <span className="holdings-status">
           {!status
@@ -304,33 +303,24 @@ function Holdings() {
         <div className="holdings-section-title">
           <h2>仓位变动</h2>
           <label>
-            记录日期{' '}
-            <input
-              aria-label="记录日期"
-              type="date"
-              value={day}
-              onChange={(event) => setDay(event.target.value)}
-            />
-          </label>
-        </div>
-        <p>记录的是两次完整快照间的净变化，不代表逐笔成交；时间为北京时间的实际检测时间。</p>
-        {history.days.length > 0 && (
-          <label>
             历史日期{' '}
             <select
               aria-label="历史日期"
               value={history.days.includes(day) ? day : ''}
+              disabled={!history.days.length}
               onChange={(event) => {
                 if (event.target.value) setDay(event.target.value)
               }}
             >
-              <option value="">选择已有记录的日期</option>
+              <option value="">
+                {history.days.length ? '选择已有记录的日期' : '暂无历史记录'}
+              </option>
               {history.days.map((value) => (
                 <option key={value}>{value}</option>
               ))}
             </select>
           </label>
-        )}
+        </div>
         {historyError && (
           <p role="alert" className="holdings-error">
             {historyError}
@@ -343,17 +333,18 @@ function Holdings() {
           <p className="holdings-empty">当天暂无仓位变动记录。</p>
         ) : (
           <div
-            className="holdings-scroll"
+            className="holdings-scroll holdings-history-scroll"
             tabIndex={0}
             role="region"
-            aria-label="持仓表格，可横向滚动"
+            aria-label="仓位变动表，可上下左右滚动"
           >
             <table>
               <thead>
                 <tr>
                   <th>检测时间</th>
                   <th>策略</th>
-                  <th>股票 / 代码</th>
+                  <th>股票</th>
+                  <th>代码</th>
                   <th>变动</th>
                   <th>股数变化</th>
                   <th>变化后</th>
@@ -369,10 +360,8 @@ function Holdings() {
                       })}
                     </td>
                     <td>{event.strategy2}</td>
-                    <td>
-                      {event.name}
-                      <small>{event.code}</small>
-                    </td>
+                    <td>{event.name}</td>
+                    <td>{event.code}</td>
                     <td>
                       <span className={'holdings-event ' + event.kind}>{names[event.kind]}</span>
                     </td>
@@ -393,7 +382,7 @@ function Holdings() {
       <section className="holdings-toolbar">
         <div>
           <strong>交易日 09:25–15:10 · 北京时间</strong>
-          <p>每15秒查询，包含午间。关页后后台继续；首次完整读取建立基准，不记买入。</p>
+
           <small>最近成功读取：{stamp(status?.observed_at ?? null)}</small>
         </div>
         <div className="holdings-actions">
