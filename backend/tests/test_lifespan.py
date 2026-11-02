@@ -24,7 +24,7 @@ def test_worker_cleanup_covers_startup_and_shutdown_failure(monkeypatch, engine,
 
     for cls, name in [('SnapshotCache', 'cache'), ('SocialMonitor', 'social'),
                       ('BrowserLogin', 'browser'), ('MarginGuarantee', 'margin'),
-                      ('ValidationJobs', 'validation')]:
+                      ('PersonalHoldings', 'holdings'), ('ValidationJobs', 'validation')]:
         monkeypatch.setattr(main, cls, Mock(return_value=worker(name)))
     validation_engine = Mock()
     validation_engine.dispose.side_effect = lambda: record('validation_engine.dispose')
@@ -43,6 +43,6 @@ def test_worker_cleanup_covers_startup_and_shutdown_failure(monkeypatch, engine,
             run()
     else:
         run()
-    assert events[-7:] == ['validation.stop', 'validation_engine.dispose', 'margin.stop',
+    assert events[-8:] == ['validation.stop', 'validation_engine.dispose', 'holdings.stop', 'margin.stop',
                            'browser.stop', 'social.stop', 'cache.stop', 'database.dispose']
     assert ('serving' in events) == (failure not in ('sources', 'margin.start'))

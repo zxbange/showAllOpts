@@ -21,6 +21,7 @@ from app.services.margin_guarantee import MarginGuarantee
 from app.services.short_validation import ValidationJobs
 from app.services.validation_sources import ValidationSources
 from app.services.accounts import Accounts
+from app.services.personal_holdings import PersonalHoldings
 from app.api.routes.accounts import router as accounts_router, require_user
 from fastapi import Depends
 
@@ -51,6 +52,10 @@ def create_app(settings: Settings | None = None, engine: Engine | None = None) -
             margin_guarantee = MarginGuarantee(settings)
             cleanup.push_async_callback(asyncio.to_thread, margin_guarantee.stop)
             application.state.margin_guarantee = margin_guarantee
+            holdings = PersonalHoldings(settings)
+            cleanup.push_async_callback(asyncio.to_thread, holdings.stop)
+            application.state.personal_holdings = holdings
+            holdings.start()
             validation_engine = build_engine(settings)
             cleanup.callback(validation_engine.dispose)
             validation = ValidationJobs(settings, validation_engine)

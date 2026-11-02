@@ -9,6 +9,7 @@ from app.api.routes.etf_heat import router as etf_heat_router
 from app.api.routes.growth import router as growth_router
 from app.api.routes.cache import router as cache_router
 from app.api.routes.dividend import router as dividend_router
+from app.api.routes.personal_holdings import router as personal_holdings_router
 
 from app.api.routes.breadth import router as breadth_router
 from app.api.routes.earnings import router as earnings_router
@@ -18,6 +19,7 @@ from app.api.routes.microcap import router as microcap_router
 from app.api.routes.momentum import router as momentum_router
 
 router = APIRouter(prefix='/api/v1')
+router.include_router(personal_holdings_router)
 router.include_router(social_router)
 router.include_router(social_browser_router)
 router.include_router(short_term_router)

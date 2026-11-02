@@ -6,6 +6,7 @@ import { MomentumPage } from './pages/MomentumPage'
 import { LoadingState } from './components/States'
 import { AccountAccess } from './components/AccountAccess'
 import { UsersPage } from './pages/UsersPage'
+import { PersonalHoldingsPage } from './pages/PersonalHoldingsPage'
 
 const ShortValidationPage = lazy(() =>
   import('./pages/ShortValidationPage').then((m) => ({ default: m.ShortValidationPage })),
@@ -78,6 +79,7 @@ export default function App() {
           <Route element={<Layout />}>
             <Route path="account" element={<UsersPage />} />
             <Route index element={<HomePage />} />
+            <Route path="personal-holdings" element={<PersonalHoldingsPage />} />
             <Route
               path="social-monitor"
               element={

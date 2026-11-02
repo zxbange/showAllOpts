@@ -185,6 +185,7 @@ test('navigation prioritizes market views and removes workspace label', async ({
     '业绩选股',
     '高股息选股',
     '博主动态监控',
+    '个人持仓',
   ])
   await expect(page.getByText('工作空间', { exact: true })).toHaveCount(0)
   if (testInfo.project.name === 'desktop') {

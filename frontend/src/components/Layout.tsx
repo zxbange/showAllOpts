@@ -66,6 +66,13 @@ export function Layout() {
               </Link>
             )
           })}
+          {session?.user?.role === 'admin' && (
+            <NavLink to="/personal-holdings" aria-label="个人持仓" title="个人持仓">
+              <Layers3 size={18} />
+              <span>个人持仓</span>
+              <span className="nav-key">私</span>
+            </NavLink>
+          )}
         </nav>
         <div className="sidebar-bottom">
           <div className="sidebar-footer">
@@ -83,10 +90,12 @@ export function Layout() {
             <span>
               {isHome
                 ? '总览'
-                : (group?.name ??
-                  researchModules.find((module) => location.pathname.startsWith(module.path))
-                    ?.name ??
-                  '研究模块')}
+                : location.pathname === '/personal-holdings'
+                  ? '个人持仓'
+                  : (group?.name ??
+                    researchModules.find((module) => location.pathname.startsWith(module.path))
+                      ?.name ??
+                    '研究模块')}
               {location.pathname.includes('/industries/') ? ' / 趋势详情' : ''}
             </span>
           </div>
