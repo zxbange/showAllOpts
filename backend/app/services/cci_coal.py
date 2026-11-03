@@ -19,6 +19,7 @@ def latest_slot(moment):
 
 
 class CCICoal(Commodities):
+    tracks_failed_targets = False
     schedule_label = '每天 18:00 · 北京时间'
     slot_for = staticmethod(latest_slot)
 

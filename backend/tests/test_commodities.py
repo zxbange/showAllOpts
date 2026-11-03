@@ -58,7 +58,6 @@ def test_collector_upsert_preserves_other_dates(tmp_path,monkeypatch):
  from app.services import commodities
  service=Commodities(Settings(_env_file=None,log_dir=tmp_path));old=service.history()['rows']
  monkeypatch.setattr(commodities,'fetch',lambda *a,**k:body())
- monkeypatch.setattr(commodities,'discover',lambda *_:[])
  monkeypatch.setattr(service.stopping,'wait',lambda *_:False)
  service.collect(service.lock())
  assert len(service.history()['rows'])==len(old)
@@ -140,7 +139,6 @@ def test_no_new_quote_is_idempotent_across_runs(tmp_path,monkeypatch):
  from app.services import commodities
  service=scheduled_service(tmp_path,monkeypatch)
  monkeypatch.setattr(commodities,'fetch',lambda *a,**k:body())
- monkeypatch.setattr(commodities,'discover',lambda *_:[])
  monkeypatch.setattr(service.stopping,'wait',lambda *_:False)
  service.collect(service.lock());first=service.history()['rows']
  service.collect(service.lock())

@@ -11,6 +11,10 @@ START = '2026-10-08'
 class QuoteError(ValueError):
     pass
 
+class ArticleNotApplicable(QuoteError):
+    """Discovered public article has no supported A00 history evidence."""
+
+
 class Document(HTMLParser):
     def __init__(self, content):
         super().__init__(); self.parts=[]; self.links=[]; self.hidden=0; self.feed(content)
@@ -47,7 +51,11 @@ def fetch(client,url,catalog=False):
 
 def discover(content):
     urls=[]
-    for href in Document(content).links:
+    for href, label in HomeDocument(content).anchors:
+        # Public directories mix metals and generic industry news. Keep aluminum
+        # candidates; the separate homepage date lookup still reads daily metadata.
+        if not re.search(r'A00|铝', label):
+            continue
         url=urljoin(CATALOG,href)
         try:safe_url(url)
         except (ValueError,TypeError):continue
@@ -58,7 +66,12 @@ def parse(content,url,known=None):
     safe_url(url)
     raw=Document(content).text
     part=re.search(r'五[、.．]长江市场行情(.*?)六[、.．]',raw)
-    if not part:raise QuoteError('未找到历史行情段落，保留已有记录')
+    if not part:
+        title = re.search(r'<h1\b[^>]*>(.*?)</h1>', content, re.I | re.S)
+        unrelated_title = title is not None and not re.search(r'A00|现铝|铝价|行情|早评', Document(title[1]).text)
+        if known is None and unrelated_title and 'A00' not in raw and '长江市场行情' not in raw:
+            raise ArticleNotApplicable('发现文章不含A00历史行情')
+        raise QuoteError('未找到历史行情段落，保留已有记录')
     pub=re.search(r'(20\d{2}-\d{2}-\d{2})',raw[:part.start()])
     if not pub:raise QuoteError('无法确认正文发布日期')
     published=date.fromisoformat(pub[1])
@@ -153,7 +166,7 @@ def parse_home(content, *, today, report_date, report_url):
         raise QuoteError('首页报价年份不一致')
     if not START <= report_date.isoformat() <= today.isoformat():
         raise QuoteError('首页报价日期超出范围')
-    safe_url(report_url)
+    safe_url(report_url, catalog=report_url == HOME)
     rows = [label for href, label in doc.anchors if urljoin(HOME, href) == HOME.rstrip('/') + A00_PATH]
     if len(rows) != 1:
         raise QuoteError('首页缺少唯一长江现货A00报价')
@@ -168,3 +181,39 @@ def parse_home(content, *, today, report_date, report_url):
     return dict(quoteDate=report_date.isoformat(), low=low, high=high, mean=mean, change=change,
                 publishedDate=report_date.isoformat(), sourceUrl=HOME, dateSourceUrl=report_url,
                 rangeEvidence='page', sourceSection='首页长江现货A00铝')
+
+
+def diagnostic_reason(error):
+    # Only fixed parser messages map to public codes; never echo upstream text.
+    if isinstance(error, QuoteError):
+        return {
+            '未找到历史行情段落，保留已有记录': 'history_section_missing',
+            '无法确认正文发布日期': 'publication_date_missing',
+            '未找到明确的A00现货历史区间': 'spot_range_missing',
+            '历史行情未注明报价日期，拒绝推算上一交易日': 'quote_date_missing',
+            '正文日期与已核验来源不符': 'publication_date_conflict',
+            '报价日期冲突': 'quote_date_conflict',
+            '报价日期不属于已发布历史': 'quote_date_out_of_range',
+            '价格区间校验失败': 'invalid_range',
+        }.get(str(error), 'quote_validation_failed')
+    return 'source_request_or_processing_failed'
+
+
+def explicit_home_date(content):
+    """Use one request only when the source itself supplies a complete date."""
+    match = re.search(r'(20\d{2})年(\d{1,2})月(\d{1,2})日长江有色金属价格行情', HomeDocument(content).text)
+    return date(*map(int, match.groups())) if match else None
+
+
+def homepage_review_link(content):
+    """One public review linked by the already fetched homepage; no directory scan."""
+    for href, label in HomeDocument(content).anchors:
+        if not re.search(r'现铝|铝早评|铝早报', label):
+            continue
+        url = urljoin(HOME, href)
+        try:
+            safe_url(url)
+        except ValueError:
+            continue
+        return url
+    return None

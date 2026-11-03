@@ -376,3 +376,91 @@ def test_manual_requires_saved_configuration(tmp_path):
     job=PersonalHoldings(Settings(_env_file=None,log_dir=tmp_path/'log'))
     with pytest.raises(HoldingsError,match='保存'):job.request_sync('a'*32)
     assert not job.status()['configured']
+
+
+def test_buffered_snapshot_and_connection_reuse(monitor):
+    job, source, now, config, counts, closed = monitor
+    job.set_enabled(True)
+    assert tick(monitor, [row()])
+    assert job.connection.get_execution_options()['stream_results'] is False
+    assert tick(monitor, [row(amt='120')])
+    assert len(counts) == 1 and not closed
+    assert not job.connection.in_transaction()
+
+
+@pytest.mark.parametrize('errno', [2013, 2006])
+def test_mysql_failure_preserves_snapshot_logs_code_and_reconnects(monitor, monkeypatch, caplog, errno):
+    import pymysql
+    from sqlalchemy.exc import OperationalError
+    job, source, now, config, counts, closed = monitor
+    job.set_enabled(True)
+    assert tick(monitor, [row()])
+    original = job.read
+    def broken(*args):
+        raise OperationalError('private SQL', {'password': 'private-password'},
+                               pymysql.err.OperationalError(errno, 'private host and holdings'))
+    monkeypatch.setattr(job, 'read', broken)
+    assert not tick(monitor, [row(amt='120')])
+    assert job.status()['rows'][0]['amt'] == '100'
+    assert not job.history('2026-11-02')['events']
+    assert f'mysql_errno={errno}' in caplog.text and 'stage=source_read' in caplog.text
+    assert 'private' not in caplog.text
+    assert job.connection is None and job.engine is None
+    monkeypatch.setattr(job, 'read', original)
+    assert tick(monitor)
+    assert len(counts) == 2
+    assert job.history('2026-11-02')['events'][0]['kind'] == 'add'
+    assert tick(monitor) and len(counts) == 2
+    assert len(job.history('2026-11-02')['events']) == 1
+
+
+def test_cleanup_failure_does_not_mask_original_or_skip_failure_state(monitor, monkeypatch, caplog):
+    import pymysql
+    job, source, now, *_ = monitor
+    job.set_enabled(True)
+    assert tick(monitor, [row()])
+    connection = job.connection
+    real_close = connection.close
+    def close():
+        real_close()
+        raise RuntimeError('private-cleanup-secret')
+    monkeypatch.setattr(connection, 'close', close)
+    def broken(*args):
+        raise pymysql.err.OperationalError(2013, 'private-source-secret')
+    monkeypatch.setattr(job, 'read', broken)
+    assert not tick(monitor)
+    assert job.status()['error'] and job.status()['rows'][0]['amt'] == '100'
+    assert 'mysql_errno=2013' in caplog.text and 'cleanup failed' in caplog.text
+    assert caplog.text.index('poll failed') < caplog.text.index('cleanup failed')
+    assert 'private' not in caplog.text
+
+
+def test_driver_timeout_streaming_cleanup_reproduction_and_buffered_close():
+    import pymysql
+    from pymysql.connections import MySQLResult
+    from pymysql.cursors import Cursor, SSCursor
+    class Reader:
+        def read(self, count): raise TimeoutError('synthetic timeout')
+        def close(self): pass
+    connection = pymysql.Connection(defer_connect=True)
+    connection._current_timeout = connection._read_timeout
+    connection._rfile = Reader()
+    result = MySQLResult(connection)
+    result.unbuffered_active = True
+    connection._result = result
+    streaming = SSCursor(connection)
+    streaming._result = result
+    try:
+        with pytest.raises(pymysql.err.OperationalError) as first:
+            connection._read_bytes(4)
+        assert first.value.args[0] == 2013 and connection._rfile is None
+        with pytest.raises(AttributeError, match='read'):
+            streaming.close()
+        result.unbuffered_active = False
+        buffered = Cursor(connection)
+        buffered.close()
+    finally:
+        result.unbuffered_active = False
+        result.connection = None
+        streaming.connection = None
+        connection._result = None

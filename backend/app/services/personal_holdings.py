@@ -11,6 +11,8 @@ import uuid
 from zoneinfo import ZoneInfo
 
 import portalocker
+import pymysql
+from sqlalchemy.exc import DBAPIError
 from sqlalchemy import text
 
 from app.services.holdings_snapshot import HoldingsError, MAX_ROWS, changes, normalize
@@ -20,6 +22,17 @@ from app.services.database_sources import DatabaseSources, SourceError
 LOG = logging.getLogger(__name__)
 SHANGHAI = ZoneInfo('Asia/Shanghai')
 INTERVAL = 15
+
+
+def failure_details(error):
+    """Return types and a numeric MySQL code only, never exception messages."""
+    original = error.orig if isinstance(error, DBAPIError) else error
+    code = None
+    if isinstance(original, pymysql.err.MySQLError) and original.args:
+        value = original.args[0]
+        if type(value) is int and 0 <= value <= 65535:
+            code = value
+    return type(error).__name__, type(original).__name__, code
 
 
 def clock():
@@ -183,7 +196,11 @@ class PersonalHoldings:
         with connection.begin():
             # No reconnect/replay on a checked-out dead socket. The next scheduled
             # poll creates a new connection after this one has been discarded.
-            with connection.execution_options(stream_results=True).execute(text(statement)) as result:
+            # Buffer this single bounded, four-column snapshot in the driver. An
+            # SSCursor tries to drain unread packets on close even after a read
+            # failure has destroyed its socket, producing a secondary exception.
+            # Keep the same connection across polls, but no unbuffered cursor.
+            with connection.execution_options(stream_results=False).execute(text(statement)) as result:
                 def rows():
                     while True:
                         batch = result.mappings().fetchmany(1000)
@@ -209,12 +226,14 @@ class PersonalHoldings:
     def close_source(self):
         connection, engine = self.connection, self.engine
         self.connection = self.engine = self.source_ref = None
-        try:
-            if connection is not None:
-                connection.close()
-        finally:
-            if engine is not None:
-                engine.dispose()
+        # Cleanup failures must not prevent recording the original read failure.
+        for operation, resource in (('close', connection), ('dispose', engine)):
+            if resource is not None:
+                try:
+                    getattr(resource, operation)()
+                except Exception as error:
+                    LOG.warning('Personal holdings cleanup failed operation=%s type=%s driver_type=%s mysql_errno=%s',
+                                operation, *failure_details(error))
 
     def release(self):
         try:
@@ -252,6 +271,7 @@ class PersonalHoldings:
             if not manual:
                 state['next_poll'] = moment.timestamp()+INTERVAL
                 self.write(db, state)
+        stage = 'source_connect'
         try:
             if self.source_ref != state['source']:
                 self.close_source()
@@ -261,7 +281,9 @@ class PersonalHoldings:
                 self.source_ref = state['source']
                 self.connection = self.engine.connect()
             config = self.sources.get(state['source']['id'], state['source']['revision'])
+            stage = 'source_read'
             snapshot = self.read(self.connection, config['table'])
+            stage = 'snapshot_save'
             observed = clock()
             with self.db() as db:
                 db.execute('BEGIN IMMEDIATE')
@@ -284,9 +306,10 @@ class PersonalHoldings:
                 self.write(db, current)
             return True
         except Exception as error:
+            # Record the original failure before cleanup; never log SQL/messages.
+            LOG.warning('Personal holdings poll failed stage=%s type=%s driver_type=%s mysql_errno=%s',
+                        stage, *failure_details(error))
             self.close_source()
-            # Never log raw driver messages, SQL, parameters or holdings.
-            LOG.warning('Personal holdings poll failed type=%s', type(error).__name__)
             with self.db() as db:
                 db.execute('BEGIN IMMEDIATE')
                 current = self.state(db)

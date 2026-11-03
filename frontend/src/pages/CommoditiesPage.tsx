@@ -51,6 +51,9 @@ type Data = {
     stale?: boolean
     targetDate?: string
     targetMode?: string
+    recovery?: { day: string; result: string }
+    pendingCount?: number
+    pendingTargets?: { day: string; reason: string }[]
     targetResult?: string
   }
 }
@@ -191,8 +194,10 @@ function A00Page() {
     guard.current = true
     setBusy(true)
     try {
-      const r = await apiFetch('/api/v1/commodities/a00/refresh', { method: 'POST' })
-      if (!r.ok) throw Error('补采未启动，请稍后重试')
+      const r = await apiFetch('/api/v1/commodities/a00/refresh', {
+        method: 'POST',
+      })
+      if (!r.ok) throw Error('采集未启动，请稍后重试')
       if (mounted.current) setRevision((v) => v + 1)
     } catch (e) {
       if (mounted.current) setError((e as Error).message)
@@ -230,13 +235,15 @@ function A00Page() {
         <div className="commodity-heading">
           <h2>价格走势</h2>
           {admin && (
-            <button
-              className="button"
-              disabled={busy || data?.status.running}
-              onClick={() => void refresh()}
-            >
-              {busy || data?.status.running ? '补采中…' : '更新 / 补采'}
-            </button>
+            <div className="commodity-actions">
+              <button
+                className="button"
+                disabled={busy || data?.status.running}
+                onClick={() => void refresh()}
+              >
+                {busy || data?.status.running ? '采集中…' : '更新当日报价'}
+              </button>
+            </div>
           )}
         </div>
         <p>
@@ -293,6 +300,21 @@ function A00Page() {
             <span>暂无新报价</span>
           )}
           {!data?.status.running && data?.status.stale && <span>已保存报价尚未更新至今日</span>}
+          {data?.status.recovery && (
+            <span>
+              失败日期回补：{data.status.recovery.day} ·{' '}
+              {data.status.recovery.result === 'recovered'
+                ? '已补回'
+                : '未取得可核验报价，保留待补'}
+            </span>
+          )}
+          {!!data?.status.pendingCount && (
+            <span>
+              待核验日期 {data.status.pendingCount} 个：
+              {data.status.pendingTargets?.map((item) => item.day).join('、')}
+              （未确认是否发布；每次最多尝试一个失败日，无法核验则保留）
+            </span>
+          )}
           <small>每天 11:00、18:00 自动采集 · 北京时间</small>
         </div>
       </section>

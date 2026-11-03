@@ -136,3 +136,9 @@
 .commodity-collection-status small {
   flex-basis: 100%;
 }
+
+.commodity-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}

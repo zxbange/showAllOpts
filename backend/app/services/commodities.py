@@ -9,7 +9,7 @@ import sqlite3
 import threading
 import httpx
 import portalocker
-from app.services.commodity_source import CATALOG, HOME, discover, fetch, parse, home_date_reference, public_report_date, parse_home, QuoteError, QuoteIncomplete
+from app.services.commodity_source import HOME, fetch, home_date_reference, public_report_date, parse_home, QuoteError, QuoteIncomplete, explicit_home_date, homepage_review_link, parse, diagnostic_reason
 
 LOG = logging.getLogger(__name__)
 CHINA = ZoneInfo('Asia/Shanghai')
@@ -28,6 +28,7 @@ def latest_slot(moment):
 SEED=Path(__file__).resolve().parents[1]/'data/a00_changjiang.json'
 
 class Commodities:
+    tracks_failed_targets = True
     schedule_label = '每天 11:00、18:00 · 北京时间'
     slot_for = staticmethod(latest_slot)
 
@@ -41,6 +42,8 @@ class Commodities:
             db.execute("INSERT OR IGNORE INTO state VALUES(1,'{}')")
             db.execute('CREATE TABLE IF NOT EXISTS schedule_meta(id INTEGER PRIMARY KEY, initialized_at TEXT NOT NULL)')
             db.execute('INSERT OR IGNORE INTO schedule_meta VALUES(1,?)', (now().isoformat(),))
+            db.execute('CREATE TABLE IF NOT EXISTS recovery_attempts(day TEXT PRIMARY KEY, attempted_at TEXT NOT NULL, result TEXT NOT NULL)')
+            db.execute('CREATE TABLE IF NOT EXISTS failed_targets(day TEXT PRIMARY KEY, reason TEXT NOT NULL, attempted_at TEXT NOT NULL)')
             db.execute('CREATE TABLE IF NOT EXISTS schedule_runs(slot TEXT PRIMARY KEY, status TEXT NOT NULL, finished_at TEXT)')
             for row in json.loads(SEED.read_text())['rows']:
                 # Keep research evidence but do not expose unverified range values.
@@ -57,7 +60,12 @@ class Commodities:
         try:lock.acquire();return lock
         except portalocker.exceptions.LockException:return None
     def status(self):
-        with self.db() as db:state=json.loads(db.execute('SELECT payload FROM state WHERE id=1').fetchone()[0])
+        with self.db() as db:
+            state=json.loads(db.execute('SELECT payload FROM state WHERE id=1').fetchone()[0])
+            if self.tracks_failed_targets:
+                pending=[dict(day=row[0],reason=row[1]) for row in db.execute('SELECT day,reason FROM failed_targets ORDER BY day LIMIT 20')]
+                count=db.execute('SELECT count(*) FROM failed_targets').fetchone()[0]
+                state.update(pendingTargets=pending, pendingCount=count)
         lock=self.lock();running=lock is None
         if lock:lock.release()
         return dict(state,running=running,automatic=True,schedule=self.schedule_label)
@@ -102,7 +110,7 @@ class Commodities:
                     if not claimed:
                         lock.release()
                         return False
-            self.state(stage='读取公开历史报价',error=None,trigger='scheduled' if slot else 'manual',slot=slot.isoformat() if slot else None)
+            self.state(stage='读取最新现货报价',error=None,trigger='scheduled' if slot else 'manual',slot=slot.isoformat() if slot else None)
             LOG.info('Commodity collection start trigger=%s slot=%s', 'scheduled' if slot else 'manual', slot.isoformat() if slot else '-')
             self.thread=threading.Thread(target=self.collect,args=(lock,slot),daemon=True,name='commodities')
             self.thread.start()
@@ -113,6 +121,7 @@ class Commodities:
         current_verified = False
         target_result = 'pending'
         home_quote = None
+        recovery = None
         finished = False
         started = now().isoformat()
         today = now().astimezone(CHINA).date()
@@ -125,7 +134,7 @@ class Commodities:
             self.state(stage=stage, outcome=outcome, trigger='scheduled' if slot else 'manual',
                        slot=slot.isoformat() if slot else None, startedAt=started,
                        checkedAt=now().isoformat() if outcome != 'running' else None,
-                       updated=parsed, pagesFetched=fetched, pagesParsed=parsed,
+                       recovery=recovery, updated=parsed, pagesFetched=fetched, pagesParsed=parsed, mode='current',
                        inserted=inserted, changed=changed, failures=failures,
                        latestQuoteDate=latest, currentVerified=current_verified,
                        targetDate=target_day.isoformat(), targetMode=target_mode, targetResult=target_result,
@@ -152,19 +161,27 @@ class Commodities:
                 if differs:
                     db.execute('INSERT INTO quotes VALUES(?,?) ON CONFLICT(day) DO UPDATE SET payload=excluded.payload',
                                (row['quoteDate'], json.dumps(row, ensure_ascii=False)))
+                db.execute('DELETE FROM failed_targets WHERE day=?', (row['quoteDate'],))
+                db.execute('DELETE FROM recovery_attempts WHERE day=?', (row['quoteDate'],))
             parsed += 1
             inserted += int(old is None)
             changed += int(old is not None and differs)
+            return True
 
         try:
-            known = {r['sourceUrl']:r for r in json.loads(SEED.read_text())['rows'] if 'html' in r['sourceUrl']}
+            with self.db() as db:
+                db.execute('INSERT INTO failed_targets VALUES(?,?,?) ON CONFLICT(day) DO UPDATE SET reason=excluded.reason, attempted_at=excluded.attempted_at',
+                           (target_day.isoformat(), 'interrupted_or_pending', started))
             with httpx.Client(timeout=httpx.Timeout(15,connect=8),trust_env=False,follow_redirects=False) as client:
                 status('读取最新现货报价')
                 home = None
                 try:
                     home = read(client, HOME, True)
-                    date_url = home_date_reference(home)
-                    quote_date = public_report_date(read(client, date_url))
+                    quote_date = explicit_home_date(home)
+                    date_url = HOME
+                    if quote_date is None:
+                        date_url = home_date_reference(home)
+                        quote_date = public_report_date(read(client, date_url))
                     home_quote = parse_home(home, today=today, report_date=quote_date, report_url=date_url)
                     save(home_quote)
                     current_verified = not self.stopping.is_set() and quote_date == target_day
@@ -175,29 +192,35 @@ class Commodities:
                                      'unverified' if isinstance(exc, (QuoteError, ValueError)) else 'sourceReadFailed')
                     failures += 1
                     LOG.warning('Commodity current quote failed type=%s', type(exc).__name__)
-                urls = list(known)
-                if home is not None:
-                    urls = list(dict.fromkeys(urls + discover(home)))
-                try:
-                    urls = list(dict.fromkeys(urls + discover(read(client, CATALOG, True))))
-                except Exception as exc:
-                    failures += 1
-                    LOG.warning('Commodity catalogue failed type=%s', type(exc).__name__)
-                for url in urls:
-                    if self.stopping.is_set():
-                        break
-                    try:
-                        row = parse(read(client, url), url, known.get(url))
-                        # A historical recap must never overwrite the current
-                        # homepage quote fetched and verified in this same run.
-                        if home_quote is None or row['quoteDate'] != home_quote['quoteDate']:
-                            save(row)
-                    except Exception as exc:
-                        failures += 1
-                        LOG.warning('Commodity article failed type=%s', type(exc).__name__)
-                    status('补采公开历史')
-                    if self.stopping.wait(.35):
-                        break
+                # One failed observation date and at most one review request per
+                # run. Use only links already present on the public homepage.
+                with self.db() as db:
+                    pending = db.execute("""SELECT f.day FROM failed_targets f
+                        LEFT JOIN recovery_attempts r ON r.day=f.day
+                        WHERE f.day<? AND f.reason!='sourceNotPublished'
+                        ORDER BY coalesce(r.attempted_at,''),f.day LIMIT 1""",
+                        (target_day.isoformat(),)).fetchone()
+                if pending and not self.stopping.is_set():
+                    recovery = dict(day=pending[0], result='no_public_link')
+                    url = homepage_review_link(home) if home else None
+                    if url:
+                        try:
+                            row = parse(read(client, url), url)
+                            if self.stopping.is_set():
+                                recovery['result'] = 'interrupted'
+                            elif row['quoteDate'] != pending[0]:
+                                recovery['result'] = 'date_mismatch'
+                            else:
+                                recovery['result'] = 'recovered' if save(row) else 'interrupted'
+                        except Exception as exc:
+                            recovery['result'] = diagnostic_reason(exc)
+                            LOG.warning('Commodity recovery failed target=%s type=%s reason=%s source=%s',
+                                        pending[0], type(exc).__name__, recovery['result'], url)
+                    with self.db() as db:
+                        if recovery['result'] != 'recovered':
+                            db.execute('INSERT INTO recovery_attempts VALUES(?,?,?) ON CONFLICT(day) DO UPDATE SET attempted_at=excluded.attempted_at,result=excluded.result',
+                                       (pending[0], now().isoformat(), recovery['result']))
+                    LOG.info('Commodity recovery target=%s result=%s', pending[0], recovery['result'])
             finished = True
         except Exception as exc:
             failures += 1
@@ -219,6 +242,14 @@ class Commodities:
                     stage = '采集成功' if inserted or changed else '暂无新报价'
                 if not self.stopping.is_set() and not current_verified and target_result in ('sourceReadFailed', 'partial', 'unverified'):
                     stage = {'sourceReadFailed':'目标日报价读取失败', 'partial':'目标日报价字段不完整', 'unverified':'目标日报价无法核验'}[target_result]
+                with self.db() as db:
+                    if current_verified:
+                        db.execute('DELETE FROM failed_targets WHERE day=?', (target_day.isoformat(),))
+                    else:
+                        # This is a failed observation target, not proof that the
+                        # source published a quote (nor proof of a holiday).
+                        db.execute('UPDATE failed_targets SET reason=? WHERE day=?',
+                                   (target_result, target_day.isoformat()))
                 status(stage, error, outcome)
                 if slot is not None:
                     with self.db() as db:
