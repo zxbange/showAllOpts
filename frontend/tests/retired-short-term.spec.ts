@@ -15,7 +15,7 @@ test('retired routes show not found and navigation retains other modules', async
   await expect(page.getByRole('link', { name: /大宗商品/ }).first()).toBeVisible()
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
   await page.screenshot({
-    path: `/workspace/removal-preview/${info.project.name}-navigation.png`,
+    path: info.outputPath('navigation.png'),
     fullPage: true,
   })
 })
