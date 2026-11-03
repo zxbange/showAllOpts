@@ -68,11 +68,11 @@ def test_public_requests_are_windowed_and_bounded():
         p = request.url.params
         requests.append(p)
         assert p['tab'] == 'steamcoal-index'
-        assert (date.fromisoformat(p['date_to'])-date.fromisoformat(p['date_from'])).days <= 30
+        assert p['date_to'] == p['date_from'] == '2026-11-03'
         return httpx.Response(200,json=response(day=p['date_from'],grade=p['index_name']))
     with httpx.Client(transport=httpx.MockTransport(handle),follow_redirects=False) as client:
-        rows=fetch_rows(client,'2026-01-01','2026-03-01')
-    assert len(requests)==6 and len(rows)==6
+        rows=fetch_rows(client,'2026-11-03','2026-11-03')
+    assert len(requests)==3 and len(rows)==3
     assert {p['index_name'] for p in requests}==set(GRADES)
 
 
@@ -83,22 +83,25 @@ def test_no_redirect_or_access_bypass(status):
         calls.append(request)
         return httpx.Response(status,headers={'Location':'https://other.invalid/private'})
     with httpx.Client(transport=httpx.MockTransport(handle),follow_redirects=False) as client:
-        with pytest.raises(httpx.HTTPStatusError):fetch_rows(client,'2026-01-01','2026-01-02')
-    assert len(calls)==1
+        details=[]
+        assert fetch_rows(client,'2026-11-03','2026-11-03',diagnostics=details)==[]
+    assert len(calls)==3
+    assert all(d['error']==f'HTTP {status}' for d in details)
 
 
 def test_failed_empty_and_repeated_collection_preserve_history(tmp_path,monkeypatch):
     import app.services.cci_coal as module
+    monkeypatch.setattr(module,'now',lambda:datetime(2026,11,3,12,tzinfo=timezone.utc))
     store=CCICoal(Settings(_env_file=None,log_dir=tmp_path));old=store.history()['rows']
     monkeypatch.setattr(module,'fetch_rows',lambda *a,**k:[])
     store.collect(store.lock());assert store.history()['rows']==old
     monkeypatch.setattr(module,'fetch_rows',lambda *a,**k:[quote(price=999),quote(day='bad')])
     store.collect(store.lock());assert store.history()['rows']==old
     assert store.status()['error']
-    monkeypatch.setattr(module,'fetch_rows',lambda *a,**k:[quote(price=999,change=None)])
+    monkeypatch.setattr(module,'fetch_rows',lambda *a,**k:[quote(day='2026-11-03',price=999,change=None)])
     store.collect(store.lock());first=store.history()['rows']
-    store.collect(store.lock());assert store.history()['rows']==first and len(first)==586
-    assert next(r for r in first if r['quoteDate']=='2026-11-02' and r['grade']=='CCI5500')['price']==999
+    store.collect(store.lock());assert store.history()['rows']==first and len(first)==587
+    assert next(r for r in first if r['quoteDate']=='2026-11-03' and r['grade']=='CCI5500')['price']==999
     assert CCICoal(Settings(_env_file=None,log_dir=tmp_path)).history()['rows']==first
 
 
@@ -138,3 +141,65 @@ def test_api_read_auth_and_admin_write(tmp_path):
         assert client.post('/api/v1/commodities/cci/refresh').status_code==403
         sign_in(client);client.headers['X-CSRF-Token']='bad'
         assert client.post('/api/v1/commodities/cci/refresh').status_code==403
+
+@pytest.mark.parametrize('mode,expected,hits', [('full','completed',3),('empty','empty',0),('partial','partial',1),('network','failed',0),('parse','failed',0),('stale','failed',0)])
+def test_today_results_history_and_diagnostics(tmp_path, monkeypatch, caplog, mode, expected, hits):
+    import app.services.cci_coal as module
+    real_client = httpx.Client
+    # UTC is still Nov 2; Shanghai's target must already be Nov 3.
+    monkeypatch.setattr(module, 'now', lambda: datetime(2026,11,2,16,1,tzinfo=timezone.utc))
+    calls=[]
+    def handle(request):
+        p=request.url.params; calls.append(p)
+        assert p['date_from']==p['date_to']=='2026-11-03'
+        if mode=='network':raise httpx.ConnectError('secret-token https://private.invalid',request=request)
+        if mode=='parse':return httpx.Response(200,text='private-invalid-json')
+        if mode=='empty' or (mode=='partial' and p['index_name']!='CCI5500'):
+            return httpx.Response(200,json=dict(rows=[],total=0))
+        return httpx.Response(200,json=response(day='2026-11-02' if mode=='stale' else '2026-11-03',grade=p['index_name']))
+    monkeypatch.setattr(module.httpx,'Client',lambda **kwargs:real_client(transport=httpx.MockTransport(handle),**kwargs))
+    store=CCICoal(Settings(_env_file=None,log_dir=tmp_path));old=store.history()['rows']
+    with caplog.at_level('INFO'):
+        store.collect(store.lock())
+    state=store.status()
+    assert state['outcome']==expected and state['observed']==hits
+    assert state['inserted']==hits and state['changed']==0
+    assert len(calls)==3 and len(state['grades'])==3
+    assert [r for r in store.history()['rows'] if r['quoteDate']<'2026-11-03']==old
+    assert 'secret-token' not in caplog.text and 'private-invalid' not in caplog.text
+    assert all('elapsedMs' in d and 'dateFrom' in d for d in state['grades'])
+    if mode=='stale':assert all(d['latestQuoteDate']=='2026-11-02' and d['targetHits']==0 for d in state['grades'])
+    store.collect(store.lock())
+    assert store.status()['inserted']==store.status()['changed']==0
+    assert len(store.history()['rows'])==len(old)+hits
+
+
+def test_reject_history_range():
+    with httpx.Client() as client, pytest.raises(CCIError):
+        fetch_rows(client,'2026-01-01','2026-11-03')
+
+
+def test_partial_network_failure_and_changed_counts(tmp_path, monkeypatch):
+    import app.services.cci_coal as module
+    real_client=httpx.Client
+    monkeypatch.setattr(module,'now',lambda:datetime(2026,11,3,12,tzinfo=timezone.utc))
+    value=[1015]
+    def handle(request):
+        grade=request.url.params['index_name']
+        if grade=='CCI5000':raise httpx.ReadTimeout('sensitive',request=request)
+        return httpx.Response(200,json=response(day='2026-11-03',grade=grade,price=value[0]))
+    monkeypatch.setattr(module.httpx,'Client',lambda **kwargs:real_client(transport=httpx.MockTransport(handle),**kwargs))
+    store=CCICoal(Settings(_env_file=None,log_dir=tmp_path));old=store.history()['rows']
+    store.collect(store.lock())
+    assert store.status()['outcome']=='partial' and store.status()['inserted']==2
+    assert store.status()['grades'][1]['error']=='请求超时'
+    value[0]=1016
+    store.collect(store.lock())
+    assert store.status()['changed']==2 and store.status()['inserted']==0
+    assert sum(g['changed'] for g in store.status()['grades'])==2
+    assert [r for r in store.history()['rows'] if r['quoteDate']<'2026-11-03']==old
+    store.stopping.set()
+    store.collect(store.lock())
+    assert store.status()['outcome']=='interrupted'
+    assert store.status()['running'] is False
+    assert len(store.history()['rows'])==len(old)+2

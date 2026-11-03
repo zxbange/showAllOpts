@@ -37,9 +37,9 @@ test('CCI peer module, gaps, grade selection, schedule, responsive navigation', 
   await expect(page.getByRole('cell', { name: '2026-01-21', exact: true })).toHaveCount(0)
   await expect(page.getByRole('cell', { name: '—', exact: true }).first()).toBeVisible()
   await page.getByLabel('CCI报价档位').selectOption('all')
-  await page.getByRole('button', { name: '更新 / 补采' }).click()
+  await page.getByRole('button', { name: '更新今日' }).click()
   expect(calls).toBe(1)
-  await expect(page.getByRole('button', { name: '更新 / 补采' })).toBeEnabled()
+  await expect(page.getByRole('button', { name: '更新今日' })).toBeEnabled()
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
   await page.evaluate(() => {
     if (document.activeElement instanceof HTMLElement) document.activeElement.blur()
@@ -72,10 +72,55 @@ test('CCI failed refresh retains displayed history and prevents repeated start',
     return route.fulfill({ json: data })
   })
   await page.goto('/commodities?instrument=cci')
-  await page.getByRole('button', { name: '更新 / 补采' }).click()
+  await page.getByRole('button', { name: '更新今日' }).click()
   await expect(page.getByRole('button', { name: '更新中…' })).toBeDisabled()
   expect(posts).toBe(1)
   release()
   await expect(page.getByRole('alert')).toContainText('CCI更新未启动')
   await expect(page.getByRole('row')).toHaveCount(587)
 })
+
+for (const outcome of ['empty', 'partial', 'failed', 'completed']) {
+  test(`CCI today status ${outcome} preserves history`, async ({ page }) => {
+    const hits = outcome === 'completed' ? 3 : outcome === 'partial' ? 1 : 0
+    const stage =
+      outcome === 'empty'
+        ? '来源无当日报价，历史保留'
+        : outcome === 'failed'
+          ? '当日报价读取失败，历史保留'
+          : outcome === 'partial'
+            ? '当日报价部分可用'
+            : '当日三档报价已核验'
+    await page.route('**/api/v1/commodities/cci', (route) =>
+      route.fulfill({
+        json: {
+          ...data,
+          status: {
+            ...data.status,
+            stage,
+            targetDate: '2026-11-03',
+            observed: hits,
+            inserted: hits,
+            changed: 0,
+            grades: ['CCI5500', 'CCI5000', 'CCI4500'].map((grade, index) => ({
+              grade,
+              returned: index < hits ? 1 : 0,
+              latestQuoteDate: index < hits ? '2026-11-03' : null,
+              targetHits: index < hits ? 1 : 0,
+              error: outcome === 'failed' ? '网络请求失败' : null,
+            })),
+          },
+        },
+      }),
+    )
+    await page.goto('/commodities?instrument=cci')
+    await expect(page.getByText(stage, { exact: false })).toBeVisible()
+    const status = page.getByRole('status', { name: 'CCI当日更新状态' })
+    await expect(status).toContainText(`命中 ${hits}/3 档`)
+    await expect(status).toContainText('目标日期：2026-11-03')
+    await expect(page.getByRole('row')).toHaveCount(587)
+    await expect(page.getByRole('button', { name: '更新今日' })).toBeEnabled()
+    await expect(page.getByText(/补采/)).toHaveCount(0)
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
+  })
+}

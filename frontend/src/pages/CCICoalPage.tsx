@@ -32,7 +32,23 @@ type Quote = {
 type Data = {
   rows: Quote[]
   missingChanges: number
-  status: { running: boolean; stage?: string; error?: string; checkedAt?: string }
+  status: {
+    running: boolean
+    stage?: string
+    error?: string
+    checkedAt?: string
+    targetDate?: string
+    observed?: number
+    inserted?: number
+    changed?: number
+    grades?: {
+      grade: string
+      returned: number | null
+      latestQuoteDate: string | null
+      targetHits: number
+      error: string | null
+    }[]
+  }
 }
 const price = (v: number | null | undefined) => (v == null ? '—' : v.toLocaleString('zh-CN'))
 function CoalChart({ rows }: { rows: Quote[] }) {
@@ -189,7 +205,7 @@ export function CCICoalPage() {
               disabled={busy || data?.status.running}
               onClick={() => void refresh()}
             >
-              {busy || data?.status.running ? '更新中…' : '更新 / 补采'}
+              {busy || data?.status.running ? '更新中…' : '更新今日'}
             </button>
           )}
         </div>
@@ -204,11 +220,28 @@ export function CCICoalPage() {
           <p>正在读取报价…</p>
         )}
         <small>
-          每天 18:00 自动采集 · 北京时间。{data?.status.stage}
+          每天 18:00 自动采集 · 北京时间，仅查询当天，保留既有历史。{data?.status.stage}
           {data?.status.checkedAt
             ? ` · 最近采集：${new Date(data.status.checkedAt).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai', hour12: false })}`
             : ''}
         </small>
+        {data?.status.targetDate && (
+          <div role="status" aria-label="CCI当日更新状态">
+            <p>
+              目标日期：{data.status.targetDate} · 命中 {data.status.observed ?? 0}/3 档 · 新增{' '}
+              {data.status.inserted ?? 0} · 变更 {data.status.changed ?? 0}
+            </p>
+            {data.status.grades?.map((result) => (
+              <p key={result.grade}>
+                {result.grade}：
+                {result.error || (result.targetHits ? '已获取当日报价' : '来源无当日报价')}
+                {' · 返回 '}
+                {result.returned ?? '未知'} 条{' · 本次返回最新报价日期：'}
+                {result.latestQuoteDate ?? '无'}
+              </p>
+            ))}
+          </div>
+        )}
       </section>
       <section className="commodity-panel">
         <div className="commodity-heading">

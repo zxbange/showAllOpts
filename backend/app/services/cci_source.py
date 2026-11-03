@@ -1,5 +1,7 @@
 """Public third-party CCI observations, not an official licensed index feed."""
-from datetime import date, timedelta
+from datetime import date
+from time import monotonic
+import httpx
 from decimal import Decimal, InvalidOperation
 import json
 from math import isfinite
@@ -89,22 +91,36 @@ def parse_response(payload, grade, start, end):
     return normalized
 
 
-def fetch_rows(client, start, end, *, should_stop=lambda: False):
-    first, last = date.fromisoformat(start), date.fromisoformat(end)
-    if first > last or start < START or (last - first).days > 3660:
-        raise CCIError('请求日期范围无效')
+def safe_error(exc):
+    """Never expose request URLs, credentials, response bodies or exception text."""
+    if isinstance(exc, httpx.HTTPStatusError):
+        return f'HTTP {exc.response.status_code}'
+    if isinstance(exc, httpx.TimeoutException):
+        return '请求超时'
+    if isinstance(exc, httpx.RequestError):
+        return '网络请求失败'
+    return '响应解析或校验失败'
+
+
+def fetch_rows(client, start, end, *, should_stop=lambda: False, diagnostics=None):
+    # Daily collection deliberately has no historical range or retry path.
+    target = date.fromisoformat(start)
+    if start != end or target.isoformat() != start or start < START:
+        raise CCIError('仅允许查询目标当天')
     result = []
-    day = first
-    # One series and at most 31 dates per request: never rely on the source's
-    # unfiltered endpoint fitting under its 1000-row response cap.
-    while day <= last:
-        finish = min(day + timedelta(days=30), last)
-        for grade in GRADES:
-            if should_stop():
-                raise CCIError('采集已停止')
-            params = dict(tab='steamcoal-index', date_from=day.isoformat(),
-                          date_to=finish.isoformat(), index_name=grade)
+    diagnostics = diagnostics if diagnostics is not None else []
+    for grade in GRADES:
+        if should_stop():
+            raise CCIError('采集已停止')
+        began = monotonic()
+        detail = dict(grade=grade, dateFrom=start, dateTo=end, returned=None,
+                      latestQuoteDate=None, targetHits=0, error=None, errorType=None,
+                      inserted=0, changed=0)
+        diagnostics.append(detail)
+        try:
+            params = dict(tab='steamcoal-index', date_from=start, date_to=end, index_name=grade)
             with client.stream('GET', 'https://coalindex.com/api/market', params=params) as response:
+                detail['httpStatus'] = response.status_code
                 response.raise_for_status()
                 chunks = []
                 size = 0
@@ -114,6 +130,22 @@ def fetch_rows(client, start, end, *, should_stop=lambda: False):
                         raise CCIError('公开报价响应过大')
                     chunks.append(chunk)
                 payload = json.loads(b''.join(chunks))
-            result.extend(parse_response(payload, grade, day.isoformat(), finish.isoformat()))
-        day = finish + timedelta(days=1)
-    return validate_rows(result, today=last)
+            if isinstance(payload, dict) and isinstance(payload.get('rows'), list):
+                detail['returned'] = len(payload['rows'])
+                dates = []
+                for item in payload['rows']:
+                    day = item.get('data', {}).get('date') if isinstance(item, dict) and isinstance(item.get('data'), dict) else None
+                    try:
+                        if date.fromisoformat(day).isoformat() == day:
+                            dates.append(day)
+                    except (TypeError, ValueError):
+                        pass
+                detail['latestQuoteDate'] = max(dates, default=None)
+            rows = parse_response(payload, grade, start, end)
+            detail['targetHits'] = len(rows)
+            result.extend(rows)
+        except Exception as exc:
+            detail.update(error=safe_error(exc), errorType=type(exc).__name__)
+        finally:
+            detail['elapsedMs'] = round((monotonic() - began) * 1000)
+    return result
