@@ -1,0 +1,3532 @@
+{
+  "source": "coalindex.com",
+  "sourceUrl": "https://coalindex.com/market",
+  "provenance": "https://coalindex.com/about",
+  "api": "https://coalindex.com/api/market",
+  "retrievedAt": "2026-11-03T01:27:20Z",
+  "official": false,
+  "redistributionLicenseVerified": false,
+  "evidence": "public_query",
+  "notes": [
+    "Normal anonymous frontend query; not an official guaranteed or licensed API.",
+    "Partial history; sample checked only; do not fill missing dates or changes."
+  ],
+  "rows": [
+    {
+      "quoteDate": "2026-01-04",
+      "grade": "CCI5500",
+      "price": 684,
+      "change": 3
+    },
+    {
+      "quoteDate": "2026-01-04",
+      "grade": "CCI5000",
+      "price": 595,
+      "change": 4
+    },
+    {
+      "quoteDate": "2026-01-04",
+      "grade": "CCI4500",
+      "price": 501,
+      "change": null
+    },
+    {
+      "quoteDate": "2026-01-05",
+      "grade": "CCI5500",
+      "price": 687,
+      "change": 3
+    },
+    {
+      "quoteDate": "2026-01-05",
+      "grade": "CCI5000",
+      "price": 599,
+      "change": 4
+    },
+    {
+      "quoteDate": "2026-01-05",
+      "grade": "CCI4500",
+      "price": 506,
+      "change": 5
+    },
+    {
+      "quoteDate": "2026-01-06",
+      "grade": "CCI5500",
+      "price": 690,
+      "change": 3
+    },
+    {
+      "quoteDate": "2026-01-06",
+      "grade": "CCI5000",
+      "price": 603,
+      "change": 4
+    },
+    {
+      "quoteDate": "2026-01-06",
+      "grade": "CCI4500",
+      "price": 510,
+      "change": 4
+    },
+    {
+      "quoteDate": "2026-01-07",
+      "grade": "CCI5500",
+      "price": 694,
+      "change": 4
+    },
+    {
+      "quoteDate": "2026-01-07",
+      "grade": "CCI5000",
+      "price": 607,
+      "change": 4
+    },
+    {
+      "quoteDate": "2026-01-07",
+      "grade": "CCI4500",
+      "price": 514,
+      "change": 4
+    },
+    {
+      "quoteDate": "2026-01-08",
+      "grade": "CCI5500",
+      "price": 698,
+      "change": 4
+    },
+    {
+      "quoteDate": "2026-01-08",
+      "grade": "CCI5000",
+      "price": 611,
+      "change": 4
+    },
+    {
+      "quoteDate": "2026-01-08",
+      "grade": "CCI4500",
+      "price": 518,
+      "change": 4
+    },
+    {
+      "quoteDate": "2026-01-09",
+      "grade": "CCI5500",
+      "price": 701,
+      "change": 3
+    },
+    {
+      "quoteDate": "2026-01-09",
+      "grade": "CCI5000",
+      "price": 615,
+      "change": 4
+    },
+    {
+      "quoteDate": "2026-01-09",
+      "grade": "CCI4500",
+      "price": 522,
+      "change": 4
+    },
+    {
+      "quoteDate": "2026-01-12",
+      "grade": "CCI5500",
+      "price": 703,
+      "change": 2
+    },
+    {
+      "quoteDate": "2026-01-12",
+      "grade": "CCI5000",
+      "price": 618,
+      "change": 3
+    },
+    {
+      "quoteDate": "2026-01-12",
+      "grade": "CCI4500",
+      "price": 525,
+      "change": 3
+    },
+    {
+      "quoteDate": "2026-01-13",
+      "grade": "CCI5500",
+      "price": 704,
+      "change": 1
+    },
+    {
+      "quoteDate": "2026-01-13",
+      "grade": "CCI5000",
+      "price": 620,
+      "change": 2
+    },
+    {
+      "quoteDate": "2026-01-13",
+      "grade": "CCI4500",
+      "price": 528,
+      "change": 3
+    },
+    {
+      "quoteDate": "2026-01-14",
+      "grade": "CCI5500",
+      "price": 704,
+      "change": null
+    },
+    {
+      "quoteDate": "2026-01-14",
+      "grade": "CCI5000",
+      "price": 620,
+      "change": null
+    },
+    {
+      "quoteDate": "2026-01-14",
+      "grade": "CCI4500",
+      "price": 528,
+      "change": null
+    },
+    {
+      "quoteDate": "2026-01-15",
+      "grade": "CCI5500",
+      "price": 704,
+      "change": null
+    },
+    {
+      "quoteDate": "2026-01-15",
+      "grade": "CCI5000",
+      "price": 620,
+      "change": null
+    },
+    {
+      "quoteDate": "2026-01-15",
+      "grade": "CCI4500",
+      "price": 528,
+      "change": null
+    },
+    {
+      "quoteDate": "2026-01-16",
+      "grade": "CCI5500",
+      "price": 702,
+      "change": -2
+    },
+    {
+      "quoteDate": "2026-01-16",
+      "grade": "CCI5000",
+      "price": 617,
+      "change": -3
+    },
+    {
+      "quoteDate": "2026-01-16",
+      "grade": "CCI4500",
+      "price": 525,
+      "change": -3
+    },
+    {
+      "quoteDate": "2026-01-19",
+      "grade": "CCI5500",
+      "price": 700,
+      "change": -2
+    },
+    {
+      "quoteDate": "2026-01-19",
+      "grade": "CCI5000",
+      "price": 614,
+      "change": null
+    },
+    {
+      "quoteDate": "2026-01-19",
+      "grade": "CCI4500",
+      "price": 522,
+      "change": null
+    },
+    {
+      "quoteDate": "2026-01-20",
+      "grade": "CCI5500",
+      "price": 697,
+      "change": -3
+    },
+    {
+      "quoteDate": "2026-01-20",
+      "grade": "CCI5000",
+      "price": 611,
+      "change": -3
+    },
+    {
+      "quoteDate": "2026-01-20",
+      "grade": "CCI4500",
+      "price": 520,
+      "change": -2
+    },
+    {
+      "quoteDate": "2026-01-21",
+      "grade": "CCI5500",
+      "price": 694,
+      "change": -3
+    },
+    {
+      "quoteDate": "2026-01-21",
+      "grade": "CCI4500",
+      "price": 518,
+      "change": -2
+    },
+    {
+      "quoteDate": "2026-01-22",
+      "grade": "CCI5500",
+      "price": 692,
+      "change": -2
+    },
+    {
+      "quoteDate": "2026-01-22",
+      "grade": "CCI5000",
+      "price": 607,
+      "change": -2
+    },
+    {
+      "quoteDate": "2026-01-22",
+      "grade": "CCI4500",
+      "price": 516,
+      "change": -2
+    },
+    {
+      "quoteDate": "2026-01-23",
+      "grade": "CCI5500",
+      "price": 691,
+      "change": -1
+    },
+    {
+      "quoteDate": "2026-01-23",
+      "grade": "CCI5000",
+      "price": 607,
+      "change": null
+    },
+    {
+      "quoteDate": "2026-01-23",
+      "grade": "CCI4500",
+      "price": 516,
+      "change": null
+    },
+    {
+      "quoteDate": "2026-01-26",
+      "grade": "CCI5500",
+      "price": 691,
+      "change": null
+    },
+    {
+      "quoteDate": "2026-01-26",
+      "grade": "CCI5000",
+      "price": 607,
+      "change": null
+    },
+    {
+      "quoteDate": "2026-01-26",
+      "grade": "CCI4500",
+      "price": 518,
+      "change": 2
+    },
+    {
+      "quoteDate": "2026-01-27",
+      "grade": "CCI5500",
+      "price": 691,
+      "change": null
+    },
+    {
+      "quoteDate": "2026-01-27",
+      "grade": "CCI5000",
+      "price": 609,
+      "change": 2
+    },
+    {
+      "quoteDate": "2026-01-27",
+      "grade": "CCI4500",
+      "price": 521,
+      "change": 3
+    },
+    {
+      "quoteDate": "2026-01-28",
+      "grade": "CCI5500",
+      "price": 693,
+      "change": 2
+    },
+    {
+      "quoteDate": "2026-01-28",
+      "grade": "CCI5000",
+      "price": 611,
+      "change": 2
+    },
+    {
+      "quoteDate": "2026-01-28",
+      "grade": "CCI4500",
+      "price": 522,
+      "change": 1
+    },
+    {
+      "quoteDate": "2026-01-29",
+      "grade": "CCI5500",
+      "price": 695,
+      "change": 2
+    },
+    {
+      "quoteDate": "2026-01-29",
+      "grade": "CCI5000",
+      "price": 613,
+      "change": 2
+    },
+    {
+      "quoteDate": "2026-01-29",
+      "grade": "CCI4500",
+      "price": 524,
+      "change": 2
+    },
+    {
+      "quoteDate": "2026-01-30",
+      "grade": "CCI5500",
+      "price": 696,
+      "change": 1
+    },
+    {
+      "quoteDate": "2026-01-30",
+      "grade": "CCI5000",
+      "price": 614,
+      "change": 1
+    },
+    {
+      "quoteDate": "2026-01-30",
+      "grade": "CCI4500",
+      "price": 525,
+      "change": 1
+    },
+    {
+      "quoteDate": "2026-02-02",
+      "grade": "CCI5500",
+      "price": 696,
+      "change": null
+    },
+    {
+      "quoteDate": "2026-02-02",
+      "grade": "CCI5000",
+      "price": 614,
+      "change": null
+    },
+    {
+      "quoteDate": "2026-02-02",
+      "grade": "CCI4500",
+      "price": 525,
+      "change": null
+    },
+    {
+      "quoteDate": "2026-02-03",
+      "grade": "CCI5500",
+      "price": 696,
+      "change": null
+    },
+    {
+      "quoteDate": "2026-02-03",
+      "grade": "CCI5000",
+      "price": 614,
+      "change": null
+    },
+    {
+      "quoteDate": "2026-02-03",
+      "grade": "CCI4500",
+      "price": 525,
+      "change": null
+    },
+    {
+      "quoteDate": "2026-02-04",
+      "grade": "CCI5500",
+      "price": 696,
+      "change": null
+    },
+    {
+      "quoteDate": "2026-02-04",
+      "grade": "CCI5000",
+      "price": 614,
+      "change": null
+    },
+    {
+      "quoteDate": "2026-02-04",
+      "grade": "CCI4500",
+      "price": 526,
+      "change": 1
+    },
+    {
+      "quoteDate": "2026-02-06",
+      "grade": "CCI5500",
+      "price": 698,
+      "change": 1
+    },
+    {
+      "quoteDate": "2026-02-06",
+      "grade": "CCI5000",
+      "price": 617,
+      "change": 2
+    },
+    {
+      "quoteDate": "2026-02-06",
+      "grade": "CCI4500",
+      "price": 530,
+      "change": 3
+    },
+    {
+      "quoteDate": "2026-02-09",
+      "grade": "CCI5500",
+      "price": 700,
+      "change": 2
+    },
+    {
+      "quoteDate": "2026-02-09",
+      "grade": "CCI5000",
+      "price": 620,
+      "change": 3
+    },
+    {
+      "quoteDate": "2026-02-09",
+      "grade": "CCI4500",
+      "price": 532,
+      "change": 2
+    },
+    {
+      "quoteDate": "2026-02-10",
+      "grade": "CCI5500",
+      "price": 702,
+      "change": 2
+    },
+    {
+      "quoteDate": "2026-02-10",
+      "grade": "CCI5000",
+      "price": 623,
+      "change": 3
+    },
+    {
+      "quoteDate": "2026-02-10",
+      "grade": "CCI4500",
+      "price": 535,
+      "change": 3
+    },
+    {
+      "quoteDate": "2026-02-11",
+      "grade": "CCI5500",
+      "price": 706,
+      "change": null
+    },
+    {
+      "quoteDate": "2026-02-11",
+      "grade": "CCI5000",
+      "price": 627,
+      "change": null
+    },
+    {
+      "quoteDate": "2026-02-11",
+      "grade": "CCI4500",
+      "price": 539,
+      "change": null
+    },
+    {
+      "quoteDate": "2026-02-12",
+      "grade": "CCI5500",
+      "price": 711,
+      "change": 5
+    },
+    {
+      "quoteDate": "2026-02-12",
+      "grade": "CCI5000",
+      "price": 632,
+      "change": 5
+    },
+    {
+      "quoteDate": "2026-02-12",
+      "grade": "CCI4500",
+      "price": 544,
+      "change": 5
+    },
+    {
+      "quoteDate": "2026-02-13",
+      "grade": "CCI5500",
+      "price": 717,
+      "change": 6
+    },
+    {
+      "quoteDate": "2026-02-13",
+      "grade": "CCI5000",
+      "price": 638,
+      "change": 6
+    },
+    {
+      "quoteDate": "2026-02-13",
+      "grade": "CCI4500",
+      "price": 550,
+      "change": 6
+    },
+    {
+      "quoteDate": "2026-02-25",
+      "grade": "CCI5500",
+      "price": 732,
+      "change": 5
+    },
+    {
+      "quoteDate": "2026-02-25",
+      "grade": "CCI5000",
+      "price": 654,
+      "change": 6
+    },
+    {
+      "quoteDate": "2026-02-25",
+      "grade": "CCI4500",
+      "price": 566,
+      "change": 6
+    },
+    {
+      "quoteDate": "2026-02-26",
+      "grade": "CCI5500",
+      "price": 738,
+      "change": 6
+    },
+    {
+      "quoteDate": "2026-02-26",
+      "grade": "CCI5000",
+      "price": 660,
+      "change": 6
+    },
+    {
+      "quoteDate": "2026-02-26",
+      "grade": "CCI4500",
+      "price": 572,
+      "change": 6
+    },
+    {
+      "quoteDate": "2026-02-27",
+      "grade": "CCI5500",
+      "price": 744,
+      "change": 6
+    },
+    {
+      "quoteDate": "2026-02-27",
+      "grade": "CCI5000",
+      "price": 666,
+      "change": 6
+    },
+    {
+      "quoteDate": "2026-02-27",
+      "grade": "CCI4500",
+      "price": 578,
+      "change": 6
+    },
+    {
+      "quoteDate": "2026-02-28",
+      "grade": "CCI5500",
+      "price": 750,
+      "change": 6
+    },
+    {
+      "quoteDate": "2026-02-28",
+      "grade": "CCI5000",
+      "price": 671,
+      "change": 5
+    },
+    {
+      "quoteDate": "2026-02-28",
+      "grade": "CCI4500",
+      "price": 581,
+      "change": 3
+    },
+    {
+      "quoteDate": "2026-03-06",
+      "grade": "CCI5500",
+      "price": 750,
+      "change": -1
+    },
+    {
+      "quoteDate": "2026-03-06",
+      "grade": "CCI5000",
+      "price": 669,
+      "change": -2
+    },
+    {
+      "quoteDate": "2026-03-06",
+      "grade": "CCI4500",
+      "price": 577,
+      "change": -2
+    },
+    {
+      "quoteDate": "2026-03-09",
+      "grade": "CCI5500",
+      "price": 748,
+      "change": -2
+    },
+    {
+      "quoteDate": "2026-03-09",
+      "grade": "CCI5000",
+      "price": 667,
+      "change": -2
+    },
+    {
+      "quoteDate": "2026-03-09",
+      "grade": "CCI4500",
+      "price": 575,
+      "change": -2
+    },
+    {
+      "quoteDate": "2026-03-10",
+      "grade": "CCI5500",
+      "price": 745,
+      "change": null
+    },
+    {
+      "quoteDate": "2026-03-10",
+      "grade": "CCI5000",
+      "price": 664,
+      "change": -3
+    },
+    {
+      "quoteDate": "2026-03-10",
+      "grade": "CCI4500",
+      "price": 571,
+      "change": null
+    },
+    {
+      "quoteDate": "2026-03-11",
+      "grade": "CCI5500",
+      "price": 742,
+      "change": -3
+    },
+    {
+      "quoteDate": "2026-03-11",
+      "grade": "CCI5000",
+      "price": 660,
+      "change": -4
+    },
+    {
+      "quoteDate": "2026-03-11",
+      "grade": "CCI4500",
+      "price": 568,
+      "change": -3
+    },
+    {
+      "quoteDate": "2026-03-12",
+      "grade": "CCI5500",
+      "price": 738,
+      "change": -4
+    },
+    {
+      "quoteDate": "2026-03-12",
+      "grade": "CCI5000",
+      "price": 656,
+      "change": -4
+    },
+    {
+      "quoteDate": "2026-03-12",
+      "grade": "CCI4500",
+      "price": 564,
+      "change": -4
+    },
+    {
+      "quoteDate": "2026-03-13",
+      "grade": "CCI5500",
+      "price": 736,
+      "change": -2
+    },
+    {
+      "quoteDate": "2026-03-13",
+      "grade": "CCI5000",
+      "price": 653,
+      "change": -3
+    },
+    {
+      "quoteDate": "2026-03-13",
+      "grade": "CCI4500",
+      "price": 561,
+      "change": -3
+    },
+    {
+      "quoteDate": "2026-03-16",
+      "grade": "CCI5500",
+      "price": 732,
+      "change": null
+    },
+    {
+      "quoteDate": "2026-03-16",
+      "grade": "CCI5000",
+      "price": 650,
+      "change": -3
+    },
+    {
+      "quoteDate": "2026-03-16",
+      "grade": "CCI4500",
+      "price": 558,
+      "change": -3
+    },
+    {
+      "quoteDate": "2026-03-17",
+      "grade": "CCI5500",
+      "price": 730,
+      "change": -2
+    },
+    {
+      "quoteDate": "2026-03-17",
+      "grade": "CCI5000",
+      "price": 648,
+      "change": -2
+    },
+    {
+      "quoteDate": "2026-03-17",
+      "grade": "CCI4500",
+      "price": 558,
+      "change": null
+    },
+    {
+      "quoteDate": "2026-03-18",
+      "grade": "CCI5500",
+      "price": 730,
+      "change": null
+    },
+    {
+      "quoteDate": "2026-03-18",
+      "grade": "CCI5000",
+      "price": 648,
+      "change": null
+    },
+    {
+      "quoteDate": "2026-03-18",
+      "grade": "CCI4500",
+      "price": 559,
+      "change": 1
+    },
+    {
+      "quoteDate": "2026-03-19",
+      "grade": "CCI5500",
+      "price": 732,
+      "change": 2
+    },
+    {
+      "quoteDate": "2026-03-19",
+      "grade": "CCI5000",
+      "price": 650,
+      "change": 2
+    },
+    {
+      "quoteDate": "2026-03-19",
+      "grade": "CCI4500",
+      "price": 562,
+      "change": 3
+    },
+    {
+      "quoteDate": "2026-03-20",
+      "grade": "CCI5500",
+      "price": 736,
+      "change": 4
+    },
+    {
+      "quoteDate": "2026-03-20",
+      "grade": "CCI5000",
+      "price": 654,
+      "change": 4
+    },
+    {
+      "quoteDate": "2026-03-20",
+      "grade": "CCI4500",
+      "price": 567,
+      "change": 5
+    },
+    {
+      "quoteDate": "2026-03-23",
+      "grade": "CCI5500",
+      "price": 742,
+      "change": 6
+    },
+    {
+      "quoteDate": "2026-03-23",
+      "grade": "CCI5000",
+      "price": 660,
+      "change": 6
+    },
+    {
+      "quoteDate": "2026-03-23",
+      "grade": "CCI4500",
+      "price": 573,
+      "change": 6
+    },
+    {
+      "quoteDate": "2026-03-24",
+      "grade": "CCI5500",
+      "price": 749,
+      "change": 7
+    },
+    {
+      "quoteDate": "2026-03-24",
+      "grade": "CCI5000",
+      "price": 667,
+      "change": 7
+    },
+    {
+      "quoteDate": "2026-03-24",
+      "grade": "CCI4500",
+      "price": 580,
+      "change": 7
+    },
+    {
+      "quoteDate": "2026-03-25",
+      "grade": "CCI5500",
+      "price": 755,
+      "change": 6
+    },
+    {
+      "quoteDate": "2026-03-25",
+      "grade": "CCI5000",
+      "price": 674,
+      "change": 7
+    },
+    {
+      "quoteDate": "2026-03-25",
+      "grade": "CCI4500",
+      "price": 587,
+      "change": 7
+    },
+    {
+      "quoteDate": "2026-03-26",
+      "grade": "CCI5500",
+      "price": 760,
+      "change": 5
+    },
+    {
+      "quoteDate": "2026-03-26",
+      "grade": "CCI5000",
+      "price": 680,
+      "change": 6
+    },
+    {
+      "quoteDate": "2026-03-26",
+      "grade": "CCI4500",
+      "price": 593,
+      "change": 6
+    },
+    {
+      "quoteDate": "2026-03-27",
+      "grade": "CCI5500",
+      "price": 763,
+      "change": 3
+    },
+    {
+      "quoteDate": "2026-03-27",
+      "grade": "CCI5000",
+      "price": 683,
+      "change": 3
+    },
+    {
+      "quoteDate": "2026-03-27",
+      "grade": "CCI4500",
+      "price": 595,
+      "change": 2
+    },
+    {
+      "quoteDate": "2026-03-30",
+      "grade": "CCI5500",
+      "price": 763,
+      "change": null
+    },
+    {
+      "quoteDate": "2026-03-30",
+      "grade": "CCI5000",
+      "price": 683,
+      "change": null
+    },
+    {
+      "quoteDate": "2026-03-30",
+      "grade": "CCI4500",
+      "price": 595,
+      "change": null
+    },
+    {
+      "quoteDate": "2026-03-31",
+      "grade": "CCI4500",
+      "price": 593,
+      "change": null
+    },
+    {
+      "quoteDate": "2026-04-01",
+      "grade": "CCI5500",
+      "price": 761,
+      "change": null
+    },
+    {
+      "quoteDate": "2026-04-01",
+      "grade": "CCI5000",
+      "price": 678,
+      "change": -2
+    },
+    {
+      "quoteDate": "2026-04-01",
+      "grade": "CCI4500",
+      "price": 591,
+      "change": -2
+    },
+    {
+      "quoteDate": "2026-04-02",
+      "grade": "CCI5500",
+      "price": 760,
+      "change": -1
+    },
+    {
+      "quoteDate": "2026-04-02",
+      "grade": "CCI5000",
+      "price": 676,
+      "change": -2
+    },
+    {
+      "quoteDate": "2026-04-02",
+      "grade": "CCI4500",
+      "price": 589,
+      "change": -2
+    },
+    {
+      "quoteDate": "2026-04-03",
+      "grade": "CCI5500",
+      "price": 760,
+      "change": null
+    },
+    {
+      "quoteDate": "2026-04-03",
+      "grade": "CCI5000",
+      "price": 675,
+      "change": -1
+    },
+    {
+      "quoteDate": "2026-04-03",
+      "grade": "CCI4500",
+      "price": 589,
+      "change": null
+    },
+    {
+      "quoteDate": "2026-04-07",
+      "grade": "CCI5500",
+      "price": 760,
+      "change": null
+    },
+    {
+      "quoteDate": "2026-04-07",
+      "grade": "CCI5000",
+      "price": 675,
+      "change": null
+    },
+    {
+      "quoteDate": "2026-04-07",
+      "grade": "CCI4500",
+      "price": 589,
+      "change": null
+    },
+    {
+      "quoteDate": "2026-04-08",
+      "grade": "CCI5500",
+      "price": 760,
+      "change": null
+    },
+    {
+      "quoteDate": "2026-04-08",
+      "grade": "CCI5000",
+      "price": 675,
+      "change": null
+    },
+    {
+      "quoteDate": "2026-04-08",
+      "grade": "CCI4500",
+      "price": 589,
+      "change": null
+    },
+    {
+      "quoteDate": "2026-04-09",
+      "grade": "CCI5500",
+      "price": 762,
+      "change": 2
+    },
+    {
+      "quoteDate": "2026-04-09",
+      "grade": "CCI5000",
+      "price": 677,
+      "change": 2
+    },
+    {
+      "quoteDate": "2026-04-09",
+      "grade": "CCI4500",
+      "price": 589,
+      "change": null
+    },
+    {
+      "quoteDate": "2026-04-10",
+      "grade": "CCI5500",
+      "price": 764,
+      "change": 2
+    },
+    {
+      "quoteDate": "2026-04-10",
+      "grade": "CCI5000",
+      "price": 679,
+      "change": 2
+    },
+    {
+      "quoteDate": "2026-04-10",
+      "grade": "CCI4500",
+      "price": 590,
+      "change": 1
+    },
+    {
+      "quoteDate": "2026-04-13",
+      "grade": "CCI5500",
+      "price": 766,
+      "change": 2
+    },
+    {
+      "quoteDate": "2026-04-13",
+      "grade": "CCI5000",
+      "price": 681,
+      "change": 2
+    },
+    {
+      "quoteDate": "2026-04-13",
+      "grade": "CCI4500",
+      "price": 591,
+      "change": 1
+    },
+    {
+      "quoteDate": "2026-04-14",
+      "grade": "CCI5500",
+      "price": 768,
+      "change": 2
+    },
+    {
+      "quoteDate": "2026-04-14",
+      "grade": "CCI5000",
+      "price": 683,
+      "change": 2
+    },
+    {
+      "quoteDate": "2026-04-14",
+      "grade": "CCI4500",
+      "price": 592,
+      "change": 1
+    },
+    {
+      "quoteDate": "2026-04-15",
+      "grade": "CCI5500",
+      "price": 770,
+      "change": 2
+    },
+    {
+      "quoteDate": "2026-04-15",
+      "grade": "CCI5000",
+      "price": 685,
+      "change": 2
+    },
+    {
+      "quoteDate": "2026-04-15",
+      "grade": "CCI4500",
+      "price": 594,
+      "change": 2
+    },
+    {
+      "quoteDate": "2026-04-16",
+      "grade": "CCI5500",
+      "price": 771,
+      "change": null
+    },
+    {
+      "quoteDate": "2026-04-16",
+      "grade": "CCI5000",
+      "price": 687,
+      "change": null
+    },
+    {
+      "quoteDate": "2026-04-16",
+      "grade": "CCI4500",
+      "price": 595,
+      "change": null
+    },
+    {
+      "quoteDate": "2026-04-17",
+      "grade": "CCI5500",
+      "price": 772,
+      "change": null
+    },
+    {
+      "quoteDate": "2026-04-17",
+      "grade": "CCI5000",
+      "price": 688,
+      "change": null
+    },
+    {
+      "quoteDate": "2026-04-17",
+      "grade": "CCI4500",
+      "price": 596,
+      "change": null
+    },
+    {
+      "quoteDate": "2026-04-20",
+      "grade": "CCI5500",
+      "price": 773,
+      "change": 1
+    },
+    {
+      "quoteDate": "2026-04-20",
+      "grade": "CCI5000",
+      "price": 689,
+      "change": null
+    },
+    {
+      "quoteDate": "2026-04-20",
+      "grade": "CCI4500",
+      "price": 596,
+      "change": null
+    },
+    {
+      "quoteDate": "2026-04-21",
+      "grade": "CCI5500",
+      "price": 774,
+      "change": null
+    },
+    {
+      "quoteDate": "2026-04-21",
+      "grade": "CCI5000",
+      "price": 690,
+      "change": null
+    },
+    {
+      "quoteDate": "2026-04-21",
+      "grade": "CCI4500",
+      "price": 596,
+      "change": null
+    },
+    {
+      "quoteDate": "2026-04-22",
+      "grade": "CCI5500",
+      "price": 775,
+      "change": null
+    },
+    {
+      "quoteDate": "2026-04-22",
+      "grade": "CCI5000",
+      "price": 690,
+      "change": null
+    },
+    {
+      "quoteDate": "2026-04-22",
+      "grade": "CCI4500",
+      "price": 596,
+      "change": null
+    },
+    {
+      "quoteDate": "2026-04-23",
+      "grade": "CCI5500",
+      "price": 776,
+      "change": null
+    },
+    {
+      "quoteDate": "2026-04-23",
+      "grade": "CCI5000",
+      "price": 691,
+      "change": null
+    },
+    {
+      "quoteDate": "2026-04-23",
+      "grade": "CCI4500",
+      "price": 598,
+      "change": null
+    },
+    {
+      "quoteDate": "2026-04-24",
+      "grade": "CCI5500",
+      "price": 780,
+      "change": null
+    },
+    {
+      "quoteDate": "2026-04-24",
+      "grade": "CCI5000",
+      "price": 694,
+      "change": null
+    },
+    {
+      "quoteDate": "2026-04-24",
+      "grade": "CCI4500",
+      "price": 603,
+      "change": null
+    },
+    {
+      "quoteDate": "2026-04-27",
+      "grade": "CCI5500",
+      "price": 785,
+      "change": 5
+    },
+    {
+      "quoteDate": "2026-04-27",
+      "grade": "CCI5000",
+      "price": 699,
+      "change": 5
+    },
+    {
+      "quoteDate": "2026-04-27",
+      "grade": "CCI4500",
+      "price": 608,
+      "change": 5
+    },
+    {
+      "quoteDate": "2026-04-28",
+      "grade": "CCI5500",
+      "price": 792,
+      "change": null
+    },
+    {
+      "quoteDate": "2026-04-28",
+      "grade": "CCI5000",
+      "price": 705,
+      "change": null
+    },
+    {
+      "quoteDate": "2026-04-28",
+      "grade": "CCI4500",
+      "price": 614,
+      "change": null
+    },
+    {
+      "quoteDate": "2026-04-29",
+      "grade": "CCI5500",
+      "price": 800,
+      "change": null
+    },
+    {
+      "quoteDate": "2026-04-29",
+      "grade": "CCI5000",
+      "price": 713,
+      "change": null
+    },
+    {
+      "quoteDate": "2026-04-29",
+      "grade": "CCI4500",
+      "price": 622,
+      "change": null
+    },
+    {
+      "quoteDate": "2026-04-30",
+      "grade": "CCI5500",
+      "price": 808,
+      "change": null
+    },
+    {
+      "quoteDate": "2026-04-30",
+      "grade": "CCI5000",
+      "price": 721,
+      "change": null
+    },
+    {
+      "quoteDate": "2026-04-30",
+      "grade": "CCI4500",
+      "price": 630,
+      "change": null
+    },
+    {
+      "quoteDate": "2026-05-06",
+      "grade": "CCI5500",
+      "price": 816,
+      "change": null
+    },
+    {
+      "quoteDate": "2026-05-06",
+      "grade": "CCI5000",
+      "price": 729,
+      "change": null
+    },
+    {
+      "quoteDate": "2026-05-06",
+      "grade": "CCI4500",
+      "price": 638,
+      "change": null
+    },
+    {
+      "quoteDate": "2026-05-07",
+      "grade": "CCI5500",
+      "price": 824,
+      "change": null
+    },
+    {
+      "quoteDate": "2026-05-07",
+      "grade": "CCI5000",
+      "price": 737,
+      "change": null
+    },
+    {
+      "quoteDate": "2026-05-07",
+      "grade": "CCI4500",
+      "price": 644,
+      "change": null
+    },
+    {
+      "quoteDate": "2026-05-08",
+      "grade": "CCI5500",
+      "price": 830,
+      "change": null
+    },
+    {
+      "quoteDate": "2026-05-08",
+      "grade": "CCI5000",
+      "price": 742,
+      "change": null
+    },
+    {
+      "quoteDate": "2026-05-08",
+      "grade": "CCI4500",
+      "price": 648,
+      "change": null
+    },
+    {
+      "quoteDate": "2026-05-09",
+      "grade": "CCI5500",
+      "price": 835,
+      "change": null
+    },
+    {
+      "quoteDate": "2026-05-09",
+      "grade": "CCI5000",
+      "price": 746,
+      "change": null
+    },
+    {
+      "quoteDate": "2026-05-09",
+      "grade": "CCI4500",
+      "price": 651,
+      "change": null
+    },
+    {
+      "quoteDate": "2026-05-11",
+      "grade": "CCI5500",
+      "price": 835,
+      "change": null
+    },
+    {
+      "quoteDate": "2026-05-11",
+      "grade": "CCI5000",
+      "price": 748,
+      "change": null
+    },
+    {
+      "quoteDate": "2026-05-11",
+      "grade": "CCI4500",
+      "price": 651,
+      "change": null
+    },
+    {
+      "quoteDate": "2026-05-12",
+      "grade": "CCI5500",
+      "price": 835,
+      "change": null
+    },
+    {
+      "quoteDate": "2026-05-12",
+      "grade": "CCI5000",
+      "price": 748,
+      "change": null
+    },
+    {
+      "quoteDate": "2026-05-12",
+      "grade": "CCI4500",
+      "price": 651,
+      "change": null
+    },
+    {
+      "quoteDate": "2026-05-13",
+      "grade": "CCI5500",
+      "price": 835,
+      "change": null
+    },
+    {
+      "quoteDate": "2026-05-13",
+      "grade": "CCI5000",
+      "price": 748,
+      "change": null
+    },
+    {
+      "quoteDate": "2026-05-13",
+      "grade": "CCI4500",
+      "price": 651,
+      "change": null
+    },
+    {
+      "quoteDate": "2026-05-14",
+      "grade": "CCI5500",
+      "price": 835,
+      "change": null
+    },
+    {
+      "quoteDate": "2026-05-14",
+      "grade": "CCI5000",
+      "price": 748,
+      "change": null
+    },
+    {
+      "quoteDate": "2026-05-14",
+      "grade": "CCI4500",
+      "price": 651,
+      "change": null
+    },
+    {
+      "quoteDate": "2026-05-15",
+      "grade": "CCI5500",
+      "price": 835,
+      "change": null
+    },
+    {
+      "quoteDate": "2026-05-15",
+      "grade": "CCI5000",
+      "price": 748,
+      "change": null
+    },
+    {
+      "quoteDate": "2026-05-15",
+      "grade": "CCI4500",
+      "price": 651,
+      "change": null
+    },
+    {
+      "quoteDate": "2026-05-18",
+      "grade": "CCI5500",
+      "price": 835,
+      "change": null
+    },
+    {
+      "quoteDate": "2026-05-18",
+      "grade": "CCI5000",
+      "price": 748,
+      "change": null
+    },
+    {
+      "quoteDate": "2026-05-18",
+      "grade": "CCI4500",
+      "price": 651,
+      "change": null
+    },
+    {
+      "quoteDate": "2026-05-19",
+      "grade": "CCI5500",
+      "price": 835,
+      "change": null
+    },
+    {
+      "quoteDate": "2026-05-19",
+      "grade": "CCI5000",
+      "price": 748,
+      "change": null
+    },
+    {
+      "quoteDate": "2026-05-19",
+      "grade": "CCI4500",
+      "price": 651,
+      "change": null
+    },
+    {
+      "quoteDate": "2026-05-20",
+      "grade": "CCI5500",
+      "price": 835,
+      "change": null
+    },
+    {
+      "quoteDate": "2026-05-20",
+      "grade": "CCI5000",
+      "price": 748,
+      "change": null
+    },
+    {
+      "quoteDate": "2026-05-20",
+      "grade": "CCI4500",
+      "price": 651,
+      "change": null
+    },
+    {
+      "quoteDate": "2026-05-21",
+      "grade": "CCI5500",
+      "price": 835,
+      "change": null
+    },
+    {
+      "quoteDate": "2026-05-21",
+      "grade": "CCI5000",
+      "price": 748,
+      "change": null
+    },
+    {
+      "quoteDate": "2026-05-21",
+      "grade": "CCI4500",
+      "price": 651,
+      "change": null
+    },
+    {
+      "quoteDate": "2026-05-22",
+      "grade": "CCI5500",
+      "price": 835,
+      "change": null
+    },
+    {
+      "quoteDate": "2026-05-22",
+      "grade": "CCI5000",
+      "price": 747,
+      "change": null
+    },
+    {
+      "quoteDate": "2026-05-22",
+      "grade": "CCI4500",
+      "price": 650,
+      "change": null
+    },
+    {
+      "quoteDate": "2026-05-25",
+      "grade": "CCI5500",
+      "price": 838,
+      "change": 3
+    },
+    {
+      "quoteDate": "2026-05-25",
+      "grade": "CCI5000",
+      "price": 750,
+      "change": null
+    },
+    {
+      "quoteDate": "2026-05-25",
+      "grade": "CCI4500",
+      "price": 653,
+      "change": null
+    },
+    {
+      "quoteDate": "2026-05-26",
+      "grade": "CCI5500",
+      "price": 841,
+      "change": 3
+    },
+    {
+      "quoteDate": "2026-05-26",
+      "grade": "CCI5000",
+      "price": 754,
+      "change": null
+    },
+    {
+      "quoteDate": "2026-05-26",
+      "grade": "CCI4500",
+      "price": 657,
+      "change": null
+    },
+    {
+      "quoteDate": "2026-05-27",
+      "grade": "CCI5500",
+      "price": 845,
+      "change": null
+    },
+    {
+      "quoteDate": "2026-05-27",
+      "grade": "CCI5000",
+      "price": 758,
+      "change": null
+    },
+    {
+      "quoteDate": "2026-05-27",
+      "grade": "CCI4500",
+      "price": 661,
+      "change": null
+    },
+    {
+      "quoteDate": "2026-05-28",
+      "grade": "CCI5500",
+      "price": 849,
+      "change": null
+    },
+    {
+      "quoteDate": "2026-05-28",
+      "grade": "CCI5000",
+      "price": 762,
+      "change": null
+    },
+    {
+      "quoteDate": "2026-05-28",
+      "grade": "CCI4500",
+      "price": 665,
+      "change": null
+    },
+    {
+      "quoteDate": "2026-05-29",
+      "grade": "CCI5000",
+      "price": 766,
+      "change": null
+    },
+    {
+      "quoteDate": "2026-05-29",
+      "grade": "CCI4500",
+      "price": 669,
+      "change": null
+    },
+    {
+      "quoteDate": "2026-06-01",
+      "grade": "CCI5500",
+      "price": 857,
+      "change": 4
+    },
+    {
+      "quoteDate": "2026-06-01",
+      "grade": "CCI5000",
+      "price": 770,
+      "change": 4
+    },
+    {
+      "quoteDate": "2026-06-01",
+      "grade": "CCI4500",
+      "price": 673,
+      "change": 4
+    },
+    {
+      "quoteDate": "2026-06-02",
+      "grade": "CCI5500",
+      "price": 861,
+      "change": 4
+    },
+    {
+      "quoteDate": "2026-06-02",
+      "grade": "CCI5000",
+      "price": 773,
+      "change": 3
+    },
+    {
+      "quoteDate": "2026-06-02",
+      "grade": "CCI4500",
+      "price": 675,
+      "change": 2
+    },
+    {
+      "quoteDate": "2026-06-03",
+      "grade": "CCI5500",
+      "price": 864,
+      "change": 3
+    },
+    {
+      "quoteDate": "2026-06-03",
+      "grade": "CCI5000",
+      "price": 774,
+      "change": 1
+    },
+    {
+      "quoteDate": "2026-06-03",
+      "grade": "CCI4500",
+      "price": 675,
+      "change": null
+    },
+    {
+      "quoteDate": "2026-06-04",
+      "grade": "CCI5500",
+      "price": 865,
+      "change": 1
+    },
+    {
+      "quoteDate": "2026-06-04",
+      "grade": "CCI5000",
+      "price": 774,
+      "change": null
+    },
+    {
+      "quoteDate": "2026-06-04",
+      "grade": "CCI4500",
+      "price": 675,
+      "change": null
+    },
+    {
+      "quoteDate": "2026-06-05",
+      "grade": "CCI5500",
+      "price": 865,
+      "change": null
+    },
+    {
+      "quoteDate": "2026-06-05",
+      "grade": "CCI5000",
+      "price": 774,
+      "change": null
+    },
+    {
+      "quoteDate": "2026-06-05",
+      "grade": "CCI4500",
+      "price": 675,
+      "change": null
+    },
+    {
+      "quoteDate": "2026-06-08",
+      "grade": "CCI5500",
+      "price": 865,
+      "change": null
+    },
+    {
+      "quoteDate": "2026-06-08",
+      "grade": "CCI5000",
+      "price": 774,
+      "change": null
+    },
+    {
+      "quoteDate": "2026-06-08",
+      "grade": "CCI4500",
+      "price": 675,
+      "change": null
+    },
+    {
+      "quoteDate": "2026-06-09",
+      "grade": "CCI5500",
+      "price": 865,
+      "change": null
+    },
+    {
+      "quoteDate": "2026-06-09",
+      "grade": "CCI5000",
+      "price": 774,
+      "change": null
+    },
+    {
+      "quoteDate": "2026-06-09",
+      "grade": "CCI4500",
+      "price": 675,
+      "change": null
+    },
+    {
+      "quoteDate": "2026-06-10",
+      "grade": "CCI5500",
+      "price": 865,
+      "change": null
+    },
+    {
+      "quoteDate": "2026-06-10",
+      "grade": "CCI5000",
+      "price": 774,
+      "change": null
+    },
+    {
+      "quoteDate": "2026-06-10",
+      "grade": "CCI4500",
+      "price": 675,
+      "change": null
+    },
+    {
+      "quoteDate": "2026-06-11",
+      "grade": "CCI5500",
+      "price": 865,
+      "change": null
+    },
+    {
+      "quoteDate": "2026-06-11",
+      "grade": "CCI5000",
+      "price": 774,
+      "change": null
+    },
+    {
+      "quoteDate": "2026-06-11",
+      "grade": "CCI4500",
+      "price": 675,
+      "change": null
+    },
+    {
+      "quoteDate": "2026-06-12",
+      "grade": "CCI5500",
+      "price": 865,
+      "change": null
+    },
+    {
+      "quoteDate": "2026-06-12",
+      "grade": "CCI5000",
+      "price": 774,
+      "change": null
+    },
+    {
+      "quoteDate": "2026-06-12",
+      "grade": "CCI4500",
+      "price": 675,
+      "change": null
+    },
+    {
+      "quoteDate": "2026-06-15",
+      "grade": "CCI5500",
+      "price": 865,
+      "change": null
+    },
+    {
+      "quoteDate": "2026-06-15",
+      "grade": "CCI5000",
+      "price": 774,
+      "change": null
+    },
+    {
+      "quoteDate": "2026-06-15",
+      "grade": "CCI4500",
+      "price": 675,
+      "change": null
+    },
+    {
+      "quoteDate": "2026-06-17",
+      "grade": "CCI5500",
+      "price": 865,
+      "change": null
+    },
+    {
+      "quoteDate": "2026-06-17",
+      "grade": "CCI5000",
+      "price": 774,
+      "change": null
+    },
+    {
+      "quoteDate": "2026-06-17",
+      "grade": "CCI4500",
+      "price": 675,
+      "change": null
+    },
+    {
+      "quoteDate": "2026-06-18",
+      "grade": "CCI5500",
+      "price": 865,
+      "change": null
+    },
+    {
+      "quoteDate": "2026-06-18",
+      "grade": "CCI5000",
+      "price": 774,
+      "change": null
+    },
+    {
+      "quoteDate": "2026-06-18",
+      "grade": "CCI4500",
+      "price": 675,
+      "change": null
+    },
+    {
+      "quoteDate": "2026-06-22",
+      "grade": "CCI5500",
+      "price": 865,
+      "change": null
+    },
+    {
+      "quoteDate": "2026-06-22",
+      "grade": "CCI5000",
+      "price": 773,
+      "change": -1
+    },
+    {
+      "quoteDate": "2026-06-22",
+      "grade": "CCI4500",
+      "price": 674,
+      "change": -1
+    },
+    {
+      "quoteDate": "2026-06-23",
+      "grade": "CCI5500",
+      "price": 863,
+      "change": -2
+    },
+    {
+      "quoteDate": "2026-06-23",
+      "grade": "CCI5000",
+      "price": 771,
+      "change": -2
+    },
+    {
+      "quoteDate": "2026-06-23",
+      "grade": "CCI4500",
+      "price": 671,
+      "change": -3
+    },
+    {
+      "quoteDate": "2026-06-24",
+      "grade": "CCI5500",
+      "price": 860,
+      "change": -3
+    },
+    {
+      "quoteDate": "2026-06-24",
+      "grade": "CCI5000",
+      "price": 768,
+      "change": -3
+    },
+    {
+      "quoteDate": "2026-06-24",
+      "grade": "CCI4500",
+      "price": 668,
+      "change": -3
+    },
+    {
+      "quoteDate": "2026-06-25",
+      "grade": "CCI5500",
+      "price": 856,
+      "change": -4
+    },
+    {
+      "quoteDate": "2026-06-25",
+      "grade": "CCI5000",
+      "price": 764,
+      "change": null
+    },
+    {
+      "quoteDate": "2026-06-25",
+      "grade": "CCI4500",
+      "price": 664,
+      "change": -4
+    },
+    {
+      "quoteDate": "2026-06-26",
+      "grade": "CCI5500",
+      "price": 851,
+      "change": -5
+    },
+    {
+      "quoteDate": "2026-06-26",
+      "grade": "CCI5000",
+      "price": 759,
+      "change": -5
+    },
+    {
+      "quoteDate": "2026-06-26",
+      "grade": "CCI4500",
+      "price": 659,
+      "change": -5
+    },
+    {
+      "quoteDate": "2026-06-29",
+      "grade": "CCI5500",
+      "price": 846,
+      "change": -5
+    },
+    {
+      "quoteDate": "2026-06-29",
+      "grade": "CCI5000",
+      "price": 754,
+      "change": -5
+    },
+    {
+      "quoteDate": "2026-06-29",
+      "grade": "CCI4500",
+      "price": 654,
+      "change": -5
+    },
+    {
+      "quoteDate": "2026-06-30",
+      "grade": "CCI5500",
+      "price": 841,
+      "change": -5
+    },
+    {
+      "quoteDate": "2026-06-30",
+      "grade": "CCI5000",
+      "price": 749,
+      "change": null
+    },
+    {
+      "quoteDate": "2026-06-30",
+      "grade": "CCI4500",
+      "price": 649,
+      "change": -5
+    },
+    {
+      "quoteDate": "2026-07-01",
+      "grade": "CCI5500",
+      "price": 835,
+      "change": null
+    },
+    {
+      "quoteDate": "2026-07-01",
+      "grade": "CCI5000",
+      "price": 743,
+      "change": -6
+    },
+    {
+      "quoteDate": "2026-07-01",
+      "grade": "CCI4500",
+      "price": 643,
+      "change": -6
+    },
+    {
+      "quoteDate": "2026-07-02",
+      "grade": "CCI5500",
+      "price": 828,
+      "change": null
+    },
+    {
+      "quoteDate": "2026-07-02",
+      "grade": "CCI5000",
+      "price": 736,
+      "change": -7
+    },
+    {
+      "quoteDate": "2026-07-02",
+      "grade": "CCI4500",
+      "price": 636,
+      "change": -7
+    },
+    {
+      "quoteDate": "2026-07-03",
+      "grade": "CCI5500",
+      "price": 821,
+      "change": -7
+    },
+    {
+      "quoteDate": "2026-07-03",
+      "grade": "CCI5000",
+      "price": 729,
+      "change": null
+    },
+    {
+      "quoteDate": "2026-07-03",
+      "grade": "CCI4500",
+      "price": 629,
+      "change": null
+    },
+    {
+      "quoteDate": "2026-07-06",
+      "grade": "CCI5500",
+      "price": 814,
+      "change": null
+    },
+    {
+      "quoteDate": "2026-07-06",
+      "grade": "CCI5000",
+      "price": 722,
+      "change": null
+    },
+    {
+      "quoteDate": "2026-07-06",
+      "grade": "CCI4500",
+      "price": 622,
+      "change": null
+    },
+    {
+      "quoteDate": "2026-07-07",
+      "grade": "CCI5500",
+      "price": 808,
+      "change": -6
+    },
+    {
+      "quoteDate": "2026-07-07",
+      "grade": "CCI5000",
+      "price": 715,
+      "change": -7
+    },
+    {
+      "quoteDate": "2026-07-07",
+      "grade": "CCI4500",
+      "price": 617,
+      "change": -5
+    },
+    {
+      "quoteDate": "2026-07-08",
+      "grade": "CCI5000",
+      "price": 710,
+      "change": -5
+    },
+    {
+      "quoteDate": "2026-07-08",
+      "grade": "CCI4500",
+      "price": 615,
+      "change": -2
+    },
+    {
+      "quoteDate": "2026-07-09",
+      "grade": "CCI5500",
+      "price": 800,
+      "change": -3
+    },
+    {
+      "quoteDate": "2026-07-09",
+      "grade": "CCI5000",
+      "price": 708,
+      "change": -2
+    },
+    {
+      "quoteDate": "2026-07-09",
+      "grade": "CCI4500",
+      "price": 615,
+      "change": null
+    },
+    {
+      "quoteDate": "2026-07-10",
+      "grade": "CCI5500",
+      "price": 800,
+      "change": null
+    },
+    {
+      "quoteDate": "2026-07-10",
+      "grade": "CCI5000",
+      "price": 708,
+      "change": null
+    },
+    {
+      "quoteDate": "2026-07-10",
+      "grade": "CCI4500",
+      "price": 615,
+      "change": null
+    },
+    {
+      "quoteDate": "2026-07-13",
+      "grade": "CCI5500",
+      "price": 802,
+      "change": 2
+    },
+    {
+      "quoteDate": "2026-07-13",
+      "grade": "CCI5000",
+      "price": 710,
+      "change": 2
+    },
+    {
+      "quoteDate": "2026-07-13",
+      "grade": "CCI4500",
+      "price": 618,
+      "change": 3
+    },
+    {
+      "quoteDate": "2026-07-14",
+      "grade": "CCI5500",
+      "price": 805,
+      "change": 3
+    },
+    {
+      "quoteDate": "2026-07-14",
+      "grade": "CCI5000",
+      "price": 714,
+      "change": 4
+    },
+    {
+      "quoteDate": "2026-07-14",
+      "grade": "CCI4500",
+      "price": 623,
+      "change": 5
+    },
+    {
+      "quoteDate": "2026-07-15",
+      "grade": "CCI5500",
+      "price": 810,
+      "change": 5
+    },
+    {
+      "quoteDate": "2026-07-15",
+      "grade": "CCI5000",
+      "price": 719,
+      "change": 5
+    },
+    {
+      "quoteDate": "2026-07-15",
+      "grade": "CCI4500",
+      "price": 629,
+      "change": 6
+    },
+    {
+      "quoteDate": "2026-07-16",
+      "grade": "CCI5500",
+      "price": 816,
+      "change": 6
+    },
+    {
+      "quoteDate": "2026-07-16",
+      "grade": "CCI5000",
+      "price": 725,
+      "change": 6
+    },
+    {
+      "quoteDate": "2026-07-16",
+      "grade": "CCI4500",
+      "price": 635,
+      "change": 6
+    },
+    {
+      "quoteDate": "2026-07-17",
+      "grade": "CCI5500",
+      "price": 821,
+      "change": 5
+    },
+    {
+      "quoteDate": "2026-07-17",
+      "grade": "CCI5000",
+      "price": 730,
+      "change": 5
+    },
+    {
+      "quoteDate": "2026-07-17",
+      "grade": "CCI4500",
+      "price": 638,
+      "change": 3
+    },
+    {
+      "quoteDate": "2026-07-20",
+      "grade": "CCI5500",
+      "price": 824,
+      "change": 3
+    },
+    {
+      "quoteDate": "2026-07-20",
+      "grade": "CCI5000",
+      "price": 734,
+      "change": 4
+    },
+    {
+      "quoteDate": "2026-07-20",
+      "grade": "CCI4500",
+      "price": 640,
+      "change": 2
+    },
+    {
+      "quoteDate": "2026-07-21",
+      "grade": "CCI5500",
+      "price": 827,
+      "change": 3
+    },
+    {
+      "quoteDate": "2026-07-21",
+      "grade": "CCI5000",
+      "price": 736,
+      "change": 2
+    },
+    {
+      "quoteDate": "2026-07-21",
+      "grade": "CCI4500",
+      "price": 640,
+      "change": null
+    },
+    {
+      "quoteDate": "2026-07-22",
+      "grade": "CCI5500",
+      "price": 827,
+      "change": null
+    },
+    {
+      "quoteDate": "2026-07-22",
+      "grade": "CCI5000",
+      "price": 736,
+      "change": null
+    },
+    {
+      "quoteDate": "2026-07-22",
+      "grade": "CCI4500",
+      "price": 640,
+      "change": null
+    },
+    {
+      "quoteDate": "2026-07-23",
+      "grade": "CCI5500",
+      "price": 827,
+      "change": null
+    },
+    {
+      "quoteDate": "2026-07-23",
+      "grade": "CCI5000",
+      "price": 736,
+      "change": null
+    },
+    {
+      "quoteDate": "2026-07-23",
+      "grade": "CCI4500",
+      "price": 640,
+      "change": null
+    },
+    {
+      "quoteDate": "2026-07-24",
+      "grade": "CCI5500",
+      "price": 827,
+      "change": null
+    },
+    {
+      "quoteDate": "2026-07-24",
+      "grade": "CCI5000",
+      "price": 736,
+      "change": null
+    },
+    {
+      "quoteDate": "2026-07-24",
+      "grade": "CCI4500",
+      "price": 640,
+      "change": null
+    },
+    {
+      "quoteDate": "2026-07-27",
+      "grade": "CCI5500",
+      "price": 827,
+      "change": null
+    },
+    {
+      "quoteDate": "2026-07-27",
+      "grade": "CCI5000",
+      "price": 736,
+      "change": null
+    },
+    {
+      "quoteDate": "2026-07-27",
+      "grade": "CCI4500",
+      "price": 640,
+      "change": null
+    },
+    {
+      "quoteDate": "2026-07-28",
+      "grade": "CCI5500",
+      "price": 827,
+      "change": null
+    },
+    {
+      "quoteDate": "2026-07-28",
+      "grade": "CCI5000",
+      "price": 736,
+      "change": null
+    },
+    {
+      "quoteDate": "2026-07-28",
+      "grade": "CCI4500",
+      "price": 640,
+      "change": null
+    },
+    {
+      "quoteDate": "2026-07-29",
+      "grade": "CCI5500",
+      "price": 827,
+      "change": null
+    },
+    {
+      "quoteDate": "2026-07-29",
+      "grade": "CCI5000",
+      "price": 736,
+      "change": null
+    },
+    {
+      "quoteDate": "2026-07-29",
+      "grade": "CCI4500",
+      "price": 640,
+      "change": null
+    },
+    {
+      "quoteDate": "2026-07-30",
+      "grade": "CCI5500",
+      "price": 827,
+      "change": null
+    },
+    {
+      "quoteDate": "2026-07-30",
+      "grade": "CCI5000",
+      "price": 736,
+      "change": null
+    },
+    {
+      "quoteDate": "2026-07-30",
+      "grade": "CCI4500",
+      "price": 642,
+      "change": 2
+    },
+    {
+      "quoteDate": "2026-07-31",
+      "grade": "CCI5500",
+      "price": 828,
+      "change": 1
+    },
+    {
+      "quoteDate": "2026-07-31",
+      "grade": "CCI5000",
+      "price": 738,
+      "change": 2
+    },
+    {
+      "quoteDate": "2026-07-31",
+      "grade": "CCI4500",
+      "price": 645,
+      "change": 3
+    },
+    {
+      "quoteDate": "2026-08-03",
+      "grade": "CCI5500",
+      "price": 831,
+      "change": 3
+    },
+    {
+      "quoteDate": "2026-08-03",
+      "grade": "CCI5000",
+      "price": 741,
+      "change": 3
+    },
+    {
+      "quoteDate": "2026-08-03",
+      "grade": "CCI4500",
+      "price": 650,
+      "change": 5
+    },
+    {
+      "quoteDate": "2026-08-04",
+      "grade": "CCI5500",
+      "price": 834,
+      "change": 3
+    },
+    {
+      "quoteDate": "2026-08-04",
+      "grade": "CCI5000",
+      "price": 745,
+      "change": 4
+    },
+    {
+      "quoteDate": "2026-08-04",
+      "grade": "CCI4500",
+      "price": 655,
+      "change": 5
+    },
+    {
+      "quoteDate": "2026-08-05",
+      "grade": "CCI5500",
+      "price": 839,
+      "change": 5
+    },
+    {
+      "quoteDate": "2026-08-05",
+      "grade": "CCI5000",
+      "price": 750,
+      "change": 5
+    },
+    {
+      "quoteDate": "2026-08-05",
+      "grade": "CCI4500",
+      "price": 661,
+      "change": 6
+    },
+    {
+      "quoteDate": "2026-08-06",
+      "grade": "CCI5500",
+      "price": 844,
+      "change": 5
+    },
+    {
+      "quoteDate": "2026-08-06",
+      "grade": "CCI5000",
+      "price": 755,
+      "change": 5
+    },
+    {
+      "quoteDate": "2026-08-06",
+      "grade": "CCI4500",
+      "price": 667,
+      "change": 6
+    },
+    {
+      "quoteDate": "2026-08-07",
+      "grade": "CCI5500",
+      "price": 849,
+      "change": 5
+    },
+    {
+      "quoteDate": "2026-08-07",
+      "grade": "CCI5000",
+      "price": 760,
+      "change": 5
+    },
+    {
+      "quoteDate": "2026-08-07",
+      "grade": "CCI4500",
+      "price": 673,
+      "change": 6
+    },
+    {
+      "quoteDate": "2026-08-10",
+      "grade": "CCI5500",
+      "price": 854,
+      "change": 5
+    },
+    {
+      "quoteDate": "2026-08-10",
+      "grade": "CCI5000",
+      "price": 765,
+      "change": 5
+    },
+    {
+      "quoteDate": "2026-08-10",
+      "grade": "CCI4500",
+      "price": 679,
+      "change": 6
+    },
+    {
+      "quoteDate": "2026-08-11",
+      "grade": "CCI5500",
+      "price": 859,
+      "change": 5
+    },
+    {
+      "quoteDate": "2026-08-11",
+      "grade": "CCI5000",
+      "price": 770,
+      "change": 5
+    },
+    {
+      "quoteDate": "2026-08-11",
+      "grade": "CCI4500",
+      "price": 685,
+      "change": 6
+    },
+    {
+      "quoteDate": "2026-08-12",
+      "grade": "CCI5500",
+      "price": 860,
+      "change": 1
+    },
+    {
+      "quoteDate": "2026-08-12",
+      "grade": "CCI5000",
+      "price": 771,
+      "change": 1
+    },
+    {
+      "quoteDate": "2026-08-12",
+      "grade": "CCI4500",
+      "price": 686,
+      "change": 1
+    },
+    {
+      "quoteDate": "2026-08-13",
+      "grade": "CCI5500",
+      "price": 860,
+      "change": null
+    },
+    {
+      "quoteDate": "2026-08-13",
+      "grade": "CCI5000",
+      "price": 771,
+      "change": null
+    },
+    {
+      "quoteDate": "2026-08-13",
+      "grade": "CCI4500",
+      "price": 686,
+      "change": null
+    },
+    {
+      "quoteDate": "2026-08-14",
+      "grade": "CCI5500",
+      "price": 860,
+      "change": null
+    },
+    {
+      "quoteDate": "2026-08-14",
+      "grade": "CCI5000",
+      "price": 771,
+      "change": null
+    },
+    {
+      "quoteDate": "2026-08-14",
+      "grade": "CCI4500",
+      "price": 686,
+      "change": null
+    },
+    {
+      "quoteDate": "2026-08-17",
+      "grade": "CCI5500",
+      "price": 860,
+      "change": null
+    },
+    {
+      "quoteDate": "2026-08-17",
+      "grade": "CCI5000",
+      "price": 771,
+      "change": null
+    },
+    {
+      "quoteDate": "2026-08-17",
+      "grade": "CCI4500",
+      "price": 686,
+      "change": null
+    },
+    {
+      "quoteDate": "2026-08-18",
+      "grade": "CCI5500",
+      "price": 860,
+      "change": null
+    },
+    {
+      "quoteDate": "2026-08-18",
+      "grade": "CCI5000",
+      "price": 771,
+      "change": null
+    },
+    {
+      "quoteDate": "2026-08-18",
+      "grade": "CCI4500",
+      "price": 686,
+      "change": null
+    },
+    {
+      "quoteDate": "2026-08-19",
+      "grade": "CCI5500",
+      "price": 860,
+      "change": null
+    },
+    {
+      "quoteDate": "2026-08-19",
+      "grade": "CCI5000",
+      "price": 770,
+      "change": null
+    },
+    {
+      "quoteDate": "2026-08-19",
+      "grade": "CCI4500",
+      "price": 686,
+      "change": null
+    },
+    {
+      "quoteDate": "2026-08-20",
+      "grade": "CCI5500",
+      "price": 860,
+      "change": null
+    },
+    {
+      "quoteDate": "2026-08-20",
+      "grade": "CCI5000",
+      "price": 769,
+      "change": null
+    },
+    {
+      "quoteDate": "2026-08-20",
+      "grade": "CCI4500",
+      "price": 686,
+      "change": null
+    },
+    {
+      "quoteDate": "2026-08-21",
+      "grade": "CCI5500",
+      "price": 860,
+      "change": null
+    },
+    {
+      "quoteDate": "2026-08-21",
+      "grade": "CCI5000",
+      "price": 769,
+      "change": null
+    },
+    {
+      "quoteDate": "2026-08-21",
+      "grade": "CCI4500",
+      "price": 686,
+      "change": null
+    },
+    {
+      "quoteDate": "2026-08-24",
+      "grade": "CCI5500",
+      "price": 862,
+      "change": 2
+    },
+    {
+      "quoteDate": "2026-08-24",
+      "grade": "CCI5000",
+      "price": 771,
+      "change": 2
+    },
+    {
+      "quoteDate": "2026-08-24",
+      "grade": "CCI4500",
+      "price": 688,
+      "change": 2
+    },
+    {
+      "quoteDate": "2026-08-25",
+      "grade": "CCI5500",
+      "price": 865,
+      "change": 3
+    },
+    {
+      "quoteDate": "2026-08-25",
+      "grade": "CCI5000",
+      "price": 774,
+      "change": 3
+    },
+    {
+      "quoteDate": "2026-08-25",
+      "grade": "CCI4500",
+      "price": 691,
+      "change": 3
+    },
+    {
+      "quoteDate": "2026-08-26",
+      "grade": "CCI5500",
+      "price": 869,
+      "change": 4
+    },
+    {
+      "quoteDate": "2026-08-26",
+      "grade": "CCI5000",
+      "price": 778,
+      "change": 4
+    },
+    {
+      "quoteDate": "2026-08-26",
+      "grade": "CCI4500",
+      "price": 695,
+      "change": 4
+    },
+    {
+      "quoteDate": "2026-08-27",
+      "grade": "CCI5500",
+      "price": 874,
+      "change": 5
+    },
+    {
+      "quoteDate": "2026-08-27",
+      "grade": "CCI5000",
+      "price": 783,
+      "change": 5
+    },
+    {
+      "quoteDate": "2026-08-27",
+      "grade": "CCI4500",
+      "price": 700,
+      "change": 5
+    },
+    {
+      "quoteDate": "2026-08-28",
+      "grade": "CCI5500",
+      "price": 880,
+      "change": null
+    },
+    {
+      "quoteDate": "2026-08-28",
+      "grade": "CCI5000",
+      "price": 789,
+      "change": null
+    },
+    {
+      "quoteDate": "2026-08-28",
+      "grade": "CCI4500",
+      "price": 706,
+      "change": 6
+    },
+    {
+      "quoteDate": "2026-08-31",
+      "grade": "CCI5500",
+      "price": 889,
+      "change": 9
+    },
+    {
+      "quoteDate": "2026-08-31",
+      "grade": "CCI5000",
+      "price": 798,
+      "change": 9
+    },
+    {
+      "quoteDate": "2026-08-31",
+      "grade": "CCI4500",
+      "price": 715,
+      "change": 9
+    },
+    {
+      "quoteDate": "2026-09-01",
+      "grade": "CCI5500",
+      "price": 898,
+      "change": 9
+    },
+    {
+      "quoteDate": "2026-09-01",
+      "grade": "CCI5000",
+      "price": 807,
+      "change": 9
+    },
+    {
+      "quoteDate": "2026-09-01",
+      "grade": "CCI4500",
+      "price": 724,
+      "change": 9
+    },
+    {
+      "quoteDate": "2026-09-02",
+      "grade": "CCI5500",
+      "price": 908,
+      "change": 10
+    },
+    {
+      "quoteDate": "2026-09-02",
+      "grade": "CCI5000",
+      "price": 817,
+      "change": 10
+    },
+    {
+      "quoteDate": "2026-09-02",
+      "grade": "CCI4500",
+      "price": 734,
+      "change": 10
+    },
+    {
+      "quoteDate": "2026-09-03",
+      "grade": "CCI5500",
+      "price": 927,
+      "change": 19
+    },
+    {
+      "quoteDate": "2026-09-03",
+      "grade": "CCI5000",
+      "price": 835,
+      "change": 18
+    },
+    {
+      "quoteDate": "2026-09-03",
+      "grade": "CCI4500",
+      "price": 752,
+      "change": 18
+    },
+    {
+      "quoteDate": "2026-09-04",
+      "grade": "CCI5500",
+      "price": 947,
+      "change": 20
+    },
+    {
+      "quoteDate": "2026-09-04",
+      "grade": "CCI5000",
+      "price": 854,
+      "change": 19
+    },
+    {
+      "quoteDate": "2026-09-04",
+      "grade": "CCI4500",
+      "price": 771,
+      "change": 19
+    },
+    {
+      "quoteDate": "2026-09-07",
+      "grade": "CCI5500",
+      "price": 967,
+      "change": 20
+    },
+    {
+      "quoteDate": "2026-09-07",
+      "grade": "CCI5000",
+      "price": 872,
+      "change": 18
+    },
+    {
+      "quoteDate": "2026-09-07",
+      "grade": "CCI4500",
+      "price": 789,
+      "change": 18
+    },
+    {
+      "quoteDate": "2026-09-08",
+      "grade": "CCI5500",
+      "price": 984,
+      "change": 17
+    },
+    {
+      "quoteDate": "2026-09-08",
+      "grade": "CCI5000",
+      "price": 888,
+      "change": 16
+    },
+    {
+      "quoteDate": "2026-09-08",
+      "grade": "CCI4500",
+      "price": 804,
+      "change": 15
+    },
+    {
+      "quoteDate": "2026-09-09",
+      "grade": "CCI5500",
+      "price": 990,
+      "change": 6
+    },
+    {
+      "quoteDate": "2026-09-09",
+      "grade": "CCI5000",
+      "price": 894,
+      "change": 6
+    },
+    {
+      "quoteDate": "2026-09-09",
+      "grade": "CCI4500",
+      "price": 808,
+      "change": 4
+    },
+    {
+      "quoteDate": "2026-09-10",
+      "grade": "CCI5500",
+      "price": 990,
+      "change": 0
+    },
+    {
+      "quoteDate": "2026-09-10",
+      "grade": "CCI5000",
+      "price": 894,
+      "change": null
+    },
+    {
+      "quoteDate": "2026-09-10",
+      "grade": "CCI4500",
+      "price": 808,
+      "change": null
+    },
+    {
+      "quoteDate": "2026-09-11",
+      "grade": "CCI5500",
+      "price": 989,
+      "change": null
+    },
+    {
+      "quoteDate": "2026-09-11",
+      "grade": "CCI5000",
+      "price": 892,
+      "change": -2
+    },
+    {
+      "quoteDate": "2026-09-11",
+      "grade": "CCI4500",
+      "price": 805,
+      "change": -3
+    },
+    {
+      "quoteDate": "2026-09-14",
+      "grade": "CCI5500",
+      "price": 985,
+      "change": -4
+    },
+    {
+      "quoteDate": "2026-09-14",
+      "grade": "CCI5000",
+      "price": 889,
+      "change": null
+    },
+    {
+      "quoteDate": "2026-09-14",
+      "grade": "CCI4500",
+      "price": 800,
+      "change": null
+    },
+    {
+      "quoteDate": "2026-09-15",
+      "grade": "CCI5500",
+      "price": 981,
+      "change": null
+    },
+    {
+      "quoteDate": "2026-09-15",
+      "grade": "CCI5000",
+      "price": 885,
+      "change": null
+    },
+    {
+      "quoteDate": "2026-09-15",
+      "grade": "CCI4500",
+      "price": 798,
+      "change": -2
+    },
+    {
+      "quoteDate": "2026-09-16",
+      "grade": "CCI5500",
+      "price": 980,
+      "change": -1
+    },
+    {
+      "quoteDate": "2026-09-16",
+      "grade": "CCI5000",
+      "price": 884,
+      "change": -1
+    },
+    {
+      "quoteDate": "2026-09-16",
+      "grade": "CCI4500",
+      "price": 798,
+      "change": null
+    },
+    {
+      "quoteDate": "2026-09-17",
+      "grade": "CCI5500",
+      "price": 980,
+      "change": null
+    },
+    {
+      "quoteDate": "2026-09-17",
+      "grade": "CCI5000",
+      "price": 884,
+      "change": null
+    },
+    {
+      "quoteDate": "2026-09-17",
+      "grade": "CCI4500",
+      "price": 798,
+      "change": null
+    },
+    {
+      "quoteDate": "2026-09-18",
+      "grade": "CCI5500",
+      "price": 982,
+      "change": 2
+    },
+    {
+      "quoteDate": "2026-09-18",
+      "grade": "CCI5000",
+      "price": 886,
+      "change": 2
+    },
+    {
+      "quoteDate": "2026-09-18",
+      "grade": "CCI4500",
+      "price": 800,
+      "change": 2
+    },
+    {
+      "quoteDate": "2026-09-20",
+      "grade": "CCI5500",
+      "price": 984,
+      "change": 2
+    },
+    {
+      "quoteDate": "2026-09-20",
+      "grade": "CCI5000",
+      "price": 888,
+      "change": 2
+    },
+    {
+      "quoteDate": "2026-09-20",
+      "grade": "CCI4500",
+      "price": 801,
+      "change": 1
+    },
+    {
+      "quoteDate": "2026-09-21",
+      "grade": "CCI5500",
+      "price": 986,
+      "change": 2
+    },
+    {
+      "quoteDate": "2026-09-21",
+      "grade": "CCI5000",
+      "price": 890,
+      "change": 2
+    },
+    {
+      "quoteDate": "2026-09-21",
+      "grade": "CCI4500",
+      "price": 802,
+      "change": 1
+    },
+    {
+      "quoteDate": "2026-09-22",
+      "grade": "CCI5500",
+      "price": 988,
+      "change": 2
+    },
+    {
+      "quoteDate": "2026-09-22",
+      "grade": "CCI5000",
+      "price": 891,
+      "change": 1
+    },
+    {
+      "quoteDate": "2026-09-22",
+      "grade": "CCI4500",
+      "price": 803,
+      "change": 1
+    },
+    {
+      "quoteDate": "2026-09-23",
+      "grade": "CCI5500",
+      "price": 990,
+      "change": 2
+    },
+    {
+      "quoteDate": "2026-09-23",
+      "grade": "CCI5000",
+      "price": 892,
+      "change": null
+    },
+    {
+      "quoteDate": "2026-09-23",
+      "grade": "CCI4500",
+      "price": 804,
+      "change": 1
+    },
+    {
+      "quoteDate": "2026-09-24",
+      "grade": "CCI5500",
+      "price": 991,
+      "change": 1
+    },
+    {
+      "quoteDate": "2026-09-24",
+      "grade": "CCI5000",
+      "price": 893,
+      "change": 1
+    },
+    {
+      "quoteDate": "2026-09-24",
+      "grade": "CCI4500",
+      "price": 805,
+      "change": 1
+    },
+    {
+      "quoteDate": "2026-09-28",
+      "grade": "CCI5500",
+      "price": 991,
+      "change": null
+    },
+    {
+      "quoteDate": "2026-09-28",
+      "grade": "CCI5000",
+      "price": 893,
+      "change": null
+    },
+    {
+      "quoteDate": "2026-09-28",
+      "grade": "CCI4500",
+      "price": 805,
+      "change": null
+    },
+    {
+      "quoteDate": "2026-09-29",
+      "grade": "CCI5500",
+      "price": 991,
+      "change": null
+    },
+    {
+      "quoteDate": "2026-09-29",
+      "grade": "CCI5000",
+      "price": 893,
+      "change": null
+    },
+    {
+      "quoteDate": "2026-09-29",
+      "grade": "CCI4500",
+      "price": 805,
+      "change": null
+    },
+    {
+      "quoteDate": "2026-09-30",
+      "grade": "CCI5500",
+      "price": 991,
+      "change": null
+    },
+    {
+      "quoteDate": "2026-09-30",
+      "grade": "CCI5000",
+      "price": 893,
+      "change": null
+    },
+    {
+      "quoteDate": "2026-09-30",
+      "grade": "CCI4500",
+      "price": 805,
+      "change": null
+    },
+    {
+      "quoteDate": "2026-10-08",
+      "grade": "CCI5500",
+      "price": 993,
+      "change": 2
+    },
+    {
+      "quoteDate": "2026-10-08",
+      "grade": "CCI5000",
+      "price": 895,
+      "change": 2
+    },
+    {
+      "quoteDate": "2026-10-08",
+      "grade": "CCI4500",
+      "price": 805,
+      "change": null
+    },
+    {
+      "quoteDate": "2026-10-09",
+      "grade": "CCI5500",
+      "price": 998,
+      "change": 5
+    },
+    {
+      "quoteDate": "2026-10-09",
+      "grade": "CCI5000",
+      "price": 900,
+      "change": 5
+    },
+    {
+      "quoteDate": "2026-10-09",
+      "grade": "CCI4500",
+      "price": 807,
+      "change": 2
+    },
+    {
+      "quoteDate": "2026-10-10",
+      "grade": "CCI5500",
+      "price": 1003,
+      "change": 5
+    },
+    {
+      "quoteDate": "2026-10-10",
+      "grade": "CCI5000",
+      "price": 905,
+      "change": 5
+    },
+    {
+      "quoteDate": "2026-10-10",
+      "grade": "CCI4500",
+      "price": 810,
+      "change": 3
+    },
+    {
+      "quoteDate": "2026-10-12",
+      "grade": "CCI5500",
+      "price": 1008,
+      "change": 5
+    },
+    {
+      "quoteDate": "2026-10-12",
+      "grade": "CCI5000",
+      "price": 910,
+      "change": 5
+    },
+    {
+      "quoteDate": "2026-10-12",
+      "grade": "CCI4500",
+      "price": 815,
+      "change": 5
+    },
+    {
+      "quoteDate": "2026-10-13",
+      "grade": "CCI5500",
+      "price": 1013,
+      "change": 5
+    },
+    {
+      "quoteDate": "2026-10-13",
+      "grade": "CCI5000",
+      "price": 915,
+      "change": 5
+    },
+    {
+      "quoteDate": "2026-10-13",
+      "grade": "CCI4500",
+      "price": 820,
+      "change": 5
+    },
+    {
+      "quoteDate": "2026-10-14",
+      "grade": "CCI5500",
+      "price": 1018,
+      "change": 5
+    },
+    {
+      "quoteDate": "2026-10-14",
+      "grade": "CCI5000",
+      "price": 920,
+      "change": 5
+    },
+    {
+      "quoteDate": "2026-10-14",
+      "grade": "CCI4500",
+      "price": 824,
+      "change": 4
+    },
+    {
+      "quoteDate": "2026-10-15",
+      "grade": "CCI5500",
+      "price": 1023,
+      "change": 5
+    },
+    {
+      "quoteDate": "2026-10-15",
+      "grade": "CCI5000",
+      "price": 925,
+      "change": 5
+    },
+    {
+      "quoteDate": "2026-10-15",
+      "grade": "CCI4500",
+      "price": 828,
+      "change": 4
+    },
+    {
+      "quoteDate": "2026-10-16",
+      "grade": "CCI5500",
+      "price": 1028,
+      "change": 5
+    },
+    {
+      "quoteDate": "2026-10-16",
+      "grade": "CCI5000",
+      "price": 930,
+      "change": 5
+    },
+    {
+      "quoteDate": "2026-10-16",
+      "grade": "CCI4500",
+      "price": 832,
+      "change": 4
+    },
+    {
+      "quoteDate": "2026-10-19",
+      "grade": "CCI5500",
+      "price": 1033,
+      "change": 5
+    },
+    {
+      "quoteDate": "2026-10-19",
+      "grade": "CCI5000",
+      "price": 934,
+      "change": 4
+    },
+    {
+      "quoteDate": "2026-10-19",
+      "grade": "CCI4500",
+      "price": 835,
+      "change": 3
+    },
+    {
+      "quoteDate": "2026-10-20",
+      "grade": "CCI5500",
+      "price": 1038,
+      "change": 5
+    },
+    {
+      "quoteDate": "2026-10-20",
+      "grade": "CCI5000",
+      "price": 937,
+      "change": 3
+    },
+    {
+      "quoteDate": "2026-10-20",
+      "grade": "CCI4500",
+      "price": 837,
+      "change": 2
+    },
+    {
+      "quoteDate": "2026-10-21",
+      "grade": "CCI5500",
+      "price": 1040,
+      "change": 2
+    },
+    {
+      "quoteDate": "2026-10-21",
+      "grade": "CCI5000",
+      "price": 937,
+      "change": 0
+    },
+    {
+      "quoteDate": "2026-10-21",
+      "grade": "CCI4500",
+      "price": 837,
+      "change": 0
+    },
+    {
+      "quoteDate": "2026-10-22",
+      "grade": "CCI5500",
+      "price": 1040,
+      "change": 0
+    },
+    {
+      "quoteDate": "2026-10-22",
+      "grade": "CCI5000",
+      "price": 937,
+      "change": 0
+    },
+    {
+      "quoteDate": "2026-10-22",
+      "grade": "CCI4500",
+      "price": 837,
+      "change": 0
+    },
+    {
+      "quoteDate": "2026-10-23",
+      "grade": "CCI5500",
+      "price": 1040,
+      "change": 0
+    },
+    {
+      "quoteDate": "2026-10-23",
+      "grade": "CCI5000",
+      "price": 937,
+      "change": 0
+    },
+    {
+      "quoteDate": "2026-10-23",
+      "grade": "CCI4500",
+      "price": 837,
+      "change": 0
+    },
+    {
+      "quoteDate": "2026-10-26",
+      "grade": "CCI5500",
+      "price": 1037,
+      "change": -3
+    },
+    {
+      "quoteDate": "2026-10-26",
+      "grade": "CCI5000",
+      "price": 934,
+      "change": -3
+    },
+    {
+      "quoteDate": "2026-10-26",
+      "grade": "CCI4500",
+      "price": 833,
+      "change": -4
+    },
+    {
+      "quoteDate": "2026-10-27",
+      "grade": "CCI5500",
+      "price": 1032,
+      "change": -5
+    },
+    {
+      "quoteDate": "2026-10-27",
+      "grade": "CCI5000",
+      "price": 929,
+      "change": -5
+    },
+    {
+      "quoteDate": "2026-10-27",
+      "grade": "CCI4500",
+      "price": 827,
+      "change": -6
+    },
+    {
+      "quoteDate": "2026-10-28",
+      "grade": "CCI5500",
+      "price": 1026,
+      "change": -6
+    },
+    {
+      "quoteDate": "2026-10-28",
+      "grade": "CCI5000",
+      "price": 923,
+      "change": -6
+    },
+    {
+      "quoteDate": "2026-10-28",
+      "grade": "CCI4500",
+      "price": 820,
+      "change": -7
+    },
+    {
+      "quoteDate": "2026-10-29",
+      "grade": "CCI5500",
+      "price": 1021,
+      "change": -5
+    },
+    {
+      "quoteDate": "2026-10-29",
+      "grade": "CCI5000",
+      "price": 918,
+      "change": -5
+    },
+    {
+      "quoteDate": "2026-10-29",
+      "grade": "CCI4500",
+      "price": 814,
+      "change": -6
+    },
+    {
+      "quoteDate": "2026-10-30",
+      "grade": "CCI5500",
+      "price": 1017,
+      "change": -4
+    },
+    {
+      "quoteDate": "2026-10-30",
+      "grade": "CCI5000",
+      "price": 914,
+      "change": -4
+    },
+    {
+      "quoteDate": "2026-10-30",
+      "grade": "CCI4500",
+      "price": 809,
+      "change": -5
+    },
+    {
+      "quoteDate": "2026-11-02",
+      "grade": "CCI5500",
+      "price": 1015,
+      "change": -2
+    },
+    {
+      "quoteDate": "2026-11-02",
+      "grade": "CCI5000",
+      "price": 911,
+      "change": -3
+    },
+    {
+      "quoteDate": "2026-11-02",
+      "grade": "CCI4500",
+      "price": 806,
+      "change": -3
+    }
+  ]
+}

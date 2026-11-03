@@ -72,7 +72,7 @@ def modules():
         'path': '/etf-shares', 'status': 'available',
     }, {
         'id': 'commodities', 'name': '大宗商品',
-        'description': '长江现货A00铝报价区间与均价。',
+        'description': 'A00铝报价区间及CCI动力煤三档价格走势。',
         'path': '/commodities', 'status': 'available',
     }, {
         'id': 'microcap-breadth', 'name': '微盘新高新低',

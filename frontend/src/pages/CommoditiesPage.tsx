@@ -1,3 +1,5 @@
+import { Link, useSearchParams } from 'react-router-dom'
+import { CCICoalPage } from './CCICoalPage'
 import { useEffect, useRef, useState } from 'react'
 import { init, use } from 'echarts/core'
 import { LineChart, CustomChart } from 'echarts/charts'
@@ -131,7 +133,7 @@ function QuoteChart({ rows }: { rows: Quote[] }) {
     <div ref={root} className="commodity-chart" role="img" aria-label="A00铝每日报价区间与均价图" />
   )
 }
-export function CommoditiesPage() {
+function A00Page() {
   const admin = useAuth().session?.user?.role === 'admin'
   const [data, setData] = useState<Data | null>(null),
     [error, setError] = useState(''),
@@ -275,6 +277,24 @@ export function CommoditiesPage() {
           </table>
         </div>
       </section>
+    </div>
+  )
+}
+
+export function CommoditiesPage() {
+  const [params] = useSearchParams()
+  const coal = params.get('instrument') === 'cci'
+  return (
+    <div className="commodity-page">
+      <nav className="commodity-tabs" aria-label="大宗商品品种">
+        <Link to="/commodities" aria-current={!coal ? 'page' : undefined}>
+          A00铝
+        </Link>
+        <Link to="/commodities?instrument=cci" aria-current={coal ? 'page' : undefined}>
+          CCI动力煤
+        </Link>
+      </nav>
+      {coal ? <CCICoalPage /> : <A00Page />}
     </div>
   )
 }

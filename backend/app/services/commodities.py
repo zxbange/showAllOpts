@@ -28,6 +28,9 @@ def latest_slot(moment):
 SEED=Path(__file__).resolve().parents[1]/'data/a00_changjiang.json'
 
 class Commodities:
+    schedule_label = '每天 11:00、18:00 · 北京时间'
+    slot_for = staticmethod(latest_slot)
+
     def __init__(self,settings):
         self.root=settings.log_path/'market-data'/'commodities'
         self.root.mkdir(parents=True,exist_ok=True)
@@ -57,7 +60,7 @@ class Commodities:
         with self.db() as db:state=json.loads(db.execute('SELECT payload FROM state WHERE id=1').fetchone()[0])
         lock=self.lock();running=lock is None
         if lock:lock.release()
-        return dict(state,running=running,automatic=True,schedule='每天 11:00、18:00 · 北京时间')
+        return dict(state,running=running,automatic=True,schedule=self.schedule_label)
     def state(self,**values):
         with self.db() as db:db.execute('UPDATE state SET payload=? WHERE id=1',(json.dumps(values,ensure_ascii=False),))
     def history(self):
@@ -72,7 +75,7 @@ class Commodities:
     def schedule_loop(self):
         while not self.stopping.is_set():
             try:
-                self.refresh(slot=latest_slot(now()))
+                self.refresh(slot=self.slot_for(now()))
             except Exception as exc:
                 LOG.error('Commodity scheduler failed type=%s', type(exc).__name__)
             self.stopping.wait(5)

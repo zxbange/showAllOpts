@@ -19,6 +19,7 @@ from app.services.social import SocialMonitor
 from app.services.social_browser import BrowserLogin
 from app.services.margin_guarantee import MarginGuarantee
 from app.services.commodities import Commodities
+from app.services.cci_coal import CCICoal
 from app.services.short_validation import ValidationJobs
 from app.services.validation_sources import ValidationSources
 from app.services.accounts import Accounts
@@ -56,6 +57,9 @@ def create_app(settings: Settings | None = None, engine: Engine | None = None) -
             commodities = Commodities(settings)
             cleanup.push_async_callback(asyncio.to_thread, commodities.stop)
             application.state.commodities = commodities
+            cci_coal = CCICoal(settings)
+            cleanup.push_async_callback(asyncio.to_thread, cci_coal.stop)
+            application.state.cci_coal = cci_coal
             holdings = PersonalHoldings(settings)
             cleanup.push_async_callback(asyncio.to_thread, holdings.stop)
             application.state.personal_holdings = holdings
@@ -71,6 +75,7 @@ def create_app(settings: Settings | None = None, engine: Engine | None = None) -
             social.start()
             margin_guarantee.start()
             commodities.start()
+            cci_coal.start()
             logger.info('Application ready cache_enabled=%s', settings.cache_enabled)
             yield
         logger.info('Application shutdown complete')

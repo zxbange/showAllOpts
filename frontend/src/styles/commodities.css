@@ -94,3 +94,33 @@
     height: 330px;
   }
 }
+
+.commodity-tabs {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.commodity-tabs a {
+  padding: 10px 18px;
+  border: 1px solid #e8ded3;
+  border-radius: 10px;
+  color: #756a62;
+  background: white;
+  text-decoration: none;
+}
+.commodity-tabs a[aria-current='page'] {
+  background: #eef4ef;
+  color: #26765e;
+  border-color: #26765e;
+}
+.commodity-tabs a:focus-visible {
+  outline: 2px solid #26765e;
+  outline-offset: 2px;
+}
+.commodity-source-note {
+  margin: 0;
+  font-size: 13px;
+}
+.commodity-source-note a {
+  color: #26765e;
+}

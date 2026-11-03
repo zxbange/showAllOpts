@@ -130,7 +130,9 @@ export function Layout() {
           <span>
             数据来源 ·{' '}
             {location.pathname === '/commodities'
-              ? '长江有色金属网（CCMN）'
+              ? new URLSearchParams(location.search).get('instrument') === 'cci'
+                ? 'coalindex.com（非官方）'
+                : '长江有色金属网（CCMN）'
               : location.pathname === '/margin-guarantee'
                 ? '中证数据'
                 : '聚宽采集'}{' '}
