@@ -60,8 +60,8 @@ class Settings(BaseSettings):
     auth_public_origin: str = ''
     # Retired access settings: parsed only to redact secrets from old configuration/logs.
     # They never authorize access; all routes use accounts and AUTH_* settings.
-    validation_allow_http: bool = False
     validation_admin_key: SecretStr = SecretStr('')
+    # Shared holdings source settings retain their legacy environment names.
     validation_encryption_key: SecretStr = SecretStr('')
     validation_allowed_targets: list[str] = []
     social_worker_enabled: bool = True

@@ -59,17 +59,6 @@ export const individualModules: ResearchModule[] = [
     illustration: 'ownership',
   },
   {
-    id: 'short-term',
-    name: '短线选股',
-    path: '/short-term',
-    category: '趋势观察',
-    description: '补票龙、超跌后止跌反弹选股结果及K线。',
-    tags: ['补票龙', '超跌后止跌反弹'],
-    icon: ChartNoAxesCombined,
-    tone: 'coral',
-    illustration: 'breadth',
-  },
-  {
     id: 'institution-ownership',
     name: '个股机构持仓',
     path: '/institution-ownership',

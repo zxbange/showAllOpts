@@ -126,5 +126,5 @@ Docker 初始化对应命令：`docker compose exec --user appuser backend pytho
 
 - 用户、会话摘要、限流和审计记录存于 `LOG_DIR/accounts/accounts.sqlite3`，不会写入策略源 MySQL。Linux 目录 0700、数据库 0600；备份使用 SQLite 在线备份，或停服务后复制整个目录。不要作为日志清理，不要提交到 Git。
 - 会话最多 8 小时，连续 2 小时无请求失效；Cookie 为 HttpOnly、SameSite=Strict，HTTPS 下为 Secure。写请求校验同源和 CSRF。用户登录连续失败受用户名和 IP 双重限速，重启不能绕过。浏览器本地存储不保存密码或会话令牌。
-- 原 `VALIDATION_ADMIN_KEY`、`VALIDATION_ALLOW_HTTP`、`SOCIAL_BROWSER_LOGIN_KEY` 已不用于鉴权，仅兼容旧配置脱敏；旧配对会话也不能登录。原 `VALIDATION_ENCRYPTION_KEY`、`VALIDATION_ALLOWED_TARGETS` 仍按原含义生效，不要误删数据库配置加密密钥。旧 `short-validation-auth` 目录不再读取，先备份后可人工清理。
+- 原 `VALIDATION_ADMIN_KEY`、`SOCIAL_BROWSER_LOGIN_KEY` 已不用于鉴权，仅兼容旧配置脱敏；旧配对会话也不能登录。个人持仓共享的 `VALIDATION_ENCRYPTION_KEY`、`VALIDATION_ALLOWED_TARGETS` 保留兼容，不要误删数据库配置加密密钥。旧 `short-validation-auth` 目录不再读取，先备份后可人工清理。
 - 本地开发通过回环地址访问时，可在本地私有配置显式设置 `AUTH_ALLOW_HTTP=true`、`AUTH_PUBLIC_ORIGIN=http://127.0.0.1:5173`，并同样初始化管理员。**不用于公网 HTTP**；哈希存储不能防止明文网络窃听密码或会话。

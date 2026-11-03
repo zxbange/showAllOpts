@@ -129,7 +129,7 @@ def test_pasted_notebook_without_file_or_sibling_files(batch, monkeypatch, tmp_p
                    and n.func.id in ('exec', 'eval', 'compile', 'open') for n in ast.walk(tree))
     namespace = {'__name__': 'notebook_cell'}
     exec(compile(source, '<ipython-input-test>', 'exec'), namespace)
-    assert len(namespace['STRATEGIES']) == 12
+    assert len(namespace['STRATEGIES']) == 11
     # Construct all nine real strategies without accessing any project files.
     for name in namespace['STRATEGY_ORDER']:
         assert callable(namespace['_load_strategy'](name, CONFIG, {}))

@@ -23,8 +23,8 @@ def site(engine, tmp_path):
 
 
 @pytest.mark.parametrize('path', ['/api/v1/modules', '/api/v1/cache/status',
-    '/api/v1/short-term/latest', '/api/v1/social-monitor/status',
-    '/api/v1/short-term/validation/jobs', '/api/v1/social-monitor/browser/weibo/status'])
+    '/api/v1/social-monitor/status',
+    '/api/v1/social-monitor/browser/weibo/status'])
 def test_anonymous_and_old_keys_cannot_access_any_data(site, path):
     _, client, _, _ = site
     assert client.get(path).status_code == 401
@@ -57,11 +57,11 @@ def test_viewer_reads_but_cannot_operate_or_see_admin_secrets(site):
     _, client, _, _ = site
     sign_in(client, 'reader')
     assert client.get('/api/v1/social-monitor/status').status_code == 200
-    for path in ['/api/auth/users', '/api/v1/short-term/validation/sources',
-                 '/api/v1/short-term/validation/jobs', '/api/v1/social-monitor/browser/weibo/status']:
+    for path in ['/api/auth/users', '/api/v1/personal-holdings/status',
+                 '/api/v1/social-monitor/browser/weibo/status']:
         assert client.get(path).status_code == 403
     for path in ['/api/auth/users', '/api/v1/cache/refresh', '/api/v1/social-monitor/config',
-                 '/api/v1/short-term/validation/jobs']:
+                 '/api/v1/personal-holdings/sync']:
         assert client.post(path, json={}).status_code == 403
 
 

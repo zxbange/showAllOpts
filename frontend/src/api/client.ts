@@ -167,13 +167,6 @@ export async function cancelCache(runId: string, module?: string) {
   }
 }
 
-export const getShortTerm = (day: string, method: string, offset: number, signal?: AbortSignal) =>
-  request<import('../types/shortTerm').ShortOverview>(
-    '/short-term/latest?' +
-      new URLSearchParams({ ...(day ? { day } : {}), method, offset: String(offset), limit: '6' }),
-    signal,
-  )
-
 export async function saveCacheSchedule(dailyTime: string) {
   const response = await apiFetch(`${API_BASE}/cache/schedule`, {
     method: 'POST',

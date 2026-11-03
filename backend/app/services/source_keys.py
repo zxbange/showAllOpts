@@ -33,13 +33,14 @@ def persistent_cipher(root: Path, configured: str, validate):
         except KeyStorageError:
             raise
         except Exception:
-            raise KeyStorageError('已有验证加密密钥无效，已停止操作') from None
+            raise KeyStorageError('已有数据库配置加密密钥无效，已停止操作') from None
+    # Historical on-disk name is retained to decrypt existing holdings credentials.
     directory = root.parent / 'short-validation-secrets'
     try:
         directory.mkdir(mode=0o700, exist_ok=True)
         info = directory.lstat()
         if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.geteuid() or info.st_mode & 0o077:
-            raise KeyStorageError('验证密钥目录权限异常，已停止操作，请由站主管理员恢复受限权限')
+            raise KeyStorageError('数据库配置密钥目录权限异常，已停止操作，请由站主管理员恢复受限权限')
         lock_path = directory / 'initialization.lock'
         fd = os.open(lock_path, os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
         with os.fdopen(fd, 'r+b') as lock:
@@ -54,12 +55,12 @@ def persistent_cipher(root: Path, configured: str, validate):
                 with os.fdopen(fd, 'rb') as stream:
                     info = os.fstat(stream.fileno())
                     if not stat.S_ISREG(info.st_mode) or info.st_uid != os.geteuid() or info.st_mode & 0o077:
-                        raise KeyStorageError('验证密钥文件权限异常，已停止操作')
+                        raise KeyStorageError('数据库配置密钥文件权限异常，已停止操作')
                     stored = stream.read(1024)
             if configured:
                 value = configured.encode('ascii')
                 if stored is not None and stored != value:
-                    raise KeyStorageError('已有验证密钥与旧配置不一致，已停止操作；不会覆盖密钥')
+                    raise KeyStorageError('已有数据库配置密钥与旧配置不一致，已停止操作；不会覆盖密钥')
             elif stored is not None:
                 value = stored
             else:
@@ -87,4 +88,4 @@ def persistent_cipher(root: Path, configured: str, validate):
     except KeyStorageError:
         raise
     except Exception:
-        raise KeyStorageError('验证密钥初始化或读取失败，已停止操作；请保留原密钥和管理数据库以便恢复') from None
+        raise KeyStorageError('数据库配置密钥初始化或读取失败，已停止操作；请保留原密钥和管理数据库以便恢复') from None

@@ -7,7 +7,7 @@ import app.main as main
 from app.core.config import Settings
 
 
-@pytest.mark.parametrize('failure', [None, 'margin.start', 'validation.stop', 'sources'])
+@pytest.mark.parametrize('failure', [None, 'margin.start', 'holdings.stop'])
 def test_worker_cleanup_covers_startup_and_shutdown_failure(monkeypatch, engine, tmp_path, failure):
     events = []
 
@@ -24,12 +24,8 @@ def test_worker_cleanup_covers_startup_and_shutdown_failure(monkeypatch, engine,
 
     for cls, name in [('SnapshotCache', 'cache'), ('SocialMonitor', 'social'),
                       ('BrowserLogin', 'browser'), ('MarginGuarantee', 'margin'),
-                      ('PersonalHoldings', 'holdings'), ('ValidationJobs', 'validation')]:
+                      ('PersonalHoldings', 'holdings')]:
         monkeypatch.setattr(main, cls, Mock(return_value=worker(name)))
-    validation_engine = Mock()
-    validation_engine.dispose.side_effect = lambda: record('validation_engine.dispose')
-    monkeypatch.setattr(main, 'build_engine', Mock(return_value=validation_engine))
-    monkeypatch.setattr(main, 'ValidationSources', lambda *_: record('sources'))
     monkeypatch.setattr(main, 'ensure_logging', lambda *_: None)
     monkeypatch.setattr(engine, 'dispose', lambda: record('database.dispose'))
     application = main.create_app(Settings(_env_file=None, log_dir=tmp_path), engine)
@@ -43,6 +39,6 @@ def test_worker_cleanup_covers_startup_and_shutdown_failure(monkeypatch, engine,
             run()
     else:
         run()
-    assert events[-8:] == ['validation.stop', 'validation_engine.dispose', 'holdings.stop', 'margin.stop',
+    assert events[-6:] == ['holdings.stop', 'margin.stop',
                            'browser.stop', 'social.stop', 'cache.stop', 'database.dispose']
-    assert ('serving' in events) == (failure not in ('sources', 'margin.start'))
+    assert ('serving' in events) == (failure != 'margin.start')

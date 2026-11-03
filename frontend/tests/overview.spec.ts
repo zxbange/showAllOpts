@@ -12,7 +12,7 @@ test('overview directory is independent of database, searchable and categorized'
   })
   await page.goto('/')
   await expect(page.getByRole('heading', { level: 1 })).toContainText('全部研究模块')
-  await expect(page.locator('.research-card')).toHaveCount(10)
+  await expect(page.locator('.research-card')).toHaveCount(9)
   await expect(page.getByRole('link', { name: '进入动量观察', exact: true })).toHaveAttribute(
     'href',
     '/industry-momentum',
@@ -36,7 +36,7 @@ test('overview directory is independent of database, searchable and categorized'
   await expect(page.locator('.research-card')).toHaveCount(1)
   await expect(page.locator('.research-card')).toContainText('抱团拥挤度')
   await page.getByRole('button', { name: '清空模块搜索' }).click()
-  await expect(page.locator('.research-card')).toHaveCount(10)
+  await expect(page.locator('.research-card')).toHaveCount(9)
   // Mobile browsers may keep the focused search field at the top after clearing.
   await page.getByRole('heading', { name: /全部研究模块/ }).scrollIntoViewIfNeeded()
   await expect(page.getByRole('heading', { name: /全部研究模块/ })).toBeInViewport()
@@ -93,7 +93,7 @@ test('all module routes remain reachable from navigation', async ({ page }) => {
     )
   }
   await navigation.getByRole('link', { name: '总览', exact: true }).click()
-  await expect(page.locator('.research-card')).toHaveCount(10)
+  await expect(page.locator('.research-card')).toHaveCount(9)
 })
 
 test('group tabs preserve direct links, active navigation and mobile layout', async ({ page }) => {
@@ -135,7 +135,6 @@ test('shared module cards stay available while loading and after failures', asyn
   for (const [path, count] of [
     ['etf-shares', 2],
     ['dividend-selection', 3],
-    ['short-term', 3], // Two strategies plus the win-rate validation entry.
   ] as const) {
     let release!: () => void
     const response = new Promise<void>((resolve) => {
@@ -181,7 +180,6 @@ test('navigation prioritizes market views and removes workspace label', async ({
     '微盘观察',
     'ETF份额仪表盘',
     '大宗商品',
-    '短线选股',
     '个股机构持仓',
     '业绩选股',
     '高股息选股',

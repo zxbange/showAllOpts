@@ -7,7 +7,7 @@ from starlette.concurrency import run_in_threadpool
 from app.api.routes.accounts import require_admin
 from app.services.accounts import AccountError
 from app.services.holdings_snapshot import HoldingsError
-from app.services.validation_sources import SourceError
+from app.services.database_sources import SourceError
 
 router = APIRouter(prefix='/personal-holdings', tags=['个人持仓'], dependencies=[Depends(require_admin)])
 

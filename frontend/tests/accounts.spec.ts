@@ -66,7 +66,7 @@ test('admin creates and disables a user with no separate module keys', async ({ 
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
 })
 
-test('viewer has personal password settings but no user, sync or validation controls', async ({
+test('viewer has personal password settings but no user, sync or holdings controls', async ({
   page,
 }) => {
   await page.route('**/api/auth/session', (route) =>
@@ -76,8 +76,8 @@ test('viewer has personal password settings but no user, sync or validation cont
   await expect(page.getByRole('heading', { name: '我的账号' })).toBeVisible()
   await expect(page.getByRole('button', { name: '创建用户' })).toHaveCount(0)
   await expect(page.getByRole('button', { name: '数据同步', exact: true })).toHaveCount(0)
-  await page.goto('/short-term/validation')
-  await expect(page.getByText('胜率验证仅管理员可使用。')).toBeVisible()
+  await page.goto('/personal-holdings')
+  await expect(page.getByText('仅管理员可访问')).toBeVisible()
   await expect(page.getByLabel('数据库密码', { exact: true })).toHaveCount(0)
 })
 

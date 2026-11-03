@@ -213,7 +213,7 @@ def test_row_limit_and_failed_midstream_are_not_empty(monkeypatch):
 def test_secret_key_mismatch_cannot_read_or_rewrite(monitor):
     from cryptography.fernet import Fernet
     from pydantic import SecretStr
-    from app.services.validation_sources import SourceError
+    from app.services.database_sources import SourceError
     job,*_=monitor
     job.settings.validation_encryption_key=SecretStr(Fernet.generate_key().decode())
     with pytest.raises(SourceError):job.configuration()
@@ -245,11 +245,11 @@ def test_cross_process_leader_lock(monitor):
 
 
 def test_target_policy_and_table_injection_are_rejected(monitor,monkeypatch):
-    from app.services import validation_sources
-    from app.services.validation_sources import SourceError
+    from app.services import database_sources
+    from app.services.database_sources import SourceError
     job,source,now,config,*_=monitor
     with pytest.raises(HoldingsError):job.configure(dict(config,table='positions; DROP TABLE positions'))
-    monkeypatch.setattr(validation_sources,'resolve_addresses',lambda *_:[(None,None,None,None,('169.254.169.254',3306))])
+    monkeypatch.setattr(database_sources,'resolve_addresses',lambda *_:[(None,None,None,None,('169.254.169.254',3306))])
     with pytest.raises(SourceError):job.sources.allowed(dict(config,host='metadata.example'))
     job.settings.validation_allowed_targets=['approved.test:3306']
     with pytest.raises(SourceError):job.configure(config)

@@ -171,10 +171,6 @@ def sync_tables(source, target, tables, module, incremental, notes=None):
         handled = sync_quarters(source, target, tables, incremental)
         if notes is not None:
             notes[module] = None if handled else '源库未启用完整季度版本，本次使用全量清单对账；升级独立及批量采集器后自动切换季度增量。'
-    if module == 'short-term':
-        from app.core.short_term_sync import sync_short_term
-        sync_short_term(source, target, tables, incremental)
-        handled = True
     if handled:
         pass
     elif incremental and module == 'earnings-gap':

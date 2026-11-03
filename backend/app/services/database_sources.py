@@ -1,4 +1,4 @@
-"""Encrypted, immutable validation connection versions; never write to source DBs."""
+"""Encrypted, immutable database connection versions; never write to source DBs."""
 from contextlib import contextmanager
 import ipaddress
 import json
@@ -26,7 +26,7 @@ def resolve_addresses(host, port):
             result.put((False, isinstance(exc, socket.gaierror) and exc.errno == socket.EAI_AGAIN))
         finally:
             _RESOLVER_SLOTS.release()
-    threading.Thread(target=resolve, daemon=True, name='validation-dns').start()
+    threading.Thread(target=resolve, daemon=True, name='source-dns').start()
     try:
         ok, addresses = result.get(timeout=DNS_TIMEOUT)
     except queue.Empty:
@@ -37,16 +37,16 @@ def resolve_addresses(host, port):
 
 
 class SourceError(ValueError):
-    """Safe public message, never a driver/validation exception or connection value."""
+    """Safe public message, never a driver exception or connection value."""
 
 
 def temporary_dns(message):
     error = SourceError(message)
-    error._validation_dns_temporary = True
     return error
 
 
-class ValidationSources:
+class DatabaseSources:
+    # Keep legacy SQLite table names/verifier for existing holdings configurations.
     def __init__(self, jobs, settings):
         self.jobs, self.settings = jobs, settings
         with jobs.db() as db:
@@ -56,7 +56,7 @@ class ValidationSources:
             db.execute('CREATE TABLE IF NOT EXISTS validation_source_key (id INTEGER PRIMARY KEY CHECK(id=1), verifier BLOB NOT NULL)')
 
     def cipher(self):
-        from app.services.validation_keys import persistent_cipher, KeyStorageError
+        from app.services.source_keys import persistent_cipher, KeyStorageError
 
         def validate(cipher):
             with self.jobs.db() as db:
@@ -153,7 +153,9 @@ class ValidationSources:
         if self.settings.validation_allowed_targets and f"{config['host'].lower().rstrip('.')}:{config['port']}" not in self.settings.validation_allowed_targets:
             raise SourceError('数据库目标未获部署者允许，请检查 VALIDATION_ALLOWED_TARGETS')
         ident = ident or uuid.uuid4().hex
-        from app.services.short_validation import now
+        from datetime import datetime, timezone
+        def now():
+            return datetime.now(timezone.utc).isoformat()
         with self.jobs.db() as db:
             db.execute('BEGIN IMMEDIATE')
             verifier = db.execute('SELECT verifier FROM validation_source_key WHERE id=1').fetchone()
@@ -218,11 +220,6 @@ class ValidationSources:
             db.execute('INSERT INTO validation_sources VALUES (?,?,?,?)', (ident, revision, cipher.encrypt(payload), now()))
         return dict(id=ident, revision=revision)
 
-    def freeze_service(self):
-        s = self.settings
-        return self.save(dict(name='服务默认数据库', host=s.db_host, port=s.db_port, database=s.db_name,
-                              username=s.db_user, password=s.db_password.get_secret_value()), 'service')
-
     @contextmanager
     def engine(self, ref):
         config = self.get(ref['id'], ref['revision'])
@@ -255,15 +252,3 @@ class ValidationSources:
                 raise SourceError('连接失败：请检查允许目标、网络、账户和库名；详细凭证不会返回') from None
         return create_engine('mysql+pymysql://', creator=connect, hide_parameters=True, pool_pre_ping=True,
                              pool_size=1, max_overflow=0)
-
-    def test(self, config):
-        from app.services.short_statistics import validate_schema
-        self.cipher()
-        engine = self.build_engine(config)
-        try:
-            validate_schema(engine)
-        except Exception:
-            raise SourceError('连接测试失败：请检查允许目标、网络、账户权限、TLS和三张 ultra_research 表') from None
-        finally:
-            engine.dispose()
-        return {'ok': True, 'message': '连接及三张研究表字段读取测试通过（只读）'}

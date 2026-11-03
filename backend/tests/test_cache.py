@@ -12,7 +12,6 @@ from app.core.cache import CHINA, MODULES, SnapshotCache, latest_slot
 from app.core.config import Settings
 from app.main import create_app
 from app.models.momentum import IndustryMomentum
-from app.models.short_term import ShortTermRun, ShortTermStock
 from test_momentum_api import row
 from test_growth_api import seed as growth_seed
 from test_dividend_api import seed as dividend_seed
@@ -104,18 +103,8 @@ def test_module_failure_retains_old_snapshot_other_modules_still_refresh(cached,
         assert local.scalar(select(IndustryMomentum.momentum).order_by(IndustryMomentum.trade_date.desc())) == 5
 
 
-@pytest.mark.parametrize('has_short_term_data', [False, True], ids=['empty-short-term', 'populated-short-term'])
-def test_refresh_selects_only_source_columns_and_does_not_write_source(cached, engine, session, has_short_term_data):
+def test_refresh_selects_only_source_columns_and_does_not_write_source(cached, engine, session):
     _, cache = cached
-    day = datetime(2026, 10, 30).date()
-    stamp = datetime(2026, 10, 30, 18)
-    if has_short_term_data:
-        session.add_all([
-            ShortTermRun(trade_date=day, updated_at=stamp, payload={'counts': {'bukou': 1, 'oversold': 0}}),
-            ShortTermStock(trade_date=day, code='000001.XSHE', updated_at=stamp,
-                           payload={'methods': ['bukou'], 'close': 10}),
-        ])
-        session.commit()
     statements = []
     def record(conn,cursor,sql,*args): statements.append(sql)
     event.listen(engine,'before_cursor_execute',record)
@@ -127,21 +116,12 @@ def test_refresh_selects_only_source_columns_and_does_not_write_source(cached, e
     for _, models in MODULES.values():
         for model in models:
             queried = any(model.__tablename__ in sql for sql in selects)
-            # Short-term detail reads are driven by daily headers, so an empty
-            # header table must not trigger a needless stock-table scan.
-            expected = model is not ShortTermStock or has_short_term_data
-            assert queried == expected, model.__tablename__
+            assert queried, model.__tablename__
     # Optional ownership journal is detected with read-only SQLite table introspection.
     assert all(s.lstrip().startswith(('SELECT', 'PRAGMA main.table_info(', 'PRAGMA temp.table_info('))
                for s in statements)
     assert all('member_codes' not in s and 'analysis' not in s for s in statements)
     assert all(m['ready'] and not m['error'] for m in cache.status()['modules'])
-    with cache.session('short-term') as local:
-        stocks = local.scalars(select(ShortTermStock)).all()
-        assert len(stocks) == int(has_short_term_data)
-        if has_short_term_data:
-            assert stocks[0].code == '000001.XSHE'
-            assert stocks[0].payload == {'methods': ['bukou'], 'close': 10}
 
 
 def test_cross_instance_lock_rejects_duplicate_jobs(cached, engine):

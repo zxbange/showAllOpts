@@ -15,7 +15,7 @@ from sqlalchemy import text
 
 from app.services.holdings_snapshot import HoldingsError, MAX_ROWS, changes, normalize
 from app.services.holdings_calendar import trading_day
-from app.services.validation_sources import ValidationSources, SourceError
+from app.services.database_sources import DatabaseSources, SourceError
 
 LOG = logging.getLogger(__name__)
 SHANGHAI = ZoneInfo('Asia/Shanghai')
@@ -40,7 +40,7 @@ def table_name(value):
 class PersonalHoldings:
     def __init__(self, settings):
         self.settings = settings
-        # Separate secret directory from both the database and validation module.
+        # Keep the existing private holdings database and separate key directory.
         self.root = settings.log_path / 'personal-holdings' / 'data'
         self.root.mkdir(parents=True, exist_ok=True, mode=0o700)
         self.path = self.root / 'monitor.sqlite3'
@@ -58,7 +58,7 @@ class PersonalHoldings:
                 enabled=False, source=None, epoch=uuid.uuid4().hex, baseline=False, rows=[], version=0,
                 checked_at=None, observed_at=None, next_poll=0, error=None)),))
         self.path.chmod(0o600)
-        self.sources = ValidationSources(self, settings)
+        self.sources = DatabaseSources(self, settings)
 
     @contextmanager
     def db(self):

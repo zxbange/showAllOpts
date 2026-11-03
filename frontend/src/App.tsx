@@ -12,13 +12,6 @@ const CommoditiesPage = lazy(() =>
   import('./pages/CommoditiesPage').then((m) => ({ default: m.CommoditiesPage })),
 )
 
-const ShortValidationPage = lazy(() =>
-  import('./pages/ShortValidationPage').then((m) => ({ default: m.ShortValidationPage })),
-)
-
-const ShortTermPage = lazy(() =>
-  import('./pages/ShortTermPage').then((m) => ({ default: m.ShortTermPage })),
-)
 const SocialMonitorPage = lazy(() =>
   import('./pages/SocialMonitorPage').then((m) => ({ default: m.SocialMonitorPage })),
 )
@@ -97,22 +90,6 @@ export default function App() {
               element={
                 <Suspense fallback={<LoadingState />}>
                   <SocialMonitorPage />
-                </Suspense>
-              }
-            />
-            <Route
-              path="short-term/validation"
-              element={
-                <Suspense fallback={<LoadingState />}>
-                  <ShortValidationPage />
-                </Suspense>
-              }
-            />
-            <Route
-              path="short-term"
-              element={
-                <Suspense fallback={<LoadingState />}>
-                  <ShortTermPage />
                 </Suspense>
               }
             />

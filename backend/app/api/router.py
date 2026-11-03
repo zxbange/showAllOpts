@@ -3,7 +3,6 @@ from app.api.routes.sentiment import router as sentiment_router
 from app.api.routes.margin_guarantee import router as margin_guarantee_router
 from app.api.routes.social import router as social_router
 from app.api.routes.social_browser import router as social_browser_router
-from app.api.routes.short_term import router as short_term_router
 from app.api.routes.ownership import router as ownership_router
 from fastapi import APIRouter
 from app.api.routes.etf_heat import router as etf_heat_router
@@ -24,7 +23,6 @@ router.include_router(commodities_router)
 router.include_router(personal_holdings_router)
 router.include_router(social_router)
 router.include_router(social_browser_router)
-router.include_router(short_term_router)
 router.include_router(ownership_router)
 router.include_router(momentum_router)
 router.include_router(crowding_router)
@@ -90,7 +88,7 @@ def modules():
         'id': 'etf-momentum', 'name': 'ETF动量热度',
         'description': '收盘动量热力排名与基金历史走势。',
         'path': '/etf-momentum', 'status': 'available',
-    }, {'id': 'institution-ownership', 'name': '个股机构持仓', 'description': '机构披露持仓、股东户数与社保新进。', 'path': '/institution-ownership', 'status': 'available'}, {'id': 'short-term', 'name': '短线选股', 'description': '补票龙、超跌后止跌反弹与30日K线。', 'path': '/short-term', 'status': 'available'}]}
+    }, {'id': 'institution-ownership', 'name': '个股机构持仓', 'description': '机构披露持仓、股东户数与社保新进。', 'path': '/institution-ownership', 'status': 'available'}]}
 
 
     catalogue['modules'].append({

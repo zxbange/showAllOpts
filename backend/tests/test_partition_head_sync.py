@@ -1,43 +1,11 @@
 """Small head comparison repairs whole partitions without historical detail scans."""
 from datetime import date, datetime
 from sqlalchemy import event, select
-from app.models.short_term import ShortTermRun, ShortTermStock
 from app.models.earnings import EarningsStock, EarningsRun
-from app.core.short_term_sync import MARKER
 from app.core.earnings_sync import VERSION
 from test_cache import cached
 from test_cache_incremental import assert_matches
 from test_earnings_api import seed
-
-
-def test_short_same_second_and_legacy_inconsistent_details(cached, session, engine):
-    _, cache = cached
-    day, stamp = date(2026, 10, 22), datetime(2026, 10, 22, 17)
-    session.add_all([ShortTermRun(trade_date=day, payload={'counts': {}}, updated_at=stamp),
-                     ShortTermStock(trade_date=day, code='a', payload={'methods': []}, updated_at=stamp)])
-    session.commit()
-    cache.refresh('short-term', background=False)
-    session.get(ShortTermRun, day).payload = {'counts': {'oversold': 1}}
-    session.get(ShortTermStock, (day, 'a')).payload = {'methods': ['oversold']}
-    session.commit()
-    cache.refresh('short-term', background=False)
-    assert_matches(cache, session, 'short-term')
-    # Simulate an old snapshot whose header was fresh but details were stale.
-    from sqlalchemy import create_engine
-    path = cache.snapshot_path('short-term', cache.read_state()['modules']['short-term'])
-    local = create_engine('sqlite:///' + str(path))
-    with local.begin() as connection:
-        MARKER.drop(connection)
-        connection.execute(ShortTermStock.__table__.update().values(payload={'methods': []}))
-    local.dispose()
-    cache.refresh('short-term', background=False)
-    assert_matches(cache, session, 'short-term')
-    statements = []
-    def capture(conn, cursor, sql, *args): statements.append(sql)
-    event.listen(engine, 'before_cursor_execute', capture)
-    try: cache.refresh('short-term', background=False)
-    finally: event.remove(engine, 'before_cursor_execute', capture)
-    assert not any('FROM short_term_stock' in sql for sql in statements)
 
 
 def test_quarter_versions_skip_append_and_generation_rebuild(cached, session, engine):
@@ -68,54 +36,3 @@ def test_quarter_versions_skip_append_and_generation_rebuild(cached, session, en
         source.execute(VERSION.update().values(generation='b'*32, revision=2))
     cache.refresh('earnings-gap', background=False)
     assert_matches(cache, session, 'earnings-gap')
-
-
-from test_short_term_collector import mod, ns, complete_meta
-from test_short_term_observation import observation
-
-
-def test_collector_same_second_repair_replaces_cached_details(cached, session, engine, ns, mod, monkeypatch):
-    from sqlalchemy.orm import sessionmaker
-    _, cache = cached
-    stamp = datetime(2026, 10, 22, 17)
-    monkeypatch.setattr(mod, 'china_now', lambda: stamp)
-    day = stamp.date()
-    meta = complete_meta(ns)
-    meta['counts']['oversold'] = 1
-    session.add_all([ShortTermRun(trade_date=day, payload=meta, updated_at=stamp),
-                    ShortTermStock(trade_date=day, code='a', payload={'methods': ['bukou']}, updated_at=stamp)])
-    session.commit()
-    cache.refresh('short-term', background=False)
-    assert ns.save_day(sessionmaker(bind=engine), day, meta, [{'code': 'a', 'methods': ['oversold']}])
-    cache.refresh('short-term', background=False)
-    session.expire_all()
-    assert_matches(cache, session, 'short-term')
-    with cache.session('short-term') as local:
-        assert local.get(ShortTermStock, (day, 'a')).payload['methods'] == ['oversold']
-        assert local.get(ShortTermRun, day).updated_at == stamp
-        assert local.get(ShortTermRun, day).payload['snapshot_revision']
-
-
-def test_watch_quote_refresh_reaches_cache_with_same_signal_counts(cached, session, engine, observation):
-    from sqlalchemy.orm import sessionmaker
-    o = observation
-    _, cache = cached
-    days = o.calendar[95:101]
-    day, latest = days[0], days[-1]
-    Session = sessionmaker(bind=engine)
-    o.ns.save_day(Session, day, complete_meta(o.ns, 1), [{
-        'code': '600001.XSHG', 'methods': ['bukou'], 'listed_date': o.calendar[0].isoformat(),
-        'close': 9., 'bars': [{'date': day.isoformat(), 'close': 9.}]}])
-    cache.refresh('short-term', background=False)
-    with cache.session('short-term') as local:
-        before = dict(local.get(ShortTermRun, day).payload)
-    o.ns.refresh_quotes(Session, days)
-    cache.refresh('short-term', background=False)
-    with cache.session('short-term') as local:
-        current = local.get(ShortTermRun, day)
-        stock = local.get(ShortTermStock, (day, '600001.XSHG'))
-        assert current.payload['counts'] == before['counts']
-        assert current.payload['snapshot_revision'] != before['snapshot_revision']
-        assert stock.payload['quote_date'] == latest.isoformat()
-        assert stock.payload['bars'][-1]['date'] == latest.isoformat()
-        assert stock.payload['close'] == 9.  # Signal evidence did not turn into latest prices.
