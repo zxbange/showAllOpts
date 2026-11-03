@@ -18,6 +18,7 @@ from app.core.logging import ensure_logging
 from app.services.social import SocialMonitor
 from app.services.social_browser import BrowserLogin
 from app.services.margin_guarantee import MarginGuarantee
+from app.services.commodities import Commodities
 from app.services.short_validation import ValidationJobs
 from app.services.validation_sources import ValidationSources
 from app.services.accounts import Accounts
@@ -52,6 +53,9 @@ def create_app(settings: Settings | None = None, engine: Engine | None = None) -
             margin_guarantee = MarginGuarantee(settings)
             cleanup.push_async_callback(asyncio.to_thread, margin_guarantee.stop)
             application.state.margin_guarantee = margin_guarantee
+            commodities = Commodities(settings)
+            cleanup.push_async_callback(asyncio.to_thread, commodities.stop)
+            application.state.commodities = commodities
             holdings = PersonalHoldings(settings)
             cleanup.push_async_callback(asyncio.to_thread, holdings.stop)
             application.state.personal_holdings = holdings
@@ -66,6 +70,7 @@ def create_app(settings: Settings | None = None, engine: Engine | None = None) -
             cache.start()
             social.start()
             margin_guarantee.start()
+            commodities.start()
             logger.info('Application ready cache_enabled=%s', settings.cache_enabled)
             yield
         logger.info('Application shutdown complete')

@@ -128,7 +128,12 @@ export function Layout() {
             发奋墙 <i /> 研究工作台
           </span>
           <span>
-            数据来源 · {location.pathname === '/margin-guarantee' ? '中证数据' : '聚宽采集'}{' '}
+            数据来源 ·{' '}
+            {location.pathname === '/commodities'
+              ? '长江有色金属网（CCMN）'
+              : location.pathname === '/margin-guarantee'
+                ? '中证数据'
+                : '聚宽采集'}{' '}
             <ArrowUpRight size={12} />
           </span>
         </footer>

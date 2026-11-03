@@ -16,7 +16,7 @@ def authenticated_domain_tests(request, monkeypatch):
     # Security suites explicitly log in (or stay anonymous). Existing domain suites
     # exercise the same real session middleware after a test administrator logs in.
     if request.node.path.name in {
-        'test_personal_holdings.py', 'test_accounts.py', 'test_validation_pairing.py', 'test_validation_sources.py',
+        'test_commodities.py', 'test_personal_holdings.py', 'test_accounts.py', 'test_validation_pairing.py', 'test_validation_sources.py',
         'test_validation_delete.py', 'test_validation_keys.py', 'test_social_browser.py',
     }:
         return

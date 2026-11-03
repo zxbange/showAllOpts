@@ -1,3 +1,4 @@
+from app.api.routes.commodities import router as commodities_router
 from app.api.routes.sentiment import router as sentiment_router
 from app.api.routes.margin_guarantee import router as margin_guarantee_router
 from app.api.routes.social import router as social_router
@@ -19,6 +20,7 @@ from app.api.routes.microcap import router as microcap_router
 from app.api.routes.momentum import router as momentum_router
 
 router = APIRouter(prefix='/api/v1')
+router.include_router(commodities_router)
 router.include_router(personal_holdings_router)
 router.include_router(social_router)
 router.include_router(social_browser_router)
@@ -68,6 +70,10 @@ def modules():
         'id': 'etf-shares', 'name': 'ETF份额仪表盘',
         'description': '跟踪沪深300与中证500 ETF 总份额及份额变化率。',
         'path': '/etf-shares', 'status': 'available',
+    }, {
+        'id': 'commodities', 'name': '大宗商品',
+        'description': '长江现货A00铝报价区间与均价。',
+        'path': '/commodities', 'status': 'available',
     }, {
         'id': 'microcap-breadth', 'name': '微盘新高新低',
         'description': '观察微盘400的新高新低数量、市场宽度与强度趋势。',

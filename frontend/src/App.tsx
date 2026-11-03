@@ -8,6 +8,10 @@ import { AccountAccess } from './components/AccountAccess'
 import { UsersPage } from './pages/UsersPage'
 import { PersonalHoldingsPage } from './pages/PersonalHoldingsPage'
 
+const CommoditiesPage = lazy(() =>
+  import('./pages/CommoditiesPage').then((m) => ({ default: m.CommoditiesPage })),
+)
+
 const ShortValidationPage = lazy(() =>
   import('./pages/ShortValidationPage').then((m) => ({ default: m.ShortValidationPage })),
 )
@@ -79,6 +83,14 @@ export default function App() {
           <Route element={<Layout />}>
             <Route path="account" element={<UsersPage />} />
             <Route index element={<HomePage />} />
+            <Route
+              path="commodities"
+              element={
+                <Suspense fallback={<LoadingState />}>
+                  <CommoditiesPage />
+                </Suspense>
+              }
+            />
             <Route path="personal-holdings" element={<PersonalHoldingsPage />} />
             <Route
               path="social-monitor"

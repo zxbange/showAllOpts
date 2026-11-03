@@ -37,6 +37,17 @@ export interface ResearchModule {
 
 export const individualModules: ResearchModule[] = [
   {
+    id: 'commodities',
+    name: '大宗商品',
+    path: '/commodities',
+    category: '商品观察',
+    description: '长江现货A00铝每日报价区间与均价。',
+    tags: ['A00铝', '长江现货'],
+    icon: Coins,
+    tone: 'gold',
+    illustration: 'shares',
+  },
+  {
     id: 'social-monitor',
     name: '博主动态监控',
     path: '/social-monitor',
