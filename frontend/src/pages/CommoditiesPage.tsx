@@ -35,7 +35,24 @@ type Quote = {
 }
 type Data = {
   rows: Quote[]
-  status: { running: boolean; error?: string; stage?: string; automatic: boolean }
+  status: {
+    running: boolean
+    error?: string
+    stage?: string
+    automatic: boolean
+    checkedAt?: string
+    pagesFetched?: number
+    pagesParsed?: number
+    inserted?: number
+    changed?: number
+    latestQuoteDate?: string
+    noNew?: boolean
+    currentVerified?: boolean
+    stale?: boolean
+    targetDate?: string
+    targetMode?: string
+    targetResult?: string
+  }
 }
 const price = (n: number | null) => (n == null ? '未核验' : n.toLocaleString('zh-CN'))
 function QuoteChart({ rows }: { rows: Quote[] }) {
@@ -234,7 +251,50 @@ function A00Page() {
         ) : (
           <p>正在读取报价…</p>
         )}
-        <small>每天 11:00、18:00 自动采集 · 北京时间。{data?.status.stage}</small>
+        <div className="commodity-collection-status" role="status" aria-live="polite">
+          <strong>{data?.status.running ? '采集中' : data?.status.stage || '暂无采集记录'}</strong>
+          <span>
+            最近采集：
+            {data?.status.checkedAt
+              ? new Date(data.status.checkedAt).toLocaleString('zh-CN', {
+                  timeZone: 'Asia/Shanghai',
+                  hour12: false,
+                })
+              : '—'}
+          </span>
+          {data?.status.targetDate && (
+            <span>
+              本次目标：{data.status.targetDate} ·{' '}
+              {data.status.targetMode === 'complete_spot' ? '低 / 高 / 均价' : '最新现货价'} ·{' '}
+              {
+                (
+                  {
+                    current: '已核验',
+                    sourceNotPublished: '首页尚未发布',
+                    targetDateUnavailable: '未取得该日报价',
+                    partial: '字段不完整',
+                    unverified: '无法核验',
+                    sourceReadFailed: '读取失败',
+                    interrupted: '已中断',
+                    pending: '等待读取',
+                  } as Record<string, string>
+                )[data.status.targetResult || 'pending']
+              }
+            </span>
+          )}
+          <span>最新报价：{data?.status.latestQuoteDate || latest?.quoteDate || '—'}</span>
+          {data?.status.pagesFetched != null && (
+            <span>
+              读取 {data.status.pagesFetched} 页 · 解析 {data.status.pagesParsed ?? 0} 页 · 新增{' '}
+              {data.status.inserted ?? 0} 条 · 更新 {data.status.changed ?? 0} 条
+            </span>
+          )}
+          {!data?.status.running && data?.status.noNew && data.status.currentVerified && (
+            <span>暂无新报价</span>
+          )}
+          {!data?.status.running && data?.status.stale && <span>已保存报价尚未更新至今日</span>}
+          <small>每天 11:00、18:00 自动采集 · 北京时间</small>
+        </div>
       </section>
       <section className="commodity-panel">
         <h2>每日报价</h2>
