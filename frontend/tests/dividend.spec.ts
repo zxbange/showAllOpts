@@ -65,18 +65,19 @@ test('dividend module switches rules, searches and shows overlap on desktop/mobi
     route.fulfill({ json: fixture }),
   )
   await page.goto('/')
-  await page.getByRole('link', { name: '进入高股息选股', exact: true }).click()
+  await page.getByRole('link', { name: '进入业绩选股', exact: true }).click()
+  await page.getByRole('link', { name: '纯高股息', exact: true }).click()
   await expect(page.getByRole('heading', { level: 1 })).toContainText('高股息选股')
   await expect(page.locator('tbody tr')).toHaveCount(25)
   await expect(page.locator('tbody tr').first()).toContainText('20.00%')
-  await expect(page.locator('.page-header .module-card')).toHaveCount(3)
-  await page.getByRole('button', { name: /高股息低估值（银行业）/ }).click()
+  await expect(page.locator('.page-header .module-card')).toHaveCount(5)
+  await page.getByRole('link', { name: /高股息低估值（银行业）/ }).click()
   await expect(page.locator('tbody tr')).toHaveCount(10)
   await expect(
     page.getByRole('heading', { name: '高股息低估值（银行业） · 前 10 名' }),
   ).toBeVisible()
   await expect(page.locator('tbody tr').first()).toContainText('000100.XSHE')
-  await page.getByRole('button', { name: /高股息低估值（非银行业）/ }).click()
+  await page.getByRole('link', { name: /高股息低估值（非银行业）/ }).click()
   await expect(page.locator('tbody tr')).toHaveCount(25)
   await expect(page.locator('thead th').nth(2)).toHaveText('近一年股息率')
   await expect(page.locator('tbody tr').first()).toContainText('000010.XSHE')
@@ -96,6 +97,10 @@ test('dividend module switches rules, searches and shows overlap on desktop/mobi
   await page.evaluate(() => {
     ;(document.activeElement as HTMLElement)?.blur()
     window.scrollTo(0, 0)
+  })
+  await page.screenshot({
+    path: testInfo.outputPath('dividend-folders-viewport.png'),
+    animations: 'disabled',
   })
   await page.screenshot({
     path: testInfo.outputPath('dividend.png'),
@@ -148,7 +153,7 @@ test('legacy mixed results require collection before bank groups are shown', asy
   await page.goto('/dividend-selection')
   await expect(page.getByRole('status')).toContainText('当前为旧版混合名单')
   await expect(page.locator('tbody tr')).toHaveCount(25)
-  await page.getByRole('button', { name: /高股息低估值（非银行业）/ }).click()
+  await page.getByRole('link', { name: /高股息低估值（非银行业）/ }).click()
   await expect(page.getByRole('heading', { name: '请更新分组名单' })).toBeVisible()
   await expect(page.locator('tbody tr')).toHaveCount(0)
 })

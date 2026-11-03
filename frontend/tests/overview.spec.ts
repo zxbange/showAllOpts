@@ -12,7 +12,7 @@ test('overview directory is independent of database, searchable and categorized'
   })
   await page.goto('/')
   await expect(page.getByRole('heading', { level: 1 })).toContainText('全部研究模块')
-  await expect(page.locator('.research-card')).toHaveCount(8)
+  await expect(page.locator('.research-card')).toHaveCount(7)
   await expect(page.getByRole('link', { name: '进入动量观察', exact: true })).toHaveAttribute(
     'href',
     '/industry-momentum',
@@ -36,7 +36,7 @@ test('overview directory is independent of database, searchable and categorized'
   await expect(page.locator('.research-card')).toHaveCount(1)
   await expect(page.locator('.research-card')).toContainText('抱团拥挤度')
   await page.getByRole('button', { name: '清空模块搜索' }).click()
-  await expect(page.locator('.research-card')).toHaveCount(8)
+  await expect(page.locator('.research-card')).toHaveCount(7)
   // Mobile browsers may keep the focused search field at the top after clearing.
   await page.getByRole('heading', { name: /全部研究模块/ }).scrollIntoViewIfNeeded()
   await expect(page.getByRole('heading', { name: /全部研究模块/ })).toBeInViewport()
@@ -72,7 +72,6 @@ test('all module routes remain reachable from navigation', async ({ page }) => {
     ['动量观察', 'industry-momentum'],
     ['市场情绪', 'market-crowding'],
     ['微盘观察', 'microcap-temperature'],
-    ['高股息选股', 'dividend-selection'],
     ['业绩选股', 'high-growth'],
   ]) {
     await navigation.getByRole('link', { name, exact: true }).click()
@@ -92,7 +91,7 @@ test('all module routes remain reachable from navigation', async ({ page }) => {
     )
   }
   await navigation.getByRole('link', { name: '总览', exact: true }).click()
-  await expect(page.locator('.research-card')).toHaveCount(8)
+  await expect(page.locator('.research-card')).toHaveCount(7)
 })
 
 test('group tabs preserve direct links, active navigation and mobile layout', async ({ page }) => {
@@ -111,7 +110,9 @@ test('group tabs preserve direct links, active navigation and mobile layout', as
     const heading = await page.locator('.page-header .page-heading').boundingBox()
     const cards = await tabs.boundingBox()
     expect(cards!.y + cards!.height).toBeLessThanOrEqual(heading!.y)
-    await expect(tabs.locator('.module-card')).toHaveCount(group === '市场情绪' ? 5 : 2)
+    await expect(tabs.locator('.module-card')).toHaveCount(
+      ['市场情绪', '业绩选股'].includes(group) ? 5 : 2,
+    )
     await tabs.getByRole('link', { name: label, exact: true }).click()
     await expect(page).toHaveURL(new RegExp(second + '$'))
     await expect(tabs.getByRole('link', { name: label, exact: true })).toHaveAttribute(
@@ -133,7 +134,7 @@ test('shared module cards stay available while loading and after failures', asyn
   test.setTimeout(60000)
   for (const [path, count] of [
     ['etf-shares', 5],
-    ['dividend-selection', 3],
+    ['dividend-selection', 5],
   ] as const) {
     let release!: () => void
     const response = new Promise<void>((resolve) => {
@@ -180,7 +181,6 @@ test('navigation prioritizes market views and removes workspace label', async ({
     '大宗商品',
     '个股机构持仓',
     '业绩选股',
-    '高股息选股',
     '博主动态监控',
     '个人持仓',
   ])
@@ -216,7 +216,7 @@ test('compact bookmarks scroll and support keyboard without activating the wrong
     const items = Array.from(el.children).map((child) => child.getBoundingClientRect())
     const rect = el.getBoundingClientRect()
     return {
-      rows: new Set(items.map((item) => Math.round(item.top))).size,
+      rows: new Set(items.map((item) => Math.round(item.bottom))).size,
       height: items[0].height,
       scrollable: el.scrollWidth > el.clientWidth,
       offset: el.scrollLeft,
@@ -225,7 +225,7 @@ test('compact bookmarks scroll and support keyboard without activating the wrong
     }
   })
   expect(bounds.rows).toBe(1)
-  expect(bounds.height).toBeLessThanOrEqual(44)
+  expect(bounds.height).toBeCloseTo(54, 2)
   expect(bounds.lastVisible).toBe(true)
   expect(bounds.bodyOverflow).toBe(false)
   if (info.project.name === 'mobile') {
@@ -285,7 +285,7 @@ test('page-local module bookmarks stay above titles and preserve ordinary contro
       await nav.evaluate(
         (el) =>
           new Set(
-            Array.from(el.children).map((item) => Math.round(item.getBoundingClientRect().top)),
+            Array.from(el.children).map((item) => Math.round(item.getBoundingClientRect().bottom)),
           ).size,
       ),
     ).toBe(1)

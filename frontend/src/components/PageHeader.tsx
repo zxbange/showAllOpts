@@ -10,6 +10,19 @@ export function PageHeader({ children, switcher }: { children: ReactNode; switch
   const group = groupForPath(pathname)
   const groupItems = group?.ids.flatMap((id) => {
     const module = individualModules.find((item) => item.id === id)
+    if (module?.id === 'dividend-selection') {
+      return [
+        ['classic', '纯高股息'],
+        ['value', '高股息低估值（非银行业）'],
+        ['bank', '高股息低估值（银行业）'],
+      ].map(([method, name]) => ({
+        id: `dividend-${method}`,
+        name,
+        description: name,
+        icon: module.icon,
+        href: `/dividend-selection?method=${method}`,
+      }))
+    }
     if (module?.id === 'etf-shares') {
       return ['hs300', 'zz500'].map((index) => ({
         id: `etf-shares-${index}`,
@@ -41,7 +54,9 @@ export function PageHeader({ children, switcher }: { children: ReactNode; switch
             value={
               pathname === '/etf-shares'
                 ? `etf-shares-${new URLSearchParams(search).get('group') === 'zz500' ? 'zz500' : 'hs300'}`
-                : pathname.split('/')[1]
+                : pathname === '/dividend-selection'
+                  ? `dividend-${['value', 'bank'].includes(new URLSearchParams(search).get('method') ?? '') ? new URLSearchParams(search).get('method') : 'classic'}`
+                  : pathname.split('/')[1]
             }
           />
         ))}

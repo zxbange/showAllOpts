@@ -1,4 +1,4 @@
-import { useLayoutEffect, useRef, type ReactNode, type KeyboardEvent } from 'react'
+import { useLayoutEffect, useRef, type CSSProperties, type KeyboardEvent } from 'react'
 import type { LucideIcon } from 'lucide-react'
 import { NavLink, useLocation } from 'react-router-dom'
 import '../styles/page-header.css'
@@ -11,8 +11,6 @@ export interface ModuleOption<T extends string = string> {
   domId?: string
   controls?: string
   href?: string
-  count?: ReactNode
-  countLabel?: string
 }
 
 interface ModuleSwitchProps<T extends string> {
@@ -82,17 +80,13 @@ export function ModuleSwitch<T extends string>({
             <span className="module-card-text">
               <strong>{item.name}</strong>
             </span>
-            {item.count != null && (
-              <span className="module-card-count">
-                <b>{item.count}</b>
-                <small>{item.countLabel ?? '只'}</small>
-              </span>
-            )}
           </>
         )
         return item.href ? (
           <NavLink
             key={item.id}
+            style={{ '--folder-order': items.length - index } as CSSProperties}
+            data-tone={index % 5}
             to={item.href}
             aria-label={item.name}
             title={item.description}
@@ -109,6 +103,8 @@ export function ModuleSwitch<T extends string>({
         ) : (
           <button
             key={item.id}
+            style={{ '--folder-order': items.length - index } as CSSProperties}
+            data-tone={index % 5}
             id={item.domId}
             aria-controls={item.controls}
             type="button"

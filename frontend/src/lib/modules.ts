@@ -213,9 +213,15 @@ export const moduleGroups = [
   },
   {
     name: '业绩选股',
-    description: '财报持续增长筛选与公告后的高开收阳信号。',
-    ids: ['high-growth', 'earnings-gap'],
-    labels: ['高增长', '净利润断层'],
+    description: '持续增长、净利润断层与纯高股息、低估值非银行和银行筛选。',
+    ids: ['high-growth', 'earnings-gap', 'dividend-selection'],
+    labels: [
+      '高增长',
+      '净利润断层',
+      '纯高股息',
+      '高股息低估值（非银行业）',
+      '高股息低估值（银行业）',
+    ],
   },
 ]
 export function groupForPath(path: string) {

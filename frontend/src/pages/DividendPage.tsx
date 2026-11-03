@@ -1,4 +1,4 @@
-import { ModuleSwitch } from '../components/ModuleSwitch'
+import { useSearchParams } from 'react-router-dom'
 import { PageHeader } from '../components/PageHeader'
 import { useCallback, useState } from 'react'
 import {
@@ -21,7 +21,9 @@ const number = (v: number | null | undefined, suffix = '') =>
   v == null ? '—' : v.toFixed(2) + suffix
 
 export function DividendPage() {
-  const [method, setMethod] = useState('classic')
+  const [params] = useSearchParams()
+  const requested = params.get('method')
+  const method = requested === 'value' || requested === 'bank' ? requested : 'classic'
   const [search, setSearch] = useState('')
   const [overlapOnly, setOverlapOnly] = useState(false)
   const loader = useCallback((signal: AbortSignal) => getDividendOverview(signal), [])
@@ -40,39 +42,7 @@ export function DividendPage() {
   const maxYield = Math.max(1, ...(group?.items ?? []).map(metric))
   return (
     <div className="page-enter dividend-page">
-      <PageHeader
-        switcher={
-          <ModuleSwitch
-            label="选择高股息筛选方式"
-            value={method}
-            onChange={setMethod}
-            items={[
-              {
-                id: 'classic',
-                name: '纯高股息',
-                description: '三年分红前10% · PEG · 盈利增长',
-                icon: Coins,
-              },
-              {
-                id: 'value',
-                name: '高股息低估值（非银行业）',
-                description: '近一年股息率 > 4% · 0 < PE < 8',
-                icon: Coins,
-              },
-              {
-                id: 'bank',
-                name: '高股息低估值（银行业）',
-                description: '银行业独立排名 · 股息率前 10 只',
-                icon: Coins,
-              },
-            ].map((item) => ({
-              ...item,
-              count: data ? (data.groups.find((g) => g.id === item.id)?.items.length ?? 0) : '—',
-              countLabel: item.id === 'bank' ? '/ 10 只' : '/ 25 只',
-            }))}
-          />
-        }
-      >
+      <PageHeader>
         <div>
           <h1>
             高股息选股 <span className="heading-tag">三组独立排名</span>

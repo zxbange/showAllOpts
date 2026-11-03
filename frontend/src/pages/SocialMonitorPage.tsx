@@ -326,13 +326,6 @@ export function SocialMonitorPage() {
         icon: item.icon,
         domId: `social-tab-${item.id}`,
         controls: status ? `social-panel-${item.id}` : undefined,
-        count:
-          item.id === 'authors'
-            ? status?.authors.length
-            : item.id === 'cubes'
-              ? status?.cubes?.length
-              : undefined,
-        countLabel: '',
       }))}
     />
   )
