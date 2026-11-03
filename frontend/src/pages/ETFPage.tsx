@@ -1,8 +1,8 @@
-import { ModuleSwitch } from '../components/ModuleSwitch'
 import { PageHeader } from '../components/PageHeader'
-import { useCallback, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
+import { useSearchParams } from 'react-router-dom'
 import type { CSSProperties } from 'react'
-import { CalendarDays, ChartNoAxesCombined, Info, RefreshCw } from 'lucide-react'
+import { CalendarDays, Info, RefreshCw } from 'lucide-react'
 import { getETFHistory } from '../api/client'
 import { useResource } from '../hooks/useResource'
 import { ETFChart } from '../components/ETFChart'
@@ -11,10 +11,12 @@ import { billionShares, etfColors, signedPercent } from '../lib/etf'
 import '../styles/etf.css'
 
 export function ETFPage() {
-  const [group, setGroup] = useState('hs300')
+  const [params] = useSearchParams()
+  const group = params.get('group') === 'zz500' ? 'zz500' : 'hs300'
   const [days, setDays] = useState(365)
   const [mode, setMode] = useState<'shares' | 'relative'>('shares')
   const [selected, setSelected] = useState<string | null>(null)
+  useEffect(() => setSelected(null), [group])
   const loader = useCallback(
     (signal: AbortSignal) => getETFHistory(group, days, signal),
     [group, days],
@@ -24,35 +26,13 @@ export function ETFPage() {
   const selectedFund = data?.funds.find((fund) => fund.code === selected)
   return (
     <div className="page-enter etf-page">
-      <PageHeader
-        switcher={
-          <ModuleSwitch
-            label="ETF指数分组"
-            value={group}
-            onChange={(id) => {
-              setGroup(id)
-              setSelected(null)
-            }}
-            items={[
-              {
-                id: 'hs300',
-                name: '沪深300 ETF',
-                description: '大盘视角 · 跟踪 5 只',
-                icon: ChartNoAxesCombined,
-              },
-              {
-                id: 'zz500',
-                name: '中证500 ETF',
-                description: '中盘视角 · 跟踪 5 只',
-                icon: ChartNoAxesCombined,
-              },
-            ]}
-          />
-        }
-      >
+      <PageHeader>
         <div>
           <h1>
-            ETF份额仪表盘<span className="heading-tag">申赎观察</span>
+            市场情绪
+            <span className="heading-tag">
+              {group === 'hs300' ? '沪深300 ETF份额' : '中证500 ETF份额'}
+            </span>
           </h1>
           <p>跟踪沪深300、中证500 ETF 的总份额及每日增减。</p>
         </div>

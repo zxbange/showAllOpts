@@ -195,9 +195,9 @@ export const individualModules: ResearchModule[] = [
 export const moduleGroups = [
   {
     name: '市场情绪',
-    description: '成交集中度、市场情绪与两融担保比例。',
-    ids: ['market-crowding', 'market-sentiment', 'margin-guarantee'],
-    labels: ['抱团拥挤度', '市场情绪跟踪', '两融担保比例'],
+    description: '成交集中度、市场情绪、两融担保比例及沪深300 / 中证500 ETF 份额。',
+    ids: ['market-crowding', 'market-sentiment', 'margin-guarantee', 'etf-shares'],
+    labels: ['抱团拥挤度', '市场情绪跟踪', '两融担保比例', '沪深300 ETF', '中证500 ETF'],
   },
   {
     name: '动量观察',
@@ -238,12 +238,7 @@ export const researchModules: ResearchModule[] = individualModules
       : m
   })
 
-const navigationFirst = [
-  'market-crowding',
-  'industry-momentum',
-  'microcap-temperature',
-  'etf-shares',
-]
+const navigationFirst = ['market-crowding', 'industry-momentum', 'microcap-temperature']
 export const navigationModules = [
   ...navigationFirst.flatMap((id) => researchModules.filter((module) => module.id === id)),
   ...researchModules.filter(

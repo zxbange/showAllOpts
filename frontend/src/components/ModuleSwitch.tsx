@@ -1,6 +1,6 @@
-import type { ReactNode, KeyboardEvent } from 'react'
+import { useLayoutEffect, useRef, type ReactNode, type KeyboardEvent } from 'react'
 import type { LucideIcon } from 'lucide-react'
-import { NavLink } from 'react-router-dom'
+import { NavLink, useLocation } from 'react-router-dom'
 import '../styles/page-header.css'
 
 export interface ModuleOption<T extends string = string> {
@@ -8,6 +8,8 @@ export interface ModuleOption<T extends string = string> {
   name: string
   description: string
   icon: LucideIcon
+  domId?: string
+  controls?: string
   href?: string
   count?: ReactNode
   countLabel?: string
@@ -29,9 +31,23 @@ export function ModuleSwitch<T extends string>({
   onChange,
   tabs = false,
 }: ModuleSwitchProps<T>) {
+  const root = useRef<HTMLElement | null>(null)
+  const location = useLocation()
+  const reveal = (element: HTMLElement) => {
+    const container = root.current
+    if (!container) return
+    const bounds = container.getBoundingClientRect()
+    const item = element.getBoundingClientRect()
+    if (item.left < bounds.left) container.scrollLeft += item.left - bounds.left - 4
+    else if (item.right > bounds.right) container.scrollLeft += item.right - bounds.right + 4
+  }
+  useLayoutEffect(() => {
+    const active = root.current?.querySelector<HTMLElement>('.active')
+    if (active) reveal(active)
+  }, [value, location.pathname, location.search])
   const navigation = items.every((item) => item.href)
   const Container = navigation ? 'nav' : 'div'
-  const moveTab = (event: KeyboardEvent<HTMLButtonElement>, index: number) => {
+  const moveTab = (event: KeyboardEvent<HTMLElement>, index: number) => {
     const target =
       event.key === 'ArrowRight'
         ? (index + 1) % items.length
@@ -44,13 +60,16 @@ export function ModuleSwitch<T extends string>({
               : -1
     if (target < 0) return
     event.preventDefault()
-    onChange?.(items[target].id)
+    if (tabs) onChange?.(items[target].id)
     event.currentTarget.parentElement
-      ?.querySelectorAll<HTMLButtonElement>('[role="tab"]')
+      ?.querySelectorAll<HTMLElement>('.module-card')
       [target]?.focus()
   }
   return (
     <Container
+      ref={(element) => {
+        root.current = element
+      }}
       className="module-card-switch"
       aria-label={label}
       role={tabs ? 'tablist' : navigation ? undefined : 'group'}
@@ -59,10 +78,9 @@ export function ModuleSwitch<T extends string>({
         const Icon = item.icon
         const content = (
           <>
-            <Icon size={23} aria-hidden="true" />
+            <Icon size={16} aria-hidden="true" />
             <span className="module-card-text">
               <strong>{item.name}</strong>
-              <small>{item.description}</small>
             </span>
             {item.count != null && (
               <span className="module-card-count">
@@ -77,6 +95,9 @@ export function ModuleSwitch<T extends string>({
             key={item.id}
             to={item.href}
             aria-label={item.name}
+            title={item.description}
+            onFocus={(event) => reveal(event.currentTarget)}
+            onKeyDown={(event) => moveTab(event, index)}
             aria-current={value !== undefined ? (value === item.id ? 'page' : false) : undefined}
             className={({ isActive }) =>
               'module-card' +
@@ -88,14 +109,18 @@ export function ModuleSwitch<T extends string>({
         ) : (
           <button
             key={item.id}
+            id={item.domId}
+            aria-controls={item.controls}
             type="button"
             className={'module-card' + (value === item.id ? ' active' : '')}
             aria-label={item.name}
+            title={item.description}
+            onFocus={(event) => reveal(event.currentTarget)}
+            onKeyDown={(event) => moveTab(event, index)}
             aria-pressed={tabs ? undefined : value === item.id}
             role={tabs ? 'tab' : undefined}
             aria-selected={tabs ? value === item.id : undefined}
             tabIndex={tabs && value !== item.id ? -1 : 0}
-            onKeyDown={tabs ? (event) => moveTab(event, index) : undefined}
             onClick={() => onChange?.(item.id)}
           >
             {content}

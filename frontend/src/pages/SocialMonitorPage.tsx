@@ -1,3 +1,4 @@
+import { ModuleSwitch } from '../components/ModuleSwitch'
 import { useAuth } from '../components/AccountAccess'
 import { useCallback, useState } from 'react'
 import { usePolling } from '../hooks/usePolling'
@@ -312,9 +313,33 @@ export function SocialMonitorPage() {
     activePlatforms.length > 0 &&
     activePlatforms.every((platform) => status?.platforms?.[platform]?.paused)
 
+  const switcher = (
+    <ModuleSwitch
+      label="博主监控分区"
+      tabs
+      value={view}
+      onChange={setView}
+      items={visibleViews.map((item) => ({
+        id: item.id,
+        name: item.label,
+        description: item.label,
+        icon: item.icon,
+        domId: `social-tab-${item.id}`,
+        controls: status ? `social-panel-${item.id}` : undefined,
+        count:
+          item.id === 'authors'
+            ? status?.authors.length
+            : item.id === 'cubes'
+              ? status?.cubes?.length
+              : undefined,
+        countLabel: '',
+      }))}
+    />
+  )
   if (!status)
     return (
       <section className="social-page">
+        {switcher}
         <header className="social-heading">
           <h1>博主动态监控</h1>
         </header>
@@ -343,6 +368,7 @@ export function SocialMonitorPage() {
 
   return (
     <section className="social-page">
+      {switcher}
       <header className="social-heading">
         <div>
           <h1>博主动态监控</h1>
@@ -518,45 +544,6 @@ export function SocialMonitorPage() {
           </div>
         )
       })}
-      <div
-        className="social-tabs"
-        role="tablist"
-        aria-label="博主监控分区"
-        onKeyDown={(event) => {
-          const index = visibleViews.findIndex((item) => item.id === view)
-          const next =
-            event.key === 'ArrowRight'
-              ? (index + 1) % visibleViews.length
-              : event.key === 'ArrowLeft'
-                ? (index + visibleViews.length - 1) % visibleViews.length
-                : event.key === 'Home'
-                  ? 0
-                  : event.key === 'End'
-                    ? visibleViews.length - 1
-                    : -1
-          if (next < 0) return
-          event.preventDefault()
-          setView(visibleViews[next].id)
-          document.getElementById(`social-tab-${visibleViews[next].id}`)?.focus()
-        }}
-      >
-        {visibleViews.map((item) => (
-          <button
-            key={item.id}
-            id={`social-tab-${item.id}`}
-            role="tab"
-            aria-selected={view === item.id}
-            aria-controls={`social-panel-${item.id}`}
-            tabIndex={view === item.id ? 0 : -1}
-            onClick={() => setView(item.id)}
-          >
-            <item.icon size={17} />
-            <span>{item.label}</span>
-            {item.id === 'authors' && <small>{status.authors.length}</small>}
-            {item.id === 'cubes' && <small>{status.cubes?.length || 0}</small>}
-          </button>
-        ))}
-      </div>
       <div className="social-management" hidden={view === 'feed' || view === 'cubes'}>
         <section
           className="social-panel"

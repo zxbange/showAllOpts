@@ -75,7 +75,7 @@ test('market mood third tab renders official percentage units and keeps chart du
   })
   await page.goto('/market-crowding')
   const tabs = page.getByRole('navigation', { name: '市场情绪模块切换' })
-  await expect(tabs.getByRole('link')).toHaveCount(3)
+  await expect(tabs.getByRole('link')).toHaveCount(5)
   await tabs.getByRole('link', { name: '两融担保比例', exact: true }).click()
   await expect(page.locator('.margin-stats')).toContainText('255.63%')
   await expect(page.locator('.margin-stats')).toContainText('-1.97 个百分点')

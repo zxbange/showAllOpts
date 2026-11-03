@@ -54,8 +54,9 @@ test('ETF overview entry, cards, comparison, range, group and mobile layout', as
     return route.fulfill({ json: fixture(url.searchParams.get('group') ?? 'hs300') })
   })
   await page.goto('/')
-  await page.getByRole('link', { name: '进入ETF份额仪表盘', exact: true }).click()
-  await expect(page.getByRole('heading', { level: 1 })).toContainText('ETF份额仪表盘', {
+  await page.getByRole('link', { name: '进入市场情绪', exact: true }).click()
+  await page.getByRole('link', { name: '沪深300 ETF', exact: true }).click()
+  await expect(page.getByRole('heading', { level: 1 })).toContainText('沪深300 ETF份额', {
     timeout: 15000,
   })
   await expect(page.locator('.etf-card')).toHaveCount(5)
@@ -67,7 +68,7 @@ test('ETF overview entry, cards, comparison, range, group and mobile layout', as
     true,
   )
   const nav = page.getByRole('navigation', { name: '主导航' })
-  const active = nav.getByRole('link', { name: 'ETF份额仪表盘', exact: true })
+  const active = nav.getByRole('link', { name: '市场情绪', exact: true })
   const navBox = await nav.boundingBox()
   const activeBox = await active.boundingBox()
   expect(
@@ -90,8 +91,21 @@ test('ETF overview entry, cards, comparison, range, group and mobile layout', as
   await expect(page.getByRole('heading', { name: '份额变化率 · 全部' })).toBeVisible()
   await page.getByRole('button', { name: '近1月', exact: true }).click()
   await expect.poll(() => requests.at(-1)?.searchParams.get('days')).toBe('30')
-  await page.getByRole('button', { name: /中证500 ETF/ }).click()
+  await page.getByRole('button', { name: '查看沪深300ETF华泰柏瑞曲线' }).click()
+  await page.getByRole('link', { name: '中证500 ETF', exact: true }).click()
   await expect.poll(() => requests.at(-1)?.searchParams.get('group')).toBe('zz500')
+  await expect(page.locator('.etf-card').first()).toContainText('中证500')
+  await expect(page.getByRole('heading', { name: '份额变化率 · 全部' })).toBeVisible()
+  expect(requests.at(-1)?.searchParams.get('days')).toBe('30')
+  await page.reload()
+  await expect(page.locator('.etf-card').first()).toContainText('中证500')
+  await expect(page.getByRole('link', { name: '中证500 ETF', exact: true })).toHaveAttribute(
+    'aria-current',
+    'page',
+  )
+  await page.goBack()
+  await expect(page.locator('.etf-card').first()).toContainText('沪深300')
+  await page.goForward()
   await expect(page.locator('.etf-card').first()).toContainText('中证500')
   expect(errors).toEqual([])
 })

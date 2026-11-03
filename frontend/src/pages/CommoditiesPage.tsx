@@ -1,4 +1,6 @@
-import { Link, useSearchParams } from 'react-router-dom'
+import { ModuleSwitch } from '../components/ModuleSwitch'
+import { Coins } from 'lucide-react'
+import { useSearchParams } from 'react-router-dom'
 import { CCICoalPage } from './CCICoalPage'
 import { useEffect, useRef, useState } from 'react'
 import { init, use } from 'echarts/core'
@@ -368,14 +370,20 @@ export function CommoditiesPage() {
   const coal = params.get('instrument') === 'cci'
   return (
     <div className="commodity-page">
-      <nav className="commodity-tabs" aria-label="大宗商品品种">
-        <Link to="/commodities" aria-current={!coal ? 'page' : undefined}>
-          A00铝
-        </Link>
-        <Link to="/commodities?instrument=cci" aria-current={coal ? 'page' : undefined}>
-          CCI动力煤
-        </Link>
-      </nav>
+      <ModuleSwitch
+        label="大宗商品品种"
+        value={coal ? 'cci' : 'a00'}
+        items={[
+          { id: 'a00', name: 'A00铝', description: 'A00铝报价', icon: Coins, href: '/commodities' },
+          {
+            id: 'cci',
+            name: 'CCI动力煤',
+            description: 'CCI动力煤三档报价',
+            icon: Coins,
+            href: '/commodities?instrument=cci',
+          },
+        ]}
+      />
       {coal ? <CCICoalPage /> : <A00Page />}
     </div>
   )
