@@ -24,6 +24,8 @@
 
 脚本显式使用 Python 内置的 `any/bool/int/min/max`，兼容研究 Notebook 中 NumPy 同名函数覆盖的情况。若旧版默认执行 `run()` 却报“write/allow_partial/create_tables 必须是布尔值”，请完整替换并重新执行新版脚本；只再次调用 `run()` 仍会使用旧函数，无需修改布尔参数或重置 Notebook。
 
+研究接口按 Notebook 全局变量、`jqdata` 模块、平台注入的 `builtins` 依次解析，兼容行情接口未直接导出到 `jqdata` 的研究环境。如果仍缺接口，报错会列出具体名称，且尚未采集或连接数据库。
+
 1. 打开聚宽的**研究**，新建 Python 3 Notebook。把脚本完整内容复制到一个单元格执行。也可由你自行将文件上传至聚宽研究目录，再执行 `%run -i ETF历史补采_聚宽研究版.py`。
 2. 默认执行 `RESULT = run()`：只查询聚宽并打印进度、缺失和风险，**不连接MySQL、不建表、不写数据库**。使用平台已有的 `jqdata`、SQLAlchemy（1.3及以上）和 MySQL 驱动；脚本不自动安装软件。
 3. 查看预览及缺失清单。`RESULT['shares']` 和 `RESULT['prices']` 是完整记录，`RESULT['missing']` 是请求范围缺失，`RESULT['reference_missing']` 是内存参考日缺失，`RESULT['quality_warnings']` 是保守拆并提示。可在下一单元格执行：

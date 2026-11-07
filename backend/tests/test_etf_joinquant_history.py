@@ -114,7 +114,8 @@ def test_default_preview_and_weekend_end_no_database_or_2023_records(backfill):
 
 
 @pytest.mark.parametrize('pollution', ['any', 'numpy_namespace'])
-def test_pasted_notebook_with_numpy_names_previews_writes_and_repeats(backfill, monkeypatch, pollution):
+@pytest.mark.parametrize('api_location', ['jqdata', 'notebook', 'builtins'])
+def test_pasted_notebook_with_numpy_names_previews_writes_and_repeats(backfill, monkeypatch, pollution, api_location):
     """Notebook cells share globals, unlike importing a clean Python module."""
     import sys
     c = backfill
@@ -124,7 +125,18 @@ def test_pasted_notebook_with_numpy_names_previews_writes_and_repeats(backfill, 
     exec(compile(SCRIPT.read_text(encoding='utf-8'), str(SCRIPT), 'exec'), namespace)
     namespace.update(china_now=c.module.china_now, ETF_GROUPS=c.module.ETF_GROUPS,
                      connect_database=c.module.connect_database)
-    monkeypatch.setitem(sys.modules, 'jqdata', c.jq)
+    if api_location == 'jqdata':
+        monkeypatch.setitem(sys.modules, 'jqdata', c.jq)
+    else:
+        # The platform can expose finance/query on jqdata but inject market APIs elsewhere.
+        monkeypatch.setitem(sys.modules, 'jqdata', SimpleNamespace(finance=c.jq.finance, query=c.jq.query))
+        for name in ('get_trade_days', 'get_price', 'get_security_info'):
+            if api_location == 'notebook':
+                namespace[name] = getattr(c.jq, name)
+            else:
+                # Ignore stale/non-callable notebook names and resolve the real platform API.
+                namespace[name] = None
+                monkeypatch.setattr(namespace['_builtins'], name, getattr(c.jq, name), raising=False)
     # Exercise the real API resolver too: it also used an unqualified any(generator).
     preview = namespace['run']()
     assert preview['source_complete'] is True and preview['written'] is False
@@ -146,6 +158,21 @@ def test_pasted_notebook_with_numpy_names_previews_writes_and_repeats(backfill, 
         namespace['run'](groups=['unknown'])
     with pytest.raises(namespace['HistoryError'], match='交易日历'):
         namespace['checked_days']([DATES[-1]], DATES[0], DATES[1])
+
+
+def test_missing_platform_api_names_are_reported_before_collection(backfill, monkeypatch):
+    import sys
+    import builtins
+    namespace = {'__name__': 'notebook_cell'}
+    exec(compile(SCRIPT.read_text(encoding='utf-8'), str(SCRIPT), 'exec'), namespace)
+    monkeypatch.setitem(sys.modules, 'jqdata', SimpleNamespace(
+        finance=backfill.jq.finance, query=backfill.jq.query,
+        get_trade_days=backfill.jq.get_trade_days))
+    for name in ('get_price', 'get_security_info'):
+        monkeypatch.delattr(builtins, name, raising=False)
+    with pytest.raises(namespace['HistoryError'], match='get_price, get_security_info'):
+        namespace['load_api']()
+    assert not backfill.requests and not backfill.connections
 
 
 def test_persistence_insert_only_preserves_exchange_sources_and_idempotence(backfill):

@@ -11,6 +11,7 @@ from __future__ import print_function, division
 import builtins as _builtins
 import datetime as dt
 from decimal import Decimal, InvalidOperation
+from types import SimpleNamespace
 
 from sqlalchemy import BigInteger, Column, Date, DateTime, Numeric, String
 from sqlalchemy import create_engine, inspect
@@ -23,8 +24,8 @@ END_DATE = None  # 北京时间昨日；当天无论是否收盘均留给交易�
 WINDOW_SIZE = 120  # 单只基金、每次最多 120 个交易日，远低于 finance 查询上限。
 DB_CONFIG = {
     # 仅在聚宽私有 Notebook 中填写；不要提交凭据或将 Notebook 公开分享。
-    'host': 'your_mysql_host', 'port': 3306, 'dbname': 'your_database',
-    'dbuser': 'your_database_user', 'dbpassword': 'your_password',
+    'host': 'douguastock.mysql.rds.aliyuncs.com', 'port': 3306, 'dbname': 'gt888zx_4412',
+    'dbuser': 'gt888zx_4412', 'dbpassword': 'gt888zx_4412',
     'driver': 'auto',  # auto: MySQLdb 优先，否则 PyMySQL；也可指定 mysqldb / pymysql。
 }
 # 单文件不能依赖项目安装。此名单由离线测试与 backend/app/core/etf_catalog.py 校验一致。
@@ -106,13 +107,22 @@ def load_api():
         import jqdata as jq
     except ImportError:
         raise HistoryError('请在聚宽研究 Notebook 执行；不需要安装或登录 jqdatasdk。') from None
-    for name in ('query', 'get_trade_days', 'get_price', 'get_security_info'):
-        if not callable(getattr(jq, name, None)):
-            raise HistoryError('聚宽研究环境缺少必需 API，请核对平台环境。')
-    table = getattr(getattr(jq, 'finance', None), 'FUND_SHARE_DAILY', None)
+    # 聚宽部分研究接口注入 Notebook/builtins，未必是 jqdata 模块的属性。
+    resolved, missing = {}, []
+    for name in ('query', 'get_trade_days', 'get_price', 'get_security_info', 'finance'):
+        for value in (globals().get(name), getattr(jq, name, None), getattr(_builtins, name, None)):
+            valid = callable(getattr(value, 'run_query', None)) if name == 'finance' else callable(value)
+            if valid:
+                resolved[name] = value
+                break
+        else:
+            missing.append(name)
+    if missing:
+        raise HistoryError('聚宽研究环境缺少必需 API：{}。请在研究 Notebook 中执行。'.format(', '.join(missing)))
+    table = getattr(resolved['finance'], 'FUND_SHARE_DAILY', None)
     if table is None or _builtins.any(not hasattr(table, key) for key in ('code', 'date', 'shares')):
         raise HistoryError('缺少 finance.FUND_SHARE_DAILY 的 code/date/shares，请核对数据权限及字段。')
-    return jq
+    return SimpleNamespace(**resolved)
 
 
 def checked_days(raw, start, end, count=None):
