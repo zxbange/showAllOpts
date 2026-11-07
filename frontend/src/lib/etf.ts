@@ -1,4 +1,4 @@
-import type { ETFCollectionStatus, ETFHistory } from '../types/etf'
+import type { ETFCollectionStatus, ETFHistory, ETFManualRun } from '../types/etf'
 
 export const etfColors = ['#c44837', '#337fa5', '#ad7c14', '#217b70', '#8d63a6']
 export const billionShares = (value: string | null) =>
@@ -8,7 +8,10 @@ export const signedPercent = (value: number | null) =>
 
 export function chartSeries(data: ETFHistory, relative: boolean, selected: string | null) {
   const dates = [
-    ...new Set(data.funds.flatMap((fund) => fund.points.map((point) => point.date))),
+    ...new Set([
+      ...(data.market_values ?? []).map((point) => point.date),
+      ...data.funds.flatMap((fund) => fund.points.map((point) => point.date)),
+    ]),
   ].sort()
   const series = data.funds.flatMap((fund, index) => {
     if (selected && fund.code !== selected) return []
@@ -75,6 +78,45 @@ export const showETFSymbols = (values: Array<number | null>) =>
   values.filter((value) => value != null).length < 100
 
 export function collectionSummary(status: ETFCollectionStatus) {
+  const details = collectionCoverageSummary(status)
+  return `${collectionScheduleSummary(status)}${details ? ` ${details}` : ''}`
+}
+
+export function collectionCoverageSummary(status: ETFCollectionStatus) {
+  const pending = status.pending_count ?? status.manual?.pending_count
+  const blocked = status.blocked_count ?? status.manual?.blocked_count
+  const exhausted = status.retry_exhausted_count ?? status.manual?.retry_exhausted_count
+  const parts: string[] = []
+  if (pending) parts.push(`本轮目标日仍有 ${pending} 项待采集。`)
+  if (blocked)
+    parts.push(`本轮目标日 ${blocked} 项受数据源可用性或核验限制，不能保证通过重试补齐。`)
+  if (exhausted)
+    parts.push(
+      `本轮目标日 ${exhausted} 项已达到自动重试上限，勾选重试仅重置当前日常目标，不回补历史。`,
+    )
+  return parts.join('')
+}
+
+// A terminal mutation response must not retain progress from its previous running snapshot.
+export function withManualRun(
+  status: ETFCollectionStatus,
+  manual: ETFManualRun,
+): ETFCollectionStatus {
+  if (['queued', 'running', 'cancelling'].includes(manual.status)) return { ...status, manual }
+  return {
+    ...status,
+    manual,
+    progress: null,
+    status:
+      status.status === 'running'
+        ? status.enabled === false
+          ? 'disabled'
+          : 'configured'
+        : status.status,
+  }
+}
+
+function collectionScheduleSummary(status: ETFCollectionStatus) {
   if (status.status === 'disabled') return '自动采集已关闭，当前展示已保存的数据。'
   if (status.status === 'missing_writer_configuration')
     return '自动采集未就绪：尚未配置数据库连接。页面同步只读取已有数据。'
@@ -97,7 +139,7 @@ export function collectionSummary(status: ETFCollectionStatus) {
     latest && ['failed', 'partial'].includes(latest.status)
       ? '最近一次采集未完整完成，保留已保存数据。'
       : ''
-  return `${prefix}自动采集：北京时间 ${(status.schedule ?? []).join('、')}；历史目标 ${status.target_sessions ?? 300} 个交易日，按批次补采。`
+  return `${prefix}自动采集：北京时间 ${(status.schedule ?? []).join('、')}；仅更新最新已收市交易日。历史数据由聚宽平台脚本从 2024-01-01 起补齐，日常采集完成不代表历史齐全。`
 }
 
 export function collectionErrorMessage(error: string): string {
@@ -114,7 +156,7 @@ export function collectionErrorMessage(error: string): string {
     service_interrupted: '服务重启或采集被中断，可重新触发采集。',
     configuration_changed: '数据库目标已变更，本次任务已中断；请重新配置后采集。',
     missing_writer_configuration: '请先配置采集数据库连接。',
-    retry_exhausted: '已达到自动重试上限，可勾选重新尝试后手动采集。',
+    retry_exhausted: '当前目标日已达到自动重试上限，可勾选重新尝试；仅更新日常目标，不回补历史。',
   }
   return (
     messages[error] ??

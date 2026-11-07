@@ -40,3 +40,6 @@ export const runCollection = (request_id: string, retryExhausted = false) =>
     request_id,
     ...(retryExhausted ? { retry_exhausted: true } : {}),
   })
+
+export const cancelCollection = (request_id: string) =>
+  call<ETFManualRun>('collection-cancel', { request_id })

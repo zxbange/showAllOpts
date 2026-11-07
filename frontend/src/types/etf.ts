@@ -36,7 +36,15 @@ export interface ETFHistory {
   funds: ETFFund[]
 }
 
-export interface ETFCollectionStatus {
+export interface ETFCollectionCoverage {
+  collection_scope?: 'latest_completed_session'
+  pending_count?: number
+  blocked_count?: number
+  retry_exhausted_count?: number
+  history_complete?: boolean
+}
+
+export interface ETFCollectionStatus extends ETFCollectionCoverage {
   enabled?: boolean
   configured?: boolean
   cache_pending?: boolean
@@ -44,7 +52,6 @@ export interface ETFCollectionStatus {
   progress?: { phase: string; completed: number; total: number } | null
   lookback_days?: number
   batch_days?: number
-  retry_exhausted_count?: number
   gap_count?: number
   gaps?: Array<{ kind: string; code: string; day: string; status: string; attempts: number }>
   status: string
@@ -72,7 +79,7 @@ export interface ETFCollectionConfiguration {
   transport_secure: boolean
   db_local?: boolean
 }
-export interface ETFManualRun {
+export interface ETFManualRun extends ETFCollectionCoverage {
   id: string
   status: string
   error?: string | null

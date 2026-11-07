@@ -118,6 +118,23 @@ class CollectionRun(BaseModel):
     retry_exhausted: bool = Field(default=False, strict=True)
 
 
+class CollectionCancel(BaseModel):
+    model_config = ConfigDict(extra='forbid', hide_input_in_errors=True)
+    request_id: str = Field(pattern=r'^[a-zA-Z0-9-]{16,64}$')
+
+
+@router.post('/collection-cancel', status_code=202, dependencies=[Depends(require_admin)])
+async def cancel_collection(request: Request):
+    try:
+        raw = await request.body()
+        if len(raw) > 1024:
+            raise ValueError()
+        body = CollectionCancel.model_validate_json(raw)
+    except Exception:
+        raise HTTPException(422, '取消请求格式无效，请刷新页面重试') from None
+    return await collection_call(request.app.state.etf_collection.request_cancel, body.request_id)
+
+
 @router.post('/collection-run', status_code=202, dependencies=[Depends(require_admin)])
 async def run_collection(request: Request):
     try:

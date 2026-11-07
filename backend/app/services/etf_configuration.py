@@ -7,6 +7,7 @@ import re
 from sqlalchemy import URL, text
 from sqlalchemy.engine import make_url
 
+from app.services.etf_diagnostics import database_diagnostic, log_database_failure
 from app.services.source_keys import KeyStorageError, persistent_cipher
 
 
@@ -204,20 +205,25 @@ class ETFConfiguration:
                 import pymysql
                 from app.services.database_sources import resolve_addresses
                 connection, sock = None, None
+                stage = 'resolve'
                 try:
                     addresses = sorted({item[4][0] for item in resolve_addresses(config['host'], config['port'])})
                     if not addresses:
                         raise ValueError()
+                    stage = 'validate_address'
                     for raw in addresses:
                         ip = ipaddress.ip_address(raw)
                         ip = ip.ipv4_mapped if isinstance(ip, ipaddress.IPv6Address) and ip.ipv4_mapped else ip
                         if (ip.is_link_local or ip.is_unspecified or ip.is_multicast or ip.is_reserved or
                                 str(ip) in ('100.100.100.200', '168.63.129.16', 'fd00:ec2::254')):
                             raise ValueError()
+                    stage = 'driver_init'
                     connection = pymysql.connect(host=config['host'], port=config['port'],
                         user=config['username'], password=config['password'], database=config['database'],
                         charset='utf8mb4', defer_connect=True, **options)
+                    stage = 'socket_connect'
                     sock = socket.create_connection((addresses[0], config['port']), timeout=10)
+                    stage = 'mysql_connect'
                     connection.connect(sock=sock)
                     return connection
                 except Exception as error:
@@ -227,11 +233,13 @@ class ETFConfiguration:
                         except Exception:
                             pass
                     if sock is not None:
-                        sock.close()
+                        try:
+                            sock.close()
+                        except Exception:
+                            pass  # Preserve the original connection failure.
                     failure = ConfigurationFailure('数据库连接失败，请检查目标地址、网络及账号权限')
-                    args = getattr(error, 'args', ())
-                    if args and isinstance(args[0], int):
-                        failure.database_error_number = args[0]
+                    failure.database_diagnostic = database_diagnostic(error, stage)
+                    failure.database_error_number = failure.database_diagnostic.mysql_code
                     raise failure from None
             extra['creator'] = connect
         return self.owner.engine_factory(self.url(config), pool_pre_ping=True, hide_parameters=True,
@@ -240,13 +248,19 @@ class ETFConfiguration:
     def test(self, body):
         config = self.validate(body)
         engine = None
+        stage, table = 'engine_create', None
         try:
             engine = self.engine(config)
+            stage = 'connect'
             with engine.connect() as connection:
+                stage = 'table_check'
                 for table in ('etf_share_daily', 'etf_price_daily', 'etf_trading_day'):
                     connection.execute(text(f'SELECT 1 FROM `{table}` LIMIT 0'))
-        except Exception:
-            raise ConfigurationFailure('连接或表检查失败，请检查网络、账号权限及ETF三张表；不会返回原始数据库错误') from None
+                stage, table = 'connection_close', None
+        except Exception as error:
+            log_database_failure(error, operation='collection-test', stage=stage,
+                                 target=target_key(config)[:12], table=table)
+            raise ConfigurationFailure('连接或表检查失败，请检查网络、账号权限及ETF三张表；具体原因已记录到服务端错误日志') from None
         finally:
             if engine is not None:
                 engine.dispose()

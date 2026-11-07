@@ -95,14 +95,18 @@ def test_no_startup_network_or_07_slot(tmp_path):
     assert not w.tick(EVENING.replace(hour=7))
 
 
-def test_evening_idempotency_and_blocked_history(tmp_path):
+def test_evening_idempotency_only_updates_latest_and_preserves_legacy_history(tmp_path):
     w, c, disposed = worker(tmp_path)
+    old = ('prices', '159919.XSHE', '2026-11-05', 'blocked_unverified_history', 0)
+    with w.connect() as db:
+        db.execute('INSERT INTO observations VALUES (?,?,?,?,?)', old)
     assert w.tick(EVENING)
     assert not w.tick(EVENING + timedelta(minutes=31))
     assert len(c.writes) == len(disposed) == 1
-    gaps = w.status()['gaps']
-    assert gaps == [dict(kind='prices', code='159919.XSHE', day='2026-11-05',
-                         status='blocked_unverified_history', attempts=0)]
+    assert not w.status()['gaps']  # Daily status does not pretend to measure JoinQuant history.
+    assert {day for day, *_ in c.calls} == {DAY}
+    with w.connect() as db:
+        assert tuple(db.execute("SELECT * FROM observations WHERE day='2026-11-05'").fetchone()) == old
     w2, c2, _ = worker(tmp_path)
     assert not w2.tick(EVENING)
     assert not c2.calls
@@ -171,20 +175,21 @@ def test_fresh_calendar_failure_no_writer(tmp_path):
     assert not c.calls and not disposed
 
 
-def test_missing_gap_exhaustion_does_not_hide_other_dates(tmp_path):
+def test_latest_gap_exhaustion_does_not_hide_successful_daily_observations(tmp_path):
     w, c, _ = worker(tmp_path)
-    old = DAY - timedelta(days=1)
     def partial(client, start, end, funds, include_prices, include_shares, calendar):
-        if start == old:
+        if include_shares and '510300.XSHG' in funds:
             return [], [], {}
         rows = [dict(fund_code=code, trade_date=start) for code in funds]
         return rows if include_shares else [], rows if include_prices else [], {}
     c.collect = partial
     for i in range(6):
-        assert w.tick(EVENING + timedelta(days=i))
-    old_gaps = [r for r in w.status()['gaps'] if r['day'] == old.isoformat() and r['kind'] == 'shares']
-    assert all(r['status'] == 'retry_exhausted' and r['attempts'] == 6 for r in old_gaps)
-    assert old_gaps
+        assert not w.tick(EVENING + timedelta(days=i))
+    gaps = w.status()['gaps']
+    assert gaps == [dict(kind='shares', code='510300.XSHG', day=DAY.isoformat(),
+                         status='retry_exhausted', attempts=6)]
+    with w.connect() as db:
+        assert db.execute("SELECT COUNT(*) FROM observations WHERE status='complete'").fetchone()[0] == 3
 
 
 def test_month_boundary_slot_in_shanghai(tmp_path):
@@ -278,9 +283,62 @@ def test_status_reports_target_not_completed_coverage(tmp_path):
     w, c, _ = worker(tmp_path)
     assert w.tick(EVENING)
     status = w.status()
-    assert status['target_sessions'] == 2
-    assert status['historical_dates_per_run'] == 5
+    assert status['target_sessions'] == 1
+    assert status['historical_dates_per_run'] == 0
+    assert status['collection_scope'] == 'latest_completed_session'
+    assert 'history_complete' not in status
     assert status['coverage_is_target_not_completion'] is True
+
+
+@pytest.mark.parametrize('hour,expected_day', [(14, DAY - timedelta(days=1)), (16, DAY)])
+def test_daily_scope_ignores_legacy_history_target_and_respects_confirmed_close(tmp_path, hour, expected_day):
+    from test_etf_page_configuration import save
+    w, collector, _ = worker(tmp_path)
+    save(w, {'lookback_days': 1500, 'batch_days': 20, 'enabled': False})
+    calls = []
+    class DailyCalendar(Calendar):
+        def default_range(self, count):
+            calls.append(count)
+            assert count == 1
+            return DAY, DAY
+        def previous(self, day):
+            return day - timedelta(days=1)
+    collector.ExchangeClient = lambda http: SimpleNamespace(calendar=lambda: DailyCalendar())
+    w.request_run(f'latest-only-request-{hour}')
+    assert w.tick(EVENING.replace(hour=hour))
+    assert calls == [1] and {day for day, *_ in collector.calls} == {expected_day}
+    with w.connect() as db:
+        assert [row[0] for row in db.execute('SELECT DISTINCT day FROM observations')] == [expected_day.isoformat()]
+    assert w.status()['target_sessions'] == 1 and w.status()['manual']['status'] == 'complete'
+
+
+def test_latest_prices_require_fresh_verification_even_when_prior_values_exist(tmp_path):
+    w, collector, _ = worker(tmp_path)
+    assert w.tick(EVENING)
+    original = collector.collect
+    def missing_price(*args, **kwargs):
+        return ([], [], {}) if kwargs['include_prices'] else original(*args, **kwargs)
+    collector.collect = missing_price
+    assert not w.tick(EVENING + timedelta(days=1))
+    assert w.status()['runs'][0]['status'] == 'partial'
+    with w.connect() as db:
+        assert db.execute("SELECT COUNT(*) FROM observations WHERE kind='prices' AND status='complete'").fetchone()[0] == 2
+    assert collector.writes[-1][1] == []  # Keep existing database prices, never synthesize a replacement.
+
+
+def test_new_manual_click_retries_latest_exhausted_observations_without_resetting_history(tmp_path):
+    from test_etf_page_configuration import save
+    w, collector, _ = worker(tmp_path)
+    save(w, {'enabled': False})
+    with w.connect() as db:
+        db.execute("INSERT INTO observations VALUES ('prices','510300.XSHG',?,'retry_exhausted',6)", (DAY.isoformat(),))
+        db.execute("INSERT INTO observations VALUES ('prices','159919.XSHE','2024-01-02','retry_exhausted',6)")
+    w.request_run('latest-manual-retry-1')
+    assert w.tick(EVENING)
+    with w.connect() as db:
+        assert tuple(db.execute("SELECT status,attempts FROM observations WHERE day='2024-01-02'").fetchone()) == ('retry_exhausted',6)
+        assert tuple(db.execute("SELECT status,attempts FROM observations WHERE kind='prices' AND code='510300.XSHG' AND day=?", (DAY.isoformat(),)).fetchone()) == ('complete',7)
+    assert all(day == DAY for day, *_ in collector.calls)
 
 
 
@@ -320,12 +378,14 @@ def test_writer_errors_are_classified_without_driver_message(tmp_path, number, c
 
 
 
-def test_later_source_failure_does_not_exhaust_earlier_success(tmp_path):
+def test_latest_price_failure_does_not_erase_successful_shares_or_touch_history(tmp_path):
     w, c, _ = worker(tmp_path)
     old = DAY - timedelta(days=1)
+    with w.connect() as db:
+        db.execute('INSERT INTO observations VALUES (?,?,?,?,?)', ('shares','510300.XSHG',old.isoformat(),'complete',1))
     real = c.collect
     def late_failure(client, start, end, **kwargs):
-        if start == old and kwargs['include_prices']:
+        if kwargs['include_prices']:
             raise ValueError('later price source failed')
         return real(client, start, end, **kwargs)
     c.collect = late_failure
@@ -335,8 +395,8 @@ def test_later_source_failure_does_not_exhaust_earlier_success(tmp_path):
         rows = db.execute("SELECT status,attempts FROM observations WHERE day=? AND kind='shares'",
                           (old.isoformat(),)).fetchall()
     assert rows and all(tuple(r) == ('complete', 1) for r in rows)
-    assert any(r['trade_date'] == old for shares, _ in c.writes for r in shares)
-    old_price = next(r for r in w.status()['gaps'] if r['day'] == old.isoformat()
+    assert c.writes and all(r['trade_date'] == DAY for shares, _ in c.writes for r in shares)
+    old_price = next(r for r in w.status()['gaps'] if r['day'] == DAY.isoformat()
                      and r['code'] == '510300.XSHG' and r['kind'] == 'prices')
     assert old_price['status'] == 'retry_exhausted' and old_price['attempts'] == 6
 
@@ -370,7 +430,7 @@ def test_sse_share_fetch_memoized_per_date_for_multiple_funds(tmp_path):
         return real(client, start, end, **kwargs)
     c.collect = collect
     assert w.tick(EVENING)
-    assert len(calls) == 2 and len(set(calls)) == 2
+    assert calls == [DAY]
 
 
 
@@ -396,7 +456,8 @@ def test_next_morning_requires_fresh_verification_not_old_complete_state(tmp_pat
         rows = db.execute("SELECT status FROM observations WHERE day=? AND kind='shares'", (DAY.isoformat(),)).fetchall()
     assert rows and all(row[0] == 'complete' for row in rows)
     assert c.writes[:len(old_writes)] == old_writes
-    assert c.writes[-1] == ([], [])  # No replacement/deletion of old business rows.
+    assert c.writes[-1][0] == []  # Failed shares never replace/delete old business rows.
+    assert {row['trade_date'] for row in c.writes[-1][1]} == {DAY}  # Fresh prices still commit.
     assert not w.tick(morning + timedelta(minutes=29))
     c.collect = real
     assert w.tick(morning + timedelta(minutes=30))

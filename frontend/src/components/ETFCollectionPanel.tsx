@@ -2,13 +2,14 @@ import { useEffect, useRef, useState } from 'react'
 import { useAuth } from './AccountAccess'
 import { getETFCollectionStatus } from '../api/client'
 import {
+  cancelCollection,
   getCollectionConfiguration,
   runCollection,
   saveCollectionConfiguration,
   testCollectionConfiguration,
 } from '../api/etfCollection'
 import type { ETFCollectionConfiguration, ETFCollectionStatus } from '../types/etf'
-import { collectionSummary, collectionErrorMessage } from '../lib/etf'
+import { collectionSummary, collectionErrorMessage, withManualRun } from '../lib/etf'
 
 const dailyTime = (schedule: string[]) => (schedule.length === 1 ? schedule[0] : '09:00')
 const normalizeConfig = (value: ETFCollectionConfiguration) => ({
@@ -18,7 +19,7 @@ const normalizeConfig = (value: ETFCollectionConfiguration) => ({
 })
 
 const active = (s?: ETFCollectionStatus | null) =>
-  ['queued', 'running'].includes(s?.manual?.status ?? '') ||
+  ['queued', 'running', 'cancelling'].includes(s?.manual?.status ?? '') ||
   s?.status === 'running' ||
   !!s?.progress
 const phases: Record<string, string> = {
@@ -28,9 +29,11 @@ const phases: Record<string, string> = {
 }
 const labels: Record<string, string> = {
   queued: '排队中',
+  cancelling: '正在取消',
+  cancelled: '已取消',
   running: '采集中',
-  complete: '已完成',
-  partial: '部分完成',
+  complete: '本次日常采集完成',
+  partial: '部分完成，仍有缺口',
   failed: '失败',
   interrupted: '已中断',
 }
@@ -51,6 +54,7 @@ export function ETFCollectionPanel({ onCollected }: { onCollected: () => void })
   const [configVersion, setConfigVersion] = useState(0)
   const lock = useRef(false)
   const requestId = useRef<string | null>(null)
+  const mutationVersion = useRef(0)
   const mounted = useRef(false)
   const reload = useRef(onCollected)
   reload.current = onCollected
@@ -68,8 +72,19 @@ export function ETFCollectionPanel({ onCollected }: { onCollected: () => void })
     async function poll() {
       let delay = 15000
       try {
+        const version = mutationVersion.current
         const next = await getETFCollectionStatus(controller.signal)
         if (!live) return
+        if (version !== mutationVersion.current || lock.current) {
+          timer = setTimeout(poll, 2000)
+          return
+        }
+        if (requestId.current && next.manual?.id === requestId.current) {
+          requestId.current = null
+          setUncertain(false)
+          setRetryExhausted(false)
+          setError('')
+        }
         const old = previous.current
         if (
           old &&
@@ -127,6 +142,8 @@ export function ETFCollectionPanel({ onCollected }: { onCollected: () => void })
     }
   }, [admin, configVersion])
   const running = active(status)
+  const manualActive = ['queued', 'running', 'cancelling'].includes(status?.manual?.status ?? '')
+  const cancelling = status?.manual?.status === 'cancelling'
   const insecure = config && !config.transport_secure
   const targetEdited =
     !!config &&
@@ -205,7 +222,7 @@ export function ETFCollectionPanel({ onCollected }: { onCollected: () => void })
         setPassword('')
         setMessage(
           targetEdited
-            ? '采集配置已保存。新数据库需重新同步ETF数据，其他模块不受影响。'
+            ? '采集配置已保存。新数据库历史需由聚宽脚本补齐，页面仅更新最新已收市交易日，其他模块不受影响。'
             : '采集配置已保存。',
         )
         reload.current()
@@ -226,6 +243,7 @@ export function ETFCollectionPanel({ onCollected }: { onCollected: () => void })
   async function run() {
     if (!admin || lock.current || running || !status?.configured) return
     lock.current = true
+    mutationVersion.current++
     setBusy('run')
     setError('')
     setMessage('')
@@ -239,7 +257,7 @@ export function ETFCollectionPanel({ onCollected }: { onCollected: () => void })
       requestId.current = null
       setUncertain(false)
       setRetryExhausted(false)
-      previous.current = { ...(previous.current ?? { status: 'configured' }), manual: result }
+      previous.current = withManualRun(previous.current ?? { status: 'configured' }, result)
       setStatus(previous.current)
       setMessage(`手动采集：${labels[result.status] ?? '状态待确认'}`)
       setRefresh((n) => n + 1)
@@ -254,6 +272,33 @@ export function ETFCollectionPanel({ onCollected }: { onCollected: () => void })
     } finally {
       lock.current = false
       if (mounted.current) setBusy('')
+    }
+  }
+  async function cancel() {
+    const manual = status?.manual
+    if (!admin || lock.current || !manual || !manualActive || cancelling) return
+    lock.current = true
+    mutationVersion.current++
+    setBusy('cancel')
+    setError('')
+    setMessage('')
+    try {
+      const result = await cancelCollection(manual.id)
+      if (!mounted.current) return
+      previous.current = withManualRun(previous.current ?? { status: 'configured' }, result)
+      setStatus(previous.current)
+      setMessage(`手动采集：${labels[result.status] ?? '状态待确认'}`)
+    } catch (e) {
+      if (mounted.current)
+        setError(
+          `${e instanceof Error ? collectionErrorMessage(e.message) : '取消请求失败'} 取消结果待确认，将继续查询状态；可重试取消同一任务。`,
+        )
+    } finally {
+      lock.current = false
+      if (mounted.current) {
+        setBusy('')
+        setRefresh((n) => n + 1)
+      }
     }
   }
   const progress = status?.progress
@@ -271,7 +316,8 @@ export function ETFCollectionPanel({ onCollected }: { onCollected: () => void })
           {status?.cache_pending && <p>采集已入库，等待图表缓存更新…</p>}
           {progress && (
             <p>
-              {phases[progress.phase] ?? '处理中'} · {progress.completed} / {progress.total}
+              {phases[progress.phase] ?? '处理中'} · 本轮目标日已处理 {progress.completed} /{' '}
+              {progress.total} 项目标
               <progress value={progress.completed} max={progress.total || 1} />
             </p>
           )}
@@ -286,28 +332,32 @@ export function ETFCollectionPanel({ onCollected }: { onCollected: () => void })
                   disabled={!!busy || running || uncertain}
                   onChange={(e) => setRetryExhausted(e.target.checked)}
                 />
-                重新尝试已耗尽重试的数据（{status.retry_exhausted_count}项）
+                重新尝试当前目标日已耗尽重试的数据（{status.retry_exhausted_count}项）
               </label>
             )}
-            {uncertain && <p>重试会沿用上次请求的补采选项。</p>}
+            {uncertain && <p>重试会沿用上次请求的日常采集选项，不新增历史补采。</p>}
+            {cancelling && <p>正在等待当前采集步骤结束，取消后可重新开始。</p>}
             <button
               className="button"
-              disabled={!!busy || running || !status?.configured}
-              onClick={() => void run()}
+              disabled={!!busy || (!manualActive && (running || !status?.configured))}
+              onClick={() => void (manualActive ? cancel() : run())}
             >
-              {busy === 'run'
-                ? '提交中…'
-                : running
-                  ? '正在采集…'
-                  : uncertain
-                    ? '重试同一采集请求'
-                    : '立即采集'}
+              {manualActive
+                ? '取消采集'
+                : busy === 'run'
+                  ? '提交中…'
+                  : running
+                    ? '自动采集中…'
+                    : uncertain
+                      ? '重试同一采集请求'
+                      : '立即采集'}
             </button>
           </div>
         )}
       </div>
       <p className="etf-collection-hint">
-        立即采集使用已保存配置；顶部刷新仅重读数据。自动采集关闭后仍可手动采集。
+        立即采集仅更新最新已收市交易日，使用已保存配置；顶部刷新仅重读数据。自动采集关闭后仍可手动更新。历史数据由聚宽平台脚本从
+        2024-01-01 起补齐。
       </p>
       {admin && (
         <details>
@@ -434,34 +484,9 @@ export function ETFCollectionPanel({ onCollected }: { onCollected: () => void })
                         旧时段已合并为每日一次，可调整时间并保存确认。
                       </p>
                     )}
-                    <div className="etf-collection-fields">
-                      <label>
-                        回溯天数
-                        <input
-                          type="number"
-                          min="1"
-                          max="1500"
-                          required
-                          value={config.lookback_days}
-                          onChange={(e) =>
-                            setConfig({ ...config, lookback_days: Number(e.target.value) })
-                          }
-                        />
-                      </label>
-                      <label>
-                        每批天数
-                        <input
-                          type="number"
-                          min="1"
-                          max="20"
-                          required
-                          value={config.batch_days}
-                          onChange={(e) =>
-                            setConfig({ ...config, batch_days: Number(e.target.value) })
-                          }
-                        />
-                      </label>
-                    </div>
+                    <p className="etf-collection-hint">
+                      历史数据由聚宽平台脚本从 2024-01-01 起补齐，本页面接口不回补历史。
+                    </p>
                   </section>
                 </div>
                 <div className="etf-collection-actions">
@@ -508,8 +533,8 @@ export function ETFCollectionPanel({ onCollected }: { onCollected: () => void })
       {message && <p role="status">{message}</p>}
       {!!status?.gap_count && (
         <p>
-          仍有 {status.gap_count}{' '}
-          项数据缺口，未耗尽重试的部分会继续补齐；已耗尽部分可勾选后手动重试。未核验历史数据不在重试范围内，历史目标不代表已经完成。
+          本轮目标日仍有 {status.gap_count}{' '}
+          项数据缺口；勾选重试仅重置当前日常目标，不回补历史。本次日常采集完成不代表历史数据齐全。
         </p>
       )}
       {!!status?.runs?.length && (

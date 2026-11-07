@@ -8,7 +8,14 @@ import { useResource } from '../hooks/useResource'
 import { ETFCollectionPanel } from '../components/ETFCollectionPanel'
 import { ETFChart } from '../components/ETFChart'
 import { LoadingState, ErrorState, EmptyState } from '../components/States'
-import { billionShares, etfColors, signedPercent, etfGroups, marketValueSeries } from '../lib/etf'
+import {
+  billionShares,
+  etfColors,
+  signedPercent,
+  etfGroups,
+  marketValueSeries,
+  chartSeries,
+} from '../lib/etf'
 import '../styles/etf.css'
 
 export function ETFPage() {
@@ -30,6 +37,11 @@ export function ETFPage() {
   const selectedFund = data?.funds.find((fund) => fund.code === selected)
   const questionableDays =
     data?.market_values?.filter((point) => point.quality_flags?.length).length ?? 0
+  const sharesHaveGaps =
+    data &&
+    chartSeries(data, false, selected).series.some((series) =>
+      series.values.some((value) => value === null),
+    )
   const hasMarketValue =
     data && marketValueSeries(data).series[0].values.some((value) => value != null)
   return (
@@ -200,6 +212,11 @@ export function ETFPage() {
                     </button>
                   )}
                 </div>
+                {!marketValue && sharesHaveGaps && (
+                  <p role="status" className="etf-collection-hint">
+                    所选区间存在未采齐或暂无可用份额的交易日，按交易日保留空白；不补值、不跨缺口连线。
+                  </p>
+                )}
                 {marketValue && !hasMarketValue ? (
                   <EmptyState
                     title={questionableDays ? '流通市值数据待核验' : '流通市值数据未齐'}
@@ -244,7 +261,10 @@ export function ETFPage() {
                     </p>
                   )}
                   {data.funds.some((fund) => fund.code.endsWith('.XSHE')) && (
-                    <p>深市仅使用已核验的收盘价日期，更早历史缺价保留空白，随后按日积累。</p>
+                    <p>
+                      深市历史收盘价受数据源及核验范围限制，仅使用已核验日期；缺价保留空白。页面日常采集不回补更早历史，历史数据请通过聚宽平台脚本从
+                      2024-01-01 起补齐。
+                    </p>
                   )}
                 </div>
               </aside>

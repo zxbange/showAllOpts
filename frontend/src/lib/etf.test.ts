@@ -6,6 +6,7 @@ import {
   showETFSymbols,
   collectionSummary,
   collectionErrorMessage,
+  withManualRun,
 } from './etf'
 import type { ETFHistory } from '../types/etf'
 
@@ -122,7 +123,7 @@ it('never presents missing writer configuration or denied writes as running coll
       schedule: ['09:30', '11:30', '18:30'],
       target_sessions: 300,
     }),
-  ).toContain('按批次补采')
+  ).toContain('仅更新最新已收市交易日')
 })
 
 it('renders collection errors without raw internal codes', () => {
@@ -138,5 +139,88 @@ it('renders collection errors without raw internal codes', () => {
 it('connection failures refer to database settings without a TLS option', () => {
   expect(collectionErrorMessage('writer_connection_failed')).toBe(
     '无法连接数据库，请检查网络、账号和数据库配置。',
+  )
+})
+
+it('retains calendar dates with no shares instead of jumping across missing history', () => {
+  const data = {
+    funds: [
+      {
+        code: 'A',
+        name: 'A',
+        points: [
+          { date: '2026-01-14', shares: '100000000', change_pct: 0 },
+          { date: '2026-11-06', shares: '200000000', change_pct: 100 },
+        ],
+      },
+    ],
+    market_values: [
+      { date: '2026-01-14', market_value: null },
+      { date: '2026-01-15', market_value: null },
+      { date: '2026-11-05', market_value: null },
+      { date: '2026-11-06', market_value: null },
+    ],
+  } as ETFHistory
+  const shares = chartSeries(data, false, null)
+  expect(shares.dates).toEqual(['2026-01-14', '2026-01-15', '2026-11-05', '2026-11-06'])
+  expect(shares.series[0].values).toEqual([1, null, null, 2])
+  expect(chartSeries(data, true, 'A').series[0].values).toEqual([0, null, null, 100])
+  expect(marketValueSeries(data).dates).toEqual(shares.dates)
+})
+
+it('distinguishes pending, restricted and exhausted history even when automatic collection is disabled', () => {
+  const summary = collectionSummary({
+    status: 'disabled',
+    history_complete: false,
+    pending_count: 12,
+    blocked_count: 3,
+    retry_exhausted_count: 2,
+  })
+  expect(summary).toContain('自动采集已关闭')
+  expect(summary).not.toContain('历史数据未采齐')
+  expect(summary).toContain('本轮目标日仍有 12 项待采集')
+  expect(summary).toContain('3 项受数据源可用性或核验限制')
+  expect(summary).toContain('2 项已达到自动重试上限')
+  expect(
+    collectionSummary({
+      status: 'disabled',
+      manual: { id: 'job', status: 'partial', history_complete: false, pending_count: 4 },
+    }),
+  ).toContain('本轮目标日仍有 4 项待采集')
+})
+
+it('clears stale progress after terminal manual responses but retains active progress', () => {
+  const status = {
+    status: 'running',
+    configured: true,
+    enabled: false,
+    progress: { phase: 'fetching', completed: 1, total: 10 },
+  }
+  for (const terminal of ['cancelled', 'complete', 'partial', 'failed', 'interrupted']) {
+    const next = withManualRun(status, { id: 'job', status: terminal })
+    expect(next.status).toBe('disabled')
+    expect(next.progress).toBeNull()
+    expect(next.manual?.status).toBe(terminal)
+  }
+  for (const active of ['queued', 'running', 'cancelling']) {
+    expect(withManualRun(status, { id: 'job', status: active }).progress).toEqual(status.progress)
+  }
+})
+
+it('separates daily interface collection from JoinQuant history starting in 2024', () => {
+  const summary = collectionSummary({
+    status: 'configured',
+    worker_running: true,
+    collection_scope: 'latest_completed_session',
+    history_complete: false,
+    target_sessions: 300,
+    schedule: ['09:00'],
+  })
+  expect(summary).toContain('仅更新最新已收市交易日')
+  expect(summary).toContain('2024-01-01')
+  expect(summary).toContain('日常采集完成不代表历史齐全')
+  expect(summary).not.toContain('历史目标 300')
+  expect(collectionSummary({ status: 'disabled', retry_exhausted_count: 2 })).toContain(
+    '勾选重试仅重置当前日常目标，不回补历史',
   )
 })

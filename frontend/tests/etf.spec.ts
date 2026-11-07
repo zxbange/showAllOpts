@@ -121,7 +121,7 @@ test('one ETF entry, seven indices, aggregate toggle, range and history navigati
   await expectCollectionLast(page, '.etf-method-note')
   await expect(page.getByText('流通市值口径', { exact: true })).toBeVisible()
   await expect(page.getByText(/1 个交易日因疑似份额拆并或异常跳变/)).toBeVisible()
-  await expect(page.getByText(/深市仅使用已核验的收盘价日期/)).toBeVisible()
+  await expect(page.getByText(/深市历史收盘价受数据源及核验范围限制/)).toBeVisible()
   await expect(page.getByText(/清单不覆盖该指数全部/)).toHaveCount(0)
   await expect(page.locator('.etf-card')).toHaveCount(0)
   await expect(page.getByRole('button', { name: '显示全部 ETF' })).toHaveCount(0)

@@ -620,6 +620,10 @@ LOG_RETENTION_DAYS=30
 
 `LOG_LEVEL` 支持 DEBUG / INFO / WARNING / ERROR / CRITICAL；INFO 包含常规访问日志。相对 `LOG_DIR` 以项目根目录为基准，所有写入同一目录的进程应使用相同轮转设置；修改后需重启。Docker 容器的本地时区通常是 UTC，日志时间会明确显示时区偏移。
 
+`uvicorn.access` 是 HTTP 访问记录，行末的 `200`、`409` 是响应状态码，并不是数据库错误码。为减少页面轮询噪声，默认仅省略 `GET /api/v1/etf-shares/collection-status` 和 `GET /api/v1/cache/status` 的 **2xx 与 304** 访问日志（含查询参数）。这两个接口的其他状态、所有 POST、其他接口和应用告警/错误仍保留；不要通过提高全局日志级别来隐藏重要诊断。
+
+ETF 连接测试及采集写入失败会在 `app.log` 和 `error.log` 记录 `ETF database failure`，包含操作、失败阶段、检查的固定表名、目标指纹、原始异常类型、MySQL 错误码、系统错误码及安全原因。例如 `stage=table_check table=etf_share_daily mysql_code=1146 reason=table_missing` 表示缺少这张表；`1045/authentication_failed` 表示认证被拒；`1142/table_permission_denied` 表示表操作权限不足；`2003/connection_failed` 表示连接失败。自定义目标还可区分 DNS 解析、地址校验、TCP 连接及 MySQL 握手阶段。目标只记录不可直接还原的指纹，不记录主机、账号、库名、密码、原始 SQL、参数或原始异常文本；页面继续返回安全错误。历史访问日志无法补回此前未记录的数据库原因，更新并重启后需重新点击“测试连接”生成诊断。
+
 升级旧环境时，先安装新增依赖（项目根目录，按系统选择一条），再重启：
 
 ```bash
@@ -725,4 +729,6 @@ grep -E 'Cache ownership page|Cache read failed|Cache refresh retry' log/app.log
 
 ## 国家队动态页面采集配置
 
-管理员可在「市场情绪 → 国家队动态 → 采集配置」配置数据库主机、端口、库名及账号密码，测试连接、调整每日一次的采集时间和补采范围，并用「立即采集」查看异步进度。无需编辑后台配置或运行采集命令。凭据只通过 HTTPS 提交并加密持久保存，原应用配置与历史数据保留。切换数据库后仅ETF缓存需要重新同步，其他模块不受影响。完整操作、权限和数据限制见 [ETF页面采集说明](docs/etf-collection.md)。
+管理员可在「市场情绪 → 国家队动态 → 采集配置」配置数据库连接、测试连接和每日采集时间。「立即采集」异步更新最新已收市交易日，运行中按钮变为可点击的「取消采集」，取消后可再次启动新一轮。2024-01-01起的历史由聚宽平台脚本手动补齐，不再通过页面接口补历史；入库后同步ETF缓存。缺失数据保持断线，市值不会用不完整成分或未经核验的价格凑值。凭据只通过HTTPS提交并加密持久保存，原应用配置与历史数据保留。完整操作、权限和数据限制见 [ETF页面采集说明](docs/etf-collection.md)。
+
+聚宽研究平台的完整独立脚本为 [ETF历史补采_聚宽研究版.py](collectors/ETF历史补采_聚宽研究版.py)，默认仅预览，不连接或写入MySQL。核对单位、日期和目标后再显式写入，已有记录不覆盖。步骤与限制见 [聚宽历史补采说明](docs/etf-joinquant-history.md)。

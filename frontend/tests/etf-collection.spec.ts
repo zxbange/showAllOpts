@@ -44,11 +44,12 @@ test('edits configuration, retains password only for same account, and tests rea
   )
   await page.goto('/etf-shares')
   await page.getByText('采集配置', { exact: true }).click()
-  await page.getByLabel('回溯天数').fill('500')
+  await expect(page.getByLabel('回溯天数')).toHaveCount(0)
+  await expect(page.getByLabel('每批天数')).toHaveCount(0)
   await page.getByLabel('启用自动采集').check()
   await page.getByRole('button', { name: '保存采集配置', exact: true }).click()
   await expect(page.getByText('采集配置已保存。')).toBeVisible()
-  expect(bodies[0]).toMatchObject({ lookback_days: 500, enabled: true })
+  expect(bodies[0]).toMatchObject({ lookback_days: 400, batch_days: 5, enabled: true })
   expect(bodies[0]).not.toHaveProperty('password')
   await page.getByLabel('采集写入账号').fill('other')
   await expect(page.getByRole('button', { name: '保存采集配置', exact: true })).toBeDisabled()
@@ -110,13 +111,13 @@ test('uncertain manual submission reuses request id and repeated clicks are lock
     } else await r.fulfill({ status: 202, json: { id: ids[0], status: 'queued' } })
   })
   await page.goto('/etf-shares')
-  await page.getByLabel('重新尝试已耗尽重试的数据（3项）').check()
+  await page.getByLabel('重新尝试当前目标日已耗尽重试的数据（3项）').check()
   await page.getByRole('button', { name: '立即采集', exact: true }).click()
   await expect(page.getByRole('button', { name: '提交中…' })).toBeDisabled()
   expect(ids).toHaveLength(1)
   finish()
   await expect(page.getByRole('button', { name: '重试同一采集请求' })).toBeVisible()
-  await expect(page.getByLabel('重新尝试已耗尽重试的数据（3项）')).toBeDisabled()
+  await expect(page.getByLabel('重新尝试当前目标日已耗尽重试的数据（3项）')).toBeDisabled()
   await page.getByRole('button', { name: '重试同一采集请求' }).click()
   await expect.poll(() => ids.length).toBe(2)
   expect(ids[0]).toBe(ids[1])
@@ -352,7 +353,9 @@ test('custom database requires a fresh password and reloads ETF data', async ({ 
   await page.getByLabel('数据库密码', { exact: true }).fill('fresh-test-password')
   await page.getByRole('button', { name: '保存采集配置', exact: true }).click()
   await expect(
-    page.getByText('采集配置已保存。新数据库需重新同步ETF数据，其他模块不受影响。'),
+    page.getByText(
+      '采集配置已保存。新数据库历史需由聚宽脚本补齐，页面仅更新最新已收市交易日，其他模块不受影响。',
+    ),
   ).toBeVisible()
   expect(body).toMatchObject({
     host: 'custom.example',
@@ -378,4 +381,122 @@ test('changing a local target to remote needs only fresh credentials, not a tran
   await page.getByLabel('数据库密码', { exact: true }).fill('fresh-test-password')
   await expect(page.getByRole('button', { name: '保存采集配置', exact: true })).toBeEnabled()
   await expect(page.getByText(/TLS|我接受保存此配置/)).toHaveCount(0)
+})
+
+test('manual runs remain cancellable and each new round gets a fresh id', async ({ page }) => {
+  const ids: string[] = []
+  const cancelled: string[] = []
+  let manual: { id: string; status: string } | null = null
+  let release!: () => void
+  const hold = new Promise<void>((resolve) => {
+    release = resolve
+  })
+  await page.clock.install()
+  await page.route('**/api/v1/etf-shares/collection-status', (r) =>
+    r.fulfill({ json: { ...ready, manual } }),
+  )
+  await page.route('**/api/v1/etf-shares/collection-run', (r) => {
+    ids.push(r.request().postDataJSON().request_id)
+    manual = { id: ids.at(-1)!, status: 'queued' }
+    return r.fulfill({ status: 202, json: manual })
+  })
+  await page.route('**/api/v1/etf-shares/collection-cancel', async (r) => {
+    cancelled.push(r.request().postDataJSON().request_id)
+    expect(r.request().headers()['x-csrf-token']).toBe('test-csrf')
+    await hold
+    manual = { id: cancelled.at(-1)!, status: 'cancelling' }
+    await r.fulfill({ json: manual })
+  })
+  await page.goto('/etf-shares')
+  await page.getByRole('button', { name: '立即采集', exact: true }).click()
+  const cancel = page.getByRole('button', { name: '取消采集', exact: true })
+  await expect(cancel).toBeEnabled()
+  await cancel.click()
+  await expect(cancel).toBeDisabled()
+  release()
+  await expect(page.getByText('正在等待当前采集步骤结束，取消后可重新开始。')).toBeVisible()
+  await expect(cancel).toBeEnabled()
+  await cancel.click()
+  await cancel.click()
+  expect(cancelled).toEqual([ids[0]])
+  manual = { id: ids[0], status: 'cancelled' }
+  await page.clock.fastForward(2100)
+  await page.getByRole('button', { name: '立即采集', exact: true }).click()
+  await expect(cancel).toBeEnabled()
+  expect(ids).toHaveLength(2)
+  expect(ids[1]).not.toBe(ids[0])
+  manual = { id: ids[1], status: 'complete' }
+  await page.clock.fastForward(2100)
+  await page.getByRole('button', { name: '立即采集', exact: true }).click()
+  await expect(cancel).toBeEnabled()
+  expect(new Set(ids).size).toBe(3)
+})
+
+test('an uncertain start resolves through polling without reusing its id for a new round', async ({
+  page,
+}) => {
+  const ids: string[] = []
+  let manual: { id: string; status: string } | null = null
+  await page.route('**/api/v1/etf-shares/collection-status', (r) =>
+    r.fulfill({ json: { ...ready, manual } }),
+  )
+  await page.route('**/api/v1/etf-shares/collection-run', (r) => {
+    ids.push(r.request().postDataJSON().request_id)
+    manual = { id: ids.at(-1)!, status: 'complete' }
+    return r.abort()
+  })
+  await page.goto('/etf-shares')
+  await page.getByRole('button', { name: '立即采集', exact: true }).click()
+  await expect(page.getByText('手动采集：本次日常采集完成', { exact: true })).toBeVisible()
+  await page.getByRole('button', { name: '立即采集', exact: true }).click()
+  await expect.poll(() => ids.length).toBe(2)
+  expect(ids[0]).not.toBe(ids[1])
+})
+
+test('automatic collection cannot be cancelled as a manual task', async ({ page }) => {
+  let cancels = 0
+  await page.route('**/api/v1/etf-shares/collection-status', (r) =>
+    r.fulfill({
+      json: {
+        ...ready,
+        status: 'running',
+        manual: { id: 'old', status: 'complete' },
+        progress: { phase: 'fetching', completed: 1, total: 10 },
+      },
+    }),
+  )
+  await page.route('**/api/v1/etf-shares/collection-cancel', (r) => {
+    cancels++
+    return r.abort()
+  })
+  await page.goto('/etf-shares')
+  await expect(page.getByRole('button', { name: '取消采集', exact: true })).toHaveCount(0)
+  await expect(page.getByRole('button', { name: '自动采集中…', exact: true })).toBeDisabled()
+  expect(cancels).toBe(0)
+})
+
+test('uncertain cancellation retries only the current manual task', async ({ page }) => {
+  const ids: string[] = []
+  let starts = 0
+  let manual = { id: 'existing-job', status: 'running' }
+  await page.route('**/api/v1/etf-shares/collection-status', (r) =>
+    r.fulfill({ json: { ...ready, manual } }),
+  )
+  await page.route('**/api/v1/etf-shares/collection-run', (r) => {
+    starts++
+    return r.abort()
+  })
+  await page.route('**/api/v1/etf-shares/collection-cancel', (r) => {
+    ids.push(r.request().postDataJSON().request_id)
+    if (ids.length === 1) return r.abort()
+    manual = { ...manual, status: 'cancelled' }
+    return r.fulfill({ json: manual })
+  })
+  await page.goto('/etf-shares')
+  await page.getByRole('button', { name: '取消采集', exact: true }).click()
+  await expect(page.getByText(/取消结果待确认/)).toBeVisible()
+  await page.getByRole('button', { name: '取消采集', exact: true }).click()
+  await expect(page.getByRole('button', { name: '立即采集', exact: true })).toBeEnabled()
+  expect(ids).toEqual(['existing-job', 'existing-job'])
+  expect(starts).toBe(0)
 })

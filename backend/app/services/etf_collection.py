@@ -10,7 +10,8 @@ import threading
 import logging
 import json
 
-from app.services.etf_configuration import ETFConfiguration, ConfigurationFailure, DEFAULT_COLLECTION_TIME
+from app.services.etf_configuration import ETFConfiguration, ConfigurationFailure, DEFAULT_COLLECTION_TIME, target_key
+from app.services.etf_diagnostics import log_database_failure
 
 import httpx
 import portalocker
@@ -20,6 +21,28 @@ from sqlalchemy.engine import make_url
 LOG = logging.getLogger(__name__)
 CHINA = ZoneInfo('Asia/Shanghai')
 TIMES = (tuple(map(int, DEFAULT_COLLECTION_TIME.split(':'))),)
+
+
+class CollectionInterrupted(RuntimeError):
+    """Stop at a safe boundary without abandoning a database transaction."""
+
+
+class CollectionCancelled(CollectionInterrupted):
+    """A durable, run-specific manual cancellation was requested."""
+
+
+class CancellableHTTPClient:
+    def __init__(self, client, check):
+        self.client, self.check = client, check
+
+    def __getattr__(self, name):
+        return getattr(self.client, name)
+
+    def get(self, *args, **kwargs):
+        self.check()
+        result = self.client.get(*args, **kwargs)
+        self.check()
+        return result
 
 
 class WriterFailure(RuntimeError):
@@ -123,6 +146,7 @@ class ETFCollection:
         try:
             with portalocker.Lock(str(self.root / 'collection.lock'), timeout=0):
                 with self.connect() as db:
+                    self._recover_manual_runs(db, reason='configuration_changed')
                     db.execute("UPDATE manual_runs SET status='interrupted',phase='interrupted',error='configuration_changed' WHERE status IN ('queued','running')")
                     db.execute("DELETE FROM metadata WHERE key='progress'")
         except portalocker.exceptions.LockException:
@@ -138,18 +162,25 @@ class ETFCollection:
         state = dict(enabled=config['enabled'], configured=not issue, ready=not issue,
                      status=issue or ('configured' if config['enabled'] else 'disabled'),
                      disabled_reason=issue, worker_running=bool(self.worker and self.worker.is_alive()),
-                     timezone='Asia/Shanghai', schedule=config['schedule'], target_sessions=config['lookback_days'],
-                     historical_dates_per_run=config['batch_days'], coverage_is_target_not_completion=True,
+                     timezone='Asia/Shanghai', schedule=config['schedule'], target_sessions=1,
+                     collection_scope='latest_completed_session', historical_backfill='joinquant_manual',
+                     historical_dates_per_run=0, coverage_is_target_not_completion=True,
                      manual=None, progress=None, runs=[], gaps=[], metadata={})
         if not (self.root / 'state.sqlite').exists():
             return state
         with self.connect() as db:
-            # Keep responses bounded even at the maximum historical target.
-            state['gaps'] = [dict(r) for r in db.execute("SELECT * FROM observations WHERE status != 'complete' ORDER BY day,code,kind LIMIT 500")]
-            state['retry_exhausted_count'] = db.execute("SELECT COUNT(*) FROM observations WHERE status='retry_exhausted'").fetchone()[0]
-            state['gap_count'] = db.execute("SELECT COUNT(*) FROM observations WHERE status != 'complete'").fetchone()[0]
             state['runs'] = [dict(r) for r in db.execute('SELECT * FROM slots ORDER BY slot DESC LIMIT 9')]
             state['metadata'] = dict(db.execute('SELECT key,value FROM metadata').fetchall())
+            latest = state['metadata'].get('coverage_end')
+            where, values = ('day=?', (latest,)) if latest else ('0=1', ())
+            counts = dict(db.execute(f'SELECT status,COUNT(*) FROM observations WHERE {where} GROUP BY status', values))
+            state['pending_count'] = counts.get('pending', 0)
+            state['blocked_count'] = counts.get('blocked_unverified_history', 0)
+            state['retry_exhausted_count'] = counts.get('retry_exhausted', 0)
+            state['gap_count'] = sum(count for status, count in counts.items() if status != 'complete')
+            # Keep responses bounded; counts cover the complete current target window.
+            state['gaps'] = [dict(r) for r in db.execute(
+                f"SELECT * FROM observations WHERE {where} AND status!='complete' ORDER BY day,code,kind LIMIT 500", values)]
             manual_after = int(state['metadata'].get('manual_after_rowid', '0'))
             row = db.execute('SELECT * FROM manual_runs WHERE rowid>? ORDER BY rowid DESC LIMIT 1', (manual_after,)).fetchone()
             state['manual'] = dict(row) if row else None
@@ -200,14 +231,14 @@ class ETFCollection:
                     if row:
                         return dict(row)
                     # Acquiring the shared lock proves no running job still owns it.
-                    db.execute("UPDATE manual_runs SET status='interrupted',error='service_interrupted' WHERE status='running'")
+                    self._recover_manual_runs(db)
                     row = db.execute("SELECT * FROM manual_runs WHERE status='queued' LIMIT 1").fetchone()
                     if row:
                         if row['id'] == request_id:
                             return dict(row)
                         raise ConfigurationFailure('已有采集任务排队，请勿重复触发')
                     if retry_exhausted:
-                        db.execute("UPDATE observations SET status='pending',attempts=0 WHERE status='retry_exhausted'")
+                        db.execute("UPDATE observations SET status='pending',attempts=0 WHERE status='retry_exhausted' AND day=(SELECT value FROM metadata WHERE key='coverage_end')")
                     db.execute('INSERT INTO manual_runs(id,status,requested_at,phase) VALUES (?,?,?,?)',
                                (request_id, 'queued', self.clock().isoformat(), 'queued'))
                     result = dict(db.execute('SELECT * FROM manual_runs WHERE id=?', (request_id,)).fetchone())
@@ -216,6 +247,38 @@ class ETFCollection:
         self.start()
         self.wake_event.set()
         return result
+
+    @staticmethod
+    def _recover_manual_runs(db, reason='service_interrupted'):
+        # Call only while owning collection.lock: no other worker can still run.
+        db.execute("UPDATE manual_runs SET status='cancelled',phase='cancelled',error=NULL WHERE status='cancelling'")
+        db.execute("UPDATE manual_runs SET status='interrupted',phase='interrupted',error=? WHERE status='running'", (reason,))
+
+    def request_cancel(self, request_id):
+        # The worker owns collection.lock for its entire run. Do not wait for that
+        # lock before recording cancellation: another API process must be able to
+        # cancel while a network call or a MySQL transaction is still in flight.
+        with self.connect() as db:
+            db.execute("""UPDATE manual_runs SET
+                phase=CASE WHEN status='queued' THEN 'cancelled' ELSE phase END,
+                status=CASE WHEN status='queued' THEN 'cancelled' ELSE 'cancelling' END,
+                error=NULL WHERE id=? AND status IN ('queued','running')""", (request_id,))
+            row = db.execute('SELECT * FROM manual_runs WHERE id=?', (request_id,)).fetchone()
+            if row is None:
+                raise ConfigurationFailure('未找到该手动采集任务，请刷新采集状态')
+        try:
+            with portalocker.Lock(str(self.root / 'collection.lock'), timeout=0):
+                with self.connect() as db:
+                    # Recover an already-dead worker immediately, without starting
+                    # another collection or mistaking a completed run for cancelled.
+                    changed = db.execute("UPDATE manual_runs SET status='cancelled',phase='cancelled',error=NULL WHERE id=? AND status='cancelling'",
+                                         (request_id,)).rowcount
+                    if changed:
+                        db.execute("DELETE FROM metadata WHERE key='progress'")
+        except portalocker.exceptions.LockException:
+            pass
+        with self.connect() as db:
+            return dict(db.execute('SELECT * FROM manual_runs WHERE id=?', (request_id,)).fetchone())
 
     def start(self):
         with self.thread_lock:
@@ -230,7 +293,7 @@ class ETFCollection:
             try:
                 with portalocker.Lock(str(self.root / 'collection.lock'), timeout=0):
                     with self.connect() as db:
-                        db.execute("UPDATE manual_runs SET status='interrupted',error='service_interrupted' WHERE status='running'")
+                        self._recover_manual_runs(db)
                         db.execute("DELETE FROM metadata WHERE key='progress'")
             except portalocker.exceptions.LockException:
                 pass
@@ -266,12 +329,14 @@ class ETFCollection:
                 config = self.configuration.load()
                 with self.connect() as db:
                     self._refresh(db)
-                    db.execute("UPDATE manual_runs SET status='interrupted',error='service_interrupted' WHERE status='running'")
+                    self._recover_manual_runs(db)
                     db.execute("DELETE FROM metadata WHERE key='progress'")
                     manual = db.execute("SELECT * FROM manual_runs WHERE status='queued' ORDER BY rowid LIMIT 1").fetchone()
                     if manual:
-                        db.execute("UPDATE manual_runs SET status='running',phase='calendar' WHERE id=?", (manual['id'],))
+                        claimed = db.execute("UPDATE manual_runs SET status='running',phase='calendar' WHERE id=? AND status='queued'", (manual['id'],)).rowcount
                         db.commit()
+                        if not claimed:
+                            return False  # Cancellation won the queue-claim race.
                         return self._run(db, moment.astimezone(CHINA), config, manual_id=manual['id'])
                     if not config['enabled']:
                         return False
@@ -306,17 +371,30 @@ class ETFCollection:
             return False
 
     def _run(self, db, slot, config, *, key=None, manual_id=None):
+        def check_cancelled():
+            if manual_id:
+                row = db.execute('SELECT status FROM manual_runs WHERE id=?', (manual_id,)).fetchone()
+                if row and row['status'] in ('cancelling', 'cancelled'):
+                    raise CollectionCancelled()
+            if self.stop_event.is_set():
+                raise CollectionInterrupted()
+
         def progress(phase, completed=0, total=0):
+            check_cancelled()
             db.execute("INSERT OR REPLACE INTO metadata VALUES ('progress',?)",
                        (json.dumps(dict(phase=phase, completed=completed, total=total)),))
             if manual_id:
                 db.execute('UPDATE manual_runs SET phase=?,completed=?,total=? WHERE id=?',
                            (phase, completed, total, manual_id))
             db.commit()
-        progress('calendar')
         try:
-            complete = self._collect(db, slot, config=config, progress=progress)
+            progress('calendar')
+            complete = self._collect(db, slot, config=config, progress=progress,
+                                     check_cancelled=check_cancelled, manual=manual_id is not None)
+            check_cancelled()
             state, error = ('complete' if complete else 'partial'), None
+        except CollectionCancelled:
+            state, error, complete = 'cancelled', None, False
         except Exception as exc:
             state, error = 'failed', exc.code if isinstance(exc, WriterFailure) else 'source_unavailable'
             if self.stop_event.is_set():
@@ -325,7 +403,15 @@ class ETFCollection:
                 db.execute("INSERT OR REPLACE INTO metadata VALUES ('writer_error',?)", (exc.code,))
             complete = False
         if manual_id:
-            db.execute('UPDATE manual_runs SET status=?,error=?,phase=? WHERE id=?', (state, error, state, manual_id))
+            # The single SQL update arbitrates a late cancel against completion.
+            # A cancel accepted before this update must never be reported complete.
+            db.execute("""UPDATE manual_runs SET
+                phase=CASE WHEN status='cancelling' THEN 'cancelled' ELSE ? END,
+                error=CASE WHEN status='cancelling' THEN NULL ELSE ? END,
+                status=CASE WHEN status='cancelling' THEN 'cancelled' ELSE ? END
+                WHERE id=? AND status IN ('running','cancelling')""", (state, error, state, manual_id))
+            terminal = db.execute('SELECT status FROM manual_runs WHERE id=?', (manual_id,)).fetchone()
+            complete = complete and terminal['status'] == 'complete'
         else:
             db.execute('UPDATE slots SET status=?,error=? WHERE slot=?', (state, error, key))
         db.execute("DELETE FROM metadata WHERE key='progress'")
@@ -350,14 +436,17 @@ class ETFCollection:
         except Exception as exc:
             LOG.warning('ETF cache publish failed: %s', type(exc).__name__)
 
-    def _collect(self, db, slot, config=None, progress=None):
+    def _collect(self, db, slot, config=None, progress=None, check_cancelled=None, manual=False):
         config = config or self.configuration.load()
         progress = progress or (lambda *args: None)
+        check_cancelled = check_cancelled or (lambda: None)
+        check_cancelled()
         c = self.collector or collector_module()
         funds = c.catalog()
         with self.client_factory() as http:
-            client = c.ExchangeClient(http)
+            client = c.ExchangeClient(CancellableHTTPClient(http, check_cancelled))
             calendar = client.calendar()
+            check_cancelled()
             if hasattr(client, 'prices'):
                 fetch_prices, price_cache, price_errors = client.prices, {}, {}
                 def cached_prices(code):
@@ -384,72 +473,65 @@ class ETFCollection:
                             raise
                     return share_cache[day]
                 client.sse_shares = cached_shares
-            start, end = calendar.default_range(config['lookback_days'])
-            cutoff = slot.date() if slot.hour >= 18 else slot.date() - timedelta(days=1)
-            if end > cutoff:
-                while end > cutoff:
-                    end = calendar.previous(end)
-                start = end
-                for _ in range(config['lookback_days'] - 1):
-                    start = calendar.previous(start)
-            days = calendar.range(start, end)
-            for day in days:
-                for code in funds:
-                    for kind in ('shares', 'prices'):
-                        state = 'blocked_unverified_history' if kind == 'prices' and code.endswith('.XSHE') and day != end else 'pending'
-                        db.execute('INSERT OR IGNORE INTO observations(kind,code,day,status) VALUES (?,?,?,?)',
-                                   (kind, code, day.isoformat(), state))
-            db.execute("INSERT OR REPLACE INTO metadata VALUES ('coverage_start',?)", (min(days).isoformat(),))
-            db.execute("INSERT OR REPLACE INTO metadata VALUES ('coverage_end',?)", (end.isoformat(),))
-            # A missed Shenzhen same-day close cannot be recovered from a later intraday quote.
-            db.execute("UPDATE observations SET status='blocked_unverified_history' WHERE kind='prices' AND code LIKE '%.XSHE' AND day<? AND status!='complete'", (end.isoformat(),))
-            db.commit()
-            rows = db.execute("SELECT DISTINCT day FROM observations WHERE status='pending' AND attempts<6 AND day<=? ORDER BY day LIMIT ?",
-                              (end.isoformat(), config['batch_days'])).fetchall()
-            selected = sorted({end, *(datetime.fromisoformat(r[0]).date() for r in rows)})
-            shares, prices, attempted = [], [], set()
-            completed = 0
-            total = len(selected) * len(funds) * 2
-            progress('fetching', completed, total)
-            for day in selected:
-                if self.stop_event.is_set():
-                    raise RuntimeError('Collection stopped')
+            # Historical backfill belongs to the explicit JoinQuant script. The
+            # daily exchange job only refreshes the latest confirmed closed session.
+            _, end = calendar.default_range(1)
+            cutoff = slot.date() if slot.hour >= 15 else slot.date() - timedelta(days=1)
+            while end > cutoff:
+                end = calendar.previous(end)
+            for code in funds:
                 for kind in ('shares', 'prices'):
-                    wanted = {code: name for code, name in funds.items() if
-                              (kind == 'shares' and day == end) or
-                              db.execute("SELECT 1 FROM observations WHERE kind=? AND code=? AND day=? AND status='pending' AND attempts<6",
-                                         (kind, code, day.isoformat())).fetchone()}
-                    if not wanted:
+                    db.execute('INSERT OR IGNORE INTO observations(kind,code,day,status) VALUES (?,?,?,?)',
+                               (kind, code, end.isoformat(), 'pending'))
+            db.execute("INSERT OR REPLACE INTO metadata VALUES ('coverage_start',?)", (end.isoformat(),))
+            db.execute("INSERT OR REPLACE INTO metadata VALUES ('coverage_end',?)", (end.isoformat(),))
+            db.execute("INSERT OR REPLACE INTO metadata VALUES ('coverage_target_sessions','1')")
+            db.commit()
+            exhausted = {(row['kind'], row['code']) for row in db.execute(
+                "SELECT kind,code FROM observations WHERE day=? AND status='retry_exhausted'", (end.isoformat(),))}
+            targets = {(kind, code) for kind in ('shares', 'prices') for code in funds
+                       if manual or (kind, code) not in exhausted}
+            shares, prices, attempted = [], [], set()
+            completed, total = 0, len(targets)
+            for kind in ('shares', 'prices'):
+                for code, name in funds.items():
+                    if (kind, code) not in targets:
                         continue
-                    for code, name in wanted.items():
-                        completed += 1
-                        progress('fetching', completed, total)
-                        attempted.add((kind, code, day.isoformat()))
-                        try:
-                            s, p, _ = c.collect(client, day, day, funds={code: name}, calendar=calendar,
-                                                include_prices=kind == 'prices', include_shares=kind == 'shares')
-                        except Exception as exc:
-                            # Isolate source failures to the exact observation. Other fetched
-                            # observations still reach the writer; no quota is charged yet.
-                            LOG.warning('ETF source observation failed: %s', type(exc).__name__)
-                            continue
+                    progress('fetching', completed, total)
+                    attempted.add((kind, code, end.isoformat()))
+                    try:
+                        s, p, _ = c.collect(client, end, end, funds={code: name}, calendar=calendar,
+                                            include_prices=kind == 'prices', include_shares=kind == 'shares')
+                        check_cancelled()
+                    except CollectionInterrupted:
+                        raise
+                    except Exception as exc:
+                        LOG.warning('ETF source observation failed: %s', type(exc).__name__)
+                    else:
                         shares.extend(s)
                         prices.extend(p)
+                    completed += 1
+                    progress('fetching', completed, total)
             engine = None
+            stage = 'engine_create'
             try:
                 progress('writing', completed, total)
-                # Page and legacy environment writers must share the same fixed
-                # ETF transport policy; never hand the raw legacy URL to a driver.
                 engine = self.configuration.engine(config)
+                check_cancelled()
+                stage = 'write_records'
                 c.write_records(engine, shares, prices, calendar=calendar)
+            except CollectionInterrupted:
+                raise
             except Exception as exc:
+                log_database_failure(exc, operation='collection-write', stage=stage,
+                                     target=target_key(config)[:12])
                 raise WriterFailure(writer_error_code(exc)) from None
             finally:
                 if engine is not None:
                     engine.dispose()
             db.execute("INSERT OR REPLACE INTO metadata VALUES ('writer_error','')")
-            # A crash after the DB commit only causes an idempotent replay, never a skipped gap.
-            # Writer failure reaches none of these quota updates.
+            # Charge only committed attempts. Preserve old values on an incomplete
+            # source response, but do not mistake them for fresh verification.
             for kind, code, day in attempted:
                 db.execute('UPDATE observations SET attempts=attempts+1 WHERE kind=? AND code=? AND day=?',
                            (kind, code, day))
@@ -457,13 +539,12 @@ class ETFCollection:
                 for record in records:
                     db.execute("UPDATE observations SET status='complete' WHERE kind=? AND code=? AND day=?",
                                (kind, record['fund_code'], record['trade_date'].isoformat()))
-            db.execute("UPDATE observations SET status='retry_exhausted' WHERE status='pending' AND attempts>=6")
+            db.execute("UPDATE observations SET status='pending' WHERE day=? AND status='blocked_unverified_history'",
+                       (end.isoformat(),))
+            db.execute("UPDATE observations SET status='retry_exhausted' WHERE day=? AND status='pending' AND attempts>=6",
+                       (end.isoformat(),))
             db.execute("INSERT OR REPLACE INTO metadata VALUES ('cache_pending','1')")
             db.commit()
-            # Existing completed values survive a failed verification, but they cannot
-            # stand in for a successful latest-session share read in this run.
-            verified_latest = {r['fund_code'] for r in shares if r['trade_date'] == end}
-            if verified_latest != set(funds):
-                return False
-            return not db.execute("SELECT 1 FROM observations WHERE day=? AND status!='complete' LIMIT 1",
-                                  (end.isoformat(),)).fetchone()
+            verified_shares = {r['fund_code'] for r in shares if r['trade_date'] == end}
+            verified_prices = {r['fund_code'] for r in prices if r['trade_date'] == end}
+            return verified_shares == verified_prices == set(funds)

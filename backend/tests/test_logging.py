@@ -5,8 +5,67 @@ import re
 import time
 from pathlib import Path
 
+import pytest
+
 from app.core.config import Settings
-from app.core.logging import StandardFormatter, configure_logging, daily_handler
+from app.core.logging import PollingAccessFilter, StandardFormatter, configure_logging, daily_handler
+
+
+def access_record(path, status=200, method='GET', level=logging.INFO, name='uvicorn.access'):
+    return logging.LogRecord(name, level, __file__, 1, '%s - "%s %s HTTP/%s" %d',
+                             ('127.0.0.1:1234', method, path, '1.1', status), None)
+
+
+@pytest.mark.parametrize('path', sorted(PollingAccessFilter.paths))
+@pytest.mark.parametrize('status', [200, 204, 299, 304])
+def test_polling_access_filter_omits_only_successful_gets(path, status):
+    assert not PollingAccessFilter().filter(access_record(path, status))
+    assert not PollingAccessFilter().filter(access_record(path + '?poll=1', status))
+
+
+@pytest.mark.parametrize('status', [100, 199, 300, 301, 302, 307, 400, 401, 403, 404, 409, 422, 429, 500, 503])
+def test_polling_access_filter_preserves_failures_and_redirects(status):
+    for path in PollingAccessFilter.paths:
+        assert PollingAccessFilter().filter(access_record(path, status))
+
+
+def test_polling_access_filter_preserves_other_methods_paths_levels_and_formats():
+    filter_ = PollingAccessFilter()
+    for path in PollingAccessFilter.paths:
+        for method in ('POST', 'HEAD', 'DELETE'):
+            assert filter_.filter(access_record(path, method=method))
+        for level in (logging.WARNING, logging.ERROR, logging.CRITICAL):
+            assert filter_.filter(access_record(path, level=level))
+        assert filter_.filter(access_record(path, name='app.test'))
+        assert filter_.filter(access_record(path, status='200'))
+        assert filter_.filter(access_record(path + '/extra'))
+    for path in ('/api/v1/health', '/api/v1/etf-shares/collection-test', '/api/v1/modules'):
+        assert filter_.filter(access_record(path))
+    malformed = access_record('/api/v1/cache/status')
+    malformed.args = ()
+    assert filter_.filter(malformed)
+    malformed.args = {'status': 200}
+    assert filter_.filter(malformed)
+
+
+def test_access_filter_applies_to_console_and_app_log_without_hiding_errors(tmp_path, capsys):
+    configure_logging(Settings(_env_file=None, log_dir=tmp_path))
+    try:
+        logger = logging.getLogger('uvicorn.access')
+        logger.handle(access_record('/api/v1/cache/status'))
+        logger.handle(access_record('/api/v1/etf-shares/collection-status', 304))
+        logger.handle(access_record('/api/v1/cache/status', 503))
+        logger.handle(access_record('/api/v1/etf-shares/collection-test', 409, 'POST'))
+        logging.getLogger('app.test').error('important-database-error')
+        console = capsys.readouterr().err
+        application = (tmp_path / 'app.log').read_text(encoding='utf-8')
+        for output in (console, application):
+            assert 'HTTP/1.1" 200' not in output and 'HTTP/1.1" 304' not in output
+            assert 'HTTP/1.1" 503' in output and 'HTTP/1.1" 409' in output
+            assert 'important-database-error' in output
+        assert 'important-database-error' in (tmp_path / 'error.log').read_text(encoding='utf-8')
+    finally:
+        logging.shutdown()
 
 
 def write_process_logs(folder, worker):

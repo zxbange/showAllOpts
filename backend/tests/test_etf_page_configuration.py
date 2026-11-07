@@ -343,16 +343,57 @@ def test_test_route_read_only_and_manual_accepted(page_client, monkeypatch):
     assert 'private-test-password' not in response.text
 
 
+def test_failed_probe_returns_safe_409_and_logs_original_database_cause(page_client, caplog):
+    import logging
+    import pymysql
+    from sqlalchemy.exc import OperationalError
+    w = page_client.app.state.etf_collection
+    def failed_engine(config):
+        raise OperationalError('secret SQL', {'secret': 'secret-parameter'},
+            pymysql.err.OperationalError(1045, 'private-test-password private-user private-db'))
+    w.configuration.engine = failed_engine
+    with caplog.at_level(logging.ERROR):
+        response = page_client.post('/api/v1/etf-shares/collection-test', json=form())
+    assert response.status_code == 409
+    assert '具体原因已记录到服务端错误日志' in response.text
+    assert 'mysql_code=1045' in caplog.text and 'reason=authentication_failed' in caplog.text
+    for secret in ('private-test-password', 'private-user', 'private-db', 'secret SQL', 'secret-parameter'):
+        assert secret not in response.text and secret not in caplog.text
+
+
+def test_cancel_route_is_run_specific_and_requires_admin_and_csrf(page_client):
+    c = page_client
+    c.post('/api/v1/etf-shares/collection-configuration', json=form())
+    request_id = 'page-cancel-request-1'
+    assert c.post('/api/v1/etf-shares/collection-run', json={'request_id': request_id}).status_code == 202
+    path = '/api/v1/etf-shares/collection-cancel'
+    token = c.headers.pop('X-CSRF-Token')
+    assert c.post(path, json={'request_id': request_id}).status_code == 403
+    c.headers['X-CSRF-Token'] = token
+    for invalid in ({}, {'request_id': 'short'}, {'request_id': request_id, 'extra': True}):
+        assert c.post(path, json=invalid).status_code == 422
+    result = c.post(path, json={'request_id': request_id})
+    assert result.status_code == 202 and result.json()['status'] == 'cancelled'
+    assert c.post(path, json={'request_id': request_id}).json() == result.json()
+    assert c.post(path, json={'request_id': 'unknown-request-000'}).status_code == 409
+    actor = c.get('/api/auth/session').json()['user']['id']
+    c.app.state.accounts.create('cancel-reader', PASSWORD, 'viewer', actor)
+    sign_in(c, 'cancel-reader')
+    assert c.post(path, json={'request_id': request_id}).status_code == 403
+
+
 def test_page_retry_exhausted_is_explicit_preserves_completed_and_blocked(tmp_path):
     w, _, _ = worker(tmp_path); save(w)
     with w.connect() as db:
+        db.execute("INSERT INTO metadata VALUES ('coverage_end','2026-11-01')")
         for code, state in [('a', 'retry_exhausted'), ('b', 'complete'), ('c', 'blocked_unverified_history')]:
             db.execute('INSERT INTO observations VALUES (?,?,?,?,?)', ('shares', code, '2026-11-01', state, 6))
+        db.execute("INSERT INTO observations VALUES ('shares','historical','2024-01-02','retry_exhausted',6)")
     assert w.status()['retry_exhausted_count'] == 1
     w.request_run('manual-retry-exhausted', retry_exhausted=True)
     with w.connect() as db:
         rows = [tuple(row) for row in db.execute('SELECT code,status,attempts FROM observations ORDER BY code')]
-    assert rows == [('a','pending',0), ('b','complete',6), ('c','blocked_unverified_history',6)]
+    assert rows == [('a','pending',0), ('b','complete',6), ('c','blocked_unverified_history',6), ('historical','retry_exhausted',6)]
     # Repeating an already accepted request must not reset attempts again.
     with w.connect() as db:
         db.execute("UPDATE observations SET status='retry_exhausted',attempts=6 WHERE code='a'")

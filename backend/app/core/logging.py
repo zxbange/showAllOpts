@@ -18,6 +18,24 @@ SECRET_FIELD = re.compile(
 )
 
 
+class PollingAccessFilter(logging.Filter):
+    """Omit only successful GET polling; keep failures and unexpected formats."""
+
+    paths = frozenset({'/api/v1/etf-shares/collection-status', '/api/v1/cache/status'})
+
+    def filter(self, record):
+        if record.name != 'uvicorn.access' or record.levelno >= logging.WARNING:
+            return True
+        # Uvicorn supplies (client, method, full_path, http_version, status_code).
+        # Fail open if a future Uvicorn release changes its structured arguments.
+        if not isinstance(record.args, tuple) or len(record.args) != 5:
+            return True
+        _, method, path, _, status = record.args
+        if method != 'GET' or not isinstance(path, str) or type(status) is not int:
+            return True
+        return not (path.split('?', 1)[0] in self.paths and (200 <= status < 300 or status == 304))
+
+
 class StandardFormatter(logging.Formatter):
     """Prefix every line, including traceback lines; redact before any output."""
 
@@ -70,6 +88,7 @@ def logging_config(settings: Settings):
     return {
         'version': 1,
         'disable_existing_loggers': False,
+        'filters': {'polling_access': {'()': PollingAccessFilter}},
         'formatters': {'standard': {'()': StandardFormatter, 'secrets': secrets}},
         'handlers': {
             'console': {'class': 'logging.StreamHandler', 'formatter': 'standard',
@@ -83,7 +102,8 @@ def logging_config(settings: Settings):
         },
         'root': {'handlers': ['console', 'application', 'errors'], 'level': settings.log_level},
         'loggers': {
-            name: {'handlers': [], 'level': settings.log_level, 'propagate': True}
+            name: {'handlers': [], 'level': settings.log_level, 'propagate': True,
+                   'filters': ['polling_access'] if name == 'uvicorn.access' else []}
             for name in ('uvicorn', 'uvicorn.error', 'uvicorn.access', 'app', 'launcher', 'frontend')
         },
     }

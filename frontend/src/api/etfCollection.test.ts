@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import {
+  cancelCollection,
   getCollectionConfiguration,
   runCollection,
   saveCollectionConfiguration,
@@ -42,6 +43,7 @@ it('uses CSRF for all mutations and never invents a replacement password', async
   await saveCollectionConfiguration(body)
   await testCollectionConfiguration(body)
   await runCollection('1234567890abcdef')
+  await cancelCollection('1234567890abcdef')
   for (const [, options] of fetcher.mock.calls) {
     expect(options.method).toBe('POST')
     expect(options.headers.get('X-CSRF-Token')).toBe('etf-session')
@@ -55,6 +57,8 @@ it('uses CSRF for all mutations and never invents a replacement password', async
     expect(JSON.parse(options.body)).not.toHaveProperty('db_transport_acknowledged')
   }
   expect(JSON.parse(fetcher.mock.calls[2][1].body)).toEqual({ request_id: '1234567890abcdef' })
+  expect(fetcher.mock.calls[3][0]).toBe('/api/v1/etf-shares/collection-cancel')
+  expect(JSON.parse(fetcher.mock.calls[3][1].body)).toEqual({ request_id: '1234567890abcdef' })
 })
 it('returns sanitized backend errors without exposing submitted data', async () => {
   vi.stubGlobal(
