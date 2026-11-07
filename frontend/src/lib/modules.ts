@@ -181,11 +181,22 @@ export const individualModules: ResearchModule[] = [
   },
   {
     id: 'etf-shares',
-    name: 'ETF份额仪表盘',
+    name: '国家队动态',
     path: '/etf-shares',
-    category: '资金观察',
-    description: '沪深300、中证500 ETF 的份额与每日增减。',
-    tags: ['ETF总份额', '沪深300', '中证500'],
+    category: '市场结构',
+    description: '七类指数 ETF 的总份额、每日增减与合计流通市值。',
+    tags: [
+      'ETF总份额',
+      'ETF份额',
+      '流通市值',
+      '沪深300',
+      '中证500',
+      '创业板',
+      '科创50',
+      '中证1000',
+      '上证50',
+      '上证180',
+    ],
     icon: ChartNoAxesCombined,
     tone: 'coral',
     illustration: 'shares',
@@ -195,9 +206,9 @@ export const individualModules: ResearchModule[] = [
 export const moduleGroups = [
   {
     name: '市场情绪',
-    description: '成交集中度、市场情绪、两融担保比例及沪深300 / 中证500 ETF 份额。',
-    ids: ['market-crowding', 'market-sentiment', 'margin-guarantee', 'etf-shares'],
-    labels: ['抱团拥挤度', '市场情绪跟踪', '两融担保比例', '沪深300 ETF', '中证500 ETF'],
+    description: '成交集中度、市场情绪、两融担保比例及指数 ETF 份额与合计流通市值。',
+    ids: ['etf-shares', 'market-crowding', 'market-sentiment', 'margin-guarantee'],
+    labels: ['国家队动态', '抱团拥挤度', '市场情绪跟踪', '两融担保比例'],
   },
   {
     name: '动量观察',
@@ -244,7 +255,7 @@ export const researchModules: ResearchModule[] = individualModules
       : m
   })
 
-const navigationFirst = ['market-crowding', 'industry-momentum', 'microcap-temperature']
+const navigationFirst = ['etf-shares', 'industry-momentum', 'microcap-temperature']
 export const navigationModules = [
   ...navigationFirst.flatMap((id) => researchModules.filter((module) => module.id === id)),
   ...researchModules.filter(

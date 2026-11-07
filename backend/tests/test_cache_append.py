@@ -11,13 +11,11 @@ from test_cache import cached
 from test_cache_incremental import assert_matches
 from test_momentum_api import row as momentum_row
 from test_crowding_api import row as crowding_row
-from test_etf_api import row as etf_row
 from test_breadth_api import row as breadth_row
 
 CASES = [
     ('industry-momentum', lambda d, p: momentum_row(d, 'X', 3, kind=p), 'industry_type', ['sw_l1', 'sw_l2', 'jq_l1'], 'momentum'),
     ('market-crowding', lambda d, p: crowding_row(d, .3, top_pct=p), 'top_pct', ['0.05', '0.10', '0.20'], 'ratio'),
-    ('etf-shares', lambda d, p: etf_row(d, 1000, code=p), 'fund_code', ['A', 'B', 'C'], 'shares'),
     ('microcap-breadth', lambda d, p: breadth_row(d, series=p), 'series_id', ['A', 'B', 'C'], 'high_5'),
 ]
 

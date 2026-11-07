@@ -15,7 +15,17 @@ export interface ETFFund {
   lagging: boolean
   points: ETFPoint[]
 }
+export interface ETFMarketValue {
+  date: string
+  market_value: string | null
+  available_funds: number
+  expected_funds: number
+  excluded_funds?: string[]
+  quality_flags?: string[]
+}
 export interface ETFHistory {
+  market_values?: ETFMarketValue[]
+  group_options?: Array<{ id: string; name: string }>
   group: string
   group_name: string
   start_date: string | null
@@ -24,4 +34,13 @@ export interface ETFHistory {
   observed_days: number
   available_funds: number
   funds: ETFFund[]
+}
+
+export interface ETFCollectionStatus {
+  status: string
+  disabled_reason?: string | null
+  worker_running?: boolean
+  schedule?: string[]
+  target_sessions?: number
+  runs?: Array<{ slot: string; status: string; error?: string | null }>
 }

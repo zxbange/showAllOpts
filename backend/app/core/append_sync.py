@@ -17,7 +17,6 @@ logger = logging.getLogger(__name__)
 APPEND_PARTITIONS = {
     'industry-momentum': 'industry_type',
     'market-crowding': 'top_pct',
-    'etf-shares': 'fund_code',
     'microcap-breadth': 'series_id',
 }
 _metadata = MetaData()

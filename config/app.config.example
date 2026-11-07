@@ -35,3 +35,10 @@ CACHE_OWNERSHIP_COMPRESSION=true
 # Site accounts: public access requires HTTPS; see docs/账号与HTTPS配置.md
 AUTH_ALLOW_HTTP=false
 AUTH_PUBLIC_ORIGIN=
+
+# Exchange ETF collection is enabled after providing an independently authorized writer.
+# Same database target as DB_* above; never commit a real URL or fall back to readonly.
+ETF_COLLECTION_ENABLED=true
+ETF_COLLECTION_WRITER_URL=
+ETF_COLLECTION_LOOKBACK_DAYS=300
+ETF_COLLECTION_BATCH_DAYS=5

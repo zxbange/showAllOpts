@@ -21,6 +21,7 @@ from app.services.margin_guarantee import MarginGuarantee
 from app.services.commodities import Commodities
 from app.services.cci_coal import CCICoal
 from app.services.accounts import Accounts
+from app.services.etf_collection import ETFCollection
 from app.services.personal_holdings import PersonalHoldings
 from app.api.routes.accounts import router as accounts_router, require_user
 from fastapi import Depends
@@ -61,6 +62,10 @@ def create_app(settings: Settings | None = None, engine: Engine | None = None) -
             holdings = PersonalHoldings(settings)
             cleanup.push_async_callback(asyncio.to_thread, holdings.stop)
             application.state.personal_holdings = holdings
+            etf_collection = ETFCollection(settings, refresh=cache.refresh_etf_collection)
+            cleanup.push_async_callback(asyncio.to_thread, etf_collection.stop)
+            application.state.etf_collection = etf_collection
+            etf_collection.start()
             holdings.start()
             cache.start()
             social.start()

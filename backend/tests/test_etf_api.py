@@ -66,7 +66,7 @@ def test_zero_previous_denominator_has_absolute_delta_but_no_pct(client, session
     assert fund['shares_change'] == '100' and fund['daily_change_pct'] is None
 
 
-def test_range_anchored_at_latest_and_two_read_only_queries(client, session, engine):
+def test_range_anchored_at_latest_and_bounded_read_only_queries(client, session, engine):
     end = date(2026, 1, 6)
     start = end-timedelta(days=29)
     session.add_all([row(start-timedelta(days=1), 50), row(start, 100), row(end, 150)])
@@ -81,7 +81,10 @@ def test_range_anchored_at_latest_and_two_read_only_queries(client, session, eng
         event.remove(engine, 'before_cursor_execute', capture)
     data=response.json()
     assert data['start_date'] == str(start) and len(data['funds'][0]['points']) == 2
-    assert len(statements) == 2 and all(s.lstrip().startswith('SELECT') for s in statements)
+    queries = [s for s in statements if s.lstrip().startswith('SELECT')]
+    assert len(queries) == 4 and all(s.lstrip().startswith(('SELECT', 'PRAGMA')) for s in statements)
+    assert 'trade_date >=' in queries[-2] and 'fund_code IN' in queries[-2]
+    assert 'FROM etf_trading_day' in queries[-1] and 'trade_date >=' in queries[-1]
     assert 'updated_at' not in statements[1]
     assert 'trade_date >=' in statements[1] and 'fund_code IN' in statements[1]
 

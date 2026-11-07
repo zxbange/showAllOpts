@@ -1,6 +1,6 @@
 from datetime import date as DateValue, datetime
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class ETFPoint(BaseModel):
@@ -22,6 +22,20 @@ class ETFFund(BaseModel):
     points: list[ETFPoint]
 
 
+class ETFMarketValue(BaseModel):
+    date: DateValue
+    market_value: str | None = None  # CNY; null unless every tracked fund is present.
+    available_funds: int
+    expected_funds: int
+    excluded_funds: list[str] = Field(default_factory=list)
+    quality_flags: list[str] = Field(default_factory=list)
+
+
+class ETFGroupOption(BaseModel):
+    id: str
+    name: str
+
+
 class ETFHistory(BaseModel):
     group: str
     group_name: str
@@ -31,3 +45,5 @@ class ETFHistory(BaseModel):
     observed_days: int = 0
     available_funds: int = 0
     funds: list[ETFFund]
+    market_values: list[ETFMarketValue] = Field(default_factory=list)
+    group_options: list[ETFGroupOption] = Field(default_factory=list)

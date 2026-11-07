@@ -6,7 +6,7 @@ import type { GrowthOverview } from '../types/growth'
 import type { DividendOverview } from '../types/dividend'
 import type { BreadthHistory } from '../types/breadth'
 import type { EarningsOverview, EarningsDetail } from '../types/earnings'
-import type { ETFHistory } from '../types/etf'
+import type { ETFCollectionStatus, ETFHistory } from '../types/etf'
 import type { MicrocapHistory } from '../types/microcap'
 import type { CrowdingHistory } from '../types/crowding'
 import type { IndustryHistory, Module, Snapshot } from '../types/momentum'
@@ -181,3 +181,6 @@ export async function saveCacheSchedule(dailyTime: string) {
   }
   return response.json() as Promise<import('../types/cache').CacheSchedule>
 }
+
+export const getETFCollectionStatus = (signal?: AbortSignal) =>
+  request<ETFCollectionStatus>('/etf-shares/collection-status', signal)

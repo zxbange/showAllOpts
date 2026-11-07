@@ -43,6 +43,7 @@ MODULES = {
     'market-crowding': ('抱团拥挤度', (MarketCrowding,)),
     'market-sentiment': ('市场情绪跟踪', (MarketSentiment,)),
     'microcap-temperature': ('微盘温度计', (MicrocapTemperature,)),
+    # Price table is optional and reconciled by etf_sync; keep legacy cache identity stable.
     'etf-shares': ('ETF份额仪表盘', (ETFShare,)),
     'earnings-gap': ('净利润断层', (EarningsRun, EarningsStock)),
     'microcap-breadth': ('微盘新高新低', (MicrocapBreadth,)),
@@ -241,6 +242,13 @@ class SnapshotCache:
         filename = module + '-' + uuid.uuid4().hex + '.sqlite'
         path = self.root / filename
         previous = self.snapshot_path(module, self.read_state()['modules'].get(module, {}))
+        if module == 'etf-shares':
+            from app.core.etf_sync import copy_etf
+            try:
+                return copy_etf(self, path, previous, full)
+            except BaseException:
+                path.unlink(missing_ok=True)
+                raise
         if module in APPEND_PARTITIONS:
             try:
                 return copy_append(self, module, path, previous, full)
@@ -303,18 +311,23 @@ class SnapshotCache:
                 if self.stop_event.wait(delay):
                     return None
 
-    def _refresh_locked(self, lock, modules, reason, slot=None, full=False):
+    def _refresh_locked(self, lock, modules, reason, slot=None, full=False, preserve_pending=False):
         run_id = uuid.uuid4().hex
         marker = self.root / ('cancel-' + run_id)
+        deferred, deferred_full = [], False
         def check_cancel():
             if marker.exists() or module_marker.exists():
                 raise SyncCancelled()
         try:
             state = self.read_state()
+            if preserve_pending:
+                deferred = [item for item in state.get('pending', []) if item not in modules and item in MODULES]
+                deferred_full = bool(deferred and state.get('pending_full'))
             state['run_id'] = run_id
             state['last_attempt_at'] = now().isoformat()
-            state['pending'] = list(modules)
-            state['pending_full'] = full
+            # Keep deferred work durable throughout ETF-only refresh, including process death.
+            state['pending'] = list(modules) + deferred
+            state['pending_full'] = full or deferred_full
             for module in modules:
                 state['modules'].setdefault(module, {})['error'] = None
                 state['modules'][module]['progress'] = {'status': 'waiting', 'stage': '等待同步', 'processed': 0, 'percent': 0}
@@ -388,12 +401,13 @@ class SnapshotCache:
                 state['pending'].remove(module)
                 self.write_state(state)
             if marker.exists():
-                for pending_module in state['pending']:
+                cancelled = [item for item in state['pending'] if item in modules]
+                for pending_module in cancelled:
                     pending_entry = state['modules'][pending_module]
                     pending_entry['error'] = None
                     pending_entry['progress'].update(status='cancelled', stage='已停止，可手动重新同步')
-                state['pending'] = []
-                state['pending_full'] = False
+                state['pending'] = [item for item in state['pending'] if item not in cancelled]
+                state['pending_full'] = deferred_full
                 self.write_state(state)
                 logger.info('Cache refresh cancelled run_id=%s', run_id)
             self.cleanup(state)
@@ -432,6 +446,19 @@ class SnapshotCache:
         else:
             self._refresh_locked(lock, selected, reason, slot, full)
         return True
+
+    def refresh_etf_collection(self):
+        """Publish only ETF changes; leave interrupted non-ETF work for its own run."""
+        if not self.settings.cache_enabled:
+            return True  # Direct reads already see committed collector data.
+        lock = self.acquire()
+        if lock is None:
+            return False
+        state = self.read_state()
+        full = bool('etf-shares' in state.get('pending', []) and state.get('pending_full'))
+        self._refresh_locked(lock, ['etf-shares'], 'etf-collection', full=full, preserve_pending=True)
+        entry = self.read_state().get('modules', {}).get('etf-shares', {})
+        return not entry.get('error') and entry.get('progress', {}).get('status') == 'complete'
 
     def _run_background(self, lock, selected, reason, slot, full):
         try:

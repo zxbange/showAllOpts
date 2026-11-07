@@ -219,3 +219,28 @@
   flex-wrap: wrap;
   letter-spacing: 0;
 }
+
+.etf-controls select {
+  padding: 9px 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--panel);
+  color: var(--text);
+  font: inherit;
+}
+.etf-controls label {
+  font-size: 13px;
+  color: var(--muted);
+}
+.etf-controls {
+  margin-bottom: 24px;
+}
+
+.etf-collection-status {
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--panel);
+  color: var(--muted);
+  line-height: 1.6;
+}

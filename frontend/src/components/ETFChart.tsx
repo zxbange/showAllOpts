@@ -11,7 +11,7 @@ import {
 } from 'echarts/components'
 import { CanvasRenderer } from 'echarts/renderers'
 import { chartColors } from '../lib/chartTheme'
-import { chartSeries } from '../lib/etf'
+import { chartSeries, marketValueSeries, showETFSymbols } from '../lib/etf'
 import type { ETFHistory } from '../types/etf'
 
 use([
@@ -26,11 +26,11 @@ use([
 
 export function ETFChart({
   data,
-  relative,
+  marketValue,
   selected,
 }: {
   data: ETFHistory
-  relative: boolean
+  marketValue: boolean
   selected: string | null
 }) {
   const element = useRef<HTMLDivElement>(null)
@@ -47,12 +47,14 @@ export function ETFChart({
     }
   }, [])
   useEffect(() => {
-    const { dates, series } = chartSeries(data, relative, selected)
+    const { dates, series } = marketValue
+      ? marketValueSeries(data)
+      : chartSeries(data, false, selected)
     chart.current?.setOption(
       {
         animation: !window.matchMedia('(prefers-reduced-motion: reduce)').matches,
         animationDuration: 650,
-        aria: { enabled: true, description: relative ? 'ETF份额变化率曲线' : 'ETF总份额曲线' },
+        aria: { enabled: true, description: marketValue ? 'ETF合计流通市值曲线' : 'ETF总份额曲线' },
         grid: { left: 16, right: 24, top: 70, bottom: 80, containLabel: true },
         legend: {
           type: 'scroll',
@@ -68,7 +70,9 @@ export function ETFChart({
           borderColor: chartColors.border,
           textStyle: { color: chartColors.text },
           valueFormatter: (value: unknown) =>
-            value == null ? '暂无记录' : Number(value).toFixed(2) + (relative ? '%' : ' 亿份'),
+            value == null
+              ? '暂无记录'
+              : Number(value).toFixed(2) + (marketValue ? ' 亿元' : ' 亿份'),
         },
         xAxis: {
           type: 'category',
@@ -80,7 +84,7 @@ export function ETFChart({
         },
         yAxis: {
           type: 'value',
-          name: relative ? '份额变化率（%）' : '总份额（亿份）',
+          name: marketValue ? '合计流通市值（亿元）' : '总份额（亿份）',
           nameTextStyle: { color: chartColors.muted },
           axisLabel: { color: chartColors.muted },
           splitLine: { lineStyle: { color: chartColors.grid } },
@@ -108,7 +112,8 @@ export function ETFChart({
           data: item.values,
           connectNulls: false,
           smooth: false,
-          showSymbol: dates.length < 100,
+          // Sparse verified history can contain a single point across a long date axis.
+          showSymbol: showETFSymbols(item.values),
           symbolSize: 5,
           lineStyle: { width: 2.5 },
           itemStyle: { color: item.color },
@@ -117,13 +122,13 @@ export function ETFChart({
       },
       true,
     )
-  }, [data, relative, selected])
+  }, [data, marketValue, selected])
   return (
     <div
       ref={element}
       className="etf-chart"
       role="img"
-      aria-label={relative ? 'ETF份额变化率曲线' : 'ETF总份额曲线'}
+      aria-label={marketValue ? 'ETF合计流通市值曲线' : 'ETF总份额曲线'}
     />
   )
 }

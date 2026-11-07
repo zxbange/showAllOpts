@@ -51,6 +51,8 @@ test('home to crowding, chart, ranges and smoothing on desktop/mobile', async ({
   })
   await page.goto('/')
   await page.getByRole('link', { name: '进入市场情绪', exact: true }).click()
+  await expect(page).toHaveURL(/etf-shares$/)
+  await page.getByRole('link', { name: '抱团拥挤度', exact: true }).click()
   await expect(page.getByRole('heading', { name: /市场情绪.*抱团拥挤度/ })).toBeVisible()
   await expect(page.locator('.trend-chart canvas')).toBeVisible()
   await expect(page.locator('.stats-grid')).toContainText('40.00%')

@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 from __future__ import print_function, division
 
+# 旧版兼容脚本；新ETF份额/市值流程使用 etf_exchange_collector.py，不再依赖聚宽。
 # 聚宽研究 Notebook：直接粘贴运行，或 %run -i ETF份额_数据库版.py
 from jqdata import *
 import builtins

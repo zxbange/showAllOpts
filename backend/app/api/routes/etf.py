@@ -1,7 +1,7 @@
 from datetime import date
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy.orm import Session
 
 from app.core.database import get_session
@@ -22,10 +22,16 @@ def history(
     end_date: date | None = None,
 ) -> ETFHistory:
     if group not in ETF_GROUPS:
-        raise HTTPException(status_code=422, detail='分组仅支持 hs300、zz500。')
+        raise HTTPException(status_code=422, detail='分组仅支持 ' + '、'.join(ETF_GROUPS) + '。')
     if days not in (0, 30, 90, 180, 365):
         raise HTTPException(status_code=422, detail='时间范围仅支持 0、30、90、180、365 天，0 表示全部。')
     end = end_date or china_today()
     if end > china_today():
         raise HTTPException(status_code=422, detail='结束日期不能晚于今天。')
     return ETFService(ETFRepository(session)).history(group, days, end)
+
+
+@router.get('/collection-status')
+def collection_status(request: Request):
+    """Authenticated, read-only scheduler diagnostics; never expose writer credentials."""
+    return request.app.state.etf_collection.status()

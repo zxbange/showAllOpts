@@ -71,7 +71,8 @@ def record(c,day,value=100,code='510300.XSHG'):
 
 def test_catalog_schema_and_default_300_trading_days(collector):
     c=collector
-    assert c.env['ETF_GROUPS']==ETF_GROUPS
+    # Legacy JoinQuant collector remains limited to its original ten funds.
+    assert c.env['ETF_GROUPS'] == {key: ETF_GROUPS[key] for key in ('hs300', 'zz500')}
     assert c.env['START_DATE'] is None and c.env['END_DATE'] is None
     assert c.env['INITIAL_TRADE_DAYS']==300
     columns=c.env['ETFShare'].__table__.columns

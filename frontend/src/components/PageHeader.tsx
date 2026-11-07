@@ -23,15 +23,6 @@ export function PageHeader({ children, switcher }: { children: ReactNode; switch
         href: `/dividend-selection?method=${method}`,
       }))
     }
-    if (module?.id === 'etf-shares') {
-      return ['hs300', 'zz500'].map((index) => ({
-        id: `etf-shares-${index}`,
-        name: index === 'hs300' ? '沪深300 ETF' : '中证500 ETF',
-        description: 'ETF 总份额与每日增减',
-        icon: module.icon,
-        href: `/etf-shares?group=${index}`,
-      }))
-    }
     return module
       ? [
           {
@@ -52,11 +43,9 @@ export function PageHeader({ children, switcher }: { children: ReactNode; switch
             label={group.name + '模块切换'}
             items={groupItems}
             value={
-              pathname === '/etf-shares'
-                ? `etf-shares-${new URLSearchParams(search).get('group') === 'zz500' ? 'zz500' : 'hs300'}`
-                : pathname === '/dividend-selection'
-                  ? `dividend-${['value', 'bank'].includes(new URLSearchParams(search).get('method') ?? '') ? new URLSearchParams(search).get('method') : 'classic'}`
-                  : pathname.split('/')[1]
+              pathname === '/dividend-selection'
+                ? `dividend-${['value', 'bank'].includes(new URLSearchParams(search).get('method') ?? '') ? new URLSearchParams(search).get('method') : 'classic'}`
+                : pathname.split('/')[1]
             }
           />
         ))}

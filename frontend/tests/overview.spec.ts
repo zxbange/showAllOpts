@@ -19,7 +19,7 @@ test('overview directory is independent of database, searchable and categorized'
   )
   await expect(page.getByRole('link', { name: '进入市场情绪', exact: true })).toHaveAttribute(
     'href',
-    '/market-crowding',
+    '/etf-shares',
   )
   await expect(page.getByRole('link', { name: '进入微盘观察', exact: true })).toHaveAttribute(
     'href',
@@ -57,7 +57,7 @@ test('overview directory is independent of database, searchable and categorized'
   // A failed database must not prevent keyboard access to any registered module.
   await page.getByRole('link', { name: '进入市场情绪', exact: true }).focus()
   await page.keyboard.press('Enter')
-  await expect(page).toHaveURL(/market-crowding$/)
+  await expect(page).toHaveURL(/etf-shares$/)
   await expect(page.getByRole('alert')).toContainText('数据库暂不可用')
 })
 
@@ -70,7 +70,7 @@ test('all module routes remain reachable from navigation', async ({ page }) => {
   const navigation = page.getByRole('navigation', { name: '主导航' })
   for (const [name, path] of [
     ['动量观察', 'industry-momentum'],
-    ['市场情绪', 'market-crowding'],
+    ['市场情绪', 'etf-shares'],
     ['微盘观察', 'microcap-temperature'],
     ['业绩选股', 'high-growth'],
   ]) {
@@ -100,7 +100,7 @@ test('group tabs preserve direct links, active navigation and mobile layout', as
   )
   for (const [group, first, second, label] of [
     ['动量观察', 'industry-momentum', 'etf-momentum', 'ETF动量热度'],
-    ['市场情绪', 'market-crowding', 'market-sentiment', '市场情绪跟踪'],
+    ['市场情绪', 'etf-shares', 'market-crowding', '抱团拥挤度'],
     ['微盘观察', 'microcap-temperature', 'microcap-breadth', '微盘新高新低'],
     ['业绩选股', 'high-growth', 'earnings-gap', '净利润断层'],
   ]) {
@@ -111,7 +111,7 @@ test('group tabs preserve direct links, active navigation and mobile layout', as
     const cards = await tabs.boundingBox()
     expect(cards!.y + cards!.height).toBeLessThanOrEqual(heading!.y)
     await expect(tabs.locator('.module-card')).toHaveCount(
-      ['市场情绪', '业绩选股'].includes(group) ? 5 : 2,
+      group === '市场情绪' ? 4 : group === '业绩选股' ? 5 : 2,
     )
     await tabs.getByRole('link', { name: label, exact: true }).click()
     await expect(page).toHaveURL(new RegExp(second + '$'))
@@ -133,7 +133,7 @@ test('group tabs preserve direct links, active navigation and mobile layout', as
 test('shared module cards stay available while loading and after failures', async ({ page }) => {
   test.setTimeout(60000)
   for (const [path, count] of [
-    ['etf-shares', 5],
+    ['etf-shares', 4],
     ['dividend-selection', 5],
   ] as const) {
     let release!: () => void
@@ -204,14 +204,20 @@ test('compact bookmarks scroll and support keyboard without activating the wrong
   await page.route('**/api/v1/**', (route) =>
     route.fulfill({ status: 503, json: { detail: '离线布局测试' } }),
   )
-  await page.goto('/market-crowding')
+  await page.goto('/etf-shares')
   const nav = page.getByRole('navigation', { name: '市场情绪模块切换' })
-  const first = nav.getByRole('link', { name: '抱团拥挤度', exact: true })
-  const last = nav.getByRole('link', { name: '中证500 ETF', exact: true })
+  const first = nav.getByRole('link', { name: '国家队动态', exact: true })
+  const last = nav.getByRole('link', { name: '两融担保比例', exact: true })
+  await expect(nav.getByRole('link')).toHaveText([
+    '国家队动态',
+    '抱团拥挤度',
+    '市场情绪跟踪',
+    '两融担保比例',
+  ])
   await first.focus()
   await page.keyboard.press('End')
   await expect(last).toBeFocused()
-  await expect(page).toHaveURL(/market-crowding$/)
+  await expect(page).toHaveURL(/etf-shares$/)
   const bounds = await nav.evaluate((el) => {
     const items = Array.from(el.children).map((child) => child.getBoundingClientRect())
     const rect = el.getBoundingClientRect()
@@ -237,8 +243,17 @@ test('compact bookmarks scroll and support keyboard without activating the wrong
     await expect.poll(() => nav.evaluate((el) => el.scrollLeft)).toBe(0)
     await last.focus()
   }
+  await page.keyboard.press('Home')
+  await expect(first).toBeFocused()
+  await page.keyboard.press('ArrowRight')
+  await expect(nav.getByRole('link', { name: '抱团拥挤度', exact: true })).toBeFocused()
+  await page.keyboard.press('ArrowLeft')
+  await expect(first).toBeFocused()
+  await page.keyboard.press('ArrowLeft')
+  await expect(last).toBeFocused()
+  await expect(page).toHaveURL(/etf-shares$/)
   await page.keyboard.press('Enter')
-  await expect(page).toHaveURL(/etf-shares\?group=zz500$/)
+  await expect(page).toHaveURL(/margin-guarantee$/)
   await expect(last).toHaveAttribute('aria-current', 'page')
   await expect(nav.locator('[aria-current="page"]')).toHaveCount(1)
   await page.reload()
@@ -247,7 +262,7 @@ test('compact bookmarks scroll and support keyboard without activating the wrong
   await page.goBack()
   await expect(first).toHaveAttribute('aria-current', 'page')
   await page.goto('/etf-shares')
-  await expect(nav.getByRole('link', { name: '沪深300 ETF', exact: true })).toHaveAttribute(
+  await expect(nav.getByRole('link', { name: '国家队动态', exact: true })).toHaveAttribute(
     'aria-current',
     'page',
   )
@@ -257,10 +272,15 @@ test('compact bookmarks scroll and support keyboard without activating the wrong
       .getByRole('link', { name: '市场情绪', exact: true }),
   ).toHaveAttribute('aria-current', 'page')
   await page.goto('/')
-  await page.getByRole('textbox', { name: '搜索研究模块' }).fill('ETF份额')
-  await expect(page.locator('.research-card')).toHaveCount(1)
-  await expect(page.getByRole('link', { name: '进入市场情绪', exact: true })).toBeVisible()
-  await expect(page.getByRole('link', { name: '进入ETF份额仪表盘', exact: true })).toHaveCount(0)
+  for (const term of ['国家队动态', 'ETF份额', '流通市值']) {
+    await page.getByRole('textbox', { name: '搜索研究模块' }).fill(term)
+    await expect(page.locator('.research-card')).toHaveCount(1)
+    await expect(page.getByRole('link', { name: '进入市场情绪', exact: true })).toHaveAttribute(
+      'href',
+      '/etf-shares',
+    )
+  }
+  await expect(page.getByRole('link', { name: '进入国家队动态', exact: true })).toHaveCount(0)
 })
 
 test('page-local module bookmarks stay above titles and preserve ordinary controls', async ({

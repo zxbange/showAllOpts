@@ -681,3 +681,8 @@ def test_ownership_scope_messages_bypass_quiet_stream(batch, monkeypatch, capsys
     assert '新增披露影响 2 只股票' in output
     assert 'ordinary output remains hidden' not in output
     assert batch._PROGRESS_LOCAL.output is None
+
+
+def test_exchange_etf_is_not_in_default_joinquant_batch(batch):
+    assert 'ETF份额' not in batch.STRATEGY_ORDER
+    assert 'ETF份额' in batch.STRATEGIES  # Explicit legacy use only.

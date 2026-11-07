@@ -64,6 +64,10 @@ class Settings(BaseSettings):
     # Shared holdings source settings retain their legacy environment names.
     validation_encryption_key: SecretStr = SecretStr('')
     validation_allowed_targets: list[str] = []
+    etf_collection_enabled: bool = True
+    etf_collection_writer_url: SecretStr = SecretStr('')
+    etf_collection_lookback_days: int = Field(default=300, ge=1, le=1500)
+    etf_collection_batch_days: int = Field(default=5, ge=1, le=20)
     social_worker_enabled: bool = True
     margin_worker_enabled: bool = True
     social_browser_login_key: SecretStr = SecretStr('')
