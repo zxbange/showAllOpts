@@ -1,64 +1,49 @@
-# ETF exchange collection worker
+# 国家队动态：页面配置与采集
 
-The FastAPI lifespan owns this automatically scheduled worker. This is implemented scheduling, not
-an instruction to install cron. No service, cron job, or production write was
-performed while developing this feature.
+管理员登录后，在「市场情绪 → 国家队动态 → 采集配置」完成设置，不需要编辑环境文件或运行采集命令。普通用户只能看图表和采集状态。
 
-## Configuration
+## 页面操作
 
-Set these in the service environment (never commit credentials):
+1. 使用可信的 HTTPS 地址打开网站。HTTP 页面可以按现有站点规则登录，但不能提交或测试数据库凭据。不要绕过浏览器证书警告。
+2. 展开「采集配置」。页面显示固定写入目标，与应用当前读取的数据库完全一致，不能从页面改写到其他库。
+3. 输入独立的 ETF 采集账号和密码。密码不会回显，已保存后留空表示保留；更换账号或应用数据库目标后必须重新输入。禁止使用应用只读账号、root 或 MySQL 内置账号。
+4. 按需设置自动采集开关、每日时间（北京时间，1–6 个）、历史目标（1–1500 个交易日）及每轮补采历史日期数（1–20）。默认 09:30、11:30、18:30，300 个交易日，每批 5 个历史日期。
+5. 点击「测试连接（只读）」检查连接和三张表的读取。测试不写入、不保存配置，不证明写权限已经具备。缺表、权限或 TLS 失败会明确提示。
+6. 点击「保存采集配置」，立即生效并持久保存，不需要重启。点击「立即采集」异步提交任务，页面显示排队、进度、结果和缓存发布状态。自动采集关闭时仍可手动运行。采集运行/排队期间不能修改配置。
+7. 已耗尽重试次数的数据可在页面勾选重新尝试后立即采集。此操作只重置失败观测的尝试次数，不删除已完成记录，不解除未经核验的深市历史价格限制。
 
-```
-ETF_COLLECTION_ENABLED=true
-ETF_COLLECTION_WRITER_URL=mysql+pymysql://ETF_WRITER:REPLACE_ME@DB_HOST/showallopts?charset=utf8mb4
-ETF_COLLECTION_LOOKBACK_DAYS=300
-ETF_COLLECTION_BATCH_DAYS=5
-```
+页面顶部刷新只读取已经保存的数据，不采集交易所数据。手动请求有独立幂等编号，网络响应不确定时重试相同请求不会重复创建任务。若服务重启中断任务，页面显示「已中断」，可再次明确触发；数据库写入仍是幂等的。
 
-Collection is enabled by default; set `ETF_COLLECTION_ENABLED=false` to explicitly opt out. A valid independent writer connection is still required, and is never fabricated or provisioned automatically. A missing writer URL reports
-`missing_writer_configuration` with `ready=false`, logs a generic startup warning, and does not start a thread or fall back to the
-application's readonly account. The writer URL must target exactly the same driver, host, port and database as the read connection; only credentials may differ. A mismatch or malformed URL disables the worker before network activity. The independently provisioned writer needs only
-ETF table privileges (including initial table creation). Use the same shared
-persistent LOG_DIR for every process on a host. The portalocker lock and SQLite
-ledger prevent overlapping work and duplicate successful slots across these
-processes. This is not a distributed lock across hosts with separate disks: run
-the enabled collector on one host, with the others disabled.
+## 权限与传输保护
 
-## Timing and reliability
+采集账号只需以下三表的 SELECT、INSERT、UPDATE：
 
-All times use Asia/Shanghai, unaffected by server timezone. 18:30 collects the
-latest verified closed session's shares and prices. 09:30 and 11:30 only recheck
-shares, never promote a morning intraday quote into a daily close. These are
-bounded verification opportunities, **not a claim that the exchange publishes
-final shares by either time**. Official dates and values are authoritative.
-No immediate startup collection runs; the first future slot is eligible. At the first timer check, an already recorded running/failed/partial same-day slot can resume if its retry allowance and 30-minute delay permit. Unfinished prior-day slots become abandoned while their observation gaps remain. A
-minute timer only checks local state. The unchanged 07:00 MySQL-to-cache sync
-continues. Each slot permits at most two attempts, separated by 30 minutes;
-request-level retries are also bounded by the exchange client. Writer connections have a 10-second connect timeout and 60-second read/write timeouts. Missing latest-session data marks a slot partial even when available rows were committed, enabling the same delayed retry. Each ETF price history is fetched at most once per run and reused across backfill dates. Interrupted
-running slots can retry under the same bounds after the process lock releases.
+- etf_share_daily
+- etf_price_daily
+- etf_trading_day
 
-Each run maintains a 300-session requested coverage window and processes at most
-five old pending dates plus the latest session. Older persisted gaps remain
-eligible even when outside the rolling window. Morning batches only include
-share gaps; evening batches include prices too. Initial 300-session backfill is
-therefore gradual, not promised complete on the first day. Every ETF, date and
-kind has a durable state; no MAX(date) watermark hides gaps. Each day/kind/ETF source request is isolated so a later source failure does not discard earlier successful observations. Attempt budgets are settled only after the writer transaction succeeds; a writer failure consumes no observation budget. Shared SSE daily disclosures and per-ETF price responses (including source failures) are reused within each run. A particular gap has
-at most six settled attempts before `retry_exhausted`, requiring operator investigation
-and a deliberate ledger reset after fixing the cause. Schedules also run on weekends and holidays for share verification and gradual historical backfill. The latest confirmed closed session remains eligible for a verified Shenzhen close, including Friday on a weekend. Shenzhen unverified older
-prices are `blocked_unverified_history` and not requested indefinitely. Existing
-completed values survive missing responses. Failed transactions do not mark any
-observations complete. A crash after the MySQL transaction and before ledger
-commit leads only to an idempotent replay.
+若首次采集需要创建缺失表，还需这些表的 CREATE 权限。已有表不会删除或重建；不需要 DELETE、DROP、ALTER 或全库管理员权限。应用不会创建数据库账号、授予权限或更改原只读账号。没有合适账号时，需要数据库管理员提供；网页不能安全地凭空取得数据库权限。
 
-Only the ETF cache is refreshed after a successful transaction. Lock contention
-or a failed cache publish leaves `cache_pending` durable, retried no faster than
-five minutes without re-fetching exchanges. The authenticated read-only `GET /api/v1/etf-shares/collection-status` exposes schedule,
-coverage, recent slots and all incomplete ETF/date observations. Errors retain
-exception types only, never database URLs or response payloads.
+新配置的远程数据库连接默认启用 TLS，使用系统信任根验证证书及主机名，失败不会静默回退明文。本机回环数据库可不用 TLS。如果远程数据库确实不支持 TLS，必须在页面明确确认风险后才能保存/测试；该选择会应用于后续自动及手动采集。浏览器到网站的 HTTPS 与服务器到 MySQL 的 TLS 是两段独立连接。
 
-Writer failures are classified safely as `writer_permission_denied` (including
-MySQL 1044/1045/1142/1143), `writer_table_missing`, `writer_database_missing`,
-`writer_connection_failed`, or `writer_write_failed`. Status reports `ready=false`
-until a subsequent successful write. No account creation, privilege changes, or
-readonly-credential fallback is attempted. Deployment without a configured and
-authorized writer remains **not ready**, not a successful automatic collection.
+旧环境连接中的自定义 CA、客户端证书或特殊 TLS 参数不会自动转成页面选项。迁移前先测试兼容性；需要这类证书的部署暂保留旧连接方式，不要通过关闭校验证书来绕过问题。
+
+页面凭据使用既有受限权限密钥存储机制加密保存，不在 API 响应、验证错误或日志中回显。密钥与状态数据库分开存放，缺失/不匹配时停止操作，绝不生成替代密钥覆盖原配置。备份时应一并保护整个持久 LOG_DIR。源连接、手动操作均保留管理员、同源及 CSRF 检查。
+
+## 时间、数据与故障状态
+
+默认 09:30、11:30 复核最新已收市交易日份额；18:30 采份额及可信收盘价。自定义时间及手动任务在北京时间 18:00 前只补份额，18:00 起才处理收盘价，避免把盘中报价当作收盘价。交易所官方日期和值为准，不承诺某时点一定公布。
+
+启动不立即访问交易所，之后的计划时段才触发；此前已有的同日失败/部分任务按原有重试规则恢复。每个计划时段最多两次，至少相隔 30 分钟。交易所请求和数据库连接均有超时与有限重试。周末/节假日仍可复核及小批补历史。
+
+历史窗口只是目标，不是已经采齐。每轮最多设定数量的历史日期加最新日期，逐批积累。深交所未经核验的旧收盘价保持缺失，不估算；现存完整记录不会因一次失败或缺值被清空。每个ETF/日期/种类独立记录状态，写库失败不消耗缺口重试额度，成功写库后才更新观测账本。
+
+只更新 ETF 缓存，其他模块待同步状态保留。缓存暂时无法发布时显示等待更新，后台至少间隔五分钟重试发布，不重复抓交易所。原 07:00 数据库到缓存同步保持不变。
+
+状态接口保留最近计划运行记录、最近手动任务和进度。缺口总数为完整统计，详细缺口列表最多返回 500 项，避免巨大响应；目标覆盖范围不表示实际完整覆盖。写入错误使用安全分类，不含连接字符串或数据库驱动原始报错。
+
+## 既有部署兼容
+
+未通过页面保存前，继续使用既有 ETF_COLLECTION_ENABLED、ETF_COLLECTION_WRITER_URL、ETF_COLLECTION_LOOKBACK_DAYS、ETF_COLLECTION_BATCH_DAYS。首次页面保存后，以页面的加密配置为准；不会改写原服务配置或只读 DB_*。缺失/错误的旧写入配置可直接在页面修复，不能回退使用只读账号。
+
+所有进程须使用同一持久 LOG_DIR，文件锁和 SQLite 账本防止同一主机多进程并行采集。此方案不是跨不同主机磁盘的分布式锁，多主机部署只在一个主机启用采集。

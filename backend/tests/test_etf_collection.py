@@ -67,7 +67,9 @@ def test_timezone_and_naive():
 def test_disabled_and_missing_configuration(tmp_path):
     w = ETFCollection(Settings(_env_file=None, log_dir=tmp_path, etf_collection_enabled=False))
     w.start()
-    assert w.status() == {'status': 'disabled', 'ready': False, 'disabled_reason': 'ETF_COLLECTION_ENABLED=false'}
+    assert w.status()['enabled'] is False
+    assert w.status()['ready'] is False
+    assert w.status()['disabled_reason'] == 'missing_writer_configuration'
     assert w.worker is None
     w.settings.etf_collection_enabled = True
     w.start()

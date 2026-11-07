@@ -99,3 +99,24 @@ export function collectionSummary(status: ETFCollectionStatus) {
       : ''
   return `${prefix}自动采集：北京时间 ${(status.schedule ?? []).join('、')}；历史目标 ${status.target_sessions ?? 300} 个交易日，按批次补采。`
 }
+
+export function collectionErrorMessage(error: string): string {
+  const messages: Record<string, string> = {
+    writer_permission_denied: '采集账号权限不足，请检查三张ETF表的读写权限。',
+    writer_table_missing: 'ETF数据表缺失，首次建表需要CREATE权限。',
+    writer_database_missing: '目标数据库不存在，请检查固定数据库目标。',
+    writer_connection_failed: '无法连接数据库，请检查网络、账号和TLS设置。',
+    writer_write_failed: '数据库写入未完成，请检查采集账号及目标表。',
+    writer_target_mismatch: '写入目标与页面数据库不一致，请重新读取配置并保存。',
+    invalid_writer_configuration: '采集配置无效，请重新检查并保存。',
+    configuration_unavailable: '采集配置暂不可用，请重新读取配置。',
+    source_unavailable: '交易所数据暂不可用，请稍后重试。',
+    service_interrupted: '服务重启或采集被中断，可重新触发采集。',
+    missing_writer_configuration: '请先配置独立采集写入账号。',
+    retry_exhausted: '已达到自动重试上限，可勾选重新尝试后手动采集。',
+  }
+  return (
+    messages[error] ??
+    (/[\u4e00-\u9fff]/.test(error) ? error : '操作未完成，请稍后重试或检查采集配置。')
+  )
+}

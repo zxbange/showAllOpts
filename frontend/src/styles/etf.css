@@ -244,3 +244,95 @@
   color: var(--muted);
   line-height: 1.6;
 }
+
+.etf-collection-panel {
+  padding: 18px;
+  margin-bottom: 18px;
+  font-size: 13px;
+}
+.etf-collection-overview {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 16px;
+}
+.etf-collection-overview button {
+  flex-shrink: 0;
+}
+.etf-collection-panel summary {
+  cursor: pointer;
+  font-weight: 600;
+  padding: 10px 0;
+}
+.etf-collection-panel fieldset {
+  border: 0;
+  padding: 0;
+  min-width: 0;
+}
+.etf-collection-fields {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+.etf-collection-fields label {
+  display: grid;
+  gap: 6px;
+}
+.etf-collection-panel input:not([type='checkbox']) {
+  min-width: 0;
+  padding: 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface);
+  color: inherit;
+}
+.etf-collection-hint {
+  color: var(--text-muted);
+  line-height: 1.6;
+}
+.etf-check {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin: 14px 0;
+}
+.etf-collection-warning {
+  padding: 10px;
+  background: #fff4dd;
+  color: #764b06;
+  border-radius: 6px;
+  display: block;
+  line-height: 1.7;
+  overflow-wrap: anywhere;
+}
+.etf-collection-warning label {
+  display: block;
+}
+.etf-schedule {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-bottom: 16px;
+}
+.etf-schedule > div {
+  display: flex;
+  gap: 5px;
+}
+.etf-collection-panel progress {
+  display: block;
+  width: 100%;
+  margin-top: 8px;
+}
+.etf-collection-panel form > p,
+.etf-collection-panel li {
+  overflow-wrap: anywhere;
+}
+@media (max-width: 600px) {
+  .etf-collection-fields {
+    grid-template-columns: 1fr;
+  }
+  .etf-collection-overview {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+}

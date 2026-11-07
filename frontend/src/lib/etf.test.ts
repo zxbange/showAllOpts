@@ -5,6 +5,7 @@ import {
   marketValueSeries,
   showETFSymbols,
   collectionSummary,
+  collectionErrorMessage,
 } from './etf'
 import type { ETFHistory } from '../types/etf'
 
@@ -122,4 +123,11 @@ it('never presents missing writer configuration or denied writes as running coll
       target_sessions: 300,
     }),
   ).toContain('按批次补采')
+})
+
+it('renders collection errors without raw internal codes', () => {
+  expect(collectionErrorMessage('writer_permission_denied')).toContain('权限不足')
+  expect(collectionErrorMessage('service_interrupted')).toContain('中断')
+  expect(collectionErrorMessage('unknown_backend_code')).not.toContain('unknown_backend_code')
+  expect(collectionErrorMessage('配置已被修改，请刷新')).toBe('配置已被修改，请刷新')
 })

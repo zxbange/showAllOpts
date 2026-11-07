@@ -38,6 +38,8 @@ AUTH_PUBLIC_ORIGIN=
 
 # Exchange ETF collection is enabled after providing an independently authorized writer.
 # Same database target as DB_* above; never commit a real URL or fall back to readonly.
+# Legacy fallback only; page-saved encrypted settings take precedence.
+# Prefer National Team Dynamics > Collection Settings; no service restart needed.
 ETF_COLLECTION_ENABLED=true
 ETF_COLLECTION_WRITER_URL=
 ETF_COLLECTION_LOOKBACK_DAYS=300

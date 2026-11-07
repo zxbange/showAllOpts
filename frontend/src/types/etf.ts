@@ -37,10 +37,46 @@ export interface ETFHistory {
 }
 
 export interface ETFCollectionStatus {
+  enabled?: boolean
+  configured?: boolean
+  cache_pending?: boolean
+  manual?: ETFManualRun | null
+  progress?: { phase: string; completed: number; total: number } | null
+  lookback_days?: number
+  batch_days?: number
+  retry_exhausted_count?: number
+  gap_count?: number
+  gaps?: Array<{ kind: string; code: string; day: string; status: string; attempts: number }>
   status: string
   disabled_reason?: string | null
   worker_running?: boolean
   schedule?: string[]
   target_sessions?: number
   runs?: Array<{ slot: string; status: string; error?: string | null }>
+}
+
+export interface ETFCollectionConfiguration {
+  revision: number
+  host: string
+  port: number
+  database: string
+  username: string
+  password_set: boolean
+  target_changed?: boolean
+  enabled: boolean
+  lookback_days: number
+  batch_days: number
+  schedule: string[]
+  source: 'page' | 'environment' | 'none'
+  transport_secure: boolean
+  db_local?: boolean
+  db_tls: boolean
+}
+export interface ETFManualRun {
+  id: string
+  status: string
+  error?: string | null
+  phase?: string
+  completed?: number
+  total?: number
 }

@@ -3,18 +3,12 @@ import { useCallback, useEffect, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import type { CSSProperties } from 'react'
 import { CalendarDays, Info, RefreshCw } from 'lucide-react'
-import { getETFCollectionStatus, getETFHistory } from '../api/client'
+import { getETFHistory } from '../api/client'
 import { useResource } from '../hooks/useResource'
+import { ETFCollectionPanel } from '../components/ETFCollectionPanel'
 import { ETFChart } from '../components/ETFChart'
 import { LoadingState, ErrorState, EmptyState } from '../components/States'
-import {
-  billionShares,
-  etfColors,
-  signedPercent,
-  etfGroups,
-  marketValueSeries,
-  collectionSummary,
-} from '../lib/etf'
+import { billionShares, etfColors, signedPercent, etfGroups, marketValueSeries } from '../lib/etf'
 import '../styles/etf.css'
 
 export function ETFPage() {
@@ -32,7 +26,6 @@ export function ETFPage() {
     [group, days],
   )
   const { data, error, loading, reload } = useResource(loader)
-  const collection = useResource(getETFCollectionStatus)
   const marketValue = mode === 'marketValue'
   const selectedFund = data?.funds.find((fund) => fund.code === selected)
   const questionableDays =
@@ -59,20 +52,13 @@ export function ETFPage() {
             disabled={loading}
             onClick={() => {
               reload()
-              collection.reload()
             }}
           >
             <RefreshCw size={16} className={loading ? 'spin' : ''} />
           </button>
         </div>
       </PageHeader>
-      {(collection.data || collection.error) && (
-        <p className="etf-collection-status" role="status">
-          {collection.data
-            ? collectionSummary(collection.data)
-            : '自动采集状态暂不可用，当前仅展示已保存的数据。'}
-        </p>
-      )}
+      <ETFCollectionPanel onCollected={reload} />
       <div className="etf-chart-toolbar etf-controls">
         <label htmlFor="etf-group">跟踪指数</label>
         <select
@@ -137,7 +123,7 @@ export function ETFPage() {
               (!data.end_date ? (
                 <EmptyState
                   title="暂无ETF份额数据"
-                  description="请先运行交易所采集器并同步数据，或切换其他指数。"
+                  description="请由管理员在本页面配置并触发采集，或切换其他指数。"
                 />
               ) : (
                 <>
