@@ -128,6 +128,9 @@ it('never presents missing writer configuration or denied writes as running coll
 it('renders collection errors without raw internal codes', () => {
   expect(collectionErrorMessage('writer_permission_denied')).toContain('权限不足')
   expect(collectionErrorMessage('service_interrupted')).toContain('中断')
+  expect(collectionErrorMessage('configuration_changed')).toBe(
+    '数据库目标已变更，本次任务已中断；请重新配置后采集。',
+  )
   expect(collectionErrorMessage('unknown_backend_code')).not.toContain('unknown_backend_code')
   expect(collectionErrorMessage('配置已被修改，请刷新')).toBe('配置已被修改，请刷新')
 })

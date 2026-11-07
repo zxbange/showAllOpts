@@ -58,7 +58,7 @@ test('overview directory is independent of database, searchable and categorized'
   await page.getByRole('link', { name: '进入市场情绪', exact: true }).focus()
   await page.keyboard.press('Enter')
   await expect(page).toHaveURL(/etf-shares$/)
-  await expect(page.getByRole('alert')).toContainText('数据库暂不可用')
+  await expect(page.locator('.state-panel[role="alert"]')).toContainText('数据库暂不可用')
 })
 
 test('all module routes remain reachable from navigation', async ({ page }) => {

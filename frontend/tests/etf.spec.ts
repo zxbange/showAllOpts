@@ -150,7 +150,7 @@ test('failure retry, empty database, legacy market data and empty selected fund'
     })
   })
   await page.goto('/etf-shares?group=invalid')
-  await expect(page.getByRole('alert')).toContainText('数据库暂不可用')
+  await expect(page.locator('.state-panel[role="alert"]')).toContainText('数据库暂不可用')
   await expect(page.getByRole('combobox', { name: '跟踪指数' })).toHaveValue('hs300')
   state = 'empty'
   await page.getByRole('button', { name: '重新加载' }).click()
@@ -166,7 +166,7 @@ test('failure retry, empty database, legacy market data and empty selected fund'
   await expect(page.getByRole('heading', { name: '该ETF在所选区间暂无数据' })).toBeVisible()
   state = 'error'
   await page.getByRole('combobox', { name: '跟踪指数' }).selectOption('zz500')
-  await expect(page.getByRole('alert')).toContainText('数据库暂不可用')
+  await expect(page.locator('.state-panel[role="alert"]')).toContainText('数据库暂不可用')
   await expect(page.locator('.etf-card')).toHaveCount(0)
   state = 'partial'
   await page.getByRole('combobox', { name: '跟踪指数' }).selectOption('cyb')

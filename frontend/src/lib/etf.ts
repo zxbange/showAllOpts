@@ -112,6 +112,7 @@ export function collectionErrorMessage(error: string): string {
     configuration_unavailable: '采集配置暂不可用，请重新读取配置。',
     source_unavailable: '交易所数据暂不可用，请稍后重试。',
     service_interrupted: '服务重启或采集被中断，可重新触发采集。',
+    configuration_changed: '数据库目标已变更，本次任务已中断；请重新配置后采集。',
     missing_writer_configuration: '请先配置独立采集写入账号。',
     retry_exhausted: '已达到自动重试上限，可勾选重新尝试后手动采集。',
   }

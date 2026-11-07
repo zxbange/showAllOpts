@@ -125,6 +125,8 @@ test('polls active progress, refreshes chart after cache completion and stops on
 }) => {
   let polls = 0
   let histories = 0
+  // StrictMode may issue multiple initial reads. Only the test advances the job.
+  let phase: 'running' | 'cache_pending' | 'complete' = 'running'
   await page.clock.install()
   await page.route('**/api/v1/etf-shares/history?*', (r) => {
     histories++
@@ -137,19 +139,28 @@ test('polls active progress, refreshes chart after cache completion and stops on
     return r.fulfill({
       json: {
         ...ready,
-        manual: { id: 'job-1', status: polls < 2 ? 'running' : 'complete' },
-        cache_pending: polls === 2,
+        manual: { id: 'job-1', status: phase === 'running' ? 'running' : 'complete' },
+        cache_pending: phase === 'cache_pending',
       },
     })
   })
   await page.goto('/etf-shares')
   await expect(page.getByText('手动采集：采集中', { exact: true })).toBeVisible()
+  await expect(page.getByRole('heading', { name: '暂无ETF份额数据', exact: true })).toBeVisible()
+  const initialHistories = histories
+  const initialPolls = polls
+  phase = 'cache_pending'
   await page.clock.fastForward(2100)
   await expect(page.getByText('采集已入库，等待图表缓存更新…')).toBeVisible()
-  expect(histories).toBe(1)
+  expect(polls).toBeGreaterThan(initialPolls)
+  expect(histories).toBe(initialHistories)
+  phase = 'complete'
   await page.clock.fastForward(2100)
-  await expect.poll(() => histories).toBe(2)
-  await page.getByRole('link', { name: '发奋墙 首页', exact: true }).click()
+  await expect(page.getByText('采集已入库，等待图表缓存更新…')).toHaveCount(0)
+  await expect.poll(() => histories).toBe(initialHistories + 1)
+  await page.getByRole('link', { name: '总览', exact: true }).click()
+  await expect(page).toHaveURL(/\/$/)
+  await expect(page.getByRole('region', { name: 'ETF采集管理' })).toHaveCount(0)
   const count = polls
   await page.clock.fastForward(30000)
   expect(polls).toBe(count)
@@ -175,27 +186,42 @@ test('remote database without TLS requires explicit acknowledgment', async ({ pa
 })
 
 test('late status from a departed page cannot replace new page status', async ({ page }) => {
-  let calls = 0
+  let holdOldPage = true
+  let heldResponses = 0
+  let releasedResponses = 0
   let release!: () => void
   const wait = new Promise<void>((resolve) => {
     release = resolve
   })
   await page.route('**/api/v1/etf-shares/collection-status', async (r) => {
-    calls++
-    if (calls === 1) {
+    // Hold every first-mount read, including StrictMode's duplicate request.
+    if (holdOldPage) {
+      heldResponses++
       await wait
       await r
         .fulfill({ json: { ...ready, manual: { id: 'old', status: 'running' } } })
-        .catch(() => {})
+        .catch(() => {}) // Aborting an unmounted page's fetch is expected.
+      releasedResponses++
     } else await r.fulfill({ json: ready })
   })
   await page.goto('/etf-shares')
-  await expect.poll(() => calls).toBe(1)
-  await page.getByRole('link', { name: '发奋墙 首页', exact: true }).click()
-  await page.getByRole('link', { name: '国家队动态', exact: true }).click()
+  await expect.poll(() => heldResponses).toBeGreaterThan(0)
+  await expect(page.getByText('正在读取采集状态…', { exact: true })).toBeVisible()
+  await page.getByRole('link', { name: '总览', exact: true }).click()
+  await expect(page).toHaveURL(/\/$/)
+  await expect(page.getByRole('region', { name: 'ETF采集管理' })).toHaveCount(0)
+  holdOldPage = false
+  await page
+    .getByRole('navigation', { name: '主导航' })
+    .getByRole('link', { name: '市场情绪', exact: true })
+    .click()
+  await expect(page).toHaveURL(/etf-shares$/)
   await expect(page.getByText('自动采集已关闭，当前展示已保存的数据。')).toBeVisible()
+  const oldResponses = heldResponses
   release()
+  await expect.poll(() => releasedResponses).toBe(oldResponses)
   await expect(page.getByText('手动采集：采集中', { exact: true })).toHaveCount(0)
+  await expect(page.getByText('自动采集已关闭，当前展示已保存的数据。')).toBeVisible()
   await expect(page.getByRole('button', { name: '立即采集', exact: true })).toBeEnabled()
 })
 
