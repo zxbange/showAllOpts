@@ -6,6 +6,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pandas as pd
+import numpy as np
 import pytest
 from sqlalchemy import BigInteger, Column, Date, String, create_engine, event
 from sqlalchemy.dialects import mysql
@@ -110,6 +111,41 @@ def test_default_preview_and_weekend_end_no_database_or_2023_records(backfill):
     assert result['shares'][0]['previous_trade_date'] == DATES[1]
     assert len(result['shares']) == len(result['prices']) == len(result['trading_days']) == 4
     assert get_rows(c, c.module.ETFShare) == []
+
+
+@pytest.mark.parametrize('pollution', ['any', 'numpy_namespace'])
+def test_pasted_notebook_with_numpy_names_previews_writes_and_repeats(backfill, monkeypatch, pollution):
+    """Notebook cells share globals, unlike importing a clean Python module."""
+    import sys
+    c = backfill
+    namespace = {'__name__': 'notebook_cell', 'any': np.any}
+    if pollution == 'numpy_namespace':
+        namespace.update(all=np.all, min=np.min, max=np.max, bool=np.bool_, int=np.int64)
+    exec(compile(SCRIPT.read_text(encoding='utf-8'), str(SCRIPT), 'exec'), namespace)
+    namespace.update(china_now=c.module.china_now, ETF_GROUPS=c.module.ETF_GROUPS,
+                     connect_database=c.module.connect_database)
+    monkeypatch.setitem(sys.modules, 'jqdata', c.jq)
+    # Exercise the real API resolver too: it also used an unqualified any(generator).
+    preview = namespace['run']()
+    assert preview['source_complete'] is True and preview['written'] is False
+    assert not c.connections
+    written = namespace['run'](write=True)
+    assert written['written'] is True
+    assert all(count['inserted'] == 4 for count in written['counts'].values())
+    repeated = namespace['run'](write=True)
+    assert all(count['inserted'] == 0 and count['different_preserved'] == 0
+               for count in repeated['counts'].values())
+    del c.prices[CODE, DATES[3]]
+    incomplete = namespace['run'](write=True)
+    assert incomplete['source_complete'] is False and incomplete['written'] is False
+    assert len(c.connections) == 2
+    for key in ('write', 'allow_partial', 'create_tables'):
+        with pytest.raises(namespace['HistoryError'], match='必须是布尔值'):
+            namespace['run'](**{key: 1})
+    with pytest.raises(namespace['HistoryError'], match='groups'):
+        namespace['run'](groups=['unknown'])
+    with pytest.raises(namespace['HistoryError'], match='交易日历'):
+        namespace['checked_days']([DATES[-1]], DATES[0], DATES[1])
 
 
 def test_persistence_insert_only_preserves_exchange_sources_and_idempotence(backfill):

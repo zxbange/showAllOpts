@@ -7,6 +7,8 @@
 """
 from __future__ import print_function, division
 
+# Notebook 的共享命名空间可能被 NumPy 通配导入覆盖，显式使用 Python 内置函数。
+import builtins as _builtins
 import datetime as dt
 from decimal import Decimal, InvalidOperation
 
@@ -108,7 +110,7 @@ def load_api():
         if not callable(getattr(jq, name, None)):
             raise HistoryError('聚宽研究环境缺少必需 API，请核对平台环境。')
     table = getattr(getattr(jq, 'finance', None), 'FUND_SHARE_DAILY', None)
-    if table is None or any(not hasattr(table, key) for key in ('code', 'date', 'shares')):
+    if table is None or _builtins.any(not hasattr(table, key) for key in ('code', 'date', 'shares')):
         raise HistoryError('缺少 finance.FUND_SHARE_DAILY 的 code/date/shares，请核对数据权限及字段。')
     return jq
 
@@ -117,7 +119,7 @@ def checked_days(raw, start, end, count=None):
     if raw is None:
         raise HistoryError('交易日历未返回有效数据。')
     days = [as_date(day) for day in raw]
-    if (days != sorted(set(days)) or any(day < start or day > end for day in days)
+    if (days != sorted(set(days)) or _builtins.any(day < start or day > end for day in days)
             or (count is not None and len(days) != count)):
         raise HistoryError('交易日历乱序、重复、越界或长度异常；不能用工作日猜测。')
     return days
@@ -153,7 +155,7 @@ def normalize_shares(value):
     number = decimal_value(value, '份额')
     if number < 0 or number != number.to_integral_value() or number > 9223372036854775807:
         raise HistoryError('份额须为非负整数份且不超出 BIGINT；不得把万份或市值直接入库。')
-    return int(number)
+    return _builtins.int(number)
 
 
 def normalize_close(value):
@@ -197,7 +199,8 @@ def fetch_prices(jq, code, days, stamp):
         if day not in allowed or day in seen or ('code' in frame.columns and row['code'] != code):
             raise HistoryError('行情响应代码不符、日期重复或不在请求交易日内。')
         seen.add(day)
-        paused = decimal_value(int(row['paused']) if isinstance(row['paused'], bool) else row['paused'], '停牌标记')
+        paused = decimal_value(_builtins.int(row['paused'])
+                               if isinstance(row['paused'], _builtins.bool) else row['paused'], '停牌标记')
         if paused not in (0, 1):
             raise HistoryError('停牌标记不是0或1。')
         if paused == 1:
@@ -228,7 +231,7 @@ def quality_warnings(shares, prices, before, days):
 
 
 def connect_database(config):
-    if any(not config.get(key) or str(config[key]).startswith('your_')
+    if _builtins.any(not config.get(key) or str(config[key]).startswith('your_')
            for key in ('host', 'dbname', 'dbuser', 'dbpassword')):
         raise HistoryError('请只在聚宽私有副本中填写 DB_CONFIG，不要把凭据发到聊天或提交到仓库。')
     driver = config.get('driver', 'auto')
@@ -244,7 +247,7 @@ def connect_database(config):
                 driver = 'pymysql'
         make_url = getattr(URL, 'create', URL)
         url = make_url(drivername='mysql+' + driver, host=config['host'],
-                       port=int(config.get('port', 3306)), database=config['dbname'],
+                       port=_builtins.int(config.get('port', 3306)), database=config['dbname'],
                        username=config['dbuser'], password=config['dbpassword'],
                        query={'charset': 'utf8mb4'})
         engine = create_engine(url, echo=False, hide_parameters=True, pool_size=1,
@@ -306,7 +309,8 @@ def save_records(engine, shares, prices, sessions, create_tables=False):
             if len(keyed) != len(records):
                 raise HistoryError('待写入批次存在重复主键。')
             dates = [row['trade_date'] for row in records]
-            query = session.query(model).filter(model.trade_date >= min(dates), model.trade_date <= max(dates))
+            query = session.query(model).filter(model.trade_date >= _builtins.min(dates),
+                                                 model.trade_date <= _builtins.max(dates))
             if model is not ETFTradingDay:
                 query = query.filter(model.fund_code.in_(sorted({row['fund_code'] for row in records})))
             existing = {}
@@ -322,7 +326,7 @@ def save_records(engine, shares, prices, sessions, create_tables=False):
                 counts[name]['preserved'] += 1
                 fields = ('shares', 'previous_trade_date') if model is ETFShare else (
                     ('close_price',) if model is ETFPrice else ('previous_trade_date',))
-                if any(getattr(old, field) != record[field] for field in fields):
+                if _builtins.any(getattr(old, field) != record[field] for field in fields):
                     if model is ETFTradingDay:
                         raise HistoryError('已有交易日历与聚宽前一交易日冲突；未覆盖，停止本次入库。')
                     counts[name]['different_preserved'] += 1
@@ -352,9 +356,10 @@ def save_records(engine, shares, prices, sessions, create_tables=False):
 def run(start_date=START_DATE, end_date=END_DATE, groups=None, write=False,
         allow_partial=False, create_tables=False, db_config=None):
     """返回记录、源缺失清单、拆并风险及写入计数。默认只读，不连接 MySQL。"""
-    if any(not isinstance(value, bool) for value in (write, allow_partial, create_tables)):
+    if _builtins.any(not isinstance(value, _builtins.bool) for value in (write, allow_partial, create_tables)):
         raise HistoryError('write/allow_partial/create_tables 必须是布尔值。')
-    if isinstance(WINDOW_SIZE, bool) or not isinstance(WINDOW_SIZE, int) or not 1 <= WINDOW_SIZE <= 120:
+    if (isinstance(WINDOW_SIZE, _builtins.bool) or not isinstance(WINDOW_SIZE, _builtins.int)
+            or not 1 <= WINDOW_SIZE <= 120):
         raise HistoryError('WINDOW_SIZE 必须是1至120的整数。')
     start = as_date(start_date)
     yesterday = china_now().date() - dt.timedelta(days=1)
@@ -362,7 +367,8 @@ def run(start_date=START_DATE, end_date=END_DATE, groups=None, write=False,
     if start > end or end > yesterday:
         raise HistoryError('开始日期不能晚于结束日期；历史补采截止日期最多为北京时间昨日。')
     selected = list(ETF_GROUPS) if groups is None else list(groups)
-    if not selected or len(selected) != len(set(selected)) or any(group not in ETF_GROUPS for group in selected):
+    if (not selected or len(selected) != len(set(selected))
+            or _builtins.any(group not in ETF_GROUPS for group in selected)):
         raise HistoryError('groups 必须是不重复的有效分组列表。')
     funds = dict(pair for group in selected for pair in ETF_GROUPS[group])
     shares, prices = [], []
@@ -431,14 +437,14 @@ def run(start_date=START_DATE, end_date=END_DATE, groups=None, write=False,
                   trading_days=sessions, missing=missing, reference_missing=reference_missing,
                   listing_ranges=listing_ranges, quality_warnings=warnings,
                   quarantined_prices=sorted(quarantined),
-                  source_complete=not any(missing.values()) and not any(reference_missing.values()),
+                  source_complete=not _builtins.any(missing.values()) and not _builtins.any(reference_missing.values()),
                   written=False, counts={})
     print('源数据缺失：份额 {}，价格 {}。份额按“份”，价格按“元/份”，不补零或前向填充。'.format(
         len(missing['shares']), len(missing['prices'])))
     for kind in ('shares', 'prices'):
         if missing[kind]:
             print('{} 缺失前20项：{}'.format(kind, missing[kind][:20]))
-    if any(reference_missing.values()):
+    if _builtins.any(reference_missing.values()):
         print('首日前日参考缺失：{}'.format(reference_missing))
     if quarantined:
         print('首日价格隔离（本次不新增，已有记录不动）：{}'.format(sorted(quarantined)))
