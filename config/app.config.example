@@ -36,10 +36,10 @@ CACHE_OWNERSHIP_COMPRESSION=true
 AUTH_ALLOW_HTTP=false
 AUTH_PUBLIC_ORIGIN=
 
-# Exchange ETF collection is enabled after providing an independently authorized writer.
-# Same database target as DB_* above; never commit a real URL or fall back to readonly.
+# Exchange ETF collection is enabled after configuring an account with write permissions.
+# Legacy URL uses the DB_* target; the page supports a separate ETF-only target.
 # Legacy fallback only; page-saved encrypted settings take precedence.
-# Prefer National Team Dynamics > Collection Settings; no service restart needed.
+# Prefer National Team Dynamics > Collection Settings; no restart. Default daily time: 09:00 Beijing.
 ETF_COLLECTION_ENABLED=true
 ETF_COLLECTION_WRITER_URL=
 ETF_COLLECTION_LOOKBACK_DAYS=300

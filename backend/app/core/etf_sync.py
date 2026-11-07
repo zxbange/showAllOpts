@@ -21,7 +21,7 @@ def manifest(connection, table):
     return read_map(connection, columns, len(keys))
 
 
-def copy_etf(cache, path, previous, full=False):
+def copy_etf(cache, path, previous, full=False, *, source=None, identity=None):
     tables = [ETFShare.__table__, ETFPrice.__table__, ETFTradingDay.__table__]
     local = None
     local_maps = {}
@@ -35,7 +35,7 @@ def copy_etf(cache, path, previous, full=False):
                               for table in tables}
         finally:
             local.dispose()
-    with cache.source.connect() as source:
+    with (source if source is not None else cache.source).connect() as source:
         if source.dialect.name == 'mysql':
             source = source.execution_options(isolation_level='REPEATABLE READ')
         with source.begin():
@@ -65,6 +65,10 @@ def copy_etf(cache, path, previous, full=False):
                             target.execute(table.delete().where(key_filter(table, batch)))
                         for batch in chunks(changed & new.keys()):
                             transfer(source, target, table, key_filter(table, batch))
+                    if identity is not None:
+                        target.exec_driver_sql('CREATE TABLE IF NOT EXISTS etf_cache_source_v1 (id INTEGER PRIMARY KEY, identity TEXT NOT NULL)')
+                        target.exec_driver_sql('DELETE FROM etf_cache_source_v1')
+                        target.exec_driver_sql('INSERT INTO etf_cache_source_v1 (id, identity) VALUES (1, ?)', (identity,))
                     # Do not leave an obsolete append cursor certifying this module.
                     target.exec_driver_sql('DROP TABLE IF EXISTS append_cache_cursor_v1')
                     target.exec_driver_sql('DROP TABLE IF EXISTS append_cache_version')

@@ -31,6 +31,9 @@ it('uses CSRF for all mutations and never invents a replacement password', async
   const body = {
     revision: 1,
     username: 'writer',
+    host: 'db.example',
+    port: 3306,
+    database: 'market',
     enabled: false,
     lookback_days: 400,
     batch_days: 4,

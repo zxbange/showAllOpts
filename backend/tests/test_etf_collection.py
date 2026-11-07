@@ -47,7 +47,7 @@ class Collector:
         self.writes.append((shares, prices))
 
 
-def worker(tmp_path, **kwargs):
+def worker(tmp_path, *, schedule=None, **kwargs):
     settings = Settings(_env_file=None, log_dir=tmp_path, etf_collection_enabled=True,
                         etf_collection_writer_url='mysql+pymysql://etf_writer@127.0.0.1:3306/showallopts', etf_collection_lookback_days=2)
     c = Collector()
@@ -55,11 +55,18 @@ def worker(tmp_path, **kwargs):
     w = ETFCollection(settings, collector=c, client_factory=lambda: nullcontext(None),
                       engine_factory=lambda *a, **k: SimpleNamespace(dispose=lambda: disposed.append(True)),
                       clock=lambda: EVENING, **kwargs)
+    # Most historical regressions exercise an explicitly configured evening run.
+    # The production default morning schedule has its own coverage below.
+    load = w.configuration.load
+    def configured_load():
+        config = load()
+        return config | {'schedule': schedule or ['18:30']} if config['source'] == 'environment' else config
+    w.configuration.load = configured_load
     return w, c, disposed
 
 
 def test_timezone_and_naive():
-    assert scheduled_slots(EVENING.astimezone(timezone.utc))[-1] == EVENING
+    assert scheduled_slots(EVENING.astimezone(timezone.utc)) == [EVENING.replace(hour=9, minute=0)]
     with pytest.raises(ValueError):
         scheduled_slots(datetime(2026, 11, 6))
 
@@ -101,10 +108,11 @@ def test_evening_idempotency_and_blocked_history(tmp_path):
     assert not c2.calls
 
 
-def test_morning_never_fetches_prices(tmp_path):
-    w, c, _ = worker(tmp_path)
+def test_morning_collects_previous_completed_day_shares_and_prices(tmp_path):
+    w, c, _ = worker(tmp_path, schedule=['09:00'])
     assert w.tick(EVENING + timedelta(days=1, hours=-9))
-    assert all(not call[2] and call[3] for call in c.calls)
+    assert all(call[0] <= DAY for call in c.calls)
+    assert any(call[2] for call in c.calls) and any(call[3] for call in c.calls)
 
 
 def test_failed_write_never_advances_complete_and_redacts(tmp_path):
@@ -182,7 +190,7 @@ def test_missing_gap_exhaustion_does_not_hide_other_dates(tmp_path):
 def test_month_boundary_slot_in_shanghai(tmp_path):
     # 01:30 UTC on Jan 1 is 09:30 in Shanghai, no 07 cache schedule collision.
     moment = datetime(2027, 1, 1, 1, 30, tzinfo=timezone.utc)
-    assert scheduled_slots(moment)[0].isoformat() == '2027-01-01T09:30:00+08:00'
+    assert scheduled_slots(moment)[0].isoformat() == '2027-01-01T09:00:00+08:00'
     assert all(slot.hour != 7 for slot in scheduled_slots(moment))
 
 
@@ -368,8 +376,10 @@ def test_sse_share_fetch_memoized_per_date_for_multiple_funds(tmp_path):
 
 @pytest.mark.parametrize('failure_mode', ['exception', 'empty'])
 def test_next_morning_requires_fresh_verification_not_old_complete_state(tmp_path, failure_mode):
-    w, c, _ = worker(tmp_path)
+    schedule = ['18:30']
+    w, c, _ = worker(tmp_path, schedule=schedule)
     assert w.tick(EVENING)
+    schedule[0] = '09:00'
     old_writes = list(c.writes)
     real = c.collect
     def unavailable(*args, **kwargs):
@@ -405,3 +415,14 @@ def test_writer_connection_has_bounded_timeouts(tmp_path):
     assert w.tick(EVENING)
     assert received == [{'pool_pre_ping': True, 'connect_args': {
         'connect_timeout': 10, 'read_timeout': 60, 'write_timeout': 60}}]
+
+
+def test_changing_daily_time_cannot_create_second_automatic_run(tmp_path):
+    schedule = ['18:30']
+    w, c, _ = worker(tmp_path, schedule=schedule)
+    assert w.tick(EVENING)
+    count = len(c.calls)
+    schedule[0] = '19:00'
+    assert not w.tick(EVENING.replace(hour=19, minute=0))
+    assert len(c.calls) == count
+    assert w.tick(EVENING.replace(hour=19, minute=0) + timedelta(days=1))

@@ -283,11 +283,11 @@
   padding: 8px;
   border: 1px solid var(--border);
   border-radius: 6px;
-  background: var(--surface);
+  background: var(--panel);
   color: inherit;
 }
 .etf-collection-hint {
-  color: var(--text-muted);
+  color: var(--muted);
   line-height: 1.6;
 }
 .etf-check {
@@ -308,16 +308,6 @@
 .etf-collection-warning label {
   display: block;
 }
-.etf-schedule {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 10px;
-  margin-bottom: 16px;
-}
-.etf-schedule > div {
-  display: flex;
-  gap: 5px;
-}
 .etf-collection-panel progress {
   display: block;
   width: 100%;
@@ -334,5 +324,111 @@
   .etf-collection-overview {
     align-items: flex-start;
     flex-direction: column;
+  }
+}
+
+.etf-collection-panel {
+  line-height: 1.6;
+}
+.etf-collection-panel details + details {
+  margin-top: 12px;
+}
+.etf-collection-panel form {
+  margin-top: 8px;
+}
+.etf-collection-sections {
+  display: grid;
+  grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr);
+  gap: 16px;
+}
+.etf-config-section {
+  min-width: 0;
+  padding: 20px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+}
+.etf-config-section h3 {
+  margin: 0 0 6px;
+  font-size: 15px;
+}
+.etf-config-section > .etf-collection-hint {
+  margin: 6px 0 16px;
+}
+.etf-collection-fields {
+  align-items: start;
+}
+.etf-collection-fields label {
+  min-width: 0;
+}
+.etf-collection-panel input:not([type='checkbox']) {
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 42px;
+  font: inherit;
+  border-radius: 8px;
+  padding: 10px;
+}
+.etf-collection-panel input:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.etf-config-section .etf-permission-note {
+  margin: 16px 0 0;
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+.etf-collection-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-top: 18px;
+}
+.etf-collection-actions .button:last-child {
+  margin-left: auto;
+}
+.etf-daily-time {
+  grid-column: 1 / -1;
+}
+.etf-check input {
+  flex-shrink: 0;
+  width: 16px;
+  height: 16px;
+  accent-color: var(--accent);
+}
+@media (max-width: 900px) {
+  .etf-collection-sections {
+    grid-template-columns: 1fr;
+  }
+}
+@media (max-width: 600px) {
+  .etf-collection-panel {
+    padding: 14px;
+  }
+  .etf-config-section {
+    padding: 14px;
+  }
+  .etf-collection-actions {
+    display: grid;
+    grid-template-columns: 1fr;
+  }
+  .etf-collection-actions .button:last-child {
+    margin-left: 0;
+  }
+  .etf-collection-actions .button {
+    width: 100%;
+    min-height: 44px;
+  }
+}
+
+.etf-target-fields {
+  grid-template-columns: minmax(0, 1fr) 100px;
+}
+.etf-target-fields label:last-child {
+  grid-column: 1 / -1;
+}
+@media (max-width: 600px) {
+  .etf-target-fields {
+    grid-template-columns: minmax(0, 1fr) 76px;
   }
 }

@@ -1,6 +1,6 @@
 """Low-frequency exchange collection. All state is local and durable.
 
-Writer credentials are deliberately separate from the application's readonly DSN.
+ETF collection and display reads can share a page-configured database account.
 """
 from datetime import datetime, timedelta
 from contextlib import contextmanager
@@ -10,7 +10,7 @@ import threading
 import logging
 import json
 
-from app.services.etf_configuration import ETFConfiguration, ConfigurationFailure
+from app.services.etf_configuration import ETFConfiguration, ConfigurationFailure, DEFAULT_COLLECTION_TIME
 
 import httpx
 import portalocker
@@ -19,7 +19,7 @@ from sqlalchemy.engine import make_url
 
 LOG = logging.getLogger(__name__)
 CHINA = ZoneInfo('Asia/Shanghai')
-TIMES = ((9, 30), (11, 30), (18, 30))
+TIMES = (tuple(map(int, DEFAULT_COLLECTION_TIME.split(':'))),)
 
 
 class WriterFailure(RuntimeError):
@@ -32,7 +32,9 @@ class WriterFailure(RuntimeError):
 def writer_error_code(exc):
     original = getattr(exc, 'orig', exc)
     args = getattr(original, 'args', ())
-    number = args[0] if args and isinstance(args[0], int) else None
+    number = getattr(original, 'database_error_number', None)
+    if number is None:
+        number = args[0] if args and isinstance(args[0], int) else None
     if number in {1044, 1045, 1142, 1143, 1227, 1370}:
         return 'writer_permission_denied'
     if number == 1146:
@@ -79,7 +81,8 @@ class ETFCollection:
                 return config['legacy_error']
             if config['password'] is None or not config['username']:
                 return 'missing_writer_configuration'
-            self.configuration.validate_target(self.configuration.url(config))
+            if config.get('target_mode') != 'custom':
+                self.configuration.validate_target(self.configuration.url(config))
         except ConfigurationFailure as error:
             return str(error) if str(error) in {'writer_target_mismatch', 'invalid_writer_configuration'} else 'configuration_unavailable'
         except Exception:
@@ -147,7 +150,8 @@ class ETFCollection:
             state['gap_count'] = db.execute("SELECT COUNT(*) FROM observations WHERE status != 'complete'").fetchone()[0]
             state['runs'] = [dict(r) for r in db.execute('SELECT * FROM slots ORDER BY slot DESC LIMIT 9')]
             state['metadata'] = dict(db.execute('SELECT key,value FROM metadata').fetchall())
-            row = db.execute('SELECT * FROM manual_runs ORDER BY rowid DESC LIMIT 1').fetchone()
+            manual_after = int(state['metadata'].get('manual_after_rowid', '0'))
+            row = db.execute('SELECT * FROM manual_runs WHERE rowid>? ORDER BY rowid DESC LIMIT 1', (manual_after,)).fetchone()
             state['manual'] = dict(row) if row else None
         writer_issue = state['metadata'].get('writer_error') or None
         if writer_issue:
@@ -184,7 +188,7 @@ class ETFCollection:
 
     def request_run(self, request_id, retry_exhausted=False):
         if self.configuration_issue:
-            raise ConfigurationFailure('采集配置尚未就绪，请先在页面保存独立写入账号')
+            raise ConfigurationFailure('采集配置尚未就绪，请先在页面保存数据库连接')
         with self.connect() as db:
             row = db.execute('SELECT * FROM manual_runs WHERE id=?', (request_id,)).fetchone()
             if row:
@@ -283,6 +287,12 @@ class ETFCollection:
                         return False
                     slot = slots[-1]
                     key = slot.isoformat()
+                    # Changing the daily clock or migrating an old multi-slot plan
+                    # must not start a second automatic run on the same date.
+                    prior = db.execute('SELECT slot FROM slots WHERE substr(slot,1,10)=? AND slot!=? LIMIT 1',
+                                       (slot.date().isoformat(), key)).fetchone()
+                    if prior:
+                        return False
                     row = db.execute('SELECT * FROM slots WHERE slot=?', (key,)).fetchone()
                     if row and (row['status'] == 'complete' or row['attempts'] >= 2 or
                                 moment - datetime.fromisoformat(row['attempted_at']) < timedelta(minutes=30)):
@@ -394,19 +404,17 @@ class ETFCollection:
             # A missed Shenzhen same-day close cannot be recovered from a later intraday quote.
             db.execute("UPDATE observations SET status='blocked_unverified_history' WHERE kind='prices' AND code LIKE '%.XSHE' AND day<? AND status!='complete'", (end.isoformat(),))
             db.commit()
-            rows = db.execute("SELECT DISTINCT day FROM observations WHERE status='pending' AND attempts<6 AND day<=? AND (kind='shares' OR ?=1) ORDER BY day LIMIT ?",
-                              (end.isoformat(), int(slot.hour >= 18), config['batch_days'])).fetchall()
+            rows = db.execute("SELECT DISTINCT day FROM observations WHERE status='pending' AND attempts<6 AND day<=? ORDER BY day LIMIT ?",
+                              (end.isoformat(), config['batch_days'])).fetchall()
             selected = sorted({end, *(datetime.fromisoformat(r[0]).date() for r in rows)})
             shares, prices, attempted = [], [], set()
             completed = 0
-            total = len(selected) * len(funds) * (2 if slot.hour >= 18 else 1)
+            total = len(selected) * len(funds) * 2
             progress('fetching', completed, total)
             for day in selected:
                 if self.stop_event.is_set():
                     raise RuntimeError('Collection stopped')
                 for kind in ('shares', 'prices'):
-                    if kind == 'prices' and slot.hour < 18:
-                        continue
                     wanted = {code: name for code, name in funds.items() if
                               (kind == 'shares' and day == end) or
                               db.execute("SELECT 1 FROM observations WHERE kind=? AND code=? AND day=? AND status='pending' AND attempts<6",
@@ -460,5 +468,5 @@ class ETFCollection:
             verified_latest = {r['fund_code'] for r in shares if r['trade_date'] == end}
             if verified_latest != set(funds):
                 return False
-            return not db.execute("SELECT 1 FROM observations WHERE day=? AND status!='complete' AND (kind='shares' OR ?=1) LIMIT 1",
-                                  (end.isoformat(), int(slot.hour >= 18))).fetchone()
+            return not db.execute("SELECT 1 FROM observations WHERE day=? AND status!='complete' LIMIT 1",
+                                  (end.isoformat(),)).fetchone()

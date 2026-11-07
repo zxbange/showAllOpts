@@ -63,6 +63,7 @@ export interface ETFCollectionConfiguration {
   username: string
   password_set: boolean
   target_changed?: boolean
+  schedule_migrated?: boolean
   enabled: boolean
   lookback_days: number
   batch_days: number

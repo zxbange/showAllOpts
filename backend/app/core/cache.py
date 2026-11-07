@@ -1,11 +1,12 @@
 """Shared persistent SQLite snapshots. Only refresh jobs read the source database."""
-from contextlib import contextmanager
+from contextlib import closing, contextmanager
 from datetime import datetime, timedelta, timezone
 import hashlib
 import json
 import logging
 import os
 import shutil
+import sqlite3
 from pathlib import Path
 import threading
 import time
@@ -150,12 +151,64 @@ class SnapshotCache:
         (self.root / ('cancel-' + run_id + ('-' + module if module else ''))).touch()
         return True
 
+    def etf_configuration(self):
+        # Resolve on every operation, including standalone refresh_cache.py runs.
+        from app.services.etf_collection import ETFCollection
+        return ETFCollection(self.settings).configuration
+
+    def etf_reader_target(self):
+        configuration = self.etf_configuration()
+        config = configuration.reader_configuration()
+        if config is None:
+            return configuration, None, 'application-default', None
+        identity = [config.get(key) for key in ('host', 'port', 'database', 'username', 'db_tls')]
+        fingerprint = hashlib.sha256(json.dumps(identity, ensure_ascii=True).encode()).hexdigest()
+        return configuration, config, fingerprint, config.get('revision')
+
+    @contextmanager
+    def etf_source(self, target=None):
+        from app.services.etf_configuration import ConfigurationFailure
+        try:
+            configuration, config, _, _ = target or self.etf_reader_target()
+            engine = self.source if config is None else configuration.engine(config)
+        except ConfigurationFailure:
+            raise CacheUnavailable('ETF 数据库配置不可用，请检查或恢复配置；不会读取旧数据源。') from None
+        try:
+            yield engine
+        except ConfigurationFailure:
+            raise CacheUnavailable('ETF 数据库连接不可用，请检查配置、网络与账号权限；不会读取旧数据源。') from None
+        finally:
+            if config is not None:
+                engine.dispose()
+
+    def etf_snapshot_matches(self, path, identity):
+        try:
+            with closing(sqlite3.connect(path.as_uri() + '?mode=ro', uri=True)) as connection:
+                exists = connection.execute(
+                    "SELECT 1 FROM sqlite_master WHERE type='table' AND name='etf_cache_source_v1'").fetchone()
+                if not exists:
+                    return identity == 'application-default'
+                row = connection.execute('SELECT identity FROM etf_cache_source_v1 WHERE id=1').fetchone()
+                return row is not None and row[0] == identity
+        except sqlite3.Error:
+            return False
+
     def snapshot_path(self, module, entry):
         name = entry.get('file', '')
         if not name or Path(name).name != name or not name.startswith(module + '-') or not name.endswith('.sqlite'):
             return None
         path = self.root / name
-        return path if path.is_file() else None
+        if not path.is_file():
+            return None
+        if module == 'etf-shares':
+            from app.services.etf_configuration import ConfigurationFailure
+            try:
+                identity = self.etf_reader_target()[2]
+            except ConfigurationFailure:
+                return None
+            if not self.etf_snapshot_matches(path, identity):
+                return None
+        return path
 
     def schedule_floor_for(self, plan, moment):
         if self.schedule_floor is None:
@@ -245,7 +298,16 @@ class SnapshotCache:
         if module == 'etf-shares':
             from app.core.etf_sync import copy_etf
             try:
-                return copy_etf(self, path, previous, full)
+                target = self.etf_reader_target()
+                # A config save can occur between snapshot lookup and target lookup.
+                if previous is not None and not self.etf_snapshot_matches(previous, target[2]):
+                    previous = None
+                with self.etf_source(target) as source:
+                    result = copy_etf(self, path, previous, full, source=source, identity=target[2])
+                current = self.etf_reader_target()
+                if current[2:] != target[2:]:
+                    raise CacheUnavailable('ETF 数据库配置已变更，请重新同步。')
+                return result
             except BaseException:
                 path.unlink(missing_ok=True)
                 raise

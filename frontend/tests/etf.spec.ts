@@ -213,7 +213,7 @@ test('missing writer is clearly visible without blocking saved charts', async ({
   await page.route('**/api/v1/etf-shares/history?*', (route) => route.fulfill({ json: fixture() }))
   await page.goto('/etf-shares')
   await expect(
-    page.getByText('自动采集未就绪：尚未配置独立写入账号。页面同步只读取已有数据。'),
+    page.getByText('自动采集未就绪：尚未配置数据库连接。页面同步只读取已有数据。'),
   ).toBeVisible()
   await expect(page.getByRole('img', { name: 'ETF总份额曲线' })).toBeVisible()
 })

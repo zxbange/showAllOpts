@@ -2,7 +2,16 @@ import { apiFetch } from './http'
 import type { ETFCollectionConfiguration, ETFManualRun } from '../types/etf'
 export type CollectionInput = Pick<
   ETFCollectionConfiguration,
-  'revision' | 'username' | 'enabled' | 'lookback_days' | 'batch_days' | 'schedule' | 'db_tls'
+  | 'revision'
+  | 'host'
+  | 'port'
+  | 'database'
+  | 'username'
+  | 'enabled'
+  | 'lookback_days'
+  | 'batch_days'
+  | 'schedule'
+  | 'db_tls'
 > & { password?: string; db_transport_acknowledged?: boolean }
 async function call<T>(path: string, body?: unknown, signal?: AbortSignal): Promise<T> {
   const response = await apiFetch('/api/v1/etf-shares/' + path, {

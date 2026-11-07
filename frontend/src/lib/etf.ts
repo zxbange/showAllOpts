@@ -77,12 +77,12 @@ export const showETFSymbols = (values: Array<number | null>) =>
 export function collectionSummary(status: ETFCollectionStatus) {
   if (status.status === 'disabled') return '自动采集已关闭，当前展示已保存的数据。'
   if (status.status === 'missing_writer_configuration')
-    return '自动采集未就绪：尚未配置独立写入账号。页面同步只读取已有数据。'
+    return '自动采集未就绪：尚未配置数据库连接。页面同步只读取已有数据。'
   if (
     status.status === 'writer_target_mismatch' ||
     status.status === 'invalid_writer_configuration'
   )
-    return '自动采集未就绪：写入连接配置不正确，请检查是否指向同一数据库。'
+    return '自动采集未就绪：旧采集连接配置不正确，请在采集配置中重新保存数据库目标。'
   if (
     status.status === 'writer_permission_denied' ||
     status.runs?.[0]?.error === 'writer_permission_denied'
@@ -104,7 +104,7 @@ export function collectionErrorMessage(error: string): string {
   const messages: Record<string, string> = {
     writer_permission_denied: '采集账号权限不足，请检查三张ETF表的读写权限。',
     writer_table_missing: 'ETF数据表缺失，首次建表需要CREATE权限。',
-    writer_database_missing: '目标数据库不存在，请检查固定数据库目标。',
+    writer_database_missing: '目标数据库不存在，请检查数据库配置。',
     writer_connection_failed: '无法连接数据库，请检查网络、账号和TLS设置。',
     writer_write_failed: '数据库写入未完成，请检查采集账号及目标表。',
     writer_target_mismatch: '写入目标与页面数据库不一致，请重新读取配置并保存。',
@@ -113,7 +113,7 @@ export function collectionErrorMessage(error: string): string {
     source_unavailable: '交易所数据暂不可用，请稍后重试。',
     service_interrupted: '服务重启或采集被中断，可重新触发采集。',
     configuration_changed: '数据库目标已变更，本次任务已中断；请重新配置后采集。',
-    missing_writer_configuration: '请先配置独立采集写入账号。',
+    missing_writer_configuration: '请先配置采集数据库连接。',
     retry_exhausted: '已达到自动重试上限，可勾选重新尝试后手动采集。',
   }
   return (

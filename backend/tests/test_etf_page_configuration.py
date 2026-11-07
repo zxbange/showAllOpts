@@ -24,7 +24,7 @@ from test_etf_collection import worker, EVENING
 
 def form(**changes):
     return dict(revision=0, username='etf_writer', password='private-test-password', enabled=True,
-                lookback_days=300, batch_days=5, schedule=['09:30', '11:30', '18:30'], db_tls=False,
+                lookback_days=300, batch_days=5, schedule=['18:30'], db_tls=False,
                 **changes)
 
 
@@ -103,8 +103,8 @@ def test_bad_legacy_config_can_be_repaired_on_page(tmp_path):
     assert w.configured
 
 
-@pytest.mark.parametrize('username', ['root', 'readonly', 'mysql.sys'])
-def test_no_admin_or_reader_account(tmp_path, username):
+@pytest.mark.parametrize('username', ['', '   '])
+def test_empty_account_is_rejected(tmp_path, username):
     w, _, _ = worker(tmp_path)
     with pytest.raises(ConfigurationFailure):
         save(w, {'username': username})
@@ -368,3 +368,155 @@ def test_target_change_interrupts_stale_queue_so_page_can_repair(tmp_path):
     w.configure(body)
     assert w.configuration.public()['host'] == 'new-db.example'
     assert w.configured
+
+
+@pytest.mark.parametrize('username', ['readonly', 'root', 'mysql.sys', 'mysql.session', 'mysql.infoschema'])
+def test_application_account_can_save_probe_and_collect(tmp_path, username):
+    w, c, _ = worker(tmp_path)
+    w.settings.db_user = username
+    body = form() | {'username': w.settings.db_user}
+    seen = []
+    class Connection:
+        def execute(self, statement):
+            seen.append(str(statement))
+    w.engine_factory = lambda url, **kwargs: SimpleNamespace(
+        connect=lambda: nullcontext(Connection()), dispose=lambda: None)
+    assert w.test_configuration(body)['ok']
+    assert len(seen) == 3 and all(query.startswith('SELECT ') for query in seen)
+    public = save(w, {'username': w.settings.db_user, 'enabled': False})
+    assert public['username'] == w.settings.db_user and public['password_set']
+    restarted, _, _ = worker(tmp_path)
+    assert restarted.configuration.public() == public
+    w.request_run('same-account-collection')
+    assert w.tick(EVENING) and c.writes
+    assert w.status()['manual']['status'] == 'complete'
+
+
+def test_default_time_and_legacy_multiple_times_migrate_without_rewriting_credentials(tmp_path):
+    w = ETFCollection(Settings(_env_file=None, log_dir=tmp_path))
+    assert w.configuration.public()['schedule'] == ['09:00']
+    old, _, _ = worker(tmp_path)
+    save(old)
+    config = old.configuration.load() | {'schedule': ['09:30', '11:30', '18:30']}
+    ciphertext = old.configuration.cipher().encrypt(json.dumps(config).encode())
+    with old.connect() as db:
+        db.execute('UPDATE configuration SET ciphertext=?', (ciphertext,))
+    public = w.configuration.public()
+    assert public['schedule'] == ['09:00'] and public['schedule_migrated']
+    assert w.configuration.load()['password'] == 'private-test-password'
+    assert w.configuration.record()['ciphertext'] == ciphertext
+    w.start = lambda: None
+    w.configure(form() | {'revision': 1, 'password': None, 'schedule': ['10:15']})
+    assert w.configuration.public()['schedule'] == ['10:15']
+    assert not w.configuration.public().get('schedule_migrated')
+
+
+@pytest.mark.parametrize('schedule', [[], ['09:00', '18:30'], ['25:00'], ['9:00']])
+def test_only_one_valid_daily_time_can_be_saved(tmp_path, schedule):
+    w, _, _ = worker(tmp_path)
+    with pytest.raises(ConfigurationFailure, match='一个每日采集时间'):
+        save(w, {'schedule': schedule})
+
+
+def test_custom_target_roundtrip_and_no_service_target_or_password_fallback(tmp_path):
+    w, _, _ = worker(tmp_path)
+    public = save(w, {'host': 'new.example', 'port': 3307, 'database': 'etf_market',
+                      'username': w.settings.db_user, 'db_tls': True})
+    assert (public['host'], public['port'], public['database']) == ('new.example', 3307, 'etf_market')
+    assert w.configured
+    assert w.settings.db_host == '127.0.0.1' and w.settings.db_port == 3306
+    restarted, _, _ = worker(tmp_path)
+    restarted.settings.db_host = 'unrelated-app.example'
+    assert restarted.configuration.public() == public
+    assert restarted.configuration.reader_configuration()['host'] == 'new.example'
+    assert restarted.configured
+    for changed in ({'host': 'other.example'}, {'port': 3308}, {'database': 'other'}, {'username': 'other'}):
+        body = form() | {'revision': 1, 'host': 'new.example', 'port': 3307, 'database': 'etf_market',
+                         'username': w.settings.db_user, 'db_tls': True, 'password': None} | changed
+        with pytest.raises(ConfigurationFailure, match='重新输入密码'):
+            w.test_configuration(body)
+    retained = w.configuration.validate(form() | {'revision': 1, 'password': None,
+        'username': w.settings.db_user, 'db_tls': True})
+    assert retained['host'] == 'new.example' and retained['password'] == 'private-test-password'
+
+
+def test_switch_target_archives_collection_bookkeeping_without_touching_business_data(tmp_path):
+    w, collector, _ = worker(tmp_path)
+    save(w)
+    w.request_run('old-target-manual-request')
+    assert w.tick(EVENING)
+    original_writes = list(collector.writes)
+    w.configure(form() | {'revision': 1, 'host': 'new.example', 'port': 3307,
+                          'database': 'new_market', 'db_tls': True})
+    status = w.status()
+    assert status['manual'] is None and not status['runs'] and not status['gaps']
+    assert collector.writes == original_writes
+    with w.connect() as db:
+        assert db.execute('SELECT COUNT(*) FROM manual_runs').fetchone()[0] == 1
+        archive = json.loads(db.execute('SELECT state FROM target_archive').fetchone()[0])
+        assert archive['observations'] and archive['metadata']
+    w.request_run('new-target-manual-request')
+    assert w.status()['manual']['id'] == 'new-target-manual-request'
+
+
+def test_custom_target_routes_accept_target_and_same_application_account(page_client):
+    path = '/api/v1/etf-shares/collection-configuration'
+    settings = page_client.app.state.etf_collection.settings
+    response = page_client.post(path, json=form() | {'host': 'new.example', 'port': 3307,
+        'database': 'etf_only', 'username': settings.db_user, 'db_tls': True})
+    assert response.status_code == 200, response.text
+    assert response.json()['host'] == 'new.example' and response.json()['database'] == 'etf_only'
+    assert 'private-test-password' not in response.text
+    assert settings.db_host == '127.0.0.1'
+
+
+def test_custom_engine_pins_dns_and_keeps_tls_hostname(tmp_path, monkeypatch):
+    import socket
+    import pymysql
+    from app.services import database_sources
+    w, _, _ = worker(tmp_path)
+    save(w, {'host': 'new.example', 'port': 3307, 'database': 'etf_only', 'db_tls': True})
+    captured = []
+    w.engine_factory = lambda url, **kwargs: captured.append((url, kwargs))
+    w.configuration.engine(w.configuration.load())
+    addresses = [(socket.AF_INET, socket.SOCK_STREAM, 6, '', ('169.254.169.254', 3307))]
+    monkeypatch.setattr(database_sources, 'resolve_addresses', lambda *a: addresses)
+    sockets, connections = [], []
+    monkeypatch.setattr(socket, 'create_connection', lambda *a, **kw: sockets.append((a, kw)))
+    monkeypatch.setattr(pymysql, 'connect', lambda **kw: connections.append(kw))
+    with pytest.raises(ConfigurationFailure):
+        captured[0][1]['creator']()
+    assert not sockets and not connections  # Metadata addresses are blocked before credentials.
+    addresses[0] = (socket.AF_INET, socket.SOCK_STREAM, 6, '', ('10.1.2.3', 3307))
+    class Connection:
+        def connect(self, **kwargs):
+            self.socket = kwargs['sock']
+    connection = Connection()
+    monkeypatch.setattr(pymysql, 'connect', lambda **kw: connections.append(kw) or connection)
+    sock = object()
+    monkeypatch.setattr(socket, 'create_connection', lambda *a, **kw: sockets.append((a, kw)) or sock)
+    assert captured[0][1]['creator']() is connection
+    assert sockets[0][0] == (('10.1.2.3', 3307),)
+    assert connections[0]['host'] == 'new.example' and connections[0]['ssl'].check_hostname
+    assert connection.socket is sock
+
+
+def test_custom_connection_retains_safe_permission_classification(tmp_path, monkeypatch):
+    import socket
+    import pymysql
+    from app.services import database_sources
+    from app.services.etf_collection import writer_error_code
+    w, _, _ = worker(tmp_path)
+    save(w, {'host': 'new.example', 'port': 3307, 'database': 'etf_only', 'db_tls': True})
+    captured = []
+    w.engine_factory = lambda url, **kwargs: captured.append(kwargs)
+    w.configuration.engine(w.configuration.load())
+    monkeypatch.setattr(database_sources, 'resolve_addresses', lambda *args:
+        [(socket.AF_INET, socket.SOCK_STREAM, 6, '', ('10.1.2.3', 3307))])
+    def denied(**kwargs):
+        raise pymysql.err.OperationalError(1045, 'private password and raw DSN')
+    monkeypatch.setattr(pymysql, 'connect', denied)
+    with pytest.raises(ConfigurationFailure) as failure:
+        captured[0]['creator']()
+    assert writer_error_code(failure.value) == 'writer_permission_denied'
+    assert 'private' not in str(failure.value)

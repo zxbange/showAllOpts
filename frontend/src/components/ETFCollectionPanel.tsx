@@ -10,6 +10,15 @@ import {
 import type { ETFCollectionConfiguration, ETFCollectionStatus } from '../types/etf'
 import { collectionSummary, collectionErrorMessage } from '../lib/etf'
 
+const localHost = (host: string) =>
+  ['localhost', '127.0.0.1', '::1'].includes(host.trim().toLowerCase())
+const dailyTime = (schedule: string[]) => (schedule.length === 1 ? schedule[0] : '09:00')
+const normalizeConfig = (value: ETFCollectionConfiguration) => ({
+  ...value,
+  schedule_migrated: value.schedule_migrated || value.schedule.length > 1,
+  schedule: [dailyTime(value.schedule)],
+})
+
 const active = (s?: ETFCollectionStatus | null) =>
   ['queued', 'running'].includes(s?.manual?.status ?? '') ||
   s?.status === 'running' ||
@@ -107,7 +116,7 @@ export function ETFCollectionPanel({ onCollected }: { onCollected: () => void })
     getCollectionConfiguration(controller.signal)
       .then((value) => {
         if (live) {
-          setConfig(value)
+          setConfig(normalizeConfig(value))
           setSaved(value)
           setError('')
         }
@@ -122,14 +131,40 @@ export function ETFCollectionPanel({ onCollected }: { onCollected: () => void })
   }, [admin, configVersion])
   const running = active(status)
   const insecure = config && !config.transport_secure
-  const remote =
-    config && !(config.db_local ?? ['localhost', '127.0.0.1', '::1'].includes(config.host))
+  const targetEdited =
+    !!config &&
+    !!saved &&
+    (config.host !== saved.host || config.port !== saved.port || config.database !== saved.database)
+  const remote = config && !localHost(config.host)
   const transportBlocked = !!insecure
   const dbBlocked = !!remote && !config?.db_tls && !dbAck
   const passwordNeeded =
     config &&
-    (!saved?.password_set || saved.target_changed || config.username !== saved.username) &&
+    (!saved?.password_set ||
+      saved.target_changed ||
+      targetEdited ||
+      config.username !== saved.username) &&
     !password
+  const invalidConfig =
+    !config ||
+    !config.host.trim() ||
+    !config.database.trim() ||
+    !config.username.trim() ||
+    !Number.isInteger(config.port) ||
+    config.port < 1 ||
+    config.port > 65535 ||
+    !dailyTime(config.schedule)
+  function editTarget(patch: Partial<ETFCollectionConfiguration>) {
+    if (!config) return
+    setConfig({
+      ...config,
+      ...patch,
+      ...(patch.host !== undefined && !localHost(patch.host) ? { db_tls: true } : {}),
+    })
+    setPassword('')
+    setDbAck(false)
+    setMessage('')
+  }
   async function submit(kind: 'save' | 'test') {
     if (
       !admin ||
@@ -138,7 +173,8 @@ export function ETFCollectionPanel({ onCollected }: { onCollected: () => void })
       lock.current ||
       transportBlocked ||
       dbBlocked ||
-      passwordNeeded
+      passwordNeeded ||
+      invalidConfig
     )
       return
     lock.current = true
@@ -146,14 +182,28 @@ export function ETFCollectionPanel({ onCollected }: { onCollected: () => void })
     setError('')
     setMessage('')
     try {
-      const { revision, username, enabled, lookback_days, batch_days, schedule, db_tls } = config
-      const body = {
+      const {
         revision,
+        host,
+        port,
+        database,
         username,
         enabled,
         lookback_days,
         batch_days,
         schedule,
+        db_tls,
+      } = config
+      const body = {
+        revision,
+        host,
+        port,
+        database,
+        username,
+        enabled,
+        lookback_days,
+        batch_days,
+        schedule: [dailyTime(schedule)],
         db_tls,
         ...(password ? { password } : {}),
         db_transport_acknowledged: dbAck,
@@ -161,10 +211,15 @@ export function ETFCollectionPanel({ onCollected }: { onCollected: () => void })
       if (kind === 'save') {
         const value = await saveCollectionConfiguration(body)
         if (!mounted.current) return
-        setConfig(value)
+        setConfig(normalizeConfig(value))
         setSaved(value)
         setPassword('')
-        setMessage('采集配置已保存。')
+        setMessage(
+          targetEdited
+            ? '采集配置已保存。新数据库需重新同步ETF数据，其他模块不受影响。'
+            : '采集配置已保存。',
+        )
+        reload.current()
         setRefresh((n) => n + 1)
       } else {
         const result = await testCollectionConfiguration(body)
@@ -263,7 +318,7 @@ export function ETFCollectionPanel({ onCollected }: { onCollected: () => void })
         )}
       </div>
       <p className="etf-collection-hint">
-        立即采集使用已保存配置，从交易所补采并写入数据；页面顶部刷新仅重读已保存数据。关闭自动采集后仍可手动采集。
+        立即采集使用已保存配置；顶部刷新仅重读数据。自动采集关闭后仍可手动采集。
       </p>
       {admin && (
         <details>
@@ -279,20 +334,7 @@ export function ETFCollectionPanel({ onCollected }: { onCollected: () => void })
                 void submit('save')
               }}
             >
-              <p>
-                固定写入目标：{config.host}:{config.port} / {config.database} · 配置来源：
-                {config.source === 'page'
-                  ? '页面'
-                  : config.source === 'environment'
-                    ? '现有服务配置'
-                    : '未配置'}
-              </p>
-              <p>
-                使用独立采集账号，不要使用数据库管理员账号。仅需
-                etf_share_daily、etf_price_daily、etf_trading_day 三张表的 SELECT / INSERT / UPDATE
-                权限；首次缺表时还需 CREATE 权限。
-              </p>
-              {config.target_changed && (
+              {(config.target_changed || targetEdited) && (
                 <p className="etf-collection-warning" role="alert">
                   数据库目标已变更，旧密码不会沿用，请重新输入新目标的密码并保存。
                 </p>
@@ -304,166 +346,189 @@ export function ETFCollectionPanel({ onCollected }: { onCollected: () => void })
                 </div>
               )}
               <fieldset disabled={!!busy || running || transportBlocked}>
-                <div className="etf-collection-fields">
-                  <label>
-                    采集写入账号
-                    <input
-                      autoComplete="off"
-                      required
-                      value={config.username}
-                      onChange={(e) => setConfig({ ...config, username: e.target.value })}
-                    />
-                  </label>
-                  <label>
-                    数据库密码
-                    <input
-                      type="password"
-                      autoComplete="new-password"
-                      value={password}
-                      placeholder={
-                        saved?.password_set && !saved.target_changed
-                          ? '留空保留已保存密码（账号不变时）'
-                          : '请输入密码'
-                      }
-                      onChange={(e) => setPassword(e.target.value)}
-                    />
-                  </label>
-                  <label>
-                    回溯天数
-                    <input
-                      type="number"
-                      min="1"
-                      max="1500"
-                      required
-                      value={config.lookback_days}
-                      onChange={(e) =>
-                        setConfig({ ...config, lookback_days: Number(e.target.value) })
-                      }
-                    />
-                  </label>
-                  <label>
-                    每批天数
-                    <input
-                      type="number"
-                      min="1"
-                      max="20"
-                      required
-                      value={config.batch_days}
-                      onChange={(e) => setConfig({ ...config, batch_days: Number(e.target.value) })}
-                    />
-                  </label>
-                </div>
-                {passwordNeeded && <p>首次配置、更换账号或数据库目标时，必须输入密码。</p>}
-                <label className="etf-check">
-                  <input
-                    type="checkbox"
-                    checked={config.db_tls}
-                    onChange={(e) => {
-                      setConfig({ ...config, db_tls: e.target.checked })
-                      setDbAck(false)
-                    }}
-                  />
-                  数据库连接使用 TLS
-                </label>
-                {remote && !config.db_tls && (
-                  <label className="etf-collection-warning">
-                    <input
-                      type="checkbox"
-                      checked={dbAck}
-                      onChange={(e) => setDbAck(e.target.checked)}
-                    />
-                    远程数据库未启用
-                    TLS，凭据和数据可能被截获；我接受保存此配置后自动和手动采集均存在该风险
-                  </label>
-                )}
-                <label className="etf-check">
-                  <input
-                    type="checkbox"
-                    checked={config.enabled}
-                    onChange={(e) => setConfig({ ...config, enabled: e.target.checked })}
-                  />
-                  启用自动采集
-                </label>
-                <p>每日采集时间（北京时间，1–6 个，不可重复）</p>
-                <div className="etf-schedule">
-                  {config.schedule.map((time, i) => (
-                    <div key={i}>
-                      <input
-                        aria-label={`采集时间 ${i + 1}`}
-                        type="time"
-                        required
-                        value={time}
-                        onChange={(e) =>
-                          setConfig({
-                            ...config,
-                            schedule: config.schedule.map((v, n) => (n === i ? e.target.value : v)),
-                          })
-                        }
-                      />
-                      <button
-                        type="button"
-                        aria-label={`删除采集时间 ${i + 1}`}
-                        disabled={config.schedule.length <= 1}
-                        onClick={() =>
-                          setConfig({
-                            ...config,
-                            schedule: config.schedule.filter((_, n) => n !== i),
-                          })
-                        }
-                      >
-                        删除
-                      </button>
+                <div className="etf-collection-sections">
+                  <section className="etf-config-section" aria-labelledby="etf-account-heading">
+                    <h3 id="etf-account-heading">数据库账户</h3>
+                    <p className="etf-collection-hint">可使用现有具备权限的账号。</p>
+                    <div className="etf-collection-fields etf-target-fields">
+                      <label className="etf-host-field">
+                        数据库主机
+                        <input
+                          required
+                          autoComplete="off"
+                          value={config.host}
+                          onChange={(e) => editTarget({ host: e.target.value })}
+                        />
+                      </label>
+                      <label>
+                        端口
+                        <input
+                          required
+                          type="number"
+                          min="1"
+                          max="65535"
+                          value={config.port}
+                          onChange={(e) => editTarget({ port: Number(e.target.value) })}
+                        />
+                      </label>
+                      <label>
+                        数据库名称
+                        <input
+                          required
+                          autoComplete="off"
+                          value={config.database}
+                          onChange={(e) => editTarget({ database: e.target.value })}
+                        />
+                      </label>
                     </div>
-                  ))}
-                  <button
-                    type="button"
-                    disabled={config.schedule.length >= 6}
-                    onClick={() =>
-                      setConfig({ ...config, schedule: [...config.schedule, '18:00'] })
-                    }
-                  >
-                    添加时间
-                  </button>
+                    <p className="etf-collection-hint">仅用于 ETF 采集与图表，其他模块不受影响。</p>
+                    <div className="etf-collection-fields">
+                      <label>
+                        采集写入账号
+                        <input
+                          autoComplete="off"
+                          required
+                          value={config.username}
+                          onChange={(e) => editTarget({ username: e.target.value })}
+                        />
+                      </label>
+                      <label>
+                        数据库密码
+                        <input
+                          type="password"
+                          autoComplete="new-password"
+                          value={password}
+                          placeholder={
+                            saved?.password_set &&
+                            !saved.target_changed &&
+                            !targetEdited &&
+                            config.username === saved.username
+                              ? '留空保留已保存密码（账号不变时）'
+                              : '请输入密码'
+                          }
+                          onChange={(e) => setPassword(e.target.value)}
+                        />
+                      </label>
+                    </div>
+                    {passwordNeeded && <p>首次配置、更换账号或数据库目标时，必须输入密码。</p>}
+                    <label className="etf-check">
+                      <input
+                        type="checkbox"
+                        checked={config.db_tls}
+                        onChange={(e) => {
+                          setConfig({ ...config, db_tls: e.target.checked })
+                          setDbAck(false)
+                        }}
+                      />
+                      数据库连接使用 TLS
+                    </label>
+                    {remote && !config.db_tls && (
+                      <label className="etf-collection-warning">
+                        <input
+                          type="checkbox"
+                          checked={dbAck}
+                          onChange={(e) => setDbAck(e.target.checked)}
+                        />
+                        远程数据库未启用
+                        TLS，凭据和数据可能被截获；我接受保存此配置后自动和手动采集均存在该风险
+                      </label>
+                    )}
+                    <p className="etf-collection-hint etf-permission-note">
+                      仅需 etf_share_daily、etf_price_daily、etf_trading_day 的 SELECT / INSERT /
+                      UPDATE 权限；缺表时需 CREATE。
+                    </p>
+                  </section>
+                  <section className="etf-config-section" aria-labelledby="etf-plan-heading">
+                    <h3 id="etf-plan-heading">采集计划</h3>
+                    <label className="etf-check">
+                      <input
+                        type="checkbox"
+                        checked={config.enabled}
+                        onChange={(e) => setConfig({ ...config, enabled: e.target.checked })}
+                      />
+                      启用自动采集
+                    </label>
+                    <div className="etf-collection-fields">
+                      <label className="etf-daily-time">
+                        每日采集时间（北京时间）
+                        <input
+                          type="time"
+                          required
+                          value={dailyTime(config.schedule)}
+                          onChange={(e) => setConfig({ ...config, schedule: [e.target.value] })}
+                        />
+                      </label>
+                    </div>
+                    <p className="etf-collection-hint">
+                      默认 09:00，开盘前采集上一已收市交易日的份额与价格。
+                    </p>
+                    {config.schedule_migrated && (
+                      <p className="etf-collection-hint" role="status">
+                        旧时段已合并为每日一次，可调整时间并保存确认。
+                      </p>
+                    )}
+                    <div className="etf-collection-fields">
+                      <label>
+                        回溯天数
+                        <input
+                          type="number"
+                          min="1"
+                          max="1500"
+                          required
+                          value={config.lookback_days}
+                          onChange={(e) =>
+                            setConfig({ ...config, lookback_days: Number(e.target.value) })
+                          }
+                        />
+                      </label>
+                      <label>
+                        每批天数
+                        <input
+                          type="number"
+                          min="1"
+                          max="20"
+                          required
+                          value={config.batch_days}
+                          onChange={(e) =>
+                            setConfig({ ...config, batch_days: Number(e.target.value) })
+                          }
+                        />
+                      </label>
+                    </div>
+                  </section>
                 </div>
-                {new Set(config.schedule).size !== config.schedule.length && (
-                  <p role="alert">采集时间不能重复。</p>
-                )}
-                <div className="heading-actions">
+                <div className="etf-collection-actions">
                   <button
                     className="button"
                     type="submit"
-                    disabled={
-                      transportBlocked ||
-                      dbBlocked ||
-                      !!passwordNeeded ||
-                      new Set(config.schedule).size !== config.schedule.length
-                    }
+                    disabled={transportBlocked || dbBlocked || !!passwordNeeded || invalidConfig}
                   >
                     {busy === 'save' ? '保存中…' : '保存采集配置'}
                   </button>
                   <button
                     type="button"
                     className="button button-quiet"
-                    disabled={transportBlocked || dbBlocked || !!passwordNeeded}
+                    disabled={transportBlocked || dbBlocked || !!passwordNeeded || invalidConfig}
                     onClick={() => void submit('test')}
                   >
                     {busy === 'test' ? '测试中…' : '测试连接（只读）'}
                   </button>
+                  <button
+                    className="button button-quiet"
+                    type="button"
+                    title="重新读取配置，丢弃未保存修改"
+                    disabled={!!busy || running}
+                    onClick={() => {
+                      setPassword('')
+                      setConfig(null)
+                      setDbAck(false)
+                      setConfigVersion((n) => n + 1)
+                    }}
+                  >
+                    重置修改
+                  </button>
                 </div>
               </fieldset>
-              <button
-                className="button button-quiet"
-                type="button"
-                disabled={!!busy}
-                onClick={() => {
-                  setPassword('')
-                  setConfig(null)
-                  setDbAck(false)
-                  setConfigVersion((n) => n + 1)
-                }}
-              >
-                重新读取配置（丢弃未保存修改）
-              </button>
               {running && <p>采集运行期间不能修改配置，请完成后再保存。</p>}
             </form>
           )}

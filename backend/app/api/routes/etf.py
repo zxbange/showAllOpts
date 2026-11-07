@@ -48,11 +48,14 @@ class CollectionConfiguration(BaseModel):
     model_config = ConfigDict(extra='forbid', hide_input_in_errors=True)
     revision: int = Field(ge=0, strict=True)
     username: str = Field(min_length=1, max_length=128)
+    host: str | None = Field(default=None, min_length=1, max_length=253)
+    port: int | None = Field(default=None, ge=1, le=65535, strict=True)
+    database: str | None = Field(default=None, min_length=1, max_length=64)
     password: SecretStr | None = None
     enabled: bool = Field(strict=True)
     lookback_days: int = Field(ge=1, le=1500, strict=True)
     batch_days: int = Field(ge=1, le=20, strict=True)
-    schedule: list[str] = Field(min_length=1, max_length=6)
+    schedule: list[str] = Field(min_length=1, max_length=1)
     db_tls: bool = Field(strict=True)
     db_transport_acknowledged: bool = Field(default=False, strict=True)
 

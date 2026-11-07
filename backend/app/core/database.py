@@ -21,11 +21,16 @@ def build_engine(settings: Settings, *, for_cache: bool = False) -> Engine:
 
 def get_session(request: Request, response: Response) -> Iterator[Session]:
     cache = request.app.state.cache
+    module = request.url.path.split('/')[3]
     if cache.settings.cache_enabled:
-        module = request.url.path.split('/')[3]
         with cache.session(module) as session:
             response.headers['X-Data-Source'] = 'local-cache'
             response.headers['X-Data-Updated-At'] = session.info['cache_updated_at']
+            response.headers['Cache-Control'] = 'no-store'
+            yield session
+    elif module == 'etf-shares':
+        with cache.etf_source() as engine, Session(engine) as session:
+            response.headers['X-Data-Source'] = 'database'
             response.headers['Cache-Control'] = 'no-store'
             yield session
     else:
