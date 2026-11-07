@@ -175,6 +175,51 @@ def test_missing_platform_api_names_are_reported_before_collection(backfill, mon
     assert not backfill.requests and not backfill.connections
 
 
+@pytest.mark.parametrize('legacy', [False, True])
+def test_connection_uses_batch_compatible_engine_options(backfill, monkeypatch, legacy):
+    namespace = {'__name__': 'notebook_cell', 'any': np.any, 'int': np.int64}
+    exec(compile(SCRIPT.read_text(encoding='utf-8'), str(SCRIPT), 'exec'), namespace)
+    engine = (SimpleNamespace(connect=backfill.engine.connect, dispose=backfill.engine.dispose)
+              if legacy else backfill.engine)
+    calls = []
+    # Explicit signature rejects unsupported keywords like old SQLAlchemy does.
+    def factory(url, echo, pool_size, max_overflow, pool_recycle, pool_pre_ping, connect_args):
+        calls.append(url)
+        assert url.drivername == 'mysql+pymysql' and url.port == 3306
+        assert echo is False and pool_size == 1 and max_overflow == 0
+        assert pool_recycle == 3600 and pool_pre_ping is True
+        assert connect_args == {'connect_timeout': 10}
+        return engine
+    namespace['create_engine'] = factory
+    if legacy:
+        # SQLAlchemy < 1.4 exposes URL as a constructor, without URL.create.
+        namespace['URL'] = lambda **kwargs: SimpleNamespace(**kwargs)
+    config = dict(host='offline-host', port='3306', dbname='offline-db', dbuser='offline-user',
+                  dbpassword='offline-secret', driver='pymysql')
+    assert namespace['connect_database'](config) is engine
+    assert len(calls) == 1
+    if not legacy:
+        assert engine.hide_parameters is True
+
+
+@pytest.mark.parametrize('phase', ['初始化连接引擎', '建立数据库连接'])
+def test_connection_failure_reports_stage_without_exposing_credentials(backfill, phase):
+    namespace = {'__name__': 'notebook_cell'}
+    exec(compile(SCRIPT.read_text(encoding='utf-8'), str(SCRIPT), 'exec'), namespace)
+    disposed = []
+    def fail(*args, **kwargs):
+        raise TypeError('offline-secret offline-user offline-host')
+    namespace['create_engine'] = (fail if phase == '初始化连接引擎' else
+                                  lambda *args, **kwargs: SimpleNamespace(
+                                      connect=fail, dispose=lambda: disposed.append(True)))
+    with pytest.raises(namespace['HistoryError']) as error:
+        namespace['connect_database'](dict(host='offline-host', dbname='offline-db',
+                                          dbuser='offline-user', dbpassword='offline-secret', driver='pymysql'))
+    assert phase in str(error.value) and 'TypeError' in str(error.value)
+    assert 'offline-' not in str(error.value)
+    assert disposed == ([True] if phase == '建立数据库连接' else [])
+
+
 def test_persistence_insert_only_preserves_exchange_sources_and_idempotence(backfill):
     c = backfill
     preview = c.module.run()

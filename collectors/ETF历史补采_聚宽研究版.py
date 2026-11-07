@@ -247,6 +247,8 @@ def connect_database(config):
     driver = config.get('driver', 'auto')
     if driver not in ('auto', 'mysqldb', 'pymysql'):
         raise HistoryError('driver 仅支持 auto、mysqldb 或 pymysql。')
+    stage = '加载驱动'
+    engine = None
     try:
         if driver == 'auto':
             try:
@@ -255,22 +257,32 @@ def connect_database(config):
             except ImportError:
                 import pymysql  # noqa: F401
                 driver = 'pymysql'
+        stage = '构造连接地址'
         make_url = getattr(URL, 'create', URL)
         url = make_url(drivername='mysql+' + driver, host=config['host'],
                        port=_builtins.int(config.get('port', 3306)), database=config['dbname'],
                        username=config['dbuser'], password=config['dbpassword'],
                        query={'charset': 'utf8mb4'})
-        engine = create_engine(url, echo=False, hide_parameters=True, pool_size=1,
+        stage = '初始化连接引擎'
+        # 沿用批量采集的连接参数；旧版 SQLAlchemy 不接受 hide_parameters 构造参数。
+        engine = create_engine(url, echo=False, pool_size=1,
                                max_overflow=0, pool_recycle=3600, pool_pre_ping=True,
                                connect_args={'connect_timeout': 10})
+        if hasattr(engine, 'hide_parameters'):
+            engine.hide_parameters = True
+        stage = '建立数据库连接'
         with engine.connect():
             pass
         return engine
     except Exception as exc:
-        if 'engine' in locals():
-            engine.dispose()
-        raise HistoryError('MySQL 连接未成功（{}）；请检查驱动、网络白名单、账号及数据库。'.format(
-            type(exc).__name__)) from None
+        if engine is not None:
+            try:
+                engine.dispose()
+            except Exception:
+                pass
+        hint = ('请检查 SQLAlchemy/驱动版本及连接参数类型。' if isinstance(exc, TypeError)
+                else '请检查驱动、网络白名单、账号及数据库。')
+        raise HistoryError('MySQL {}失败（{}）；{}'.format(stage, type(exc).__name__, hint)) from None
 
 
 def check_schema(engine, create_tables=False):
