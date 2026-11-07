@@ -18,10 +18,19 @@ async function expectCollectionLast(page: import('./fixtures').Page, content: st
   const panel = page.getByRole('region', { name: 'ETF采集管理' })
   await expect(panel).toBeVisible()
   await expect(page.locator('.etf-page > :last-child')).toHaveAttribute('aria-label', 'ETF采集管理')
-  const contentBox = await page.locator(content).boundingBox()
-  const panelBox = await panel.boundingBox()
-  expect(contentBox).not.toBeNull()
-  expect(panelBox!.y).toBeGreaterThanOrEqual(contentBox!.y + contentBox!.height)
+  await expect(page.locator(content)).toBeVisible()
+  await expect
+    .poll(() =>
+      panel.evaluate((element, selector) => {
+        const contentElement = element.closest('.etf-page')?.querySelector(selector)
+        if (!contentElement) throw new Error(`Missing ETF content: ${selector}`)
+        // Read both bounds in one frame so page-enter cannot shift between measurements.
+        const contentBox = contentElement.getBoundingClientRect()
+        const panelBox = element.getBoundingClientRect()
+        return panelBox.top - contentBox.bottom
+      }, content),
+    )
+    .toBeGreaterThanOrEqual(0)
 }
 
 const codes = ['510300.XSHG', '510310.XSHG', '510330.XSHG', '159919.XSHE', '515330.XSHG']
