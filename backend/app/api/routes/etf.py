@@ -56,8 +56,6 @@ class CollectionConfiguration(BaseModel):
     lookback_days: int = Field(ge=1, le=1500, strict=True)
     batch_days: int = Field(ge=1, le=20, strict=True)
     schedule: list[str] = Field(min_length=1, max_length=1)
-    db_tls: bool = Field(strict=True)
-    db_transport_acknowledged: bool = Field(default=False, strict=True)
 
 
 async def collection_body(request):

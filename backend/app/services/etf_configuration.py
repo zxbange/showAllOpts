@@ -72,6 +72,11 @@ class ETFConfiguration:
                 config = json.loads(self.cipher().decrypt(record['ciphertext']))
                 if config['revision'] != record['revision']:
                     raise ValueError()
+                # Older encrypted records may contain a TLS preference/acknowledgment.
+                # Read them without rewriting credentials or revisions; the ETF driver
+                # now uses one fixed non-TLS transport, and the next save drops the keys.
+                config.pop('db_tls', None)
+                config.pop('db_transport_acknowledged', None)
                 return single_schedule(config)
             except ConfigurationFailure:
                 raise
@@ -83,14 +88,12 @@ class ETFConfiguration:
                       enabled=self.settings.etf_collection_enabled,
                       lookback_days=self.settings.etf_collection_lookback_days,
                       batch_days=self.settings.etf_collection_batch_days,
-                      schedule=[DEFAULT_COLLECTION_TIME],
-                      db_tls=not local_database(self.settings.db_host), source='none')
+                      schedule=[DEFAULT_COLLECTION_TIME], source='none')
         if raw:
             try:
                 url = make_url(raw)
                 self.validate_target(url)
-                config.update(username=url.username or '', password=url.password or '', source='environment',
-                              db_tls=bool(url.query.get('ssl_ca') or url.query.get('ssl_check_hostname')))
+                config.update(username=url.username or '', password=url.password or '', source='environment')
             except ConfigurationFailure:
                 config['legacy_error'] = 'writer_target_mismatch'
             except Exception:
@@ -141,11 +144,9 @@ class ETFConfiguration:
         if len(schedule) != 1 or any(
                 not re.fullmatch(r'(?:[01][0-9]|2[0-3]):[0-5][0-9]', slot) for slot in schedule):
             raise ConfigurationFailure('请设置一个每日采集时间（北京时间），格式为HH:MM')
-        if not body['db_tls'] and not local_database(target['host']) and not body.get('db_transport_acknowledged'):
-            raise ConfigurationFailure('远程数据库未启用TLS，凭据和数据可能被截获；请明确确认风险或启用TLS')
         return dict(revision=previous['revision'], **target, username=username, password=password,
                     enabled=body['enabled'], lookback_days=body['lookback_days'],
-                    batch_days=body['batch_days'], schedule=schedule, db_tls=body['db_tls'], source='page',
+                    batch_days=body['batch_days'], schedule=schedule, source='page',
                     target_mode='custom' if custom or previous.get('target_mode') == 'custom' else 'service')
 
     def public(self):
@@ -192,18 +193,12 @@ class ETFConfiguration:
     def engine(self, config):
         if config.get('target_mode') != 'custom':
             self.validate_target(self.url(config))
-        options = dict(connect_timeout=10, read_timeout=60, write_timeout=60)
-        if config['db_tls']:
-            # System trust store + hostname verification. No silent plaintext fallback.
-            # Pass the context itself: driver ssl_verify_* kwargs replace it and
-            # can disable hostname checks when no explicit CA file is supplied.
-            import ssl
-            options['ssl'] = ssl.create_default_context()
-        else:
-            options['ssl_disabled'] = True
+        # ETF database transport is intentionally non-TLS, including legacy records
+        # and environment URLs. This does not change browser HTTPS or other modules.
+        options = dict(connect_timeout=10, read_timeout=60, write_timeout=60, ssl_disabled=True)
         extra = {}
         if config.get('target_mode') == 'custom':
-            # Resolve and pin one permitted socket. TLS still verifies the supplied host.
+            # Resolve and pin one permitted socket before transmitting credentials.
             def connect():
                 import socket
                 import pymysql
@@ -233,7 +228,7 @@ class ETFConfiguration:
                             pass
                     if sock is not None:
                         sock.close()
-                    failure = ConfigurationFailure('数据库连接失败，请检查目标地址、网络、TLS及账号权限')
+                    failure = ConfigurationFailure('数据库连接失败，请检查目标地址、网络及账号权限')
                     args = getattr(error, 'args', ())
                     if args and isinstance(args[0], int):
                         failure.database_error_number = args[0]
@@ -251,7 +246,7 @@ class ETFConfiguration:
                 for table in ('etf_share_daily', 'etf_price_daily', 'etf_trading_day'):
                     connection.execute(text(f'SELECT 1 FROM `{table}` LIMIT 0'))
         except Exception:
-            raise ConfigurationFailure('连接或表检查失败，请检查网络、TLS证书、账号权限及ETF三张表；不会返回原始数据库错误') from None
+            raise ConfigurationFailure('连接或表检查失败，请检查网络、账号权限及ETF三张表；不会返回原始数据库错误') from None
         finally:
             if engine is not None:
                 engine.dispose()

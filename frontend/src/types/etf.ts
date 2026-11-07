@@ -71,7 +71,6 @@ export interface ETFCollectionConfiguration {
   source: 'page' | 'environment' | 'none'
   transport_secure: boolean
   db_local?: boolean
-  db_tls: boolean
 }
 export interface ETFManualRun {
   id: string

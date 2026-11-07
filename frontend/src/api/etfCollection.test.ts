@@ -38,7 +38,6 @@ it('uses CSRF for all mutations and never invents a replacement password', async
     lookback_days: 400,
     batch_days: 4,
     schedule: ['17:00'],
-    db_tls: true,
   }
   await saveCollectionConfiguration(body)
   await testCollectionConfiguration(body)
@@ -49,7 +48,12 @@ it('uses CSRF for all mutations and never invents a replacement password', async
     expect(options.headers.get('X-App-Client')).toBe('browser')
     expect(options.credentials).toBe('same-origin')
   }
-  expect(JSON.parse(fetcher.mock.calls[0][1].body)).not.toHaveProperty('password')
+  for (const [, options] of fetcher.mock.calls.slice(0, 2)) {
+    expect(JSON.parse(options.body)).toEqual(body)
+    expect(JSON.parse(options.body)).not.toHaveProperty('password')
+    expect(JSON.parse(options.body)).not.toHaveProperty('db_tls')
+    expect(JSON.parse(options.body)).not.toHaveProperty('db_transport_acknowledged')
+  }
   expect(JSON.parse(fetcher.mock.calls[2][1].body)).toEqual({ request_id: '1234567890abcdef' })
 })
 it('returns sanitized backend errors without exposing submitted data', async () => {

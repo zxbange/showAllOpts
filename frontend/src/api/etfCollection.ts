@@ -11,8 +11,7 @@ export type CollectionInput = Pick<
   | 'lookback_days'
   | 'batch_days'
   | 'schedule'
-  | 'db_tls'
-> & { password?: string; db_transport_acknowledged?: boolean }
+> & { password?: string }
 async function call<T>(path: string, body?: unknown, signal?: AbortSignal): Promise<T> {
   const response = await apiFetch('/api/v1/etf-shares/' + path, {
     method: body === undefined ? 'GET' : 'POST',

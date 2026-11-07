@@ -105,7 +105,7 @@ export function collectionErrorMessage(error: string): string {
     writer_permission_denied: '采集账号权限不足，请检查三张ETF表的读写权限。',
     writer_table_missing: 'ETF数据表缺失，首次建表需要CREATE权限。',
     writer_database_missing: '目标数据库不存在，请检查数据库配置。',
-    writer_connection_failed: '无法连接数据库，请检查网络、账号和TLS设置。',
+    writer_connection_failed: '无法连接数据库，请检查网络、账号和数据库配置。',
     writer_write_failed: '数据库写入未完成，请检查采集账号及目标表。',
     writer_target_mismatch: '写入目标与页面数据库不一致，请重新读取配置并保存。',
     invalid_writer_configuration: '采集配置无效，请重新检查并保存。',

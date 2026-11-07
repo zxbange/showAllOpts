@@ -134,3 +134,9 @@ it('renders collection errors without raw internal codes', () => {
   expect(collectionErrorMessage('unknown_backend_code')).not.toContain('unknown_backend_code')
   expect(collectionErrorMessage('配置已被修改，请刷新')).toBe('配置已被修改，请刷新')
 })
+
+it('connection failures refer to database settings without a TLS option', () => {
+  expect(collectionErrorMessage('writer_connection_failed')).toBe(
+    '无法连接数据库，请检查网络、账号和数据库配置。',
+  )
+})

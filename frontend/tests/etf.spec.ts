@@ -14,6 +14,16 @@ test.beforeEach(async ({ page }) => {
   )
 })
 
+async function expectCollectionLast(page: import('./fixtures').Page, content: string) {
+  const panel = page.getByRole('region', { name: 'ETF采集管理' })
+  await expect(panel).toBeVisible()
+  await expect(page.locator('.etf-page > :last-child')).toHaveAttribute('aria-label', 'ETF采集管理')
+  const contentBox = await page.locator(content).boundingBox()
+  const panelBox = await panel.boundingBox()
+  expect(contentBox).not.toBeNull()
+  expect(panelBox!.y).toBeGreaterThanOrEqual(contentBox!.y + contentBox!.height)
+}
+
 const codes = ['510300.XSHG', '510310.XSHG', '510330.XSHG', '159919.XSHE', '515330.XSHG']
 function fixture(group = 'hs300') {
   const dates = Array.from({ length: 70 }, (_, i) =>
@@ -51,6 +61,7 @@ function fixture(group = 'hs300') {
       market_value: i === 3 ? null : String(500e8 + i * 1e8),
       available_funds: i === 3 ? 4 : 5,
       expected_funds: 5,
+      quality_flags: i === 0 ? ['suspected_split'] : [],
     })),
   }
 }
@@ -74,14 +85,35 @@ test('one ETF entry, seven indices, aggregate toggle, range and history navigati
   await expect(page.locator('.etf-card').nth(2)).toContainText('日变动 —')
   await expect(page.locator('.etf-card').last()).toContainText('待更新')
   await expect(page.getByRole('img', { name: 'ETF总份额曲线' }).locator('canvas')).toBeVisible()
+  await expectCollectionLast(page, '.etf-trend-panel')
+  await expect(page.getByText('切换指数，查看 ETF 总份额与所跟踪基金的合计流通市值。')).toHaveCount(
+    0,
+  )
+  await expect(page.getByText('点击卡片聚焦单只 ETF，再次点击恢复全部')).toHaveCount(0)
+  await expect(page.locator('.etf-method-note')).toHaveCount(0)
+  await expect(page.getByText(/日变动对比前一交易日|清单不覆盖该指数全部/)).toHaveCount(0)
   await page.getByRole('button', { name: '查看沪深300ETF华泰柏瑞曲线' }).click()
   await expect(
     page.getByRole('heading', { name: '总份额变化曲线 · 沪深300ETF华泰柏瑞' }),
+  ).toBeVisible()
+  await page.getByRole('button', { name: '查看沪深300ETF华泰柏瑞曲线' }).click()
+  await expect(
+    page.getByRole('heading', { name: '总份额变化曲线 · 全部', exact: true }),
+  ).toBeVisible()
+  await page.getByRole('button', { name: '查看沪深300ETF华泰柏瑞曲线' }).click()
+  await page.getByRole('button', { name: '显示全部 ETF' }).click()
+  await expect(
+    page.getByRole('heading', { name: '总份额变化曲线 · 全部', exact: true }),
   ).toBeVisible()
   await page.getByRole('button', { name: '流通市值', exact: true }).click()
   await expect(
     page.getByRole('img', { name: 'ETF合计流通市值曲线' }).locator('canvas'),
   ).toBeVisible()
+  await expectCollectionLast(page, '.etf-method-note')
+  await expect(page.getByText('流通市值口径', { exact: true })).toBeVisible()
+  await expect(page.getByText(/1 个交易日因疑似份额拆并或异常跳变/)).toBeVisible()
+  await expect(page.getByText(/深市仅使用已核验的收盘价日期/)).toBeVisible()
+  await expect(page.getByText(/清单不覆盖该指数全部/)).toHaveCount(0)
   await expect(page.locator('.etf-card')).toHaveCount(0)
   await expect(page.getByRole('button', { name: '显示全部 ETF' })).toHaveCount(0)
   await expect(page.getByText('同日份额 × 收盘价后求和；缺数据不估算')).toBeVisible()
@@ -151,10 +183,12 @@ test('failure retry, empty database, legacy market data and empty selected fund'
   })
   await page.goto('/etf-shares?group=invalid')
   await expect(page.locator('.state-panel[role="alert"]')).toContainText('数据库暂不可用')
+  await expectCollectionLast(page, '.state-panel')
   await expect(page.getByRole('combobox', { name: '跟踪指数' })).toHaveValue('hs300')
   state = 'empty'
   await page.getByRole('button', { name: '重新加载' }).click()
   await expect(page.getByRole('heading', { name: '暂无ETF份额数据' })).toBeVisible()
+  await expectCollectionLast(page, '.state-panel')
   await page.getByRole('button', { name: '流通市值', exact: true }).click()
   await expect(page.getByRole('heading', { name: '流通市值数据未齐' })).toBeVisible()
   await expect(page.getByRole('img', { name: 'ETF合计流通市值曲线' })).toHaveCount(0)
@@ -167,6 +201,7 @@ test('failure retry, empty database, legacy market data and empty selected fund'
   state = 'error'
   await page.getByRole('combobox', { name: '跟踪指数' }).selectOption('zz500')
   await expect(page.locator('.state-panel[role="alert"]')).toContainText('数据库暂不可用')
+  await expectCollectionLast(page, '.state-panel')
   await expect(page.locator('.etf-card')).toHaveCount(0)
   state = 'partial'
   await page.getByRole('combobox', { name: '跟踪指数' }).selectOption('cyb')
@@ -194,6 +229,7 @@ test('rapid index, range and metric changes never show a stale response', async 
   await page.getByRole('combobox', { name: '跟踪指数' }).selectOption('zz500')
   await expect.poll(() => delayedStarted).toBe(true)
   await expect(page.getByRole('status', { name: '正在加载数据' })).toBeVisible()
+  await expectCollectionLast(page, '.loading-state')
   await expect(page.locator('.etf-card')).toHaveCount(0)
   await page.getByRole('button', { name: '流通市值', exact: true }).click()
   await page.getByRole('button', { name: '近1月', exact: true }).click()

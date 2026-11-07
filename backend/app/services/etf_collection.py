@@ -438,12 +438,9 @@ class ETFCollection:
             engine = None
             try:
                 progress('writing', completed, total)
-                if config['source'] == 'environment':
-                    engine = self.engine_factory(
-                        self.settings.etf_collection_writer_url.get_secret_value(), pool_pre_ping=True,
-                        connect_args={'connect_timeout': 10, 'read_timeout': 60, 'write_timeout': 60})
-                else:
-                    engine = self.configuration.engine(config)
+                # Page and legacy environment writers must share the same fixed
+                # ETF transport policy; never hand the raw legacy URL to a driver.
+                engine = self.configuration.engine(config)
                 c.write_records(engine, shares, prices, calendar=calendar)
             except Exception as exc:
                 raise WriterFailure(writer_error_code(exc)) from None

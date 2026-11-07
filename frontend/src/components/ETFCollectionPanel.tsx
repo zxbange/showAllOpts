@@ -10,8 +10,6 @@ import {
 import type { ETFCollectionConfiguration, ETFCollectionStatus } from '../types/etf'
 import { collectionSummary, collectionErrorMessage } from '../lib/etf'
 
-const localHost = (host: string) =>
-  ['localhost', '127.0.0.1', '::1'].includes(host.trim().toLowerCase())
 const dailyTime = (schedule: string[]) => (schedule.length === 1 ? schedule[0] : '09:00')
 const normalizeConfig = (value: ETFCollectionConfiguration) => ({
   ...value,
@@ -49,7 +47,6 @@ export function ETFCollectionPanel({ onCollected }: { onCollected: () => void })
   const [uncertain, setUncertain] = useState(false)
   const [retryExhausted, setRetryExhausted] = useState(false)
   const retryChoice = useRef(false)
-  const [dbAck, setDbAck] = useState(false)
   const [refresh, setRefresh] = useState(0)
   const [configVersion, setConfigVersion] = useState(0)
   const lock = useRef(false)
@@ -135,9 +132,7 @@ export function ETFCollectionPanel({ onCollected }: { onCollected: () => void })
     !!config &&
     !!saved &&
     (config.host !== saved.host || config.port !== saved.port || config.database !== saved.database)
-  const remote = config && !localHost(config.host)
   const transportBlocked = !!insecure
-  const dbBlocked = !!remote && !config?.db_tls && !dbAck
   const passwordNeeded =
     config &&
     (!saved?.password_set ||
@@ -159,10 +154,8 @@ export function ETFCollectionPanel({ onCollected }: { onCollected: () => void })
     setConfig({
       ...config,
       ...patch,
-      ...(patch.host !== undefined && !localHost(patch.host) ? { db_tls: true } : {}),
     })
     setPassword('')
-    setDbAck(false)
     setMessage('')
   }
   async function submit(kind: 'save' | 'test') {
@@ -172,7 +165,6 @@ export function ETFCollectionPanel({ onCollected }: { onCollected: () => void })
       running ||
       lock.current ||
       transportBlocked ||
-      dbBlocked ||
       passwordNeeded ||
       invalidConfig
     )
@@ -192,7 +184,6 @@ export function ETFCollectionPanel({ onCollected }: { onCollected: () => void })
         lookback_days,
         batch_days,
         schedule,
-        db_tls,
       } = config
       const body = {
         revision,
@@ -204,9 +195,7 @@ export function ETFCollectionPanel({ onCollected }: { onCollected: () => void })
         lookback_days,
         batch_days,
         schedule: [dailyTime(schedule)],
-        db_tls,
         ...(password ? { password } : {}),
-        db_transport_acknowledged: dbAck,
       }
       if (kind === 'save') {
         const value = await saveCollectionConfiguration(body)
@@ -411,28 +400,6 @@ export function ETFCollectionPanel({ onCollected }: { onCollected: () => void })
                       </label>
                     </div>
                     {passwordNeeded && <p>首次配置、更换账号或数据库目标时，必须输入密码。</p>}
-                    <label className="etf-check">
-                      <input
-                        type="checkbox"
-                        checked={config.db_tls}
-                        onChange={(e) => {
-                          setConfig({ ...config, db_tls: e.target.checked })
-                          setDbAck(false)
-                        }}
-                      />
-                      数据库连接使用 TLS
-                    </label>
-                    {remote && !config.db_tls && (
-                      <label className="etf-collection-warning">
-                        <input
-                          type="checkbox"
-                          checked={dbAck}
-                          onChange={(e) => setDbAck(e.target.checked)}
-                        />
-                        远程数据库未启用
-                        TLS，凭据和数据可能被截获；我接受保存此配置后自动和手动采集均存在该风险
-                      </label>
-                    )}
                     <p className="etf-collection-hint etf-permission-note">
                       仅需 etf_share_daily、etf_price_daily、etf_trading_day 的 SELECT / INSERT /
                       UPDATE 权限；缺表时需 CREATE。
@@ -501,14 +468,14 @@ export function ETFCollectionPanel({ onCollected }: { onCollected: () => void })
                   <button
                     className="button"
                     type="submit"
-                    disabled={transportBlocked || dbBlocked || !!passwordNeeded || invalidConfig}
+                    disabled={transportBlocked || !!passwordNeeded || invalidConfig}
                   >
                     {busy === 'save' ? '保存中…' : '保存采集配置'}
                   </button>
                   <button
                     type="button"
                     className="button button-quiet"
-                    disabled={transportBlocked || dbBlocked || !!passwordNeeded || invalidConfig}
+                    disabled={transportBlocked || !!passwordNeeded || invalidConfig}
                     onClick={() => void submit('test')}
                   >
                     {busy === 'test' ? '测试中…' : '测试连接（只读）'}
@@ -521,7 +488,6 @@ export function ETFCollectionPanel({ onCollected }: { onCollected: () => void })
                     onClick={() => {
                       setPassword('')
                       setConfig(null)
-                      setDbAck(false)
                       setConfigVersion((n) => n + 1)
                     }}
                   >

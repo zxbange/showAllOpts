@@ -12,7 +12,6 @@ const configuration = {
   schedule: ['17:00'],
   source: 'page',
   transport_secure: true,
-  db_tls: true,
 }
 const ready = { status: 'disabled', configured: true, enabled: false, manual: null, runs: [] }
 test.beforeEach(async ({ page }) => {
@@ -169,23 +168,30 @@ test('polls active progress, refreshes chart after cache completion and stops on
   expect(polls).toBe(count)
 })
 
-test('remote database without TLS requires explicit acknowledgment', async ({ page }) => {
-  let body: Record<string, unknown> | null = null
+test('remote database saves and tests without TLS options or acknowledgment', async ({ page }) => {
+  const bodies: Record<string, unknown>[] = []
   await page.route('**/api/v1/etf-shares/collection-configuration', (r) => {
-    if (r.request().method() === 'POST') body = r.request().postDataJSON()
-    return r.fulfill({ json: { ...configuration, db_local: false, db_tls: false } })
+    if (r.request().method() === 'POST') bodies.push(r.request().postDataJSON())
+    return r.fulfill({ json: configuration })
+  })
+  await page.route('**/api/v1/etf-shares/collection-test', (r) => {
+    bodies.push(r.request().postDataJSON())
+    return r.fulfill({ json: { ok: true, permissions_verified: false, message: '连接成功' } })
   })
   await page.goto('/etf-shares')
   await page.getByText('采集配置', { exact: true }).click()
-  await expect(page.getByRole('button', { name: '保存采集配置', exact: true })).toBeDisabled()
-  await page
-    .getByLabel(
-      '远程数据库未启用 TLS，凭据和数据可能被截获；我接受保存此配置后自动和手动采集均存在该风险',
-    )
-    .check()
+  await expect(page.getByText(/TLS|我接受保存此配置/)).toHaveCount(0)
+  await expect(page.getByRole('button', { name: '保存采集配置', exact: true })).toBeEnabled()
   await page.getByRole('button', { name: '保存采集配置', exact: true }).click()
   await expect(page.getByText('采集配置已保存。')).toBeVisible()
-  expect(body).toMatchObject({ db_tls: false, db_transport_acknowledged: true })
+  await page.getByRole('button', { name: '测试连接（只读）' }).click()
+  await expect(page.getByText(/不代表写入权限验证通过/)).toBeVisible()
+  expect(bodies).toHaveLength(2)
+  for (const body of bodies) {
+    expect(body).toMatchObject({ host: 'db.example', username: 'writer' })
+    expect(body).not.toHaveProperty('db_tls')
+    expect(body).not.toHaveProperty('db_transport_acknowledged')
+  }
 })
 
 test('late status from a departed page cannot replace new page status', async ({ page }) => {
@@ -342,7 +348,7 @@ test('custom database requires a fresh password and reloads ETF data', async ({ 
   await page.getByLabel('端口', { exact: true }).fill('3307')
   await page.getByLabel('数据库名称', { exact: true }).fill('etf_custom')
   await expect(page.getByRole('button', { name: '保存采集配置', exact: true })).toBeDisabled()
-  await expect(page.getByLabel('数据库连接使用 TLS')).toBeChecked()
+  await expect(page.getByText(/TLS|我接受保存此配置/)).toHaveCount(0)
   await page.getByLabel('数据库密码', { exact: true }).fill('fresh-test-password')
   await page.getByRole('button', { name: '保存采集配置', exact: true }).click()
   await expect(
@@ -358,23 +364,18 @@ test('custom database requires a fresh password and reloads ETF data', async ({ 
   await expect(page.getByLabel('数据库密码', { exact: true })).toHaveValue('')
 })
 
-test('changing a local target to remote enables TLS and clears the risk acknowledgment', async ({
+test('changing a local target to remote needs only fresh credentials, not a transport option', async ({
   page,
 }) => {
   await page.route('**/api/v1/etf-shares/collection-configuration', (r) =>
-    r.fulfill({ json: { ...configuration, host: 'localhost', db_local: true, db_tls: false } }),
+    r.fulfill({ json: { ...configuration, host: 'localhost', db_local: true } }),
   )
   await page.goto('/etf-shares')
   await page.getByText('采集配置', { exact: true }).click()
   await page.getByLabel('数据库主机', { exact: true }).fill('remote.example')
-  await expect(page.getByLabel('数据库连接使用 TLS')).toBeChecked()
-  await page.getByLabel('数据库连接使用 TLS').uncheck()
-  const acknowledgment = page.getByLabel(
-    '远程数据库未启用 TLS，凭据和数据可能被截获；我接受保存此配置后自动和手动采集均存在该风险',
-  )
-  await acknowledgment.check()
   await page.getByLabel('数据库名称', { exact: true }).fill('new_market')
-  await expect(acknowledgment).not.toBeChecked()
-  await page.getByLabel('数据库密码', { exact: true }).fill('fresh-test-password')
   await expect(page.getByRole('button', { name: '保存采集配置', exact: true })).toBeDisabled()
+  await page.getByLabel('数据库密码', { exact: true }).fill('fresh-test-password')
+  await expect(page.getByRole('button', { name: '保存采集配置', exact: true })).toBeEnabled()
+  await expect(page.getByText(/TLS|我接受保存此配置/)).toHaveCount(0)
 })

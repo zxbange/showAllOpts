@@ -24,7 +24,7 @@ from test_etf_collection import worker, EVENING
 
 def form(**changes):
     return dict(revision=0, username='etf_writer', password='private-test-password', enabled=True,
-                lookback_days=300, batch_days=5, schedule=['18:30'], db_tls=False,
+                lookback_days=300, batch_days=5, schedule=['18:30'],
                 **changes)
 
 
@@ -87,7 +87,7 @@ def test_target_change_needs_fresh_password_and_displays_new_target(tmp_path):
     assert w.configuration_issue == 'writer_target_mismatch'
     public = w.configuration.public()
     assert public['host'] == 'new-db.example' and not public['password_set'] and public['target_changed']
-    body = form(); body.update(revision=1, password=None, db_tls=True)
+    body = form(); body.update(revision=1, password=None)
     with pytest.raises(ConfigurationFailure, match='重新输入密码'):
         w.test_configuration(body)
     assert w.configuration.load()['host'] == '127.0.0.1'
@@ -110,23 +110,76 @@ def test_empty_account_is_rejected(tmp_path, username):
         save(w, {'username': username})
 
 
-def test_remote_plaintext_requires_explicit_ack_and_tls_does_not_fallback(tmp_path):
+def test_remote_database_needs_no_tls_option_or_acknowledgment(tmp_path):
     w, _, _ = worker(tmp_path)
     w.settings.db_host = 'db.example'
     from pydantic import SecretStr
     w.settings.etf_collection_writer_url = SecretStr('')
-    assert w.configuration.public()['db_tls'] is True
-    with pytest.raises(ConfigurationFailure, match='TLS'):
-        save(w)
-    public = save(w, {'db_tls': True})
+    assert 'db_tls' not in w.configuration.public()
+    public = save(w)
     received = []
     w.engine_factory = lambda url, **kwargs: received.append((url, kwargs)) or SimpleNamespace(dispose=lambda: None)
     w.configuration.engine(w.configuration.load())
     args = received[0][1]
     assert args['hide_parameters']
-    assert args['connect_args']['ssl'].check_hostname
-    assert 'ssl_disabled' not in args['connect_args']
-    assert public['db_tls']
+    assert args['connect_args']['ssl_disabled'] is True
+    assert 'ssl' not in args['connect_args']
+    assert 'db_tls' not in public and 'db_transport_acknowledged' not in public
+
+
+@pytest.mark.parametrize('legacy_tls', [False, True])
+def test_legacy_tls_fields_removed_without_rewriting_saved_credentials(tmp_path, legacy_tls):
+    w, _, _ = worker(tmp_path)
+    save(w, {'host': 'db.example', 'port': 3306, 'database': 'etf_only'})
+    old = w.configuration.load() | {'db_tls': legacy_tls, 'db_transport_acknowledged': True}
+    cipher = w.configuration.cipher()
+    ciphertext = cipher.encrypt(json.dumps(old).encode())
+    with w.connect() as db:
+        db.execute('UPDATE configuration SET ciphertext=?', (ciphertext,))
+        db.execute("INSERT INTO observations VALUES ('shares','510300.XSHG','2026-11-06','complete',0)")
+    restarted, _, _ = worker(tmp_path)
+    loaded = restarted.configuration.load()
+    assert 'db_tls' not in loaded and 'db_transport_acknowledged' not in loaded
+    assert loaded['password'] == old['password'] and loaded['revision'] == old['revision']
+    assert restarted.configuration.record()['ciphertext'] == ciphertext
+    received = []
+    restarted.engine_factory = lambda url, **kwargs: received.append(kwargs)
+    restarted.configuration.engine(restarted.configuration.reader_configuration())
+    assert received[0]['connect_args']['ssl_disabled'] is True
+    public = save(restarted, {'revision': 1, 'password': None})
+    assert public['revision'] == 2 and public['password_set']
+    stored = json.loads(cipher.decrypt(restarted.configuration.record()['ciphertext']))
+    assert stored['password'] == old['password']
+    assert 'db_tls' not in stored and 'db_transport_acknowledged' not in stored
+    with restarted.connect() as db:
+        assert db.execute('SELECT COUNT(*) FROM observations').fetchone()[0] == 1
+
+
+@pytest.mark.parametrize('manual', [False, True])
+@pytest.mark.parametrize('query', ['', '?ssl_ca=old-ca.pem&ssl_check_hostname=true&ssl_cert=old-cert.pem'])
+def test_legacy_environment_collection_cannot_enable_database_tls(tmp_path, manual, query):
+    from pydantic import SecretStr
+    import pymysql
+    w, collector, _ = worker(tmp_path)
+    w.settings.etf_collection_writer_url = SecretStr(
+        'mysql+pymysql://etf_writer:old-secret@127.0.0.1:3306/showallopts' + query)
+    config = w.configuration.load()
+    assert config['source'] == 'environment' and config['password'] == 'old-secret'
+    assert 'db_tls' not in config
+    received, disposed = [], []
+    w.engine_factory = lambda url, **kwargs: received.append((url, kwargs)) or SimpleNamespace(
+        dispose=lambda: disposed.append(True))
+    if manual:
+        w.start = lambda: None
+        w.request_run('legacy-environment-manual')
+    assert w.tick(EVENING) and collector.writes
+    assert len(received) == 1 and disposed == [True]
+    assert dict(received[0][0].query) == {'charset': 'utf8mb4'}
+    assert received[0][1]['hide_parameters'] is True
+    assert received[0][1]['connect_args']['ssl_disabled'] is True
+    assert 'ssl' not in received[0][1]['connect_args']
+    connection = pymysql.connections.Connection(defer_connect=True, **received[0][1]['connect_args'])
+    assert connection.ssl is False and connection._ssl_required is False
 
 
 def test_manual_is_async_idempotent_and_works_with_auto_disabled(tmp_path):
@@ -256,6 +309,15 @@ def test_routes_auth_csrf_viewer_and_safe_validation(page_client):
     assert c.get(path).status_code == 401
 
 
+@pytest.mark.parametrize('obsolete', ['db_tls', 'db_transport_acknowledged'])
+def test_api_rejects_removed_database_transport_options(page_client, obsolete):
+    path = '/api/v1/etf-shares/collection-configuration'
+    for endpoint in (path, '/api/v1/etf-shares/collection-test'):
+        response = page_client.post(endpoint, json=form() | {obsolete: True})
+        assert response.status_code == 422 and 'private-test-password' not in response.text
+    assert page_client.get(path).json()['revision'] == 0
+
+
 def test_http_password_gate_even_with_http_login_allowed(page_client):
     app = page_client.app
     with TestClient(app, base_url='http://testserver') as client:
@@ -328,21 +390,22 @@ def test_connection_probe_only_reads_fixed_tables(tmp_path):
     assert w.configuration.public()['source'] == 'environment'
 
 
-def test_tls_driver_requires_encryption_before_authentication(tmp_path):
+@pytest.mark.parametrize('legacy_tls', [None, False, True])
+def test_driver_explicitly_disables_tls_even_for_legacy_configs(tmp_path, legacy_tls):
     import pymysql
+    from pymysql.constants import CLIENT
     w, _, _ = worker(tmp_path)
     received = []
     w.engine_factory = lambda url, **kwargs: received.append(kwargs) or None
-    config = w.configuration.load() | {'db_tls': True}
+    config = w.configuration.load()
+    if legacy_tls is not None:
+        config['db_tls'] = legacy_tls
     w.configuration.engine(config)
-    # defer_connect guarantees this is a pure offline driver check.
+    # defer_connect guarantees this uses the actual driver but never opens a socket.
     connection = pymysql.connections.Connection(defer_connect=True, **received[0]['connect_args'])
-    assert connection.ssl and connection._ssl_required
-    assert connection.ctx.check_hostname
-    connection.server_version = '8.0.0'
-    connection.server_capabilities = 0
-    with pytest.raises(pymysql.err.OperationalError, match='server doesn.t support'):
-        connection._request_authentication()
+    assert connection.ssl is False and connection._ssl_required is False
+    assert not connection.client_flag & CLIENT.SSL
+    assert getattr(connection, 'ctx', None) is None
 
 
 def test_configuration_activation_floor_is_shared_across_processes(tmp_path):
@@ -364,7 +427,7 @@ def test_target_change_interrupts_stale_queue_so_page_can_repair(tmp_path):
     assert state['manual']['status'] == 'interrupted'
     assert state['manual']['error'] == 'configuration_changed'
     assert not c.calls
-    body = form(); body.update(revision=1, password='new-target-password', db_tls=True)
+    body = form(); body.update(revision=1, password='new-target-password')
     w.configure(body)
     assert w.configuration.public()['host'] == 'new-db.example'
     assert w.configured
@@ -421,7 +484,7 @@ def test_only_one_valid_daily_time_can_be_saved(tmp_path, schedule):
 def test_custom_target_roundtrip_and_no_service_target_or_password_fallback(tmp_path):
     w, _, _ = worker(tmp_path)
     public = save(w, {'host': 'new.example', 'port': 3307, 'database': 'etf_market',
-                      'username': w.settings.db_user, 'db_tls': True})
+                      'username': w.settings.db_user})
     assert (public['host'], public['port'], public['database']) == ('new.example', 3307, 'etf_market')
     assert w.configured
     assert w.settings.db_host == '127.0.0.1' and w.settings.db_port == 3306
@@ -432,11 +495,11 @@ def test_custom_target_roundtrip_and_no_service_target_or_password_fallback(tmp_
     assert restarted.configured
     for changed in ({'host': 'other.example'}, {'port': 3308}, {'database': 'other'}, {'username': 'other'}):
         body = form() | {'revision': 1, 'host': 'new.example', 'port': 3307, 'database': 'etf_market',
-                         'username': w.settings.db_user, 'db_tls': True, 'password': None} | changed
+                         'username': w.settings.db_user, 'password': None} | changed
         with pytest.raises(ConfigurationFailure, match='重新输入密码'):
             w.test_configuration(body)
     retained = w.configuration.validate(form() | {'revision': 1, 'password': None,
-        'username': w.settings.db_user, 'db_tls': True})
+        'username': w.settings.db_user})
     assert retained['host'] == 'new.example' and retained['password'] == 'private-test-password'
 
 
@@ -447,7 +510,7 @@ def test_switch_target_archives_collection_bookkeeping_without_touching_business
     assert w.tick(EVENING)
     original_writes = list(collector.writes)
     w.configure(form() | {'revision': 1, 'host': 'new.example', 'port': 3307,
-                          'database': 'new_market', 'db_tls': True})
+                          'database': 'new_market'})
     status = w.status()
     assert status['manual'] is None and not status['runs'] and not status['gaps']
     assert collector.writes == original_writes
@@ -463,19 +526,20 @@ def test_custom_target_routes_accept_target_and_same_application_account(page_cl
     path = '/api/v1/etf-shares/collection-configuration'
     settings = page_client.app.state.etf_collection.settings
     response = page_client.post(path, json=form() | {'host': 'new.example', 'port': 3307,
-        'database': 'etf_only', 'username': settings.db_user, 'db_tls': True})
+        'database': 'etf_only', 'username': settings.db_user})
     assert response.status_code == 200, response.text
     assert response.json()['host'] == 'new.example' and response.json()['database'] == 'etf_only'
+    assert 'db_tls' not in response.json() and 'db_transport_acknowledged' not in response.json()
     assert 'private-test-password' not in response.text
     assert settings.db_host == '127.0.0.1'
 
 
-def test_custom_engine_pins_dns_and_keeps_tls_hostname(tmp_path, monkeypatch):
+def test_custom_engine_pins_dns_and_disables_tls(tmp_path, monkeypatch):
     import socket
     import pymysql
     from app.services import database_sources
     w, _, _ = worker(tmp_path)
-    save(w, {'host': 'new.example', 'port': 3307, 'database': 'etf_only', 'db_tls': True})
+    save(w, {'host': 'new.example', 'port': 3307, 'database': 'etf_only'})
     captured = []
     w.engine_factory = lambda url, **kwargs: captured.append((url, kwargs))
     w.configuration.engine(w.configuration.load())
@@ -497,7 +561,8 @@ def test_custom_engine_pins_dns_and_keeps_tls_hostname(tmp_path, monkeypatch):
     monkeypatch.setattr(socket, 'create_connection', lambda *a, **kw: sockets.append((a, kw)) or sock)
     assert captured[0][1]['creator']() is connection
     assert sockets[0][0] == (('10.1.2.3', 3307),)
-    assert connections[0]['host'] == 'new.example' and connections[0]['ssl'].check_hostname
+    assert connections[0]['host'] == 'new.example' and connections[0]['ssl_disabled'] is True
+    assert 'ssl' not in connections[0]
     assert connection.socket is sock
 
 
@@ -507,7 +572,7 @@ def test_custom_connection_retains_safe_permission_classification(tmp_path, monk
     from app.services import database_sources
     from app.services.etf_collection import writer_error_code
     w, _, _ = worker(tmp_path)
-    save(w, {'host': 'new.example', 'port': 3307, 'database': 'etf_only', 'db_tls': True})
+    save(w, {'host': 'new.example', 'port': 3307, 'database': 'etf_only'})
     captured = []
     w.engine_factory = lambda url, **kwargs: captured.append(kwargs)
     w.configuration.engine(w.configuration.load())

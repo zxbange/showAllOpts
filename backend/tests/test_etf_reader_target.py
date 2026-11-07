@@ -39,7 +39,7 @@ def targets(cached, tmp_path, monkeypatch):
             return create_engine(urls[config['database']])
         def choose(self, name, revision=1):
             self.config = dict(host='example.invalid', port=3306, database=name, username='writer',
-                               password='never-in-a-snapshot', db_tls=True, revision=revision)
+                               password='never-in-a-snapshot', revision=revision)
     configuration = Configuration()
     monkeypatch.setattr(cache, 'etf_configuration', lambda: configuration)
     return cache, configuration
@@ -79,6 +79,28 @@ def test_revision_only_preserves_snapshot_and_noop(targets):
     assert shares(cache) == [101]
     cache.refresh('etf-shares', background=False)
     assert cache.read_state()['modules']['etf-shares']['file'] == first
+
+
+@pytest.mark.parametrize('legacy_tls', [False, True])
+def test_legacy_transport_cache_identity_refreshes_once(targets, legacy_tls):
+    import hashlib
+    import json
+    import sqlite3
+    cache, config = targets
+    config.choose('a')
+    cache.refresh('etf-shares', background=False)
+    entry = cache.read_state()['modules']['etf-shares']
+    identity = [config.config[key] for key in ('host', 'port', 'database', 'username')] + [legacy_tls]
+    old_fingerprint = hashlib.sha256(json.dumps(identity, ensure_ascii=True).encode()).hexdigest()
+    with sqlite3.connect(cache.root / entry['file']) as connection:
+        connection.execute('UPDATE etf_cache_source_v1 SET identity=? WHERE id=1', (old_fingerprint,))
+    with pytest.raises(CacheUnavailable):
+        shares(cache)
+    cache.refresh('etf-shares', background=False)
+    assert shares(cache) == [101]
+    refreshed = cache.read_state()['modules']['etf-shares']['file']
+    cache.refresh('etf-shares', background=False)
+    assert cache.read_state()['modules']['etf-shares']['file'] == refreshed
 
 
 @pytest.mark.parametrize('noop', [False, True])

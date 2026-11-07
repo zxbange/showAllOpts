@@ -413,8 +413,8 @@ def test_writer_connection_has_bounded_timeouts(tmp_path):
         return SimpleNamespace(dispose=lambda: None)
     w.engine_factory = factory
     assert w.tick(EVENING)
-    assert received == [{'pool_pre_ping': True, 'connect_args': {
-        'connect_timeout': 10, 'read_timeout': 60, 'write_timeout': 60}}]
+    assert received == [{'pool_pre_ping': True, 'hide_parameters': True, 'connect_args': {
+        'connect_timeout': 10, 'read_timeout': 60, 'write_timeout': 60, 'ssl_disabled': True}}]
 
 
 def test_changing_daily_time_cannot_create_second_automatic_run(tmp_path):

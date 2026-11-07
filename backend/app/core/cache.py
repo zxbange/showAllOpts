@@ -161,7 +161,7 @@ class SnapshotCache:
         config = configuration.reader_configuration()
         if config is None:
             return configuration, None, 'application-default', None
-        identity = [config.get(key) for key in ('host', 'port', 'database', 'username', 'db_tls')]
+        identity = [config.get(key) for key in ('host', 'port', 'database', 'username')]
         fingerprint = hashlib.sha256(json.dumps(identity, ensure_ascii=True).encode()).hexdigest()
         return configuration, config, fingerprint, config.get('revision')
 

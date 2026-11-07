@@ -39,7 +39,6 @@ export function ETFPage() {
           <h1>
             市场情绪<span className="heading-tag">{groupName} ETF份额与市值</span>
           </h1>
-          <p>切换指数，查看 ETF 总份额与所跟踪基金的合计流通市值。</p>
         </div>
         <div className="heading-actions">
           <span className="date-badge">
@@ -58,7 +57,6 @@ export function ETFPage() {
           </button>
         </div>
       </PageHeader>
-      <ETFCollectionPanel onCollected={reload} />
       <div className="etf-chart-toolbar etf-controls">
         <label htmlFor="etf-group">跟踪指数</label>
         <select
@@ -129,7 +127,6 @@ export function ETFPage() {
                 <>
                   <div className="etf-section-label">
                     <span>{data.group_name} · 最新份额</span>
-                    <small>点击卡片聚焦单只 ETF，再次点击恢复全部</small>
                   </div>
                   <div className="etf-cards">
                     {data.funds.map((fund, index) => {
@@ -230,33 +227,32 @@ export function ETFPage() {
                 </div>
               </section>
             )}
-            <aside className="etf-method-note">
-              <Info size={19} />
-              <div>
-                <strong>{marketValue ? '流通市值口径' : '份额口径'}</strong>
-                <p>
-                  {marketValue
-                    ? '仅展示当前指数跟踪清单的 ETF 合计市值，单位为亿元人民币，不展示单只市值、不额外加权。任一 ETF 缺少同日份额或收盘价，该日曲线中断，不插值。'
-                    : '日变动对比前一交易日，缺失显示“—”；“待更新”表示落后于本组最新日期，以各卡片日期为准。'}
-                </p>
-                {marketValue && questionableDays > 0 && (
-                  <p role="status">
-                    {questionableDays}{' '}
-                    个交易日因疑似份额拆并或异常跳变暂不显示市值，待核验后再使用；异常也可能来自真实申赎。
+            {marketValue && (
+              <aside className="etf-method-note">
+                <Info size={19} />
+                <div>
+                  <strong>流通市值口径</strong>
+                  <p>
+                    仅展示当前指数跟踪清单的 ETF
+                    合计市值，单位为亿元人民币，不展示单只市值、不额外加权。任一 ETF
+                    缺少同日份额或收盘价，该日曲线中断，不插值。
                   </p>
-                )}
-                {marketValue && data.funds.some((fund) => fund.code.endsWith('.XSHE')) && (
-                  <p>深市仅使用已核验的收盘价日期，更早历史缺价保留空白，随后按日积累。</p>
-                )}
-                <p>
-                  清单不覆盖该指数全部
-                  ETF。份额与市值变化不是资金净流入；系统会屏蔽已识别的疑似拆并与异常跳变，但尚未接入完整基金事件清单。
-                </p>
-              </div>
-            </aside>
+                  {questionableDays > 0 && (
+                    <p role="status">
+                      {questionableDays}{' '}
+                      个交易日因疑似份额拆并或异常跳变暂不显示市值，待核验后再使用；异常也可能来自真实申赎。
+                    </p>
+                  )}
+                  {data.funds.some((fund) => fund.code.endsWith('.XSHE')) && (
+                    <p>深市仅使用已核验的收盘价日期，更早历史缺价保留空白，随后按日积累。</p>
+                  )}
+                </div>
+              </aside>
+            )}
           </>
         )
       )}
+      <ETFCollectionPanel onCollected={reload} />
     </div>
   )
 }
