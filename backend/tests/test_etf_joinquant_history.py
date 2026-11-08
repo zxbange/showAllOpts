@@ -1,4 +1,5 @@
 """Offline single-file JoinQuant history backfill regression; never uses a real account/DB."""
+import ast
 import datetime as dt
 import importlib.util
 from decimal import Decimal
@@ -99,9 +100,32 @@ def test_defaults_catalog_and_exact_three_table_schema(backfill):
         assert 'CREATE TABLE' not in str(actual.__table__.insert().compile(dialect=mysql.dialect()))
 
 
-def test_default_preview_and_weekend_end_no_database_or_2023_records(backfill):
+def test_notebook_entry_creates_empty_tables_writes_and_is_repeatable(backfill):
     c = backfill
-    result = c.module.run()
+    for model in c.module.MODELS:
+        model.__table__.drop(c.engine)
+    assert c.module.WRITE_DATABASE is True
+    assert c.module.CREATE_TABLES is True
+    assert c.module.ALLOW_PARTIAL is False
+    # Execute the actual notebook entry with offline APIs and an empty target DB.
+    tree = ast.parse(SCRIPT.read_text(encoding='utf-8'))
+    entry = compile(ast.Module(body=[tree.body[-1]], type_ignores=[]), str(SCRIPT), 'exec')
+    namespace = dict(c.module.__dict__, __name__='__main__')
+    exec(entry, namespace)
+    first = namespace['RESULT']
+    assert first['written'] is True and first['source_complete'] is True
+    assert len(c.connections) == 1
+    assert all(counts['inserted'] == 4 for counts in first['counts'].values())
+    exec(entry, namespace)
+    second = namespace['RESULT']
+    assert second['written'] is True
+    assert all(counts['inserted'] == 0 and counts['preserved'] == 4 for counts in second['counts'].values())
+    assert all(len(get_rows(c, model)) == 4 for model in c.module.MODELS)
+
+
+def test_explicit_preview_and_weekend_end_no_database_or_2023_records(backfill):
+    c = backfill
+    result = c.module.run(write=False)
     assert not c.connections and result['written'] is False
     assert result['source_complete'] is True
     assert result['start_date'] == dt.date(2024, 1, 1)
@@ -138,7 +162,7 @@ def test_pasted_notebook_with_numpy_names_previews_writes_and_repeats(backfill, 
                 namespace[name] = None
                 monkeypatch.setattr(namespace['_builtins'], name, getattr(c.jq, name), raising=False)
     # Exercise the real API resolver too: it also used an unqualified any(generator).
-    preview = namespace['run']()
+    preview = namespace['run'](write=False)
     assert preview['source_complete'] is True and preview['written'] is False
     assert not c.connections
     written = namespace['run'](write=True)
@@ -222,7 +246,7 @@ def test_connection_failure_reports_stage_without_exposing_credentials(backfill,
 
 def test_persistence_insert_only_preserves_exchange_sources_and_idempotence(backfill):
     c = backfill
-    preview = c.module.run()
+    preview = c.module.run(write=False)
     old_share = dict(preview['shares'][1], shares=222, source='SSE.ETF_SCALE', updated_at=dt.datetime(2024, 1, 6))
     old_price = dict(preview['prices'][1], close_price=Decimal('3.5'), source='SSE.DAY_KLINE', updated_at=dt.datetime(2024, 1, 6))
     old_day = dict(preview['trading_days'][1], source='SSE.INDEX_TRADING_DAYS', updated_at=dt.datetime(2024, 1, 6))
@@ -241,7 +265,7 @@ def test_persistence_insert_only_preserves_exchange_sources_and_idempotence(back
 
 def test_gap_repair_is_not_limited_to_latest_watermark_and_prices_independent(backfill):
     c = backfill
-    result = c.module.run()
+    result = c.module.run(write=False)
     c.module.save_records(c.engine, result['shares'][::3], [], result['trading_days'])
     filled = c.module.run(write=True)
     assert filled['counts']['etf_share_daily']['inserted'] == 2
@@ -265,7 +289,7 @@ def test_partial_source_requires_opt_in_and_repeated_run_fills_gap(backfill):
 def test_listing_date_clips_requests_and_excludes_prelisting_missing(backfill):
     c = backfill
     c.info[CODE].start_date = DATES[3]
-    result = c.module.run()
+    result = c.module.run(write=False)
     assert result['source_complete']
     assert [row['trade_date'] for row in result['shares']] == DATES[3:]
     assert all(request[2] == DATES[3] for request in c.requests)
@@ -275,7 +299,7 @@ def test_listing_date_clips_requests_and_excludes_prelisting_missing(backfill):
 def test_window_boundaries_and_calendar_context(backfill):
     c = backfill
     c.module.WINDOW_SIZE = 2
-    result = c.module.run()
+    result = c.module.run(write=False)
     assert len(c.requests) == 6  # five dates including in-memory reference, in windows of 2/2/1
     assert len(result['shares']) == 4 and result['source_complete']
     assert result['shares'][2]['previous_trade_date'] == DATES[3]
@@ -318,7 +342,7 @@ def test_duplicate_price_response_aborts_and_paused_not_filled(backfill):
     assert c.connections == []
     c.jq.get_price = lambda *args, **kwargs: pd.DataFrame([{'close': 2, 'paused': 1}],
                                                         index=pd.DatetimeIndex([DATES[2]]))
-    result = c.module.run()
+    result = c.module.run(write=False)
     assert result['prices'] == [] and not result['source_complete']
 
 
@@ -354,7 +378,7 @@ def test_transaction_failure_rolls_back_all_three_tables_without_raw_error(backf
 
 def test_existing_calendar_conflict_aborts_without_overwriting(backfill):
     c = backfill
-    result = c.module.run()
+    result = c.module.run(write=False)
     wrong = dict(result['trading_days'][2], previous_trade_date=DATES[1], source='SSE.INDEX_TRADING_DAYS')
     c.module.save_records(c.engine, [], [], [wrong])
     with pytest.raises(c.module.HistoryError, match='日历'):
@@ -363,11 +387,11 @@ def test_existing_calendar_conflict_aborts_without_overwriting(backfill):
     assert get_rows(c, c.module.ETFTradingDay)[0].previous_trade_date == DATES[1]
 
 
-def test_create_tables_requires_explicit_flag(backfill):
+def test_create_tables_can_be_disabled(backfill):
     c = backfill
     c.module.ETFPrice.__table__.drop(c.engine)
     with pytest.raises(c.module.HistoryError, match='缺少表'):
-        c.module.run(write=True)
+        c.module.run(write=True, create_tables=False)
     assert c.module.run(write=True, create_tables=True)['written']
 
 

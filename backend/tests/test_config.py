@@ -151,9 +151,9 @@ def test_setup_legacy_source_roundtrip(initializer, tmp_path, capsys):
 
 
 @pytest.mark.parametrize('production', [False, True])
-def test_setup_default_source_uses_migrated_private_script_without_execution(initializer, tmp_path, capsys, production):
+def test_setup_default_source_uses_shared_connector_without_execution(initializer, tmp_path, capsys, production):
     root = tmp_path / 'project'
-    source = root / '脚本' / '本地专用' / '聚宽采集' / '全部策略批量采集_数据库版.py'
+    source = root / 'collectors' / 'mysql_connector.py'
     source.parent.mkdir(parents=True)
     source.write_text(
         "DB_CONFIG = {\n"

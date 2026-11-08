@@ -1,11 +1,11 @@
 """Keep quarterly transaction versions identical in both standalone collectors."""
 from pathlib import Path
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[2]
 START, END = '# BEGIN SHARED EARNINGS VERSION', '# END SHARED EARNINGS VERSION'
 
 
 def sync_block(source_name, START, END, check):
-    source = (ROOT/'collector_rules'/source_name).read_text(encoding='utf-8')
+    source = (ROOT/'collectors'/'rules'/source_name).read_text(encoding='utf-8')
     block = source[source.index(START):source.index(END)+len(END)]
     for name in ('净利润断层_数据库版.py', '策略批量采集_数据库版.py'):
         path = ROOT/'collectors'/name

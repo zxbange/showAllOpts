@@ -1,6 +1,6 @@
 # ETF 历史：聚宽平台手动补采
 
-入口：[ETF历史补采_聚宽研究版.py](../collectors/ETF历史补采_聚宽研究版.py)。这是可直接粘贴到聚宽研究 Notebook 的完整独立文件，不需要上传项目、调用项目 HTTP 接口、安装/登录外部 `jqdatasdk` 或运行交易所历史接口。后续每日自动更新仍由项目的交易所采集器负责，不改原批量采集脚本，也不设定新的定时任务。
+入口：[ETF历史补采_聚宽研究版.py](../collectors/ETF历史补采_聚宽研究版.py)。采集逻辑可粘贴到聚宽研究 Notebook，需一并上传 `collectors/mysql_connector.py`，不需要上传完整项目、调用项目 HTTP 接口、安装/登录外部 `jqdatasdk` 或运行交易所历史接口。后续每日自动更新仍由项目的交易所采集器负责，不改原批量采集脚本，也不设定新的定时任务。
 
 ## 范围和数据口径
 
@@ -22,41 +22,25 @@
 
 ## 在聚宽运行
 
-脚本显式使用 Python 内置的 `any/bool/int/min/max`，兼容研究 Notebook 中 NumPy 同名函数覆盖的情况。若旧版默认执行 `run()` 却报“write/allow_partial/create_tables 必须是布尔值”，请完整替换并重新执行新版脚本；只再次调用 `run()` 仍会使用旧函数，无需修改布尔参数或重置 Notebook。
+1. 将完整脚本粘贴到聚宽研究 Notebook 的一个单元格。
+2. 在 `mysql_connector.py` 填写 `DB_CONFIG` 并上传研究目录，核对采集脚本的 `START_DATE` 和 `END_DATE`。目标应与网页 ETF 采集配置一致，数据库本身需预先创建。
+3. 执行整个单元格，自动完成采集、校验、缺表创建和数据写入，打印各表新增及保留数量。无需再运行第二条入库命令。
 
-研究接口按 Notebook 全局变量、`jqdata` 模块、平台注入的 `builtins` 依次解析，兼容行情接口未直接导出到 `jqdata` 的研究环境。如果仍缺接口，报错会列出具体名称，且尚未采集或连接数据库。
+顶部运行开关：
 
-1. 打开聚宽的**研究**，新建 Python 3 Notebook。把脚本完整内容复制到一个单元格执行。也可由你自行将文件上传至聚宽研究目录，再执行 `%run -i ETF历史补采_聚宽研究版.py`。
-2. 默认执行 `RESULT = run()`：只查询聚宽并打印进度、缺失和风险，**不连接MySQL、不建表、不写数据库**。使用平台已有的 `jqdata`、SQLAlchemy（1.3及以上）和 MySQL 驱动；脚本不自动安装软件。
-3. 查看预览及缺失清单。`RESULT['shares']` 和 `RESULT['prices']` 是完整记录，`RESULT['missing']` 是请求范围缺失，`RESULT['reference_missing']` 是内存参考日缺失，`RESULT['quality_warnings']` 是保守拆并提示。可在下一单元格执行：
+| 参数 | 默认值 | 作用 |
+| --- | --- | --- |
+| `WRITE_DATABASE` | `True` | 采集后直接入库；改为 `False` 则只预览，不连接数据库 |
+| `CREATE_TABLES` | `True` | 自动创建缺少的三张表；账号无建表权限且表已由管理员建好时可改为 `False` |
+| `ALLOW_PARTIAL` | `False` | 源数据缺失时停止入库；确认接受缺失后改为 `True`，保存有效记录 |
 
-```python
-import pandas as pd
-pd.DataFrame(RESULT['shares']).head(10)
-# 另一个单元格查看价格、源缺失、风险：
-pd.DataFrame(RESULT['prices']).head(10)
-RESULT['missing']
-RESULT['quality_warnings']
-```
+修改顶部参数后重新运行整个单元格，确保函数使用新的默认值。源返回异常和校验错误仍会停止执行，`ALLOW_PARTIAL` 不会绕过这些检查，也不补零或前向填充。
 
-4. 只在自己的私有聚宽副本中填写顶部 `DB_CONFIG`，或者在后续单元格直接更新 `DB_CONFIG`。目标必须与网页「国家队动态 → 采集配置」当前ETF目标的**主机、端口、库名**相同。可使用已有且有权限的账号，不要求另建账号；不要把凭据发送到聊天、公开Notebook或提交GitHub。`driver='auto'` 优先使用 `MySQLdb`，否则使用 `PyMySQL`。
+使用平台已有的 `jqdata`、SQLAlchemy（1.3及以上）和 MySQL 驱动；脚本不自动安装软件。`mysql_connector.py` 中的 `DB_OPTIONS['driver']='auto'` 优先使用 `MySQLdb`，否则使用 `PyMySQL`。研究接口按 Notebook 全局变量、`jqdata` 模块和平台注入的 `builtins` 依次解析；缺少接口时列出具体名称。Python 内置函数显式通过 `builtins` 使用，避免 Notebook 中 NumPy 同名函数覆盖。
 
-   连接引擎沿用批量采集脚本的兼容参数，不向旧版 SQLAlchemy 传入不支持的 `hide_parameters` 构造参数。新版引擎支持时再启用参数隐藏；SQL 回显始终关闭，错误只报告阶段和异常类型，不输出原始连接信息。
-5. 核对单位、范围和目标后，在下一单元格执行：
+建表只针对缺少的三张表，不改已有表；已有表须为 InnoDB。MySQL DDL 可能自动提交，因此建表与后续数据事务不是同一回滚边界。补采写入需要 `SELECT`、`INSERT`，缺表时还需要 `CREATE`；不执行 `UPDATE/DELETE/DROP/ALTER`。不要将真实连接配置提交 GitHub。
 
-```python
-RESULT = run(write=True)
-```
-
-脚本每次都扫描完整指定历史范围，按**每个主键**补缺，不以最新日期作为水位，因此历史中间缺口、已有份额但缺价格、失败后重跑都能处理。每只基金每次最多请求120个交易日，避免大范围结果被行数上限静默截断。
-
-默认不创建缺失表。若缺表，先让管理员按项目结构建表；已有账号具备CREATE权限时也可由你明确执行：
-
-```python
-RESULT = run(write=True, create_tables=True)
-```
-
-建表只针对缺少的这三张表，不改已有表。MySQL DDL可能自动提交，因此建表与后续数据事务不是同一回滚边界。默认入库只需三表 `SELECT` 和 `INSERT`，不需要 `UPDATE/DELETE/DROP/ALTER`；后续交易所日更另需 `UPDATE`，用于官方同日修订。已有表须为InnoDB。
+返回值 `RESULT` 保留原始记录、缺失清单、风险提示、写入状态及计数。默认从 2024-01-01 检查整个请求区间，重复执行仍会检查历史中间缺口，不只是从数据库最新日期向后追加。
 
 ## 缺失、重复执行与权威来源
 
@@ -64,11 +48,7 @@ RESULT = run(write=True, create_tables=True)
 - 份额、价格、日历在同一数据事务内新增。原始响应错误、重复日期、错误代码、非交易日、异常数值或API异常会在连接数据库前停止。数据库写入失败请求整批回滚；提交时网络中断可能使结果不确定，安全重跑即可按已有主键核对补缺，不能仅凭报错断言未写入。
 - 写入前查询已有数据，控制台报告各表新增、保留、以及“值不同但仍保留”的数量。后一项需要人工核对来源；脚本不会自行纠正或清洗既有数据。
 - 若已有日历的前一交易日与聚宽冲突，停止并回滚本次新增，不覆盖交易所日历，也不沿用冲突关系继续入库。
-- 本次聚宽源数据有缺失时，`run(write=True)` 默认**不写库**，结果中 `written=False`。它检查的是聚宽返回是否完整，不声称数据库一定缺同一条数据。确认要先补有效记录时，可执行：
-
-```python
-RESULT = run(write=True, allow_partial=True)
-```
+- 本次聚宽源数据有缺失且 `ALLOW_PARTIAL=False` 时不写库，`RESULT['written']=False`。检查的是源返回是否完整，不代表数据库一定缺同一条数据。确认要先保存有效记录时，把顶部 `ALLOW_PARTIAL` 改为 `True` 后重新执行整段脚本。
 
 这不是填补缺失：缺少的日期仍不写入。后续重复运行会补新出现的记录。全部缺失列表保存在返回值中，控制台只打印前20项，不会把部分完成称为全历史完整。
 
@@ -83,7 +63,7 @@ RESULT = run(write=True, allow_partial=True)
 
 ## 补采后刷新页面
 
-在网站右上角打开「本地数据 / 数据同步」，对 **国家队动态（ETF）** 执行一次手动同步，再刷新图表。只点页面顶部刷新不会重新读取MySQL源表；也不必点击「立即采集」，该按钮触发的是交易所日常更新，不能代替这次聚宽历史入库。若网页切换过ETF目标库，确认连接目标与聚宽 `DB_CONFIG` 一致后再同步。
+在网站右上角打开「本地数据 / 数据同步」，选择 **国家队动态（ETF）**；已有本地缓存时，历史补采后请选择“完整重新同步（修复历史）”，再刷新图表。日常同步仅复核最近3个交易日并追加新日期，不读取更早的补采记录；首次同步会完整建立缓存。只点页面顶部刷新不会重新读取MySQL源表；也不必点击「立即采集」，该按钮触发的是交易所日常更新，不能代替这次聚宽历史入库。若网页切换过ETF目标库，确认连接目标与聚宽 `DB_CONFIG` 一致后再同步。
 
 项目继续按已保存的自动采集时间使用交易所接口日更；不需要每天到聚宽运行本脚本。历史完整度以缺失/隔离清单和实际图表为准，不能用“日常采集完成”推断2024年以来已全部补齐。
 
@@ -91,6 +71,6 @@ RESULT = run(write=True, allow_partial=True)
 
 - [聚宽官方API文档PDF](https://cdn.joinquant.com/help/img/JoinQuantAPI.pdf)：`get_price` 的 `fq=None` 为未复权，单只证券返回日期索引DataFrame；`skip_paused=True` 跳过停牌。该PDF较旧，不代表当前账号权限。
 - [聚宽官方SDK源码](https://github.com/JoinQuant/jqdatasdk/blob/master/jqdatasdk/api.py)：可交叉核对 `get_trade_days`、`get_security_info`、`get_price` 参数与返回结构。脚本使用研究平台 `jqdata`，**不使用该外部SDK进行采集**。
-- [聚宽数据文档入口](https://www.joinquant.com/help/api/help?name=JQDatadoc)：当前开发环境访问受地域限制，无法重新在线核实份额字段字典、账户可用年份和运行环境依赖版本。因此代码对 `FUND_SHARE_DAILY.code/date/shares` 做运行时检查，并要求你在聚宽预览核对单位。未在真实聚宽账号内执行，也未连接或写入生产MySQL，不把离线通过称为真实补采成功。
+- [聚宽数据文档入口](https://www.joinquant.com/help/api/help?name=JQDatadoc)：当前开发环境访问受地域限制，无法重新在线核实份额字段字典、账户可用年份和运行环境依赖版本。因此代码对 `FUND_SHARE_DAILY.code/date/shares` 做运行时检查，可使用顶部预览开关在聚宽核对单位。未在真实聚宽账号内执行，也未连接或写入生产MySQL，不把离线通过称为真实补采成功。
 
-离线测试 `backend/tests/test_etf_joinquant_history.py` 覆盖18只名单及三表兼容、默认只读、2024起点和周末终点、上市日期、跨窗口、缺失不补零、历史中间补缺、独立补价、重复运行、保留交易所数据、事务回滚、日历冲突、首日风险隔离，以及网页拆并防护集成。
+离线测试 `backend/tests/test_etf_joinquant_history.py` 覆盖18只名单及三表兼容、默认采集建表入库、显式预览不连接数据库、2024起点和周末终点、上市日期、跨窗口、缺失不补零、历史中间补缺、独立补价、重复运行、保留交易所数据、事务回滚、日历冲突、首日风险隔离，以及网页拆并防护集成。

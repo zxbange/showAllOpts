@@ -115,10 +115,11 @@ def test_calculation_and_model_definitions_keep_original_rules(batch):
     assert compared >= 35
     imports = [n for n in ast.walk(tree) if isinstance(n, (ast.Import, ast.ImportFrom))]
     assert all(n in tree.body for n in imports)
-    assert batch.DB_CONFIG['dbpassword'] == 'your_password'
+    from mysql_connector import get_database_config
+    assert batch.DB_CONFIG == get_database_config()
 
 
-def test_pasted_notebook_without_file_or_sibling_files(batch, monkeypatch, tmp_path):
+def test_pasted_notebook_with_shared_connector_and_no_other_strategy_files(batch, monkeypatch, tmp_path):
     fake_platform(monkeypatch)
     monkeypatch.chdir(tmp_path)
     source = TARGET.read_text(encoding='utf-8')

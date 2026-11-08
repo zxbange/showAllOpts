@@ -7,7 +7,7 @@
 
 ## 使用方式
 
-1. 将 `collectors/净利润断层_数据库版.py` 上传到聚宽研究环境。在私有副本的 `MysqlEarnings` 中填写与项目相同的 MySQL 数据库连接信息。
+1. 将 `collectors/净利润断层_数据库版.py` 上传到聚宽研究环境。同时上传 `mysql_connector.py`，在其中填写与项目相同的 MySQL 数据库连接信息。
 2. 直接粘贴运行，或在 Notebook 中执行：
 
    ```python

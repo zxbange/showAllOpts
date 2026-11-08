@@ -1,10 +1,10 @@
-from datetime import date
+from datetime import date, datetime
 from decimal import Decimal
 import sqlite3
 
 from sqlalchemy import event, select
 
-from app.models.etf import ETFPrice, ETFShare
+from app.models.etf import ETFPrice, ETFShare, ETFTradingDay
 from test_cache import cached
 from test_etf_api import row
 from test_etf_market_value import price
@@ -40,6 +40,64 @@ def test_same_day_corrections_backfill_late_prices_and_noop(cached, session):
     with cache.session('etf-shares') as local:
         assert local.get(ETFPrice, ('510300.XSHG', d2)).close_price == Decimal('3.5')
         assert local.get(ETFShare, ('510300.XSHG', d1)) is None
+
+
+def test_incremental_reads_three_sessions_and_all_new_days_only(cached, session, engine):
+    _, cache = cached
+    days = [date(2026, 1, d) for d in (5, 6, 7, 8, 9, 12, 13, 14, 15)]
+    session.add_all([row(day, 10) for day in days[:5]])
+    session.add_all([price(day, '2') for day in days[:5]])
+    session.add_all([ETFTradingDay(trade_date=day, previous_trade_date=days[i-1] if i else None,
+                                  source='TEST', updated_at=datetime(2026, 1, 9, 18)) for i, day in enumerate(days[:5])])
+    session.commit()
+    cache.refresh('etf-shares', background=False)
+    # Old revisions/deletions must be ignored by daily sync, even after a long gap.
+    session.get(ETFShare, ('510300.XSHG', days[0])).shares = 99
+    session.delete(session.get(ETFShare, ('510300.XSHG', days[1])))
+    session.get(ETFShare, ('510300.XSHG', days[2])).shares = 12
+    session.delete(session.get(ETFShare, ('510300.XSHG', days[3])))
+    session.add_all([row(day, 20) for day in days[5:]])
+    session.add_all([price(day, '3') for day in days[5:]])
+    session.commit()
+    reads = []
+    def record(conn, cursor, sql, parameters, *args):
+        if sql.lstrip().startswith('SELECT') and 'FROM etf_' in sql:
+            reads.append((sql, parameters))
+    event.listen(engine, 'before_cursor_execute', record)
+    try:
+        cache.refresh('etf-shares', background=False)
+    finally:
+        event.remove(engine, 'before_cursor_execute', record)
+    assert not state(cache)['error']
+    assert reads and all('WHERE' in sql for sql, _ in reads)
+    assert any('2026-01-07' in str(params) for _, params in reads)
+    with cache.session('etf-shares') as local:
+        assert local.get(ETFShare, ('510300.XSHG', days[0])).shares == 10
+        assert local.get(ETFShare, ('510300.XSHG', days[1])).shares == 10
+        assert local.get(ETFShare, ('510300.XSHG', days[2])).shares == 12
+        assert local.get(ETFShare, ('510300.XSHG', days[3])) is None
+        assert all(local.get(ETFShare, ('510300.XSHG', day)).shares == 20 for day in days[5:])
+    # Explicit history repair still re-reads everything.
+    cache.refresh('etf-shares', background=False, full=True)
+    assert not state(cache)['error']
+    with cache.session('etf-shares') as local:
+        assert local.get(ETFShare, ('510300.XSHG', days[0])).shares == 99
+        assert local.get(ETFShare, ('510300.XSHG', days[1])) is None
+
+
+def test_prices_keep_independent_incremental_boundary(cached, session):
+    _, cache = cached
+    days = [date(2026, 1, d) for d in (5, 6, 7, 8, 9, 12, 13)]
+    session.add_all([row(day, 10) for day in days])
+    session.add_all([price(day, '2') for day in days[:3]])
+    session.commit()
+    cache.refresh('etf-shares', background=False)
+    session.add_all([price(day, '3') for day in days[3:]])
+    session.commit()
+    cache.refresh('etf-shares', background=False)
+    assert not state(cache)['error']
+    with cache.session('etf-shares') as local:
+        assert len(list(local.scalars(select(ETFPrice)))) == len(days)
 
 
 def test_legacy_source_and_snapshot_upgrade_without_resetting_other_modules(cached, session, engine):

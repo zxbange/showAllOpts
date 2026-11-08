@@ -445,23 +445,26 @@ class EarningsStock(Base):
     events = Column(JSON, nullable=False)
     prices = Column(JSON, nullable=False)
 
+from mysql_connector import get_database_config, get_database_options, mysql_drivername, engine_options
+DB_CONFIG = get_database_config()
+DB_OPTIONS = get_database_options()
+
+
 class MysqlEarnings:
     # GitHub 脱敏模板；仅在聚宽私有副本填写真实凭据。
-    host = 'your_mysql_host'
-    port = 3306
-    dbname = 'your_database'
-    dbuser = 'your_database_user'
-    dbpassword = 'your_password'
+    host = DB_CONFIG['host']
+    port = DB_CONFIG['port']
+    dbname = DB_CONFIG['dbname']
+    dbuser = DB_CONFIG['dbuser']
+    dbpassword = DB_CONFIG['dbpassword']
 
     @classmethod
     def connect_to_mysql(cls):
         url = getattr(URL, 'create', URL)(
-            drivername='mysql+mysqldb', host=cls.host, port=cls.port,
+            drivername=mysql_drivername(DB_OPTIONS['driver']), host=cls.host, port=cls.port,
             username=cls.dbuser, password=cls.dbpassword, database=cls.dbname,
-            query={'charset': 'utf8mb4'})
-        engine = create_engine(url, echo=False, pool_size=1, max_overflow=0,
-                              pool_pre_ping=True, pool_recycle=3600,
-                              connect_args={'connect_timeout': 10})
+            query={'charset': DB_OPTIONS['charset']})
+        engine = create_engine(url, **engine_options(DB_OPTIONS))
         try:
             with engine.connect():
                 pass

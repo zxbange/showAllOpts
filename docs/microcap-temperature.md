@@ -9,7 +9,7 @@
 
 仓库模板：[微盘温度计_数据库版.py](../collectors/微盘温度计_数据库版.py)。
 
-在聚宽私有副本的 `MysqlMicrocap` 类填写 host、port、dbname、dbuser、dbpassword，与网页连接同一个数据库。该脚本沿用已有 `mysql+mysqldb` / SQLAlchemy 的连接及按期事务方式，不读取网页的 `config/app.config`。本地工作区的 `脚本/本地专用/聚宽采集/微盘温度计采集_数据库版.py` 已沿用原入库脚本的私有连接配置；该文件位于项目内，但被 Git 忽略。GitHub 仅提供占位配置。
+在配套的 `collectors/mysql_connector.py` 中填写 host、port、dbname、dbuser、dbpassword，与网页连接同一个数据库。该脚本沿用已有 `mysql+mysqldb` / SQLAlchemy 的连接及按期事务方式，不读取网页的 `config/app.config`。不再维护私有代码副本，提交 Git 前须将真实连接配置还原为占位值。
 
 ```python
 START_DATE = '2021-01-01'

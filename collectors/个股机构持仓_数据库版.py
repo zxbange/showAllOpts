@@ -26,15 +26,10 @@ from sqlalchemy.orm import sessionmaker
 
 
 # ==================== 集中配置区 ====================
-DB_CONFIG = {
-    'host': 'your_mysql_host',
-    'port': 3306,
-    'dbname': 'your_database',
-    'dbuser': 'your_database_user',
-    'dbpassword': 'your_password',
-}
+from mysql_connector import get_database_config, get_database_options, mysql_drivername, engine_options
+DB_CONFIG = get_database_config()
+DB_OPTIONS = get_database_options()
 # 连接参数只配置一次；重试仅针对连接，不重放写入事务。
-DB_OPTIONS = {'connect_timeout': 10, 'retry_count': 5, 'retry_interval': 10, 'pool_recycle': 3600}
 
 # end_date=None：每次运行取北京时间当天。下列参数按策略分组配置。
 STRATEGY_CONFIG = {'个股机构持仓': {'end_date': None, 'history_years': 5, 'refresh_quarters': 4, 'page_size': 1000, 'stock_batch_size': 50}}
@@ -235,12 +230,10 @@ def connect_database(config):
             or opts['pool_recycle'] <= 0):
         raise ValueError('DB_OPTIONS 的次数、超时须为正，重试间隔不可为负。')
     url = getattr(URL, 'create', URL)(
-        drivername='mysql+mysqldb', host=config['host'], port=config['port'],
+        drivername=mysql_drivername(DB_OPTIONS['driver']), host=config['host'], port=config['port'],
         username=config['dbuser'], password=config['dbpassword'], database=config['dbname'],
-        query={'charset': 'utf8mb4'})
-    engine = create_engine(url, echo=False, pool_size=1, max_overflow=0,
-                           pool_pre_ping=True, pool_recycle=opts['pool_recycle'],
-                           connect_args={'connect_timeout': opts['connect_timeout']})
+        query={'charset': DB_OPTIONS['charset']})
+    engine = create_engine(url, **engine_options(DB_OPTIONS))
     try:
         for attempt in range(opts['retry_count']):
             _progress_note('连接数据库（第 {} / {} 次）'.format(attempt + 1, opts['retry_count']))

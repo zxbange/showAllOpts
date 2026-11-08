@@ -1,8 +1,9 @@
 # -*- coding: utf-8 -*-
-"""聚宽研究 Notebook 独立历史补采。直接粘贴执行，默认预览、不连接数据库。
+"""聚宽研究 Notebook 独立历史补采。填写 mysql_connector.py 和顶部日期配置后，整段执行即采集并入库。
 
 仅使用平台内置 jqdata，不使用外部 JQData SDK、账号认证或交易所 HTTP 接口。
-用法：RESULT = run()；核对后 RESULT = run(write=True)。
+默认自动创建缺少的数据表、只新增缺失记录；已有数据不覆盖。
+只需预览时将 WRITE_DATABASE 改为 False；源缺失是否允许部分入库由 ALLOW_PARTIAL 控制。
 完整说明见 docs/etf-joinquant-history.md；不替代后续交易所每日自动采集。
 """
 from __future__ import print_function, division
@@ -22,12 +23,12 @@ from sqlalchemy.orm import sessionmaker
 START_DATE = '2024-01-01'
 END_DATE = None  # 北京时间昨日；当天无论是否收盘均留给交易所日更。
 WINDOW_SIZE = 120  # 单只基金、每次最多 120 个交易日，远低于 finance 查询上限。
-DB_CONFIG = {
-    # 仅在聚宽私有 Notebook 中填写；不要提交凭据或将 Notebook 公开分享。
-    'host': 'douguastock.mysql.rds.aliyuncs.com', 'port': 3306, 'dbname': 'gt888zx_4412',
-    'dbuser': 'gt888zx_4412', 'dbpassword': 'gt888zx_4412',
-    'driver': 'auto',  # auto: MySQLdb 优先，否则 PyMySQL；也可指定 mysqldb / pymysql。
-}
+WRITE_DATABASE = True  # 整段执行即入库；False 为仅预览、不连接数据库。
+CREATE_TABLES = True  # 自动创建缺少的三张表；数据库本身需提前创建，账号须有相应权限。
+ALLOW_PARTIAL = False  # 源数据缺失时停止入库；确认接受缺失后改 True，只保存有效记录。
+from mysql_connector import get_database_config, get_database_options, mysql_drivername, engine_options
+DB_CONFIG = get_database_config()
+DB_OPTIONS = get_database_options()
 # 单文件不能依赖项目安装。此名单由离线测试与 backend/app/core/etf_catalog.py 校验一致。
 ETF_GROUPS = {
     'hs300': [('510300.XSHG', '沪深300ETF华泰柏瑞'), ('510310.XSHG', '沪深300ETF易方达'),
@@ -243,31 +244,23 @@ def quality_warnings(shares, prices, before, days):
 def connect_database(config):
     if _builtins.any(not config.get(key) or str(config[key]).startswith('your_')
            for key in ('host', 'dbname', 'dbuser', 'dbpassword')):
-        raise HistoryError('请只在聚宽私有副本中填写 DB_CONFIG，不要把凭据发到聊天或提交到仓库。')
-    driver = config.get('driver', 'auto')
+        raise HistoryError('请在 mysql_connector.py 中填写 DB_CONFIG，不要把凭据发到聊天或提交到仓库。')
+    driver = config.get('driver', DB_OPTIONS['driver'])
     if driver not in ('auto', 'mysqldb', 'pymysql'):
         raise HistoryError('driver 仅支持 auto、mysqldb 或 pymysql。')
     stage = '加载驱动'
     engine = None
     try:
-        if driver == 'auto':
-            try:
-                import MySQLdb  # noqa: F401
-                driver = 'mysqldb'
-            except ImportError:
-                import pymysql  # noqa: F401
-                driver = 'pymysql'
+        drivername = mysql_drivername(driver)
         stage = '构造连接地址'
         make_url = getattr(URL, 'create', URL)
-        url = make_url(drivername='mysql+' + driver, host=config['host'],
-                       port=_builtins.int(config.get('port', 3306)), database=config['dbname'],
+        url = make_url(drivername=drivername, host=config['host'],
+                       port=_builtins.int(config.get('port', DB_CONFIG['port'])), database=config['dbname'],
                        username=config['dbuser'], password=config['dbpassword'],
-                       query={'charset': 'utf8mb4'})
+                       query={'charset': DB_OPTIONS['charset']})
         stage = '初始化连接引擎'
         # 沿用批量采集的连接参数；旧版 SQLAlchemy 不接受 hide_parameters 构造参数。
-        engine = create_engine(url, echo=False, pool_size=1,
-                               max_overflow=0, pool_recycle=3600, pool_pre_ping=True,
-                               connect_args={'connect_timeout': 10})
+        engine = create_engine(url, **engine_options(DB_OPTIONS))
         if hasattr(engine, 'hide_parameters'):
             engine.hide_parameters = True
         stage = '建立数据库连接'
@@ -375,9 +368,9 @@ def save_records(engine, shares, prices, sessions, create_tables=False):
                 pass
 
 
-def run(start_date=START_DATE, end_date=END_DATE, groups=None, write=False,
-        allow_partial=False, create_tables=False, db_config=None):
-    """返回记录、源缺失清单、拆并风险及写入计数。默认只读，不连接 MySQL。"""
+def run(start_date=START_DATE, end_date=END_DATE, groups=None, write=WRITE_DATABASE,
+        allow_partial=ALLOW_PARTIAL, create_tables=CREATE_TABLES, db_config=None):
+    """采集并按顶部配置入库，返回记录、源缺失、拆并风险及计数；write=False 仅预览。"""
     if _builtins.any(not isinstance(value, _builtins.bool) for value in (write, allow_partial, create_tables)):
         raise HistoryError('write/allow_partial/create_tables 必须是布尔值。')
     if (isinstance(WINDOW_SIZE, _builtins.bool) or not isinstance(WINDOW_SIZE, _builtins.int)
@@ -474,10 +467,10 @@ def run(start_date=START_DATE, end_date=END_DATE, groups=None, write=False,
         print('发现 {} 项份额/价格单位变化风险，前20项：{}'.format(len(warnings), warnings[:20]))
         print('原始记录保留供网页拆并防护使用；不能将这些风险当作已确认拆并或自动复权。')
     if not write:
-        print('仅预览：未连接 MySQL、未建表、未写库。核对源字段单位和样本后用 run(write=True)。')
+        print('仅预览：未连接 MySQL、未建表、未写库。需要入库时将顶部 WRITE_DATABASE 改为 True 后重新运行整段脚本。')
         return result
     if not result['source_complete'] and not allow_partial:
-        print('存在源缺失，默认停止入库。核对后可 run(write=True, allow_partial=True) 只保存有效记录。')
+        print('存在源缺失，本次未入库。确认接受缺失后将顶部 ALLOW_PARTIAL 改为 True，重新运行整段脚本即可保存有效记录。')
         return result
     engine = connect_database(DB_CONFIG if db_config is None else db_config)
     try:

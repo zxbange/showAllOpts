@@ -12,7 +12,7 @@ from test_cache import cached
 from test_cache_incremental import assert_matches
 from test_microcap_api import row
 
-spec = importlib.util.spec_from_file_location('journal', Path(__file__).resolve().parents[2] / 'collector_rules/result_journal.py')
+spec = importlib.util.spec_from_file_location('journal', Path(__file__).resolve().parents[2] / 'collectors/rules/result_journal.py')
 journal = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(journal)
 MODULE = 'microcap-temperature'
@@ -154,7 +154,7 @@ def test_malformed_journal_preserves_published_snapshot(cached, writer, engine, 
 def test_shared_embedded_protocols_remain_identical():
     root = Path(__file__).resolve().parents[2]
     for name in ('result_journal', 'earnings_version'):
-        spec = importlib.util.spec_from_file_location(name, root / ('scripts/sync_' + name + '.py'))
+        spec = importlib.util.spec_from_file_location(name, root / ('collectors/tools/sync_' + name + '.py'))
         module = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(module)
         module.sync(check=True)

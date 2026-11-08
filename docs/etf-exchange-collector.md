@@ -1,10 +1,10 @@
 # ETF 交易所采集器
 
-`collectors/etf_exchange_collector.py` 是独立CLI入口，不依赖聚宽；核心实现打包在 `backend/app/services/etf_exchange.py`，原生部署和Docker使用同一实现。成员名单统一读取 `backend/app/core/etf_catalog.py`；不修改旧聚宽脚本。
+`collectors/etf_exchange_collector.py` 是独立CLI入口，不依赖聚宽；核心实现打包在 `backend/app/services/etf_exchange.py`，原生部署和Docker使用同一实现。成员名单统一读取 `backend/app/core/etf_catalog.py`；聚宽仅保留 ETF 历史补采与分类研究入口。
 
 ## 运行
 
-使用 backend 依赖环境（httpx、SQLAlchemy、PyMySQL、pydantic-settings），配置遵循 backend Settings：环境变量、默认 `backend/.env` 或 `APP_ENV_FILE` 指定配置。dry-run 不加载数据库配置、不连接数据库。
+使用 backend 依赖环境（httpx、SQLAlchemy、PyMySQL、pydantic-settings），命令行入口的连接配置统一来自同目录 `mysql_connector.py`，不再读取 backend Settings；网页自动采集仍使用网页已保存的连接目标。dry-run 不加载数据库配置、不连接数据库。
 
 ```sh
 python collectors/etf_exchange_collector.py --start 2026-11-06 --end 2026-11-06 --probe

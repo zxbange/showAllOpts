@@ -12,7 +12,7 @@ QUERY = ("SELECT TABLE_NAME, TABLE_TYPE, ENGINE FROM information_schema.TABLES "
          "WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME IN "
          "('earnings_gap_run','earnings_gap_stock','earnings_sync_head','earnings_sync_migration')")
 
-@pytest.fixture(params=['collector_rules/earnings_version.py', 'collectors/净利润断层_数据库版.py', 'collectors/策略批量采集_数据库版.py'])
+@pytest.fixture(params=['collectors/rules/earnings_version.py', 'collectors/净利润断层_数据库版.py', 'collectors/策略批量采集_数据库版.py'])
 def protocol(request):
     source = (ROOT / request.param).read_text()
     ns = {}

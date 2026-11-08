@@ -444,7 +444,7 @@ def write_records(engine, shares, prices, calendar=None):
                 # An identical recheck preserves updated_at and avoids cache churn.
 
 
-def main(argv=None):
+def main(argv=None, engine_factory=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--start', type=parse_date)
     parser.add_argument('--end', type=parse_date)
@@ -471,9 +471,12 @@ def main(argv=None):
             for code, day in gaps[:20]:
                 print(f'  {code} {day.isoformat()}')
         if args.write:
-            from sqlalchemy import create_engine
-            from app.core.config import Settings
-            engine = create_engine(Settings().database_url, echo=False, pool_pre_ping=True)
+            if engine_factory is None:
+                from sqlalchemy import create_engine
+                from app.core.config import Settings
+                engine = create_engine(Settings().database_url, echo=False, pool_pre_ping=True)
+            else:
+                engine = engine_factory()
             try:
                 write_records(engine, shares, prices, calendar=calendar)
             finally:

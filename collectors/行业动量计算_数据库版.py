@@ -68,29 +68,30 @@ class IndustryMomentum(Base):
     updated_at = Column(DateTime, nullable=False, default=datetime.datetime.now)
 
 
+from mysql_connector import get_database_config, get_database_options, mysql_drivername, engine_options
+DB_CONFIG = get_database_config()
+DB_OPTIONS = get_database_options()
+
+
 class MysqlMomentum:
     # GitHub 脱敏模板：在聚宽私有副本中填写连接信息，不要提交真实凭据。
-    host = 'your_mysql_host'
-    port = 3306
-    dbname = 'your_database'
-    dbuser = 'your_database_user'
-    dbpassword = 'your_password'
+    host = DB_CONFIG['host']
+    port = DB_CONFIG['port']
+    dbname = DB_CONFIG['dbname']
+    dbuser = DB_CONFIG['dbuser']
+    dbpassword = DB_CONFIG['dbpassword']
 
     @classmethod
     def connect_to_mysql(cls):
         # URL.create 兼容新 SQLAlchemy；旧版聚宽环境使用 URL 构造函数。
         make_url = getattr(URL, 'create', URL)
         uri = make_url(
-            drivername='mysql+mysqldb', host=cls.host, port=cls.port,
+            drivername=mysql_drivername(DB_OPTIONS['driver']), host=cls.host, port=cls.port,
             username=cls.dbuser, password=cls.dbpassword, database=cls.dbname,
-            query={'charset': 'utf8mb4'},
+            query={'charset': DB_OPTIONS['charset']},
         )
-        engine = create_engine(
-            uri, echo=False, pool_size=1, max_overflow=0,
-            pool_recycle=3600, pool_pre_ping=True,
-            connect_args={'connect_timeout': 10},
-        )
-        for attempt in range(1, 6):
+        engine = create_engine(uri, **engine_options(DB_OPTIONS))
+        for attempt in range(1, DB_OPTIONS['retry_count'] + 1):
             try:
                 with engine.connect():
                     pass
@@ -98,12 +99,12 @@ class MysqlMomentum:
                 return engine
             except Exception as exc:
                 # 不打印连接串或异常全文，避免日志包含密码。
-                print('MySQL 连接失败，第 {}/5 次，异常类型：{}'.format(
-                    attempt, type(exc).__name__))
+                print('MySQL 连接失败，第 {}/{} 次，异常类型：{}'.format(
+                    attempt, DB_OPTIONS['retry_count'], type(exc).__name__))
                 engine.dispose()
-                if attempt == 5:
+                if attempt == DB_OPTIONS['retry_count']:
                     raise RuntimeError('MySQL 连接失败，请检查网络、白名单和连接参数。') from None
-                time.sleep(10)
+                time.sleep(DB_OPTIONS['retry_interval'])
 
 
 def as_date(value):

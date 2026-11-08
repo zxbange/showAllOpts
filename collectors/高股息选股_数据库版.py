@@ -22,16 +22,11 @@ from sqlalchemy.orm import sessionmaker
 
 STRATEGY_CONFIG = {'高股息选股': {'end_date': None, 'batch_size': 300, 'page_size': 2000}}
 
-DB_CONFIG = {
-    'host': 'your_mysql_host',
-    'port': 3306,
-    'dbname': 'your_database',
-    'dbuser': 'your_database_user',
-    'dbpassword': 'your_password',
-}
+from mysql_connector import get_database_config, get_database_options, mysql_drivername, engine_options
+DB_CONFIG = get_database_config()
+DB_OPTIONS = get_database_options()
 
 
-DB_OPTIONS = {'connect_timeout': 10, 'retry_count': 5, 'retry_interval': 10, 'pool_recycle': 3600}
 
 
 PROGRESS_ENABLED = True  # 控制台进度条；关闭后仍保留各策略结果和最终汇总。
@@ -290,12 +285,10 @@ def connect_database(config):
             or opts['pool_recycle'] <= 0):
         raise ValueError('DB_OPTIONS 的次数、超时须为正，重试间隔不可为负。')
     url = getattr(URL, 'create', URL)(
-        drivername='mysql+mysqldb', host=config['host'], port=config['port'],
+        drivername=mysql_drivername(DB_OPTIONS['driver']), host=config['host'], port=config['port'],
         username=config['dbuser'], password=config['dbpassword'], database=config['dbname'],
-        query={'charset': 'utf8mb4'})
-    engine = create_engine(url, echo=False, pool_size=1, max_overflow=0,
-                           pool_pre_ping=True, pool_recycle=opts['pool_recycle'],
-                           connect_args={'connect_timeout': opts['connect_timeout']})
+        query={'charset': DB_OPTIONS['charset']})
+    engine = create_engine(url, **engine_options(DB_OPTIONS))
     try:
         for attempt in range(opts['retry_count']):
             _progress_note('连接数据库（第 {} / {} 次）'.format(attempt + 1, opts['retry_count']))

@@ -62,7 +62,7 @@ def initialize_configuration(root: Path, source: Path | None = None, production:
     if target.exists():
         print(f'{label} already exists; preserved without changes.')
         return
-    source_path = source if source is not None else root / '脚本' / '本地专用' / '聚宽采集' / '全部策略批量采集_数据库版.py'
+    source_path = source if source is not None else root / 'collectors' / 'mysql_connector.py'
     local_config = root / 'backend' / '.env'
     if production and source is None and local_config.is_file():
         content = local_config.read_text(encoding='utf-8')
@@ -88,7 +88,7 @@ def initialize_configuration(root: Path, source: Path | None = None, production:
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--source', type=Path, help='Optional collector file with DB_CONFIG or legacy connection constants.')
+    parser.add_argument('--source', type=Path, help='Optional config file with DB_CONFIG; defaults to collectors/mysql_connector.py.')
     parser.add_argument('--production', action='store_true', help='Initialize config/app.config for Linux startup.')
     args = parser.parse_args()
     initialize_configuration(ROOT, args.source, production=args.production)

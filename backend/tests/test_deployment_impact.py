@@ -8,14 +8,20 @@ impact = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(impact)
 
 @pytest.mark.parametrize('paths,expected', [
-    (['脚本/本地统计/短线五策略胜率统计_本地版.py'],False),
-    (['docs/short-statistics.md','backend/tests/test_seven_strategy_statistics.py'],False),
-    (['脚本/本地统计/短线五策略胜率统计_本地版.py','backend/app/main.py'],True),
-    (['scripts/deploy.py'],False), (['scripts/sync_oversold_rules.py'],False),
-    (['strategy_rules/oversold.py'],True), (['frontend/package-lock.json'],True),
+    (['collectors/research.py'],True),
+    (['collectors/README.md'],False),
+    (['collectors/README.md','backend/app/main.py'],True),
+    (['scripts/deploy.py'],False), (['collectors/tools/sync_result_journal.py'],False),
+    (['collectors/rules/result_journal.py'],True), (['frontend/package-lock.json'],True),
+    (['collectors/tools/sync_earnings_version.py','collectors/净利润断层_数据库版.py'],True),
+    (['collectors/tools-other/tool.py'],True),
     (['backend/requirements.lock.txt'],True), (['.github/workflows/deploy.yml'],True),
-    (['脚本/本地统计/unknown.py'],False), ([],True),
-    (['脚本/本地统计/短线五策略胜率统计_本地版.py','renamed_runtime.py'],True),
+    (['collectors/unknown.py'],True), ([],True),
+    (['scripts/research.py','renamed_runtime.py'],True),
+    (['collectors/etf_exchange_collector.py'],True),
+    (['collectors/策略批量采集_数据库版.py'],True),
+    (['scripts-other/tool.py'],True),
+    (['脚本/unknown.py'],True),
 ])
 def test_impact_paths(paths, expected):
     assert impact.requires_deployment(paths) is expected
@@ -33,7 +39,7 @@ def test_real_git_research_diff_then_mixed_diff(tmp_path):
     git('init','-q');git('config','user.email','test@example.invalid');git('config','user.name','Test')
     (tmp_path/'README').write_text('base')
     git('add','.');git('commit','-qm','base');base=git('rev-parse','HEAD')
-    target=tmp_path/'docs/short-statistics.md';target.parent.mkdir();target.write_text('research')
+    target=tmp_path/'collectors/README.md';target.parent.mkdir();target.write_text('research')
     git('add','.');git('commit','-qm','research');head=git('rev-parse','HEAD')
     assert impact.compare(base,head,tmp_path)[0] is False
     (tmp_path/'README').write_text('runtime change')

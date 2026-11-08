@@ -1,24 +1,41 @@
-"""ETF reconciliation accepts late prices and exchange same-date share revisions.
+"""ETF incremental sync rechecks only the last three cached trading sessions.
 
 Keep the existing cache namespace and share schema. Old sources without the optional
 price table remain readable, and old immutable snapshots are upgraded on refresh.
 """
 import shutil
 
-from sqlalchemy import create_engine, inspect
+from sqlalchemy import create_engine, func, inspect, select, union
 from sqlalchemy.pool import NullPool
 
-from app.core.cache_sync import chunks, key_filter, read_map, transfer
+from app.core.cache_sync import chunks, key_filter, read_batches, transfer
 from app.core.sync_progress import report
 from app.models.etf import ETFPrice, ETFShare, ETFTradingDay
 
 
-def manifest(connection, table):
-    # There are only 18 tracked ETFs. Compare actual values as well as timestamps:
-    # MySQL timestamps can have only second precision and late prices are independent.
+def manifest(connection, table, since=None):
+    # Compare values too: timestamps may have only second precision.
     keys = list(table.primary_key.columns)
     columns = keys + [c for c in table.columns if c not in keys]
-    return read_map(connection, columns, len(keys))
+    condition = table.c.trade_date >= since if since is not None else None
+    return {tuple(row[:len(keys)]): tuple(row[len(keys):])
+            for batch in read_batches(connection, columns, keys, condition) for row in batch}
+
+
+def recent_start(connection, table, names):
+    """Each table advances independently so late prices do not follow the share cursor."""
+    latest = connection.scalar(select(func.max(table.c.trade_date)))
+    if latest is None:
+        return None
+    dates = select(table.c.trade_date).where(table.c.trade_date <= latest)
+    calendar = ETFTradingDay.__table__
+    if calendar.name in names and table is not calendar:
+        dates = union(dates, select(calendar.c.trade_date).where(calendar.c.trade_date <= latest))
+    else:
+        dates = dates.distinct()
+    recent = list(connection.scalars(dates.order_by(table.c.trade_date.desc()).limit(3)))
+    # An initial snapshot with fewer than three sessions has no established window yet.
+    return recent[-1] if len(recent) == 3 else None
 
 
 def copy_etf(cache, path, previous, full=False, *, source=None, identity=None):
@@ -26,13 +43,19 @@ def copy_etf(cache, path, previous, full=False, *, source=None, identity=None):
     local = None
     local_maps = {}
     local_names = set()
+    bounds = {}
+    local_count = 0
     if previous is not None and not full:
         local = create_engine('sqlite:///file:' + previous.as_posix() + '?mode=ro&uri=true', poolclass=NullPool)
         try:
             with local.connect() as connection:
                 local_names = set(inspect(connection).get_table_names())
-                local_maps = {table.name: manifest(connection, table) if table.name in local_names else {}
-                              for table in tables}
+                for table in tables:
+                    if table.name not in local_names:
+                        continue
+                    bounds[table.name] = recent_start(connection, table, local_names)
+                    local_maps[table.name] = manifest(connection, table, bounds[table.name])
+                    local_count += connection.scalar(select(func.count()).select_from(table))
         finally:
             local.dispose()
     with (source if source is not None else cache.source).connect() as source:
@@ -47,9 +70,9 @@ def copy_etf(cache, path, previous, full=False, *, source=None, identity=None):
             if inspector.has_table(ETFTradingDay.__tablename__):
                 source_tables.add(ETFTradingDay.__tablename__)
             cache.sync_notes['etf-shares'] = None if price_exists else '源库尚无 ETF 收盘价表，保留份额展示，市值暂不估算。'
-            remote = {table.name: manifest(source, table) if table.name in source_tables else {}
+            remote = {table.name: manifest(source, table, bounds.get(table.name)) if table.name in source_tables else {}
                       for table in tables}
-            count = sum(len(values) for values in remote.values())
+            count = local_count + sum(len(remote[t.name]) - len(local_maps.get(t.name, {})) for t in tables)
             if not full and previous is not None and all(t.name in local_names for t in tables) and remote == local_maps:
                 return previous.name, count
             destination = create_engine('sqlite:///' + path.as_posix(), poolclass=NullPool)
