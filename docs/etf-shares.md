@@ -22,7 +22,7 @@
 
 交易所公开接口 → 独立采集器 → MySQL `etf_share_daily`、`etf_price_daily` 与 `etf_trading_day` → 服务器只读同步 → 本地快照 → API与图表。新流程不依赖聚宽，不回退到第三方行情。历史聚宽份额保留，不删除原表或历史记录。
 
-采集器为 [etf_exchange_collector.py](../collectors/etf_exchange_collector.py)，配置、命令、数据源及退出码见[运行说明](etf-exchange-collector.md)。默认仅探测，`--write` 才入库。旧 `ETF份额_数据库版.py` 保留用于兼容历史流程，不用于新流程；聚宽批量采集默认不再运行ETF份额，避免混合源覆盖。
+采集器为 [etf_exchange_collector.py](../collectors/etf_exchange_collector.py)，配置、命令、数据源及退出码见[运行说明](etf-exchange-collector.md)。默认仅探测，`--write` 才入库。旧 `ETF份额_数据库版.py` 保留用于兼容历史流程，不用于新流程；聚宽批量采集已移除旧ETF份额工厂、参数和注册项，避免混合源覆盖。
 
 自动采集已接入FastAPI生命周期，功能默认启用；显式设置 `ETF_COLLECTION_ENABLED=false` 可关闭。推荐在页面配置主机、端口、库名及账号密码，可用已有且具备权限的账号；自定义目标只影响ETF，采集写入和图表/缓存读取使用相同配置，其他模块不变。切换目标后旧ETF缓存不可作为新库数据展示，须重新同步。旧 `ETF_COLLECTION_WRITER_URL` 仍要求与应用数据库目标一致。缺配置、目标不符、写入权限不足时页面和状态API明确报未就绪/失败，不静默复用未配置的凭据、不创建账户或改权限。连接账号需三张表SELECT、INSERT、UPDATE，首次缺表时需CREATE权限。开发与只读验证阶段没有连接生产数据库或实际启用服务器采集；生产发布结果以对应GitHub Actions部署与健康检查为准，发布不代替写入账号配置。网页刷新不触发交易所采集，只读取已发布快照。
 

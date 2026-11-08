@@ -60,28 +60,15 @@ STRATEGY_CONFIG = {
         'start_date': '2021-01-01', 'end_date': None,
         'micro_num': 1000, 'batch_size': 1000,
     },
-    'ETF份额': {
-        'start_date': None, 'end_date': None, 'initial_trade_days': 300,
-        'window_size': 120,
-        # 固定跟踪名单；金额单位不影响源数据以“份”入库。
-        'funds': {
-            'hs300': [('510300.XSHG', '沪深300ETF华泰柏瑞'), ('510310.XSHG', '沪深300ETF易方达'),
-                      ('510330.XSHG', '沪深300ETF华夏'), ('159919.XSHE', '沪深300ETF嘉实'),
-                      ('515330.XSHG', '沪深300ETF天弘')],
-            'zz500': [('510500.XSHG', '中证500ETF南方'), ('510510.XSHG', '中证500ETF广发'),
-                      ('510580.XSHG', '中证500ETF易方达'), ('512500.XSHG', '中证500ETF华夏'),
-                      ('159922.XSHE', '中证500ETF嘉实')],
-        },
-    },
     '净利润断层': {'end_date': None, 'page_size': 1000},
     '高增长': {'end_date': None, 'batch_size': 100, 'page_size': 2000},
     '高股息选股': {'end_date': None, 'batch_size': 300, 'page_size': 2000},
     '微盘新高新低': {'start_date': None, 'end_date': None, 'micro_num': 400, 'initial_days': 180, 'batch_size': 500, 'price_batch_size': 100},
 }
 
-# ETF份额已迁往独立交易所采集器；旧工厂仅保留显式兼容调用。
+# ETF份额和两融担保比例由项目接口任务采集，不在此注册。
 STRATEGY_ORDER = ['行业动量', '抱团拥挤度', '市场情绪跟踪', '微盘温度计', '净利润断层', '微盘新高新低', '高股息选股', '高增长', 'ETF动量热度', '个股机构持仓']
-STRATEGY_OPTIONS = {}  # 原六策略固定只新增；高股息选股和高增长每次重算并替换最新快照。
+STRATEGY_OPTIONS = {}  # 历史策略固定只新增；高股息选股和高增长每次重算并替换最新快照。
 PREVIEW_ROWS = 5  # 每个策略展示最后几条新增记录；0 表示仅展示条数。
 PROGRESS_ENABLED = True  # 控制台进度条；关闭后仍保留各策略结果和最终汇总。
 PROGRESS_INTERVAL_SECONDS = 5.0  # 最多每隔多少秒刷新；等待接口/数据库时也刷新耗时。
@@ -1920,181 +1907,6 @@ def _microcap_strategy(_apis, _config):
     return SimpleNamespace(**locals())
 
 
-# ---------- ETF份额 ----------
-def _etf_strategy(_apis, _config):
-    """独立作用域隔离模型、参数和函数，返回本策略的接口。"""
-    settings = strategy_settings('ETF份额')
-    if 'lookback_days' in settings:
-        raise ValueError('批量版只新增，请移除无效的 lookback_days 配置。')
-    get_trade_days = _apis.get('get_trade_days')
-    query = _apis.get('query')
-    finance = _apis.get('finance')
-
-    START_DATE = settings['start_date']
-    INITIAL_TRADE_DAYS = settings['initial_trade_days']
-    END_DATE = settings['end_date']
-    WINDOW_SIZE = settings['window_size']
-    ETF_GROUPS = settings['funds']
-    SOURCE = 'jqdata.FUND_SHARE_DAILY'
-    Base = declarative_base()
-
-    class ETFShare(Base):
-        __tablename__ = 'etf_share_daily'
-        __table_args__ = {'mysql_engine': 'InnoDB', 'mysql_charset': 'utf8mb4'}
-        fund_code = Column(String(16), primary_key=True)
-        trade_date = Column(Date, primary_key=True)
-        fund_name = Column(String(128), nullable=False)
-        shares = Column(BigInteger, nullable=False)  # 原始单位：份；不用亿元或成交量替代。
-        previous_trade_date = Column(Date, nullable=False)
-        source = Column(String(48), nullable=False)
-        updated_at = Column(DateTime, nullable=False)
-
-    RESULT_COLUMNS = [column.name for column in ETFShare.__table__.columns]
-
-    def share_table():
-        try:
-            apis = (finance, query, get_trade_days)
-        except NameError:
-            apis = (None,)
-        if builtins.any(api is None for api in apis):
-            raise ValueError('缺少聚宽研究 API，请在聚宽 Notebook 直接粘贴运行，或使用 %run -i。')
-        table = getattr(finance, 'FUND_SHARE_DAILY', None)
-        if table is None or builtins.any(not hasattr(table, field) for field in ('code', 'date', 'shares')):
-            raise ValueError('当前环境未提供 finance.FUND_SHARE_DAILY 或所需字段，请核对聚宽数据权限。')
-        return table
-
-    def validate_days(raw, start, end):
-        return _checked_trade_days(raw, start, end,
-            error='交易日历重复、越界或乱序。', missing_error='交易日历接口返回空对象。')
-
-    def trading_days(start, end):
-        return validate_days(get_trade_days(start_date=start, end_date=end), start, end)
-
-    def previous_days(start, count):
-        raw = get_trade_days(end_date=start, count=count)
-        if raw is None:
-            raise ValueError('交易日历获取失败。')
-        return validate_days(raw, datetime.date(1900, 1, 1), start)
-
-    def normalize_shares(value):
-        try:
-            number = Decimal(str(value))
-        except (InvalidOperation, ValueError):
-            raise ValueError('基金份额不是有效数字。') from None
-        if not number.is_finite() or number < 0 or number != number.to_integral_value() or number > 9223372036854775807:
-            raise ValueError('基金份额缺失、非整数、负数或超出 BIGINT 范围。')
-        return int(number)
-
-    def fetch_window(code, name, days, before, require_start=False):
-        table = share_table()
-        frame = finance.run_query(query(table).filter(
-            table.code == code, table.date >= days[0], table.date <= days[-1],
-        ).order_by(table.date).limit(len(days) + 1))
-        if frame is None or not {'code', 'date', 'shares'}.issubset(frame.columns):
-            raise ValueError('ETF 份额接口未返回有效表格或缺少必要字段。')
-        records = []
-        allowed = set(days)
-        seen = set()
-        for item in frame.to_dict('records'):
-            day = as_date(item['date'])
-            if item['code'] != code or day not in allowed or day in seen:
-                raise ValueError('ETF 份额返回代码、日期越界或重复记录。')
-            seen.add(day)
-            records.append(dict(fund_code=code, fund_name=name, trade_date=day,
-                                shares=normalize_shares(item['shares']), previous_trade_date=before[day],
-                                source=SOURCE, updated_at=china_now()))
-        records.sort(key=lambda record: record['trade_date'])
-        if records:
-            first, last = records[0]['trade_date'], records[-1]['trade_date']
-            expected = {day for day in days if first <= day <= last}
-            if seen != expected or (require_start and first != days[0]):
-                raise ValueError('{} 份额历史中间缺失，停止该基金，不能跳过缺口更新进度。'.format(code))
-        return records
-
-    def last_dates(Session, codes):
-        with session_scope(Session) as session:
-            return {code: (first, last) for code, first, last in session.query(
-                ETFShare.fund_code, func.min(ETFShare.trade_date), func.max(ETFShare.trade_date),
-            ).filter(ETFShare.fund_code.in_(codes)).group_by(ETFShare.fund_code).all()}
-
-    def save_window(Session, code, records, skip_existing=True):
-        _progress_note('写入当前份额窗口')
-        if not records:
-            return []
-        dates = [record['trade_date'] for record in records]
-        if len(set(dates)) != len(dates) or builtins.any(r['fund_code'] != code or r['previous_trade_date'] >= r['trade_date'] for r in records):
-            raise ValueError('待写入份额快照不一致。')
-        return _save_record_set(Session, ETFShare, records,
-            (ETFShare.fund_code == code, ETFShare.trade_date.in_(dates)), ('trade_date',), skip_existing)
-
-    def run(start_date=START_DATE, end_date=END_DATE, incremental=True, groups=None, skip_existing=True):
-        _require_append(skip_existing)
-        today = china_now().date()
-        end = today if end_date is None else as_date(end_date)
-        start = None if start_date is None else as_date(start_date)
-        if end > today or (start is not None and start > end):
-            raise ValueError('开始日期不能晚于结束日期，结束日期不能晚于今天。')
-        if not isinstance(incremental, builtins.bool):
-            raise ValueError('incremental 必须为布尔值。')
-        selected = list(ETF_GROUPS) if groups is None else list(groups)
-        if not selected or builtins.any(group not in ETF_GROUPS for group in selected):
-            raise ValueError('分组仅支持 hs300、zz500。')
-        funds = dict(pair for group in selected for pair in ETF_GROUPS[group])
-        share_table()  # 在连接数据库前检查环境。
-        if start is None:
-            initial_days = previous_days(end, INITIAL_TRADE_DAYS)
-            if not initial_days:
-                raise ValueError('无法取得首次采集范围的交易日历。')
-            start = initial_days[0]
-        output, failures = [], []
-        with database_scope(Base, _config) as Session:
-            latest = last_dates(Session, list(funds)) if incremental else {}
-            for code, name in _progress_items(list(funds.items()), '基金', lambda item: '{} {}'.format(*item)):
-                try:
-                    first, last = latest.get(code, (None, None))
-                    if last and as_date(last) > today:
-                        raise ValueError('最新入库日期晚于今天。')
-                    if last and as_date(last) > end:
-                        continue
-                    begin = start
-                    if last:
-                        recent = previous_days(as_date(last), 1)
-                        if not recent or recent[-1] != as_date(last):
-                            raise ValueError('最新记录不在交易日历中。')
-                        # 已有数据以水位为准；即使一年以上没运行，也不能跳过中间缺口。
-                        begin = as_date(last) + datetime.timedelta(days=1)
-                        if start_date is not None:
-                            begin = builtins.max(start, begin)
-                    if begin > end:
-                        continue
-                    days = trading_days(begin, end)
-                    if not days:
-                        continue
-                    prior = previous_days(days[0] - datetime.timedelta(days=1), 1)
-                    if not prior:
-                        raise ValueError('无法确定首日的前一交易日。')
-                    before = dict(zip(days, prior + days[:-1]))
-                    # 已有记录作为连续性锚点；指定历史范围时允许基金成立前无数据。
-                    seen_data = builtins.bool(last and first and days[0] >= as_date(first))
-                    for offset in range(0, len(days), WINDOW_SIZE):
-                        window = days[offset:offset + WINDOW_SIZE]
-                        _progress_note('份额窗口 {} / {}：{} 至 {}'.format(offset//WINDOW_SIZE+1, (len(days)+WINDOW_SIZE-1)//WINDOW_SIZE, window[0], window[-1]))
-                        records = fetch_window(code, name, window, before, require_start=seen_data)
-                        if records:
-                            written = save_window(Session, code, records, skip_existing=skip_existing)
-                            output.extend(written)
-                            seen_data = True
-                            if records[-1]['trade_date'] < window[-1]:
-                                break
-                        elif seen_data or last:
-                            break
-                except Exception:
-                    # 每只基金独立恢复；不打印数据库连接或原始驱动异常。
-                    failures.append(code)
-            if failures:
-                raise RuntimeError('以下 ETF 未完成：{}。成功窗口已提交，修复后重跑可续传。'.format(', '.join(failures)))
-        return pd.DataFrame(output, columns=RESULT_COLUMNS)
-    return SimpleNamespace(**locals())
 
 
 # ---------- 净利润断层 ----------
@@ -3260,8 +3072,6 @@ def _etf_heat_strategy(_apis, _config):
         '159980.XSHE': ('有色金属期货方向', 'commodity:nonferrous'),
     }
 
-    FOCUS_CODES = tuple(COMMODITY_DIRECTIONS)
-
     CATEGORIES = ['宽基ETF', '行业ETF', '主题ETF', '策略/风格ETF', '跨境ETF', '商品ETF', '债券ETF', '国内LOF']
 
     OVERRIDES = {}
@@ -3342,10 +3152,10 @@ def _etf_heat_strategy(_apis, _config):
     def lof_catalog(universe, day):
         """Use fund master classification; unknown/foreign/bond types fail closed."""
         if universe.empty:
-            return [], []
+            return []
         table = finance.FUND_MAIN_INFO
         codes = [str(c)[:6] for c in universe.index]
-        info, audit, records = {}, [], []
+        info, records = {}, []
         for offset in range(0, len(codes), BATCH_SIZE):
             frame = read_pages(table, (table.main_code.in_(codes[offset:offset+BATCH_SIZE]), table.start_date <= day))
             for row in frame.to_dict('records'):
@@ -3358,20 +3168,16 @@ def _etf_heat_strategy(_apis, _config):
             name = text(fund['display_name'])
             rows = info.get(code[:6], [])
             if len(rows) != 1:
-                audit.append(dict(code=code, name=name, reason='LOF 主体信息缺失或冲突，无法确认国内投资范围'))
                 continue
             row = rows[0]
             description = ' '.join(text(row.get(k)) for k in ('name', 'underlying_asset_type', 'invest_style', 'operate_mode')) + ' ' + name
             description = description.upper()
             if builtins.any(word in description for word in foreign):
-                audit.append(dict(code=code, name=name, reason='跨境/海外 LOF 不在七只 ETF 白名单中'))
                 continue
             asset = text(row.get('underlying_asset_type'))
             if '债' in asset or '债券' in description:
-                audit.append(dict(code=code, name=name, reason='债券仅允许城投债 ETF，不纳入债券 LOF'))
                 continue
             if not builtins.any(word in asset for word in ('股票', '混合')):
-                audit.append(dict(code=code, name=name, reason='LOF 投资类型不在已确认的国内股票/混合范围', details=description))
                 continue
             # Actively managed LOFs have no common tracking index. Do not merge unrelated portfolios.
             records.append(dict(code=code, name=name, category='国内LOF', fund_type='LOF',
@@ -3379,7 +3185,7 @@ def _etf_heat_strategy(_apis, _config):
                                 group='lof:'+code, target_source='FUND_MAIN_INFO 主体信息',
                                 classification_reason='国内股票/混合 LOF，按基金代码独立保留',
                                 listed_date=text(fund.get('start_date'))[:10]))
-        return records, audit
+        return records
 
     def target_catalog(universe, day):
         table = finance.FUND_INVEST_TARGET
@@ -3397,7 +3203,7 @@ def _etf_heat_strategy(_apis, _config):
                 pair = (text(row['traced_index_code']), text(row['traced_index_name']))
                 if pair[0] or pair[1]:
                     mapping.setdefault(row['code'], set()).add(pair)
-        records, audit = [], []
+        records = []
         for code, info in universe.iterrows():
             name = text(info['display_name'])
             override = OVERRIDES.get(code, {})
@@ -3405,7 +3211,6 @@ def _etf_heat_strategy(_apis, _config):
             if override.get('target_name'):
                 targets = {(override.get('target_code', ''), override['target_name'])}
             if len(targets) > 1:
-                audit.append(dict(code=code, name=name, reason='有效跟踪标的版本冲突，请人工核对', details=str(sorted(targets))))
                 continue
             target_code, target_name = next(iter(targets)) if targets else ('', '')
             direction = commodity_direction(code, name, target_name)
@@ -3416,7 +3221,6 @@ def _etf_heat_strategy(_apis, _config):
                 elif code in CROSS_BORDER_CODES or code in BOND_CODES:
                     target_name = name + '（指定基金方向）'
                 else:
-                    audit.append(dict(code=code, name=name, reason='跟踪标的缺失，请人工核对'))
                     continue
                 source = '指定基金/商品名称方向补充（非指数代码）'
             override = dict(OVERRIDES.get(target_code, {}), **override)
@@ -3431,13 +3235,12 @@ def _etf_heat_strategy(_apis, _config):
                 category, reason = '债券ETF', '指定城投债 ETF'
             excluded = permitted(code, category)
             if excluded:
-                audit.append(dict(code=code, name=name, reason=excluded))
                 continue
             records.append(dict(code=code, name=name, category=category,
                                 fund_type='ETF', listed_date=text(info.get('start_date'))[:10],
                                 target_code=target_code, target_name=target_name, group=group,
                                 target_source=source, classification_reason=reason))
-        return records, audit
+        return records
 
     def load_sizes(codes, days):
         table, output = finance.FUND_SHARE_DAILY, {}
@@ -3468,7 +3271,7 @@ def _etf_heat_strategy(_apis, _config):
         return output
 
     def load_lof_reports(records, as_of):
-        selected, audit, candidates = [], [], []
+        selected = []
         table = finance.FUND_FIN_INDICATOR
         for record in records:
             code = record['code']
@@ -3476,7 +3279,6 @@ def _etf_heat_strategy(_apis, _config):
             frame = read_pages(table, (table.code == code[:6], table.pub_date <= as_of,
                                       table.period_end <= as_of))
             if frame.empty:
-                audit.append(dict(code=code, reason='缺少已披露的 LOF 对应份额类别净资产'))
                 continue
             rows = frame.to_dict('records')
             rows.sort(key=lambda r: (pd.Timestamp(r['period_end']).date(),
@@ -3488,44 +3290,34 @@ def _etf_heat_strategy(_apis, _config):
                       pd.Timestamp(r['pub_date']).date() == published}
             size = positive(row['total_tna'])  # 元；对应六位基金代码的份额类别（501018 为 A 类）
             if len(values) != 1 or size is None:
-                audit.append(dict(code=code, reason='最新 LOF 披露规模缺失或冲突'))
                 continue
             if (as_of - period).days > MAX_LOF_REPORT_AGE_DAYS:
-                audit.append(dict(code=code, reason='LOF 报告期过旧', details=str(period)))
                 continue
             item = dict(record, size_yuan=size, size_yi=size / Decimal('100000000'),
                         shares=None, unit_nav=positive(row['nav']), size_date=str(period),
                         size_pub_date=str(published), stale_trade_days=None,
                         size_source='FUND_FIN_INDICATOR.total_tna：对应份额类别净资产（非全类别合计）',
                         group_count=1, group_rank=1)
-            candidates.append(item)
             if item['size_yi'] > MIN_SIZE_YI:
                 selected.append(item)
-            else:
-                audit.append(dict(code=code, name=record['name'], group=record['group'],
-                                  reason='LOF 对应份额类别规模未严格超过 {} 亿元'.format(MIN_SIZE_YI),
-                                  details='规模 {:.4f} 亿元；报告期 {}；披露日 {}'.format(item['size_yi'], period, published)))
-        return selected, audit, candidates
+        return selected
 
     def select_largest(records, sizes, days):
-        groups, selected, audit, candidates = {}, [], [], []
+        groups, selected = {}, []
         for row in records:
             groups.setdefault(row['group'], []).append(row)
         for group, members in groups.items():
             categories = {row['category'] for row in members}
             if len(categories) != 1 or next(iter(categories)) not in CATEGORIES:
-                audit.append(dict(group=group, reason='分类待核对、冲突或不在所选七类', details='; '.join('{} {} [{}] {}'.format(row['code'], row['name'], row['target_name'], row['classification_reason']) for row in members)))
                 continue
             common = set(days)
             for row in members:
                 common.intersection_update(sizes.get(row['code'], {}))
             if not common:
-                audit.append(dict(group=group, reason='所有候选无共同有效规模日期，整组暂不选', details='; '.join('{} {} [{}] {}'.format(row['code'], row['name'], row['target_name'], row['classification_reason']) for row in members)))
                 continue
             day = builtins.max(common)
             lag = len(days) - 1 - days.index(day)
             if lag > MAX_STALE_TRADE_DAYS:
-                audit.append(dict(group=group, reason='共同规模日期过旧', details=str(day)))
                 continue
             ranked = []
             for row in members:
@@ -3536,15 +3328,10 @@ def _etf_heat_strategy(_apis, _config):
             ranked.sort(key=lambda row: (-row['size_yuan'], row['code']))
             for rank, row in enumerate(ranked, 1):
                 row['group_rank'] = rank
-            candidates.extend(ranked)
             if ranked[0]['size_yi'] > MIN_SIZE_YI:
                 selected.append(ranked[0])
-            else:
-                audit.append(dict(group=group, code=ranked[0]['code'], name=ranked[0]['name'],
-                                  reason='组内最大规模未严格超过 {} 亿元'.format(MIN_SIZE_YI),
-                                  details='规模 {:.4f} 亿元；日期 {}'.format(ranked[0]['size_yi'], day)))
         selected.sort(key=lambda row: (CATEGORIES.index(row['category']), -row['size_yuan'], row['code']))
-        return selected, audit, candidates
+        return selected
 
     def select_pool():
         if not 1 <= PAGE_SIZE <= 3000 or not 1 <= BATCH_SIZE <= 100:
@@ -3568,22 +3355,16 @@ def _etf_heat_strategy(_apis, _config):
             raise ValueError('LOF 列表查询失败')
         lof = lof.loc[~lof.index.isin(universe.index)] if INCLUDE_LOF else lof.iloc[0:0]
         _progress_note('截至 {}：筛选 {} 只 ETF、{} 只 LOF'.format(days[-1], len(universe), len(lof)))
-        daily_records, audit = target_catalog(universe, days[-1])
-        lof_records, lof_audit = lof_catalog(lof, days[-1]) if not lof.empty else ([], [])
-        audit.extend(lof_audit)
+        daily_records = target_catalog(universe, days[-1])
+        lof_records = lof_catalog(lof, days[-1]) if not lof.empty else []
         sizes = load_sizes([row['code'] for row in daily_records], days)
-        selected, issues, candidates = select_largest(daily_records, sizes, days)
-        lof_selected, lof_issues, lof_candidates = load_lof_reports(lof_records, days[-1]) if lof_records else ([], [], [])
-        selected.extend(lof_selected)
-        candidates.extend(lof_candidates)
+        selected = select_largest(daily_records, sizes, days)
+        if lof_records:
+            selected.extend(load_lof_reports(lof_records, days[-1]))
         selected.sort(key=lambda r: (CATEGORIES.index(r['category']), -r['size_yuan'], r['code']))
-        audit.extend(issues + lof_issues)
-        for code in FOCUS_CODES:
-            if code not in universe.index and code not in lof.index:
-                audit.append(dict(code=code, reason='指定基金不在截止日期的聚宽上市名单中'))
-        result, review, all_candidates = pd.DataFrame(selected), pd.DataFrame(audit), pd.DataFrame(candidates)
-        _progress_note('候选池筛选完成：入选 {} 只，待核对/排除 {} 条'.format(len(result), len(review)))
-        return result, review, all_candidates
+        _progress_note('候选池筛选完成：入选 {} 只'.format(len(selected)))
+        return pd.DataFrame(selected)
+
     # Collect and calculate in JoinQuant; MySQL contains final display results.
     settings = strategy_settings('ETF动量热度')
     MIN_SIZE_YI = Decimal(str(settings['min_size_yi']))
@@ -3725,7 +3506,7 @@ def _etf_heat_strategy(_apis, _config):
                 return pd.DataFrame(output)
             AS_OF_DATE = str(days[-1])
             _progress_note('筛选 ETF/LOF 候选池，计算热度后入库')
-            chosen, audit, candidates = select_pool()
+            chosen = select_pool()
             if chosen.empty:
                 raise ValueError('本次未取得有效候选池，保留旧快照；请运行分类研究脚本查看待核对清单')
             members = []
@@ -4737,8 +4518,6 @@ STRATEGY_SPECS = {
         ('trade_date', 'top_pct', 'ratio', 'top_money', 'total_money')),
     '微盘温度计': (_microcap_strategy, 'append',
         ('trade_date', 'score', 'micro_index', 'sample_count')),
-    'ETF份额': (_etf_strategy, 'append',
-        ('trade_date', 'fund_code', 'fund_name', 'shares')),
     '净利润断层': (_earnings_strategy, 'append',
         ('report_period', 'code', 'name', 'industry_name', 'signal_date', 'profit_yoy')),
     '微盘新高新低': (_breadth_strategy, 'append',

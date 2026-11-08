@@ -147,7 +147,36 @@ def test_selector_logic_is_shared_with_research_script():
     originals={n.name:n for n in research.body if isinstance(n,ast.FunctionDef)}
     for name in ['classify','permitted','commodity_direction','target_catalog','load_sizes','load_lof_reports','select_largest','lof_catalog']:
         actual=next(n for n in factory.body if isinstance(n,ast.FunctionDef) and n.name==name)
-        assert ast.dump(actual)==ast.dump(originals[name]), name
+        # The research version returns diagnostics and losing candidates; collection
+        # consumes selections only. Compare every remaining condition and calculation.
+        import copy
+        class SelectionOnly(ast.NodeTransformer):
+            def visit_Expr(self, node):
+                call = node.value
+                if (isinstance(call, ast.Call) and isinstance(call.func, ast.Attribute)
+                        and isinstance(call.func.value, ast.Name)
+                        and call.func.value.id in ('audit', 'candidates')):
+                    return None
+                return self.generic_visit(node)
+
+            def visit_Assign(self, node):
+                if len(node.targets) == 1 and isinstance(node.targets[0], ast.Tuple) and isinstance(node.value, ast.Tuple):
+                    pairs = [(key, value) for key, value in zip(node.targets[0].elts, node.value.elts)
+                             if not (isinstance(key, ast.Name) and key.id in ('audit', 'candidates'))]
+                    if len(pairs) == 1:
+                        node.targets, node.value = [pairs[0][0]], pairs[0][1]
+                    else:
+                        node.targets[0].elts = [key for key, value in pairs]
+                        node.value.elts = [value for key, value in pairs]
+                return self.generic_visit(node)
+
+            def visit_Return(self, node):
+                if isinstance(node.value, ast.Tuple) and name in ('target_catalog', 'lof_catalog', 'load_lof_reports', 'select_largest'):
+                    node.value = node.value.elts[0]
+                return self.generic_visit(node)
+
+        assert ast.dump(SelectionOnly().visit(copy.deepcopy(actual))) == ast.dump(
+            SelectionOnly().visit(copy.deepcopy(originals[name]))), name
 
 
 @pytest.mark.parametrize('direction', [1, -1, 0])
@@ -250,3 +279,34 @@ def test_retention_cleanup_precedes_selection_and_prevents_expired_backfill(mod,
 def test_retention_weekend_keeps_same_boundary(mod):
     strategy=mod._etf_heat_strategy({'get_trade_days':lambda end_date,count:pd.bdate_range(end=end_date,periods=count).date},mod.DB_CONFIG)
     assert strategy.get_retention_start(dt.date(2026,10,23))==strategy.get_retention_start(dt.date(2026,10,25))
+
+
+@pytest.mark.parametrize('case,expected', [
+    ('common', ['b']), ('missing', []), ('stale', []), ('conflict', []),
+    ('threshold', []), ('tie', ['a']), ('different_groups', ['a', 'b']),
+])
+def test_slim_selector_preserves_research_selections(ns, case, expected):
+    import builtins
+    from decimal import Decimal
+    path = ROOT / 'collectors' / 'ETF分类去重_研究版.py'
+    tree = ast.parse(path.read_text(encoding='utf-8'))
+    tree.body = [n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == 'select_largest']
+    env = dict(builtins=builtins, Decimal=Decimal, CATEGORIES=ns.CATEGORIES,
+               MIN_SIZE_YI=ns.MIN_SIZE_YI, MAX_STALE_TRADE_DAYS=ns.MAX_STALE_TRADE_DAYS)
+    exec(compile(tree, str(path), 'exec'), env)
+    days = list(pd.bdate_range('2026-10-12', periods=5).date)
+    rows = [dict(code=c, name=c, group='index', category='宽基ETF',
+                 target_name='沪深300', classification_reason='fixture') for c in ('a', 'b')]
+    sizes = {'a': {days[-2]: (Decimal('4000000000'), 400000000, 10),
+                   days[-1]: (Decimal('9000000000'), 900000000, 10)},
+             'b': {days[-2]: (Decimal('5000000000'), 500000000, 10)}}
+    if case == 'missing': sizes.pop('b')
+    if case == 'stale': sizes = {c: {days[0]: next(iter(values.values()))} for c, values in sizes.items()}
+    if case == 'conflict': rows[1]['category'] = '主题ETF'
+    if case == 'threshold': sizes = {c: {days[-1]: (Decimal('3000000000'), 300000000, 10)} for c in sizes}
+    if case == 'tie': sizes['b'] = sizes['a']
+    if case == 'different_groups': rows[1]['group'] = 'other'
+    reference, _, _ = env['select_largest'](rows, sizes, days)
+    actual = ns.select_largest(rows, sizes, days)
+    assert actual == reference
+    assert [row['code'] for row in actual] == expected

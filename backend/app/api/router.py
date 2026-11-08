@@ -54,7 +54,7 @@ def modules():
         'path': '/market-sentiment', 'status': 'available',
     }, {
         'id': 'margin-guarantee', 'name': '两融担保比例',
-        'description': '中证数据披露的平均维持担保比例及近六年历史趋势。',
+        'description': '东方财富接口提供的平均维持担保比例及近六年历史趋势。',
         'path': '/margin-guarantee', 'status': 'available',
     }, {
         'id': 'microcap-temperature', 'name': '微盘温度计',

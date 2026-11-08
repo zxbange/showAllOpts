@@ -6,9 +6,7 @@ import pytest
 
 from test_collector_batch import CONFIG, TARGET, batch
 from test_microcap_collector import collector as micro_source
-from test_etf_collector import collector as etf_source
 import test_microcap_collector as micro
-import test_etf_collector as etf
 
 
 def strategy_env(batch, name, source, monkeypatch):
@@ -26,7 +24,7 @@ def strategy_env(batch, name, source, monkeypatch):
     return SimpleNamespace(**dict(vars(source), env=env))
 
 
-@pytest.mark.parametrize('name', ['行业动量', '抱团拥挤度', '微盘温度计', 'ETF份额', '净利润断层'])
+@pytest.mark.parametrize('name', ['行业动量', '抱团拥挤度', '微盘温度计', '净利润断层'])
 def test_overwrite_rejected_before_source_or_database_access(batch, monkeypatch, name):
     monkeypatch.setattr(batch, 'connect_database', lambda _: pytest.fail('must not connect'))
     strategy = batch.STRATEGIES[name]({}, CONFIG)
@@ -34,7 +32,7 @@ def test_overwrite_rejected_before_source_or_database_access(batch, monkeypatch,
         strategy.run(skip_existing=False)
 
 
-@pytest.mark.parametrize('name,key,value', [('微盘温度计', 'sample_step', 5), ('ETF份额', 'lookback_days', 5)])
+@pytest.mark.parametrize('name,key,value', [('微盘温度计', 'sample_step', 5)])
 def test_removed_options_cannot_silently_change_collection(batch, monkeypatch, name, key, value):
     monkeypatch.setattr(batch, 'connect_database', lambda _: pytest.fail('must not connect'))
     strategy = batch.STRATEGIES[name]({}, CONFIG)
@@ -92,15 +90,3 @@ def test_batch_daily_only_uses_closed_days(daily_batch):
 
 def test_batch_daily_initial_failure_and_incremental_resume(daily_batch):
     micro.test_daily_initial_failure_and_next_day_incremental(daily_batch)
-
-
-def test_batch_etf_incremental_and_manual_backfill_preserve_existing(batch, etf_source, monkeypatch):
-    c = strategy_env(batch, 'ETF份额', etf_source, monkeypatch)
-    etf.test_insert_only_etf_requests_only_new_dates_and_protects_existing(c)
-    before = [(r.trade_date, r.shares, r.updated_at) for r in etf.rows(c)]
-    c.requested.clear()
-    # Manual historical scans remain available for filling holes, without overwrites.
-    c.source['510300.XSHG', c.days[1]] = 999
-    assert c.env['run'](start_date=c.days[1], incremental=False) == []
-    assert c.requested[0][1] == c.days[1]
-    assert [(r.trade_date, r.shares, r.updated_at) for r in etf.rows(c)] == before

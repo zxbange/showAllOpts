@@ -611,8 +611,6 @@ def _etf_heat_strategy(_apis, _config):
         '159980.XSHE': ('有色金属期货方向', 'commodity:nonferrous'),
     }
 
-    FOCUS_CODES = tuple(COMMODITY_DIRECTIONS)
-
     CATEGORIES = ['宽基ETF', '行业ETF', '主题ETF', '策略/风格ETF', '跨境ETF', '商品ETF', '债券ETF', '国内LOF']
 
     OVERRIDES = {}
@@ -693,10 +691,10 @@ def _etf_heat_strategy(_apis, _config):
     def lof_catalog(universe, day):
         """Use fund master classification; unknown/foreign/bond types fail closed."""
         if universe.empty:
-            return [], []
+            return []
         table = finance.FUND_MAIN_INFO
         codes = [str(c)[:6] for c in universe.index]
-        info, audit, records = {}, [], []
+        info, records = {}, []
         for offset in range(0, len(codes), BATCH_SIZE):
             frame = read_pages(table, (table.main_code.in_(codes[offset:offset+BATCH_SIZE]), table.start_date <= day))
             for row in frame.to_dict('records'):
@@ -709,20 +707,16 @@ def _etf_heat_strategy(_apis, _config):
             name = text(fund['display_name'])
             rows = info.get(code[:6], [])
             if len(rows) != 1:
-                audit.append(dict(code=code, name=name, reason='LOF 主体信息缺失或冲突，无法确认国内投资范围'))
                 continue
             row = rows[0]
             description = ' '.join(text(row.get(k)) for k in ('name', 'underlying_asset_type', 'invest_style', 'operate_mode')) + ' ' + name
             description = description.upper()
             if builtins.any(word in description for word in foreign):
-                audit.append(dict(code=code, name=name, reason='跨境/海外 LOF 不在七只 ETF 白名单中'))
                 continue
             asset = text(row.get('underlying_asset_type'))
             if '债' in asset or '债券' in description:
-                audit.append(dict(code=code, name=name, reason='债券仅允许城投债 ETF，不纳入债券 LOF'))
                 continue
             if not builtins.any(word in asset for word in ('股票', '混合')):
-                audit.append(dict(code=code, name=name, reason='LOF 投资类型不在已确认的国内股票/混合范围', details=description))
                 continue
             # Actively managed LOFs have no common tracking index. Do not merge unrelated portfolios.
             records.append(dict(code=code, name=name, category='国内LOF', fund_type='LOF',
@@ -730,7 +724,7 @@ def _etf_heat_strategy(_apis, _config):
                                 group='lof:'+code, target_source='FUND_MAIN_INFO 主体信息',
                                 classification_reason='国内股票/混合 LOF，按基金代码独立保留',
                                 listed_date=text(fund.get('start_date'))[:10]))
-        return records, audit
+        return records
 
     def target_catalog(universe, day):
         table = finance.FUND_INVEST_TARGET
@@ -748,7 +742,7 @@ def _etf_heat_strategy(_apis, _config):
                 pair = (text(row['traced_index_code']), text(row['traced_index_name']))
                 if pair[0] or pair[1]:
                     mapping.setdefault(row['code'], set()).add(pair)
-        records, audit = [], []
+        records = []
         for code, info in universe.iterrows():
             name = text(info['display_name'])
             override = OVERRIDES.get(code, {})
@@ -756,7 +750,6 @@ def _etf_heat_strategy(_apis, _config):
             if override.get('target_name'):
                 targets = {(override.get('target_code', ''), override['target_name'])}
             if len(targets) > 1:
-                audit.append(dict(code=code, name=name, reason='有效跟踪标的版本冲突，请人工核对', details=str(sorted(targets))))
                 continue
             target_code, target_name = next(iter(targets)) if targets else ('', '')
             direction = commodity_direction(code, name, target_name)
@@ -767,7 +760,6 @@ def _etf_heat_strategy(_apis, _config):
                 elif code in CROSS_BORDER_CODES or code in BOND_CODES:
                     target_name = name + '（指定基金方向）'
                 else:
-                    audit.append(dict(code=code, name=name, reason='跟踪标的缺失，请人工核对'))
                     continue
                 source = '指定基金/商品名称方向补充（非指数代码）'
             override = dict(OVERRIDES.get(target_code, {}), **override)
@@ -782,13 +774,12 @@ def _etf_heat_strategy(_apis, _config):
                 category, reason = '债券ETF', '指定城投债 ETF'
             excluded = permitted(code, category)
             if excluded:
-                audit.append(dict(code=code, name=name, reason=excluded))
                 continue
             records.append(dict(code=code, name=name, category=category,
                                 fund_type='ETF', listed_date=text(info.get('start_date'))[:10],
                                 target_code=target_code, target_name=target_name, group=group,
                                 target_source=source, classification_reason=reason))
-        return records, audit
+        return records
 
     def load_sizes(codes, days):
         table, output = finance.FUND_SHARE_DAILY, {}
@@ -819,7 +810,7 @@ def _etf_heat_strategy(_apis, _config):
         return output
 
     def load_lof_reports(records, as_of):
-        selected, audit, candidates = [], [], []
+        selected = []
         table = finance.FUND_FIN_INDICATOR
         for record in records:
             code = record['code']
@@ -827,7 +818,6 @@ def _etf_heat_strategy(_apis, _config):
             frame = read_pages(table, (table.code == code[:6], table.pub_date <= as_of,
                                       table.period_end <= as_of))
             if frame.empty:
-                audit.append(dict(code=code, reason='缺少已披露的 LOF 对应份额类别净资产'))
                 continue
             rows = frame.to_dict('records')
             rows.sort(key=lambda r: (pd.Timestamp(r['period_end']).date(),
@@ -839,44 +829,34 @@ def _etf_heat_strategy(_apis, _config):
                       pd.Timestamp(r['pub_date']).date() == published}
             size = positive(row['total_tna'])  # 元；对应六位基金代码的份额类别（501018 为 A 类）
             if len(values) != 1 or size is None:
-                audit.append(dict(code=code, reason='最新 LOF 披露规模缺失或冲突'))
                 continue
             if (as_of - period).days > MAX_LOF_REPORT_AGE_DAYS:
-                audit.append(dict(code=code, reason='LOF 报告期过旧', details=str(period)))
                 continue
             item = dict(record, size_yuan=size, size_yi=size / Decimal('100000000'),
                         shares=None, unit_nav=positive(row['nav']), size_date=str(period),
                         size_pub_date=str(published), stale_trade_days=None,
                         size_source='FUND_FIN_INDICATOR.total_tna：对应份额类别净资产（非全类别合计）',
                         group_count=1, group_rank=1)
-            candidates.append(item)
             if item['size_yi'] > MIN_SIZE_YI:
                 selected.append(item)
-            else:
-                audit.append(dict(code=code, name=record['name'], group=record['group'],
-                                  reason='LOF 对应份额类别规模未严格超过 {} 亿元'.format(MIN_SIZE_YI),
-                                  details='规模 {:.4f} 亿元；报告期 {}；披露日 {}'.format(item['size_yi'], period, published)))
-        return selected, audit, candidates
+        return selected
 
     def select_largest(records, sizes, days):
-        groups, selected, audit, candidates = {}, [], [], []
+        groups, selected = {}, []
         for row in records:
             groups.setdefault(row['group'], []).append(row)
         for group, members in groups.items():
             categories = {row['category'] for row in members}
             if len(categories) != 1 or next(iter(categories)) not in CATEGORIES:
-                audit.append(dict(group=group, reason='分类待核对、冲突或不在所选七类', details='; '.join('{} {} [{}] {}'.format(row['code'], row['name'], row['target_name'], row['classification_reason']) for row in members)))
                 continue
             common = set(days)
             for row in members:
                 common.intersection_update(sizes.get(row['code'], {}))
             if not common:
-                audit.append(dict(group=group, reason='所有候选无共同有效规模日期，整组暂不选', details='; '.join('{} {} [{}] {}'.format(row['code'], row['name'], row['target_name'], row['classification_reason']) for row in members)))
                 continue
             day = builtins.max(common)
             lag = len(days) - 1 - days.index(day)
             if lag > MAX_STALE_TRADE_DAYS:
-                audit.append(dict(group=group, reason='共同规模日期过旧', details=str(day)))
                 continue
             ranked = []
             for row in members:
@@ -887,15 +867,10 @@ def _etf_heat_strategy(_apis, _config):
             ranked.sort(key=lambda row: (-row['size_yuan'], row['code']))
             for rank, row in enumerate(ranked, 1):
                 row['group_rank'] = rank
-            candidates.extend(ranked)
             if ranked[0]['size_yi'] > MIN_SIZE_YI:
                 selected.append(ranked[0])
-            else:
-                audit.append(dict(group=group, code=ranked[0]['code'], name=ranked[0]['name'],
-                                  reason='组内最大规模未严格超过 {} 亿元'.format(MIN_SIZE_YI),
-                                  details='规模 {:.4f} 亿元；日期 {}'.format(ranked[0]['size_yi'], day)))
         selected.sort(key=lambda row: (CATEGORIES.index(row['category']), -row['size_yuan'], row['code']))
-        return selected, audit, candidates
+        return selected
 
     def select_pool():
         if not 1 <= PAGE_SIZE <= 3000 or not 1 <= BATCH_SIZE <= 100:
@@ -919,22 +894,16 @@ def _etf_heat_strategy(_apis, _config):
             raise ValueError('LOF 列表查询失败')
         lof = lof.loc[~lof.index.isin(universe.index)] if INCLUDE_LOF else lof.iloc[0:0]
         _progress_note('截至 {}：筛选 {} 只 ETF、{} 只 LOF'.format(days[-1], len(universe), len(lof)))
-        daily_records, audit = target_catalog(universe, days[-1])
-        lof_records, lof_audit = lof_catalog(lof, days[-1]) if not lof.empty else ([], [])
-        audit.extend(lof_audit)
+        daily_records = target_catalog(universe, days[-1])
+        lof_records = lof_catalog(lof, days[-1]) if not lof.empty else []
         sizes = load_sizes([row['code'] for row in daily_records], days)
-        selected, issues, candidates = select_largest(daily_records, sizes, days)
-        lof_selected, lof_issues, lof_candidates = load_lof_reports(lof_records, days[-1]) if lof_records else ([], [], [])
-        selected.extend(lof_selected)
-        candidates.extend(lof_candidates)
+        selected = select_largest(daily_records, sizes, days)
+        if lof_records:
+            selected.extend(load_lof_reports(lof_records, days[-1]))
         selected.sort(key=lambda r: (CATEGORIES.index(r['category']), -r['size_yuan'], r['code']))
-        audit.extend(issues + lof_issues)
-        for code in FOCUS_CODES:
-            if code not in universe.index and code not in lof.index:
-                audit.append(dict(code=code, reason='指定基金不在截止日期的聚宽上市名单中'))
-        result, review, all_candidates = pd.DataFrame(selected), pd.DataFrame(audit), pd.DataFrame(candidates)
-        _progress_note('候选池筛选完成：入选 {} 只，待核对/排除 {} 条'.format(len(result), len(review)))
-        return result, review, all_candidates
+        _progress_note('候选池筛选完成：入选 {} 只'.format(len(selected)))
+        return pd.DataFrame(selected)
+
     # Collect and calculate in JoinQuant; MySQL contains final display results.
     settings = strategy_settings('ETF动量热度')
     MIN_SIZE_YI = Decimal(str(settings['min_size_yi']))
@@ -1076,7 +1045,7 @@ def _etf_heat_strategy(_apis, _config):
                 return pd.DataFrame(output)
             AS_OF_DATE = str(days[-1])
             _progress_note('筛选 ETF/LOF 候选池，计算热度后入库')
-            chosen, audit, candidates = select_pool()
+            chosen = select_pool()
             if chosen.empty:
                 raise ValueError('本次未取得有效候选池，保留旧快照；请运行分类研究脚本查看待核对清单')
             members = []

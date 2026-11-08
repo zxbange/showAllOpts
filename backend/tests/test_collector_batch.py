@@ -11,7 +11,7 @@ ROOT = Path(__file__).resolve().parents[2]
 TARGET = ROOT / 'collectors' / '策略批量采集_数据库版.py'
 FILES = {
     '行业动量': '行业动量计算_数据库版.py', '抱团拥挤度': '抱团拥挤度_数据库版.py',
-    '微盘温度计': '微盘温度计_数据库版.py', 'ETF份额': 'ETF份额_数据库版.py',
+    '微盘温度计': '微盘温度计_数据库版.py',
     '净利润断层': '净利润断层_数据库版.py',
 }
 CONFIG = dict(host='fake.example.test', port=3306, dbname='fixture_database',
@@ -129,8 +129,8 @@ def test_pasted_notebook_without_file_or_sibling_files(batch, monkeypatch, tmp_p
                    and n.func.id in ('exec', 'eval', 'compile', 'open') for n in ast.walk(tree))
     namespace = {'__name__': 'notebook_cell'}
     exec(compile(source, '<ipython-input-test>', 'exec'), namespace)
-    assert len(namespace['STRATEGIES']) == 11
-    # Construct all nine real strategies without accessing any project files.
+    assert len(namespace['STRATEGIES']) == 10
+    # Construct all ten real strategies without accessing any project files.
     for name in namespace['STRATEGY_ORDER']:
         assert callable(namespace['_load_strategy'](name, CONFIG, {}))
     events = []
@@ -227,7 +227,7 @@ def test_strategy_initialization_failure_does_not_stop_later_strategy(batch, mon
             raise ImportError('platform dependency unavailable')
         return lambda **kw: []
     monkeypatch.setattr(batch, '_load_strategy', loader)
-    rows = batch.run_all(['行业动量', 'ETF份额'], db_config=CONFIG, raise_on_failure=False)
+    rows = batch.run_all(['行业动量', '抱团拥挤度'], db_config=CONFIG, raise_on_failure=False)
     assert [r['status'] for r in rows] == ['FAILED', 'SUCCESS']
     assert rows[0]['error_type'] == 'ImportError'
     assert 'ImportError' in capsys.readouterr().out
@@ -243,7 +243,7 @@ def test_credentials_hidden_in_results_and_console(batch, monkeypatch, capsys):
             raise RuntimeError('mysql://other:other-secret@host ' + ' '.join(variants) + " password='unrelated-secret'")
         return run
     monkeypatch.setattr(batch, '_load_strategy', loader)
-    rows = batch.run_all(['ETF份额'], db_config=CONFIG, raise_on_failure=False)
+    rows = batch.run_all(['抱团拥挤度'], db_config=CONFIG, raise_on_failure=False)
     output = capsys.readouterr().out + str(rows)
     for value in variants + ['other-secret', 'unrelated-secret']:
         assert value not in output
@@ -272,28 +272,14 @@ def test_lock_prevents_overlapping_runs(batch, tmp_path):
 
 
 @pytest.mark.parametrize('kwargs', [
-    {'strategy_names': []}, {'strategy_names': ['ETF份额', 'ETF份额']},
-    {'strategy_names': ['unknown']}, {'options': {'ETF份额': {'skip_existing': False}}},
+    {'strategy_names': []}, {'strategy_names': ['抱团拥挤度', '抱团拥挤度']},
+    {'strategy_names': ['unknown']}, {'options': {'抱团拥挤度': {'skip_existing': False}}},
     {'options': {'unknown': {}}}, {'preview_rows': -1}, {'db_config': {}},
 ])
 def test_invalid_options_fail_before_any_execution(batch, monkeypatch, tmp_path, kwargs):
     monkeypatch.setattr(batch, '_load_strategy', lambda *_: pytest.fail('must not execute'))
     with pytest.raises(ValueError): batch.run_all(**kwargs)
     assert not list(tmp_path.iterdir())
-
-
-def test_isolated_etf_api_validation_uses_strategy_scope(batch, monkeypatch):
-    fake_platform(monkeypatch)
-    table = SimpleNamespace(code='code', date='date', shares='shares')
-    ns = batch.STRATEGIES['ETF份额']({
-        'finance': SimpleNamespace(FUND_SHARE_DAILY=table),
-        'query': lambda *args: None, 'get_trade_days': lambda **kw: [],
-    }, CONFIG)
-    assert 'finance' not in ns.share_table.__globals__
-    assert ns.share_table() is table
-    missing = batch.STRATEGIES['ETF份额']({}, CONFIG)
-    with pytest.raises(ValueError, match='缺少聚宽'):
-        missing.share_table()
 
 
 def test_standalone_earnings_insert_only_preserves_first_snapshot(batch, monkeypatch):
@@ -336,7 +322,6 @@ def test_standalone_earnings_insert_only_preserves_first_snapshot(batch, monkeyp
     ('行业动量', {'start_date': '2025-02-01', 'end_date': '2026-10-16', 'industry_type': 'sw_l1'}),
     ('抱团拥挤度', {'start_date': '2024-01-01', 'top_pct': 0.1}),
     ('微盘温度计', {'start_date': '2022-01-01', 'micro_num': 500}),
-    ('ETF份额', {'start_date': '2025-01-01', 'end_date': '2026-10-16'}),
     ('净利润断层', {'end_date': '2026-10-16'}),
 ])
 def test_grouped_configuration_changes_run_defaults(batch, name, changes):
@@ -347,19 +332,14 @@ def test_grouped_configuration_changes_run_defaults(batch, name, changes):
     assert all(defaults[k] == v for k, v in changes.items())
 
 
-def test_internal_limits_and_fund_lists_use_central_config(batch):
+def test_internal_limits_use_central_config(batch):
     batch.STRATEGY_CONFIG['行业动量']['retention_trade_days'] = 200
     batch.STRATEGY_CONFIG['微盘温度计']['batch_size'] = 500
-    batch.STRATEGY_CONFIG['ETF份额'].update(initial_trade_days=250, window_size=60)
     batch.STRATEGY_CONFIG['净利润断层']['page_size'] = 200
     namespaces = {name: factory({}, CONFIG) for name, factory in batch.STRATEGIES.items()}
     assert namespaces['行业动量'].RETENTION_TRADE_DAYS == 200
     assert namespaces['微盘温度计'].BATCH_SIZE == 500
-    assert namespaces['ETF份额'].INITIAL_TRADE_DAYS == 250
-    assert namespaces['ETF份额'].WINDOW_SIZE == 60
     assert namespaces['净利润断层'].PAGE_SIZE == 200
-    namespaces['ETF份额'].ETF_GROUPS['hs300'].clear()
-    assert len(batch.STRATEGY_CONFIG['ETF份额']['funds']['hs300']) == 5
 
 
 @pytest.mark.parametrize('failures,interrupt', [(0, False), (2, False), (3, False), (0, True)])
@@ -437,7 +417,7 @@ def test_session_scope_closes_rolls_back_without_implicit_commit(batch, failure)
 
 @pytest.mark.parametrize('name,key', [
     ('行业动量', 'retention_trade_days'), ('微盘温度计', 'batch_size'),
-    ('ETF份额', 'initial_trade_days'), ('ETF份额', 'window_size'), ('净利润断层', 'page_size'),
+    ('净利润断层', 'page_size'),
 ])
 def test_invalid_loop_limits_fail_before_connecting(batch, monkeypatch, name, key):
     batch.STRATEGY_CONFIG[name][key] = 0
@@ -448,7 +428,7 @@ def test_invalid_loop_limits_fail_before_connecting(batch, monkeypatch, name, ke
 
 @pytest.mark.parametrize('name,model_name', [
     ('行业动量', 'IndustryMomentum'), ('抱团拥挤度', 'MarketCrowding'),
-    ('微盘温度计', 'MicrocapTemperature'), ('ETF份额', 'ETFShare'),
+    ('微盘温度计', 'MicrocapTemperature'),
 ])
 def test_shared_sessions_keep_insert_only_across_strategies(batch, monkeypatch, name, model_name):
     import datetime as dt
@@ -468,13 +448,12 @@ def test_shared_sessions_keep_insert_only_across_strategies(batch, monkeypatch, 
         '行业动量': {'industry_type': 'sw_l2'},
         '抱团拥挤度': {'top_pct': Decimal('0.05')},
         '微盘温度计': {'member_codes': '[]'},
-        'ETF份额': {'previous_trade_date': day-dt.timedelta(days=1)},
     }[name])
     def save(Session):
         if name == '行业动量': return strategy.save_day(Session, day, 'sw_l2', [record])
         if name == '抱团拥挤度': return strategy.save_day(Session, day, 0.05, record)
         if name == '微盘温度计': return strategy.save_period(Session, record)
-        return strategy.save_window(Session, record['fund_code'], [record])
+        raise AssertionError('Unexpected strategy: ' + name)
     engine = create_engine('sqlite://')
     monkeypatch.setattr(batch, 'connect_database', lambda _: engine)
     with batch.database_scope(strategy.Base, CONFIG) as Session:
@@ -490,7 +469,7 @@ def test_shared_sessions_keep_insert_only_across_strategies(batch, monkeypatch, 
             assert session.query(model).count() == 1
 
 
-@pytest.mark.parametrize('name', ['行业动量', '抱团拥挤度', '微盘温度计', 'ETF份额', '净利润断层', '微盘新高新低'])
+@pytest.mark.parametrize('name', ['行业动量', '抱团拥挤度', '微盘温度计', '净利润断层', '微盘新高新低'])
 def test_progress_visible_through_quiet_stream_for_each_strategy(batch, monkeypatch, capsys, name):
     processed = []
     def run(**kwargs):
@@ -683,6 +662,13 @@ def test_ownership_scope_messages_bypass_quiet_stream(batch, monkeypatch, capsys
     assert batch._PROGRESS_LOCAL.output is None
 
 
-def test_exchange_etf_is_not_in_default_joinquant_batch(batch):
-    assert 'ETF份额' not in batch.STRATEGY_ORDER
-    assert 'ETF份额' in batch.STRATEGIES  # Explicit legacy use only.
+def test_interface_collectors_are_not_registered_in_joinquant_batch(batch, monkeypatch):
+    for name in ('ETF份额', '两融担保比例'):
+        assert name not in batch.STRATEGY_ORDER
+        assert name not in batch.STRATEGY_CONFIG
+        assert name not in batch.STRATEGY_SPECS
+        assert name not in batch.STRATEGIES
+        monkeypatch.setattr(batch, 'connect_database', lambda *_: pytest.fail('must not connect'))
+        with pytest.raises(ValueError):
+            batch.run_all([name], db_config=CONFIG)
+    assert not hasattr(batch, '_etf_strategy')
