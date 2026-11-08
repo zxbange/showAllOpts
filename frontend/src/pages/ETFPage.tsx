@@ -1,21 +1,14 @@
 import { PageHeader } from '../components/PageHeader'
 import { useCallback, useEffect, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
-import type { CSSProperties } from 'react'
 import { CalendarDays, Info, RefreshCw } from 'lucide-react'
 import { getETFHistory } from '../api/client'
 import { useResource } from '../hooks/useResource'
 import { ETFCollectionPanel } from '../components/ETFCollectionPanel'
+import { ETFShareTable } from '../components/ETFShareTable'
 import { ETFChart } from '../components/ETFChart'
 import { LoadingState, ErrorState, EmptyState } from '../components/States'
-import {
-  billionShares,
-  etfColors,
-  signedPercent,
-  etfGroups,
-  marketValueSeries,
-  chartSeries,
-} from '../lib/etf'
+import { etfGroups, marketValueSeries, chartSeries } from '../lib/etf'
 import '../styles/etf.css'
 
 export function ETFPage() {
@@ -129,59 +122,12 @@ export function ETFPage() {
       ) : (
         data && (
           <>
-            {!marketValue &&
-              (!data.end_date ? (
-                <EmptyState
-                  title="暂无ETF份额数据"
-                  description="请由管理员在本页面配置并触发采集，或切换其他指数。"
-                />
-              ) : (
-                <>
-                  <div className="etf-section-label">
-                    <span>{data.group_name} · 最新份额</span>
-                  </div>
-                  <div className="etf-cards">
-                    {data.funds.map((fund, index) => {
-                      const change = fund.shares_change == null ? null : Number(fund.shares_change)
-                      return (
-                        <button
-                          key={fund.code}
-                          className={`etf-card ${selected === fund.code ? 'selected' : ''}`}
-                          style={
-                            { '--fund-color': etfColors[index % etfColors.length] } as CSSProperties
-                          }
-                          aria-pressed={selected === fund.code}
-                          aria-label={`查看${fund.name}曲线`}
-                          onClick={() => setSelected(selected === fund.code ? null : fund.code)}
-                        >
-                          <div className="etf-card-top">
-                            <span className="etf-fund-dot" />
-                            <span>{fund.code.split('.')[0]}</span>
-                            <span>{fund.code.endsWith('XSHG') ? '沪' : '深'}</span>
-                          </div>
-                          <h2>{fund.name}</h2>
-                          <div className="etf-shares">
-                            {billionShares(fund.shares)}
-                            <small>亿份</small>
-                          </div>
-                          <div
-                            className={`etf-change ${change == null || change === 0 ? '' : change > 0 ? 'increase' : 'decrease'}`}
-                          >
-                            {change == null
-                              ? '日变动 —'
-                              : `${change > 0 ? '+' : ''}${billionShares(fund.shares_change)} 亿份`}
-                            <span>（{signedPercent(fund.daily_change_pct)}）</span>
-                          </div>
-                          <div className="etf-card-date">
-                            {fund.date ?? '暂无记录'}
-                            {fund.lagging && <em>待更新</em>}
-                          </div>
-                        </button>
-                      )
-                    })}
-                  </div>
-                </>
-              ))}
+            {!marketValue && !data.end_date && (
+              <EmptyState
+                title="暂无ETF份额数据"
+                description="请由管理员在本页面配置并触发采集，或切换其他指数。"
+              />
+            )}
             {(marketValue || data.end_date) && (
               <section className="panel etf-trend-panel">
                 <div className="panel-heading">
@@ -202,9 +148,7 @@ export function ETFPage() {
                 </div>
                 <div className="etf-chart-toolbar">
                   <span>
-                    {marketValue
-                      ? '同日份额 × 收盘价后求和；缺数据不估算'
-                      : '卡片：红色增加 · 绿色减少 · 曲线单位：亿份'}
+                    {marketValue ? '同日份额 × 收盘价后求和；缺数据不估算' : '曲线单位：亿份'}
                   </span>
                   {!marketValue && selected && (
                     <button className="button button-quiet" onClick={() => setSelected(null)}>
@@ -243,6 +187,9 @@ export function ETFPage() {
                   </span>
                 </div>
               </section>
+            )}
+            {!marketValue && data.end_date && (
+              <ETFShareTable data={data} selected={selected} onSelect={setSelected} />
             )}
             {marketValue && (
               <aside className="etf-method-note">

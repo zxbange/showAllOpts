@@ -3,8 +3,33 @@ import type { ETFCollectionStatus, ETFHistory, ETFManualRun } from '../types/etf
 export const etfColors = ['#c44837', '#337fa5', '#ad7c14', '#217b70', '#8d63a6']
 export const billionShares = (value: string | null) =>
   value == null ? '—' : (Number(value) / 1e8).toFixed(2)
-export const signedPercent = (value: number | null) =>
-  value == null ? '—' : `${value > 0 ? '+' : ''}${value.toFixed(2)}%`
+
+export function recentShareRows(data: ETFHistory) {
+  // All funds share one trading-date axis; missing observations stay empty.
+  const availableDates = [
+    ...new Set([
+      ...(data.market_values ?? []).map((point) => point.date),
+      ...data.funds.flatMap((fund) => fund.points.map((point) => point.date)),
+      ...(data.end_date ? [data.end_date] : []),
+    ]),
+  ]
+    .filter((date) => !data.end_date || date <= data.end_date)
+    .sort()
+    .slice(-5)
+  const dates: Array<string | null> = [
+    ...Array<null>(5 - availableDates.length).fill(null),
+    ...availableDates,
+  ]
+  const rows = data.funds.map((fund) => {
+    const points = new Map(fund.points.map((point) => [point.date, point.shares]))
+    const shares = dates.map((date) => (date ? (points.get(date) ?? null) : null))
+    const [previous, current] = shares.slice(-2)
+    const change =
+      previous == null || current == null ? null : (BigInt(current) - BigInt(previous)).toString()
+    return { fund, shares, change }
+  })
+  return { dates, rows }
+}
 
 export function chartSeries(data: ETFHistory, relative: boolean, selected: string | null) {
   const dates = [
@@ -77,26 +102,6 @@ export function marketValueSeries(data: ETFHistory) {
 export const showETFSymbols = (values: Array<number | null>) =>
   values.filter((value) => value != null).length < 100
 
-export function collectionSummary(status: ETFCollectionStatus) {
-  const details = collectionCoverageSummary(status)
-  return `${collectionScheduleSummary(status)}${details ? ` ${details}` : ''}`
-}
-
-export function collectionCoverageSummary(status: ETFCollectionStatus) {
-  const pending = status.pending_count ?? status.manual?.pending_count
-  const blocked = status.blocked_count ?? status.manual?.blocked_count
-  const exhausted = status.retry_exhausted_count ?? status.manual?.retry_exhausted_count
-  const parts: string[] = []
-  if (pending) parts.push(`本轮目标日仍有 ${pending} 项待采集。`)
-  if (blocked)
-    parts.push(`本轮目标日 ${blocked} 项受数据源可用性或核验限制，不能保证通过重试补齐。`)
-  if (exhausted)
-    parts.push(
-      `本轮目标日 ${exhausted} 项已达到自动重试上限，勾选重试仅重置当前日常目标，不回补历史。`,
-    )
-  return parts.join('')
-}
-
 // A terminal mutation response must not retain progress from its previous running snapshot.
 export function withManualRun(
   status: ETFCollectionStatus,
@@ -114,32 +119,6 @@ export function withManualRun(
           : 'configured'
         : status.status,
   }
-}
-
-function collectionScheduleSummary(status: ETFCollectionStatus) {
-  if (status.status === 'disabled') return '自动采集已关闭，当前展示已保存的数据。'
-  if (status.status === 'missing_writer_configuration')
-    return '自动采集未就绪：尚未配置数据库连接。页面同步只读取已有数据。'
-  if (
-    status.status === 'writer_target_mismatch' ||
-    status.status === 'invalid_writer_configuration'
-  )
-    return '自动采集未就绪：旧采集连接配置不正确，请在采集配置中重新保存数据库目标。'
-  if (
-    status.status === 'writer_permission_denied' ||
-    status.runs?.[0]?.error === 'writer_permission_denied'
-  )
-    return '自动采集失败：数据库写入权限不足，请检查采集账号。'
-  if (status.status.startsWith('writer_'))
-    return '自动采集写入失败，请检查采集账号、目标表和数据库连接；已保存数据保留。'
-  if (status.status !== 'configured' || !status.worker_running)
-    return '自动采集尚未运行，请检查服务状态；当前展示已保存的数据。'
-  const latest = status.runs?.[0]
-  const prefix =
-    latest && ['failed', 'partial'].includes(latest.status)
-      ? '最近一次采集未完整完成，保留已保存数据。'
-      : ''
-  return `${prefix}自动采集：北京时间 ${(status.schedule ?? []).join('、')}；仅更新最新已收市交易日。历史数据由聚宽平台脚本从 2024-01-01 起补齐，日常采集完成不代表历史齐全。`
 }
 
 export function collectionErrorMessage(error: string): string {

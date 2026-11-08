@@ -4,11 +4,85 @@ import {
   chartSeries,
   marketValueSeries,
   showETFSymbols,
-  collectionSummary,
+  recentShareRows,
   collectionErrorMessage,
   withManualRun,
 } from './etf'
 import type { ETFHistory } from '../types/etf'
+
+describe('ETF recent share table', () => {
+  it('aligns five trading dates across funds, preserving missing sessions and exact share differences', () => {
+    const dates = [
+      '2026-10-30',
+      '2026-11-02',
+      '2026-11-03',
+      '2026-11-04',
+      '2026-11-05',
+      '2026-11-06',
+    ]
+    const data = {
+      end_date: dates[5],
+      market_values: dates.map((date) => ({ date, market_value: null })),
+      funds: [
+        {
+          code: 'up',
+          points: [
+            { date: dates[4], shares: '9007199254740992' },
+            { date: dates[5], shares: '9007199254740993' },
+          ],
+        },
+        {
+          code: 'down',
+          points: [
+            { date: dates[4], shares: '200' },
+            { date: dates[5], shares: '100' },
+          ],
+        },
+        {
+          code: 'zero',
+          points: [
+            { date: dates[4], shares: '0' },
+            { date: dates[5], shares: '0' },
+          ],
+        },
+        { code: 'lagging', shares_change: '123', points: [{ date: dates[4], shares: '100' }] },
+        {
+          code: 'gap',
+          shares_change: '234',
+          points: [
+            { date: dates[3], shares: '100' },
+            { date: dates[5], shares: '200' },
+          ],
+        },
+      ],
+    } as unknown as ETFHistory
+    const table = recentShareRows(data)
+    expect(table.dates).toEqual(dates.slice(1))
+    expect(table.rows.map((row) => row.change)).toEqual(['1', '-100', '0', null, null])
+    expect(table.rows[2].shares).toEqual([null, null, null, '0', '0'])
+    expect(table.rows[3].shares).toEqual([null, null, null, '100', null])
+    expect(table.rows[4].shares).toEqual([null, null, '100', null, '200'])
+  })
+
+  it('right-aligns short history without inventing earlier dates or future observations', () => {
+    const table = recentShareRows({
+      end_date: '2026-11-06',
+      funds: [
+        {
+          code: 'new',
+          points: [
+            { date: '2026-11-06', shares: '100' },
+            { date: '2026-11-09', shares: '200' },
+          ],
+        },
+        { code: 'empty', points: [] },
+      ],
+    } as unknown as ETFHistory)
+    expect(table.dates).toEqual([null, null, null, null, '2026-11-06'])
+    expect(table.rows[0].shares).toEqual([null, null, null, null, '100'])
+    expect(table.rows.map((row) => row.change)).toEqual([null, null])
+  })
+})
 
 describe('ETF chart dates and units', () => {
   it('aligns series by actual date, preserves zero and missing values', () => {
@@ -105,27 +179,6 @@ it('does not render a flagged market value even if a stale response includes an 
   expect(marketValueSeries(data).series[0].values).toEqual([null])
 })
 
-it('never presents missing writer configuration or denied writes as running collection', () => {
-  expect(collectionSummary({ status: 'missing_writer_configuration' })).toContain('未就绪')
-  expect(
-    collectionSummary({
-      status: 'configured',
-      worker_running: true,
-      runs: [
-        { slot: '2026-11-06T18:30:00+08:00', status: 'failed', error: 'writer_permission_denied' },
-      ],
-    }),
-  ).toContain('权限不足')
-  expect(
-    collectionSummary({
-      status: 'configured',
-      worker_running: true,
-      schedule: ['09:30', '11:30', '18:30'],
-      target_sessions: 300,
-    }),
-  ).toContain('仅更新最新已收市交易日')
-})
-
 it('renders collection errors without raw internal codes', () => {
   expect(collectionErrorMessage('writer_permission_denied')).toContain('权限不足')
   expect(collectionErrorMessage('service_interrupted')).toContain('中断')
@@ -168,27 +221,6 @@ it('retains calendar dates with no shares instead of jumping across missing hist
   expect(marketValueSeries(data).dates).toEqual(shares.dates)
 })
 
-it('distinguishes pending, restricted and exhausted history even when automatic collection is disabled', () => {
-  const summary = collectionSummary({
-    status: 'disabled',
-    history_complete: false,
-    pending_count: 12,
-    blocked_count: 3,
-    retry_exhausted_count: 2,
-  })
-  expect(summary).toContain('自动采集已关闭')
-  expect(summary).not.toContain('历史数据未采齐')
-  expect(summary).toContain('本轮目标日仍有 12 项待采集')
-  expect(summary).toContain('3 项受数据源可用性或核验限制')
-  expect(summary).toContain('2 项已达到自动重试上限')
-  expect(
-    collectionSummary({
-      status: 'disabled',
-      manual: { id: 'job', status: 'partial', history_complete: false, pending_count: 4 },
-    }),
-  ).toContain('本轮目标日仍有 4 项待采集')
-})
-
 it('clears stale progress after terminal manual responses but retains active progress', () => {
   const status = {
     status: 'running',
@@ -205,22 +237,4 @@ it('clears stale progress after terminal manual responses but retains active pro
   for (const active of ['queued', 'running', 'cancelling']) {
     expect(withManualRun(status, { id: 'job', status: active }).progress).toEqual(status.progress)
   }
-})
-
-it('separates daily interface collection from JoinQuant history starting in 2024', () => {
-  const summary = collectionSummary({
-    status: 'configured',
-    worker_running: true,
-    collection_scope: 'latest_completed_session',
-    history_complete: false,
-    target_sessions: 300,
-    schedule: ['09:00'],
-  })
-  expect(summary).toContain('仅更新最新已收市交易日')
-  expect(summary).toContain('2024-01-01')
-  expect(summary).toContain('日常采集完成不代表历史齐全')
-  expect(summary).not.toContain('历史目标 300')
-  expect(collectionSummary({ status: 'disabled', retry_exhausted_count: 2 })).toContain(
-    '勾选重试仅重置当前日常目标，不回补历史',
-  )
 })

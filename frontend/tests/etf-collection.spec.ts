@@ -75,7 +75,7 @@ test('HTTP credentials are always blocked', async ({ page }) => {
   await expect(page.getByLabel('采集写入账号')).toBeDisabled()
   await expect(page.getByLabel('数据库密码', { exact: true })).toBeDisabled()
 })
-test('viewer sees status without fetching credentials or mutation buttons', async ({ page }) => {
+test('viewer has no empty collection panel, credentials or mutation buttons', async ({ page }) => {
   let reads = 0
   await page.route('**/api/auth/**', (r) =>
     r.fulfill({ json: { ...adminSession, user: { ...adminSession.user, role: 'viewer' } } }),
@@ -85,7 +85,8 @@ test('viewer sees status without fetching credentials or mutation buttons', asyn
     return r.fulfill({ json: configuration })
   })
   await page.goto('/etf-shares')
-  await expect(page.getByText('自动采集已关闭，当前展示已保存的数据。')).toBeVisible()
+  await expect(page.getByRole('heading', { name: '暂无ETF份额数据', exact: true })).toBeVisible()
+  await expect(page.getByRole('region', { name: 'ETF采集管理' })).toHaveCount(0)
   await expect(page.getByRole('button', { name: '立即采集', exact: true })).toHaveCount(0)
   await expect(page.getByText('采集配置', { exact: true })).toHaveCount(0)
   expect(reads).toBe(0)
@@ -148,7 +149,7 @@ test('polls active progress, refreshes chart after cache completion and stops on
     })
   })
   await page.goto('/etf-shares')
-  await expect(page.getByText('手动采集：采集中', { exact: true })).toBeVisible()
+  await expect(page.getByRole('button', { name: '取消采集', exact: true })).toBeEnabled()
   await expect(page.getByRole('heading', { name: '暂无ETF份额数据', exact: true })).toBeVisible()
   const initialHistories = histories
   const initialPolls = polls
@@ -216,7 +217,7 @@ test('late status from a departed page cannot replace new page status', async ({
   })
   await page.goto('/etf-shares')
   await expect.poll(() => heldResponses).toBeGreaterThan(0)
-  await expect(page.getByText('正在读取采集状态…', { exact: true })).toBeVisible()
+  await expect(page.getByRole('button', { name: '立即采集', exact: true })).toBeDisabled()
   await page.getByRole('link', { name: '总览', exact: true }).click()
   await expect(page).toHaveURL(/\/$/)
   await expect(page.getByRole('region', { name: 'ETF采集管理' })).toHaveCount(0)
@@ -226,12 +227,12 @@ test('late status from a departed page cannot replace new page status', async ({
     .getByRole('link', { name: '市场情绪', exact: true })
     .click()
   await expect(page).toHaveURL(/etf-shares$/)
-  await expect(page.getByText('自动采集已关闭，当前展示已保存的数据。')).toBeVisible()
+  await expect(page.getByRole('button', { name: '立即采集', exact: true })).toBeEnabled()
   const oldResponses = heldResponses
   release()
   await expect.poll(() => releasedResponses).toBe(oldResponses)
   await expect(page.getByText('手动采集：采集中', { exact: true })).toHaveCount(0)
-  await expect(page.getByText('自动采集已关闭，当前展示已保存的数据。')).toBeVisible()
+  await expect(page.getByRole('button', { name: '立即采集', exact: true })).toBeEnabled()
   await expect(page.getByRole('button', { name: '立即采集', exact: true })).toBeEnabled()
 })
 
@@ -447,7 +448,7 @@ test('an uncertain start resolves through polling without reusing its id for a n
   })
   await page.goto('/etf-shares')
   await page.getByRole('button', { name: '立即采集', exact: true }).click()
-  await expect(page.getByText('手动采集：本次日常采集完成', { exact: true })).toBeVisible()
+  await expect(page.getByRole('button', { name: '立即采集', exact: true })).toBeEnabled()
   await page.getByRole('button', { name: '立即采集', exact: true }).click()
   await expect.poll(() => ids.length).toBe(2)
   expect(ids[0]).not.toBe(ids[1])

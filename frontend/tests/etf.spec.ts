@@ -89,12 +89,41 @@ test('one ETF entry, seven indices, aggregate toggle, range and history navigati
   await page.goto('/market-crowding')
   await page.getByRole('link', { name: '国家队动态', exact: true }).click()
   await expect(page.getByRole('combobox', { name: '跟踪指数' })).toHaveValue('hs300')
-  await expect(page.locator('.etf-card')).toHaveCount(5)
-  await expect(page.locator('.etf-card').first()).toContainText('285.53')
-  await expect(page.locator('.etf-card').nth(2)).toContainText('日变动 —')
-  await expect(page.locator('.etf-card').last()).toContainText('待更新')
+  await expect(page.locator('.etf-share-table tbody tr')).toHaveCount(5)
+  const table = page.getByRole('table')
+  const sample = fixture()
+  const dates = sample.market_values.slice(-5).map((point) => point.date)
+  for (let i = 0; i < 5; i++) {
+    const header = table.locator('thead th').nth(i + 1)
+    await expect(header).toContainText(i === 4 ? 'T日' : `T-${4 - i}`)
+    await expect(header).toContainText(dates[i])
+    await expect(table.locator('tbody tr').first().locator('td').nth(i)).toHaveText(
+      (
+        Number(sample.funds[0].points.find((point) => point.date === dates[i])!.shares) / 1e8
+      ).toFixed(2),
+    )
+  }
+  const lastRow = table.locator('tbody tr').last()
+  await expect(lastRow.locator('td').nth(4)).toHaveText('—')
+  await expect(lastRow.locator('td').nth(5)).toHaveText('—')
+  const firstPoints = sample.funds[0].points.slice(-2)
+  const change = (Number(firstPoints[1].shares) - Number(firstPoints[0].shares)) / 1e8
+  await expect(table.locator('tbody tr').first().locator('td').last()).toHaveText(
+    `${change > 0 ? '+' : ''}${change.toFixed(2)}`,
+  )
+  await expect(table).not.toContainText('%')
+  await expect(page.locator('.etf-card')).toHaveCount(0)
+  expect(
+    await page
+      .locator('.etf-share-panel')
+      .evaluate(
+        (element) =>
+          element.getBoundingClientRect().top >=
+          document.querySelector('.etf-trend-panel')!.getBoundingClientRect().bottom,
+      ),
+  ).toBe(true)
   await expect(page.getByRole('img', { name: 'ETF总份额曲线' }).locator('canvas')).toBeVisible()
-  await expectCollectionLast(page, '.etf-trend-panel')
+  await expectCollectionLast(page, '.etf-share-panel')
   await expect(page.getByText('切换指数，查看 ETF 总份额与所跟踪基金的合计流通市值。')).toHaveCount(
     0,
   )
@@ -123,7 +152,7 @@ test('one ETF entry, seven indices, aggregate toggle, range and history navigati
   await expect(page.getByText(/1 个交易日因疑似份额拆并或异常跳变/)).toBeVisible()
   await expect(page.getByText(/深市历史收盘价受数据源及核验范围限制/)).toBeVisible()
   await expect(page.getByText(/清单不覆盖该指数全部/)).toHaveCount(0)
-  await expect(page.locator('.etf-card')).toHaveCount(0)
+  await expect(page.locator('.etf-share-table tbody tr')).toHaveCount(0)
   await expect(page.getByRole('button', { name: '显示全部 ETF' })).toHaveCount(0)
   await expect(page.getByText('同日份额 × 收盘价后求和；缺数据不估算')).toBeVisible()
   await page.getByRole('button', { name: '近1月', exact: true }).click()
@@ -140,15 +169,15 @@ test('one ETF entry, seven indices, aggregate toggle, range and history navigati
     page.getByRole('heading', { name: '总份额变化曲线 · 全部', exact: true }),
   ).toBeVisible()
   await page.reload()
-  await expect(page.locator('.etf-card').first()).toContainText('上证180')
+  await expect(page.locator('.etf-share-table tbody tr').first()).toContainText('上证180')
   await expect(page.getByRole('link', { name: '国家队动态', exact: true })).toHaveAttribute(
     'aria-current',
     'page',
   )
   await page.goBack()
-  await expect(page.locator('.etf-card').first()).toContainText('上证50')
+  await expect(page.locator('.etf-share-table tbody tr').first()).toContainText('上证50')
   await page.goForward()
-  await expect(page.locator('.etf-card').first()).toContainText('上证180')
+  await expect(page.locator('.etf-share-table tbody tr').first()).toContainText('上证180')
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
   await page.screenshot({
     path: testInfo.outputPath('etf-dashboard.png'),
@@ -211,7 +240,7 @@ test('failure retry, empty database, legacy market data and empty selected fund'
   await page.getByRole('combobox', { name: '跟踪指数' }).selectOption('zz500')
   await expect(page.locator('.state-panel[role="alert"]')).toContainText('数据库暂不可用')
   await expectCollectionLast(page, '.state-panel')
-  await expect(page.locator('.etf-card')).toHaveCount(0)
+  await expect(page.locator('.etf-share-table tbody tr')).toHaveCount(0)
   state = 'partial'
   await page.getByRole('combobox', { name: '跟踪指数' }).selectOption('cyb')
   await expect(
@@ -234,19 +263,19 @@ test('rapid index, range and metric changes never show a stale response', async 
     await route.fulfill({ json: fixture(group) }).catch(() => {})
   })
   await page.goto('/etf-shares')
-  await expect(page.locator('.etf-card')).toHaveCount(5)
+  await expect(page.locator('.etf-share-table tbody tr')).toHaveCount(5)
   await page.getByRole('combobox', { name: '跟踪指数' }).selectOption('zz500')
   await expect.poll(() => delayedStarted).toBe(true)
   await expect(page.getByRole('status', { name: '正在加载数据' })).toBeVisible()
   await expectCollectionLast(page, '.loading-state')
-  await expect(page.locator('.etf-card')).toHaveCount(0)
+  await expect(page.locator('.etf-share-table tbody tr')).toHaveCount(0)
   await page.getByRole('button', { name: '流通市值', exact: true }).click()
   await page.getByRole('button', { name: '近1月', exact: true }).click()
   await page.getByRole('combobox', { name: '跟踪指数' }).selectOption('kc50')
   await expect(page.getByRole('heading', { name: '合计流通市值 · 科创50' })).toBeVisible()
   release()
   await page.getByRole('button', { name: '总份额', exact: true }).click()
-  await expect(page.locator('.etf-card').first()).toContainText('科创50')
+  await expect(page.locator('.etf-share-table tbody tr').first()).toContainText('科创50')
   await expect(page.getByRole('combobox', { name: '跟踪指数' })).toHaveValue('kc50')
   await expect(page.getByRole('button', { name: '近1月', exact: true })).toHaveAttribute(
     'aria-pressed',
@@ -254,11 +283,23 @@ test('rapid index, range and metric changes never show a stale response', async 
   )
 })
 
-test('missing writer is clearly visible without blocking saved charts', async ({ page }) => {
+test('collection descriptions and past failure status stay hidden without blocking saved charts', async ({
+  page,
+}) => {
   await page.route('**/api/v1/etf-shares/history?*', (route) => route.fulfill({ json: fixture() }))
+  await page.route('**/api/v1/etf-shares/collection-status', (route) =>
+    route.fulfill({
+      json: {
+        status: 'configured',
+        configured: true,
+        worker_running: true,
+        schedule: ['08:00'],
+        manual: { id: 'old', status: 'failed', error: 'writer_connection_failed' },
+      },
+    }),
+  )
   await page.goto('/etf-shares')
-  await expect(
-    page.getByText('自动采集未就绪：尚未配置数据库连接。页面同步只读取已有数据。'),
-  ).toBeVisible()
+  await expect(page.getByText(/自动采集：北京时间|手动采集：|立即采集仅更新/)).toHaveCount(0)
+  await expect(page.getByRole('button', { name: '立即采集', exact: true })).toBeEnabled()
   await expect(page.getByRole('img', { name: 'ETF总份额曲线' })).toBeVisible()
 })

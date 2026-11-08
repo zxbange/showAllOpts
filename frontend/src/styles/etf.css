@@ -1,121 +1,109 @@
+.etf-share-panel {
+  min-width: 0;
+  padding: 20px 24px;
+  margin-top: 20px;
+}
 .etf-section-label {
   display: flex;
-  justify-content: space-between;
+  flex-wrap: wrap;
   align-items: center;
-  gap: 10px;
-  margin: 0 0 14px;
-  font-weight: 650;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 16px;
 }
-.etf-section-label small {
-  font-size: 12px;
+.etf-section-label h2 {
+  margin: 0;
+  font-size: 17px;
+}
+.etf-section-label > span {
+  font-size: 13px;
   color: var(--muted);
-  font-weight: 400;
 }
-.etf-cards {
-  display: grid;
-  grid-template-columns: repeat(5, minmax(0, 1fr));
-  gap: 12px;
-  margin-bottom: 26px;
+.etf-table-scroll {
+  max-width: 100%;
+  overflow-x: auto;
 }
-.etf-card {
-  min-width: 0;
-  padding: 19px 15px 16px;
-  text-align: left;
-  border: 1px solid var(--border);
-  border-top: 3px solid var(--fund-color);
-  border-radius: 15px;
+.etf-share-table {
+  width: 100%;
+  min-width: 900px;
+  border-collapse: collapse;
+  font-size: 14px;
+}
+.etf-share-table th,
+.etf-share-table td {
+  padding: 14px 12px;
+  border-bottom: 1px solid var(--border);
+  text-align: right;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+.etf-share-table thead th {
+  background: #faf6f1;
+  font-weight: 600;
   color: var(--text);
-  background: linear-gradient(150deg, #fff, #fdf9f4);
+}
+.etf-share-table th:first-child {
+  text-align: left;
+}
+.etf-share-table tbody tr:last-child > * {
+  border-bottom: 0;
+}
+.etf-share-table tbody tr:hover,
+.etf-share-table tr.selected {
+  background: #fcf0e9;
+}
+.etf-column-date {
+  display: block;
+  font-size: 12px;
+  font-weight: 400;
+  color: var(--muted);
+  margin-top: 5px;
+}
+.etf-fund-button {
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  padding: 4px 0;
   cursor: pointer;
-  transition:
-    transform 0.2s,
-    box-shadow 0.2s;
 }
-.etf-card:hover {
-  transform: translateY(-4px);
-  box-shadow: 0 9px 24px #62432a0e;
+.etf-fund-button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+  border-radius: 3px;
 }
-.etf-card.selected {
-  outline: 2px solid var(--fund-color);
-  outline-offset: 2px;
-  background: var(--panel);
-}
-.etf-card-top {
+.etf-fund-name {
   display: flex;
   align-items: center;
-  gap: 7px;
+  gap: 8px;
+  font-weight: 600;
+}
+.etf-fund-code {
+  display: block;
   font-size: 12px;
   color: var(--muted);
-  font-variant-numeric: tabular-nums;
-  letter-spacing: 0.06em;
-}
-.etf-card-top > span:last-child {
-  margin-left: auto;
-  border: 1px solid var(--border);
-  border-radius: 4px;
-  padding: 1px 4px;
+  margin: 6px 0 0 15px;
 }
 .etf-fund-dot {
   width: 7px;
   height: 7px;
-  background: var(--fund-color);
+  flex-shrink: 0;
   border-radius: 50%;
+  background: var(--fund-color);
 }
-.etf-card h2 {
-  font-size: 15px;
-  font-weight: 500;
-  margin: 16px 0 10px;
-  min-height: 36px;
-  line-height: 1.5;
-}
-.etf-shares {
-  font-size: clamp(22px, 2.2vw, 32px);
-  font-weight: 650;
-  letter-spacing: -0.04em;
-  font-variant-numeric: tabular-nums;
-}
-.etf-shares small {
-  font-size: 12px;
-  color: var(--muted);
-  margin-left: 5px;
-  font-weight: 400;
-  letter-spacing: 0;
-}
-.etf-change {
-  margin-top: 8px;
-  font-size: 13px;
-  color: var(--muted);
-  font-variant-numeric: tabular-nums;
-  line-height: 1.7;
-}
-.etf-change span {
-  display: block;
-  font-size: 12px;
-}
-.etf-change.increase {
+.etf-share-table .increase {
   color: var(--accent);
 }
-.etf-change.decrease {
+.etf-share-table .decrease {
   color: var(--jade);
 }
-.etf-card-date {
-  border-top: 1px solid var(--border);
-  padding-top: 12px;
-  margin-top: 15px;
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 6px;
-  font-size: 12px;
-  color: var(--muted);
+@media (max-width: 640px) {
+  .etf-share-panel {
+    padding: 16px 10px;
+  }
 }
-.etf-card-date em {
-  font-style: normal;
-  color: var(--gold);
-  background: #fff0d6;
-  padding: 2px 5px;
-  border-radius: 4px;
-}
+
 .etf-trend-panel {
   padding: 24px;
 }
@@ -164,30 +152,7 @@
   color: var(--muted);
   font-size: 13px;
 }
-@media (max-width: 1100px) {
-  .etf-cards {
-    grid-template-columns: repeat(3, minmax(0, 1fr));
-  }
-}
 @media (max-width: 640px) {
-  .etf-section-label {
-    align-items: flex-start;
-    flex-direction: column;
-  }
-  .etf-cards {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: 10px;
-  }
-  .etf-card {
-    padding: 15px 12px;
-  }
-  .etf-card h2 {
-    min-height: 20px;
-    font-size: 15px;
-  }
-  .etf-shares {
-    font-size: 28px;
-  }
   .etf-trend-panel {
     padding: 16px 10px;
   }
@@ -202,24 +167,6 @@
     gap: 8px;
   }
 }
-@media (prefers-reduced-motion: reduce) {
-  .etf-card {
-    transition: none;
-  }
-  .etf-card:hover {
-    transform: none;
-  }
-}
-@media (min-width: 1101px) and (max-width: 1400px) {
-  .etf-cards {
-    grid-template-columns: repeat(3, minmax(0, 1fr));
-  }
-}
-.etf-card-top {
-  flex-wrap: wrap;
-  letter-spacing: 0;
-}
-
 .etf-controls select {
   padding: 9px 12px;
   border: 1px solid var(--border);
@@ -247,6 +194,7 @@
 
 .etf-collection-panel {
   padding: 18px;
+  margin-top: 20px;
   margin-bottom: 18px;
   font-size: 13px;
 }

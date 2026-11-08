@@ -9,7 +9,7 @@ import {
   testCollectionConfiguration,
 } from '../api/etfCollection'
 import type { ETFCollectionConfiguration, ETFCollectionStatus } from '../types/etf'
-import { collectionSummary, collectionErrorMessage, withManualRun } from '../lib/etf'
+import { collectionErrorMessage, withManualRun } from '../lib/etf'
 
 const dailyTime = (schedule: string[]) => (schedule.length === 1 ? schedule[0] : '09:00')
 const normalizeConfig = (value: ETFCollectionConfiguration) => ({
@@ -40,7 +40,6 @@ const labels: Record<string, string> = {
 export function ETFCollectionPanel({ onCollected }: { onCollected: () => void }) {
   const admin = useAuth().session?.user?.role === 'admin'
   const [status, setStatus] = useState<ETFCollectionStatus | null>(null)
-  const [statusError, setStatusError] = useState('')
   const [config, setConfig] = useState<ETFCollectionConfiguration | null>(null)
   const [saved, setSaved] = useState<ETFCollectionConfiguration | null>(null)
   const [password, setPassword] = useState('')
@@ -102,10 +101,9 @@ export function ETFCollectionPanel({ onCollected }: { onCollected: () => void })
           reload.current()
         previous.current = next
         setStatus(next)
-        setStatusError('')
         if (active(next) || next.cache_pending) delay = 2000
       } catch {
-        if (live) setStatusError('采集状态暂不可用，已保存数据仍可查看。')
+        // Keep saved charts visible while the next poll retries status retrieval.
       }
       if (live) timer = setTimeout(poll, delay)
     }
@@ -259,7 +257,6 @@ export function ETFCollectionPanel({ onCollected }: { onCollected: () => void })
       setRetryExhausted(false)
       previous.current = withManualRun(previous.current ?? { status: 'configured' }, result)
       setStatus(previous.current)
-      setMessage(`手动采集：${labels[result.status] ?? '状态待确认'}`)
       setRefresh((n) => n + 1)
     } catch (e) {
       if (mounted.current) {
@@ -287,7 +284,6 @@ export function ETFCollectionPanel({ onCollected }: { onCollected: () => void })
       if (!mounted.current) return
       previous.current = withManualRun(previous.current ?? { status: 'configured' }, result)
       setStatus(previous.current)
-      setMessage(`手动采集：${labels[result.status] ?? '状态待确认'}`)
     } catch (e) {
       if (mounted.current)
         setError(
@@ -302,17 +298,11 @@ export function ETFCollectionPanel({ onCollected }: { onCollected: () => void })
     }
   }
   const progress = status?.progress
+  if (!admin && !progress && !status?.cache_pending && !status?.runs?.length) return null
   return (
     <section className="panel etf-collection-panel" aria-label="ETF采集管理">
       <div className="etf-collection-overview">
         <div role="status">
-          {statusError || (status ? collectionSummary(status) : '正在读取采集状态…')}
-          {status?.manual && (
-            <p>
-              手动采集：{labels[status.manual.status] ?? '状态待确认'}
-              {status.manual.error ? ` · ${collectionErrorMessage(status.manual.error)}` : ''}
-            </p>
-          )}
           {status?.cache_pending && <p>采集已入库，等待图表缓存更新…</p>}
           {progress && (
             <p>
@@ -355,10 +345,6 @@ export function ETFCollectionPanel({ onCollected }: { onCollected: () => void })
           </div>
         )}
       </div>
-      <p className="etf-collection-hint">
-        立即采集仅更新最新已收市交易日，使用已保存配置；顶部刷新仅重读数据。自动采集关闭后仍可手动更新。历史数据由聚宽平台脚本从
-        2024-01-01 起补齐。
-      </p>
       {admin && (
         <details>
           <summary>采集配置</summary>
