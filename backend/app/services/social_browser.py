@@ -24,6 +24,7 @@ HOSTS = {
 ACTIVE = {'starting', 'waiting', 'verification', 'cancelling'}
 LIFETIME = 360
 WIDTH, HEIGHT = 1100, 800
+MAX_PAGE_TRANSITIONS = 3
 logger = logging.getLogger(__name__)
 
 
@@ -31,6 +32,10 @@ class LoginRestricted(RuntimeError):
     def __init__(self, status):
         self.status = status
         super().__init__('Login identity verification was restricted')
+
+
+class LoginPageClosed(RuntimeError):
+    pass
 
 
 def browser_error(error):
@@ -51,13 +56,48 @@ def browser_error(error):
         return 'permission_denied', '服务账号无法读取浏览器或写入会话目录，请检查 .runtime/playwright 和 LOG_DIR 的权限及 systemd 路径限制'
     if any(word in text for word in ('processsingleton', 'singletonlock', 'profile appears to be in use')):
         return 'profile_busy', '浏览器资料目录被其他进程占用，请检查是否存在残留浏览器；不要在浏览器运行时删除资料目录'
+    if any(word in text for word in ('execution context was destroyed', 'cannot find context with specified id',
+                                     'frame was detached', 'frame has been detached')):
+        return 'page_navigating', '登录页正在跳转，连续等待后仍未稳定，请重新打开扫码窗口'
+    if isinstance(error, LoginPageClosed):
+        return 'page_closed', '官方登录标签页已关闭，且未能确认登录，请重新打开扫码窗口'
+    if any(word in text for word in ('target crashed', 'page crashed')):
+        return 'page_crashed', '登录页面渲染进程崩溃，请检查浏览器运行环境和服务器资源'
+    if any(word in text for word in ('target page, context or browser has been closed',
+                                     'browser has been closed', 'browser closed', 'target closed')):
+        return 'browser_closed', '登录标签页或浏览器连接已关闭，请查看服务日志中的关闭、崩溃及断连状态'
     if 'net::err_' in text:
         return 'network_failed', '服务器访问官方登录页失败，请检查 DNS、代理、TLS 和出口网络'
     if type(error).__name__ == 'TimeoutError':
         return 'timeout', '官方登录页加载或操作超时，请检查服务器网络后重试'
     if isinstance(error, (json.JSONDecodeError, UnicodeDecodeError)):
         return 'invalid_response', '登录验证未得到预期数据，可能为平台验证页或接口变化，请检查官方登录画面'
+    if 'protocol error' in text:
+        return 'browser_protocol_error', '浏览器协议操作失败，请查看服务日志中的操作阶段与浏览器状态'
     return 'browser_failed', '浏览器进程或登录操作失败，请运行 scripts/check_social_browser.py 检查启动环境；若检查通过，请反馈本页失败阶段'
+
+
+def browser_diagnostics(error, context=None, page=None, events=None):
+    """Allowlisted metadata only. Never log exception text, page URLs or contents."""
+    name = type(error).__name__
+    details = {'error_type': name if name in {
+        'Error', 'TimeoutError', 'TargetClosedError', 'RuntimeError', 'PermissionError',
+        'ModuleNotFoundError', 'JSONDecodeError', 'UnicodeDecodeError', 'LoginPageClosed',
+        'OSError', 'ValueError', 'TypeError', 'AttributeError', 'LockException',
+    } else 'OtherError', 'page_count': None, 'page_closed': None, 'browser_connected': None}
+    details.update({key: bool((events or {}).get(key))
+                    for key in ('page_crashed', 'context_closed', 'browser_disconnected')})
+    # These calls inspect local Playwright state, not the page or network.
+    try:
+        if page is not None:
+            details['page_closed'] = page.is_closed()
+        if context is not None:
+            details['page_count'] = sum(not item.is_closed() for item in context.pages)
+            if context.browser is not None:
+                details['browser_connected'] = context.browser.is_connected()
+    except Exception:
+        pass
+    return details
 
 
 def allowed_url(platform, url):
@@ -221,6 +261,8 @@ class BrowserLogin:
             if not any(item['name'] == 'SUB' for item in cookies):
                 return None
             response = context.request.get('https://m.weibo.cn/api/config', timeout=12000, max_redirects=0)
+            if response.status in (401, 403, 418, 429, 567):
+                raise LoginRestricted(response.status)
             if response.status != 200:
                 return None
             data = response.json().get('data', {})
@@ -265,116 +307,212 @@ class BrowserLogin:
             options['channel'] = self.settings.social_browser_channel
         # A fresh profile avoids restoring multiple old tabs/windows. Only encrypted
         # cookies survive; localStorage and browser history are discarded at close.
-        with tempfile.TemporaryDirectory(prefix=platform + '-', dir=self.profiles) as temporary:
+        with tempfile.TemporaryDirectory(prefix=platform + '-', dir=self.profiles,
+                                         ignore_cleanup_errors=True) as temporary:
             context = playwright.chromium.launch_persistent_context(temporary, **options)
+            failed = False
             try:
                 snapshot = self.read(profile / 'cookies.enc')
                 if snapshot and self.monitor.platform_login(platform)['state'] not in ('expired', 'restricted', 'logged_out'):
                     context.add_cookies(json.loads(snapshot))
                 yield context
+            except BaseException:
+                failed = True
+                raise
             finally:
                 try:
-                    if self.monitor.platform_login(platform)['state'] == 'normal':
+                    if not failed and self.monitor.platform_login(platform)['state'] == 'normal':
                         self.write(profile / 'cookies.enc', json.dumps(context.cookies()).encode())
+                except Exception as error:
+                    # The verified credential is already in the encrypted monitor DB.
+                    # Optional profile persistence must not overwrite success or a primary failure.
+                    self.log_cleanup_error(platform, '保存浏览器凭据快照', error, context)
                 finally:
-                    context.close()
+                    try:
+                        context.close()
+                    except Exception as error:
+                        self.log_cleanup_error(platform, '关闭浏览器', error, context)
+
+    def log_cleanup_error(self, platform, stage, error, context):
+        logger.warning('Browser login cleanup failed platform=%s stage=%s code=%s diagnostics=%s',
+                       platform, stage, browser_error(error)[0],
+                       json.dumps(browser_diagnostics(error, context), sort_keys=True))
+
+    def complete(self, platform, state, credential):
+        # Serialize completion against a concurrent cancellation request from any worker.
+        with portalocker.Lock(str(self.path(platform, 'commands.lock')), timeout=2):
+            pending = self.read(self.path(platform, 'command'))
+            command = json.loads(pending) if pending else {}
+            cancelled = command.get('id') == state['id'] and command.get('action') == 'cancel'
+            if cancelled or self.stopping.is_set() or time.time() >= state['expires_at']:
+                return False
+            self.monitor.update_config({platform + '_cookie': credential}, verified_platform=platform)
+            self.save(platform, state, state='success', image=False, message='登录正常')
+            return True
 
     def run(self, platform, state, lease):
         stage = '启动浏览器'
+        context = page = None
+        diagnostics = None
+        transitions = 0
+        events = {'page_crashed': False, 'context_closed': False, 'browser_disconnected': False}
         try:
             from playwright.sync_api import sync_playwright
             os.environ.setdefault('PLAYWRIGHT_BROWSERS_PATH', str(PROJECT_ROOT / '.runtime' / 'playwright'))
             with sync_playwright() as playwright, self.browser_context(playwright, platform) as context:
-                context.route('**/*', lambda route: route.continue_() if allowed_url(platform, route.request.url)
-                              else route.abort())
-                context.route_web_socket('**/*', lambda socket: socket.close())
-                page = context.pages[0] if context.pages else context.new_page()
-                page.set_default_timeout(10000)
-                page.on('dialog', lambda dialog: dialog.dismiss())
-                stage = '打开官方登录页'
-                response = page.goto(PLATFORMS[platform], wait_until='domcontentloaded', timeout=45000)
-                if response and response.status in (401, 403, 418, 429, 567):
-                    self.save(platform, state, state='blocked', image=False,
-                              http_status=response.status, error_code='login_page_restricted',
-                              message=f'平台登录页返回 HTTP {response.status}，当前浏览器会话访问受限，已停止重试；这不表示已确认服务器 IP 被封')
-                    return
-                # Select only a visible official login entry; all other interaction is manual.
-                if platform == 'xueqiu':
-                    entry = page.get_by_text(re.compile(r'^\s*登录\s*(?:[/／]\s*注册)?\s*$')).filter(visible=True)
-                    # The header is hydrated asynchronously; do not select a hidden duplicate.
-                    try:
-                        entry.first.wait_for(state='visible', timeout=15000)
-                        entry.first.click()
-                    except Exception as error:
-                        if type(error).__name__ != 'TimeoutError':
-                            raise
-                last_probe = 0
-                opened_at = time.time()
-                while time.time() < state['expires_at'] and not self.stopping.is_set():
-                    pages = [item for item in context.pages if not item.is_closed()]
-                    if pages:
-                        page = pages[-1]
-                    command = self.command(platform)
-                    stage = '处理登录画面'
-                    if command and command['id'] == state['id']:
-                        if command['action'] == 'cancel':
-                            self.save(platform, state, state='cancelled', message='登录已取消', image=False)
-                            return
-                        if command['action'] == 'reload':
-                            page.goto(PLATFORMS[platform], wait_until='domcontentloaded', timeout=45000)
-                            last_probe = 0
-                        elif command['action'] == 'click':
-                            page.mouse.click(command['x'], command['y'])
-                        elif command['action'] == 'check':
-                            last_probe = 0
-                    text = page.locator('body').inner_text(timeout=10000)
-                    if (platform == 'weibo' and '/visitor/visitor' in urlsplit(page.url).path
-                            and time.time() - opened_at > 25):
+                try:
+                    context.on('close', lambda _: events.update(context_closed=True))
+                    if context.browser is not None:
+                        context.browser.on('disconnected', lambda _: events.update(browser_disconnected=True))
+                    observed_pages = set()
+
+                    def observe(item):
+                        if item not in observed_pages:
+                            observed_pages.add(item)
+                            item.set_default_timeout(10000)
+                            item.on('dialog', lambda dialog: dialog.dismiss())
+                            item.on('crash', lambda _: events.update(page_crashed=True))
+
+                    context.on('page', observe)
+                    context.route('**/*', lambda route: route.continue_() if allowed_url(platform, route.request.url)
+                                  else route.abort())
+                    context.route_web_socket('**/*', lambda socket: socket.close())
+                    page = context.pages[0] if context.pages else context.new_page()
+                    observe(page)
+                    stage = '打开官方登录页'
+                    response = page.goto(PLATFORMS[platform], wait_until='domcontentloaded', timeout=45000)
+                    if response and response.status in (401, 403, 418, 429, 567):
                         self.save(platform, state, state='blocked', image=False,
-                                  message='微博停留在访客验证页，服务器未能进入登录页。请检查服务器网络或在平台处理后重试')
+                                  http_status=response.status, error_code='login_page_restricted',
+                                  message=f'平台登录页返回 HTTP {response.status}，当前浏览器会话访问受限，已停止重试；这不表示已确认服务器 IP 被封')
                         return
-                    if any(word in text for word in ('安全策略拦截', '访问被拒绝', 'Access Denied')):
-                        self.save(platform, state, state='blocked', message='平台拒绝服务器访问。请检查服务器网络或联系平台处理，程序已停止重试', image=False)
-                        return
-                    if time.time() - last_probe >= 10:
-                        last_probe = time.time()
-                        stage = '验证平台登录状态'
-                        credential = self.verify(platform, context, page)
-                        if credential:
-                            # Serialize completion against a concurrent cancellation request.
-                            with portalocker.Lock(str(self.path(platform, 'commands.lock')), timeout=2):
-                                pending = self.read(self.path(platform, 'command'))
-                                cancelled = pending and json.loads(pending).get('action') == 'cancel'
-                                if not cancelled and not self.stopping.is_set() and time.time() < state['expires_at']:
-                                    self.monitor.update_config({platform + '_cookie': credential}, verified_platform=platform)
-                                    self.save(platform, state, state='success', image=False,
-                                              message='登录正常')
-                                    return
-                            continue
-                    verification = any(word in text for word in ('请输入验证码', '请完成安全验证', '拖动滑块'))
-                    stage = '保存登录画面'
-                    self.write(self.path(platform, 'image'), page.screenshot(type='png'))
-                    self.save(platform, state, state='verification' if verification else 'waiting', image=True,
-                              revision=state['revision'] + 1,
-                              message='平台要求人工验证，请查看画面；若无法操作，请取消并在平台完成验证后重试' if verification
-                              else '请选择官方扫码入口，用对应应用扫描并确认；可点击下方画面切换登录方式')
-                    self.stopping.wait(2)
-                self.save(platform, state, state='expired', image=False, message='登录窗口已结束，请重新打开')
+                    # Select only a visible official login entry; all other interaction is manual.
+                    if platform == 'xueqiu':
+                        stage = '打开官方登录入口'
+                        entry = page.get_by_text(re.compile(r'^\s*登录\s*(?:[/／]\s*注册)?\s*$')).filter(visible=True)
+                        try:
+                            entry.first.wait_for(state='visible', timeout=15000)
+                            entry.first.click()
+                        except Exception as error:
+                            if type(error).__name__ != 'TimeoutError':
+                                raise
+                    last_probe = 0
+                    opened_at = time.time()
+                    while time.time() < state['expires_at'] and not self.stopping.is_set():
+                        try:
+                            stage = '读取登录操作'
+                            command = self.command(platform)
+                            if command and command['id'] == state['id'] and command['action'] == 'cancel':
+                                self.save(platform, state, state='cancelled', message='登录已取消', image=False)
+                                return
+                            stage = '查找登录页面'
+                            pages = [item for item in context.pages if not item.is_closed()]
+                            if not pages:
+                                # A scan popup can close after setting cookies. Never query the stale page.
+                                # Weibo's mobile identity check does not require a live page or create a new one.
+                                if platform == 'weibo' and not events['context_closed']:
+                                    stage = '验证平台登录状态'
+                                    credential = self.verify(platform, context, None)
+                                    if credential:
+                                        stage = '保存登录凭据'
+                                        if self.complete(platform, state, credential):
+                                            return
+                                        continue
+                                    # Verification may take time; let cancellation/expiry win even
+                                    # when it returns no credential, instead of reporting page_closed.
+                                    if (self.stopping.is_set() or time.time() >= state['expires_at']
+                                            or self.status(platform)['state'] == 'cancelling'):
+                                        continue
+                                stage = '查找登录页面'
+                                raise LoginPageClosed()
+                            page = pages[-1]
+                            observe(page)
+                            if command and command['id'] == state['id']:
+                                if command['action'] == 'reload':
+                                    stage = '重新打开官方登录页'
+                                    response = page.goto(PLATFORMS[platform], wait_until='domcontentloaded', timeout=45000)
+                                    if response and response.status in (401, 403, 418, 429, 567):
+                                        raise LoginRestricted(response.status)
+                                    last_probe = 0
+                                elif command['action'] == 'click':
+                                    stage = '点击登录画面'
+                                    page.mouse.click(command['x'], command['y'])
+                                elif command['action'] == 'check':
+                                    last_probe = 0
+                            stage = '读取登录画面'
+                            text = page.locator('body').inner_text(timeout=10000)
+                            if (platform == 'weibo' and '/visitor/visitor' in urlsplit(page.url).path
+                                    and time.time() - opened_at > 25):
+                                self.save(platform, state, state='blocked', image=False,
+                                          message='微博停留在访客验证页，服务器未能进入登录页。请检查服务器网络或在平台处理后重试')
+                                return
+                            if any(word in text for word in ('安全策略拦截', '访问被拒绝', 'Access Denied')):
+                                self.save(platform, state, state='blocked', message='平台拒绝服务器访问。请检查服务器网络或联系平台处理，程序已停止重试', image=False)
+                                return
+                            if time.time() - last_probe >= 10:
+                                last_probe = time.time()
+                                stage = '验证平台登录状态'
+                                credential = self.verify(platform, context, page)
+                                if credential:
+                                    stage = '保存登录凭据'
+                                    if self.complete(platform, state, credential):
+                                        return
+                                    continue
+                            verification = any(word in text for word in ('请输入验证码', '请完成安全验证', '拖动滑块'))
+                            stage = '截取登录画面'
+                            screenshot = page.screenshot(type='png', timeout=15000)
+                            stage = '保存登录画面'
+                            self.write(self.path(platform, 'image'), screenshot)
+                            self.save(platform, state, state='verification' if verification else 'waiting', image=True,
+                                      revision=state['revision'] + 1,
+                                      message='平台要求人工验证，请查看画面；若无法操作，请取消并在平台完成验证后重试' if verification
+                                      else '请选择官方扫码入口，用对应应用扫描并确认；可点击下方画面切换登录方式')
+                            transitions = 0
+                            self.stopping.wait(2)
+                        except Exception as error:
+                            details = browser_diagnostics(error, context, page, events)
+                            code = browser_error(error)[0]
+                            healthy = (not details['context_closed'] and not details['browser_disconnected']
+                                       and not details['page_crashed'] and details['browser_connected'] is not False)
+                            changed = (code == 'page_navigating' or
+                                       (code == 'browser_closed' and details['page_closed'] is True
+                                        and (details['page_count'] or platform == 'weibo')))
+                            # Retry only local page observations after a recognized transition. Commands
+                            # were consumed once above: never replay clicks/reloads or retry a denial.
+                            if (stage in {'点击登录画面', '读取登录画面', '验证平台登录状态', '截取登录画面'}
+                                    and healthy and changed and transitions < MAX_PAGE_TRANSITIONS):
+                                transitions += 1
+                                logger.info('Browser login page changed platform=%s job=%s stage=%s code=%s attempt=%s diagnostics=%s',
+                                            platform, state['id'], stage, code, transitions, json.dumps(details, sort_keys=True))
+                                self.save(platform, state, state='waiting', image=False,
+                                          message='登录页正在跳转，正在等待官方页面稳定')
+                                last_probe = 0
+                                self.stopping.wait(1)
+                                continue
+                            raise
+                    self.save(platform, state, state='expired', image=False, message='登录窗口已结束，请重新打开')
+                except Exception as error:
+                    # Capture BEFORE our own cleanup closes the browser and changes these flags.
+                    diagnostics = browser_diagnostics(error, context, page, events)
+                    raise
         except Exception as error:
             if isinstance(error, LoginRestricted):
                 self.save(platform, state, state='blocked', image=False, error_code='login_verification_restricted',
                           http_status=error.status, stage=stage,
-                          message=f'登录身份校验返回 HTTP {error.status}，已停止重试，请在官方浏览器检查账号状态')
+                          message=f'登录校验或页面返回 HTTP {error.status}，已停止重试，请在官方浏览器检查账号状态')
                 return
-            # Exception messages/URLs can contain credentials; expose only a safe classification.
             code, reason = browser_error(error)
-            logger.warning('Browser login failed platform=%s stage=%s code=%s', platform, stage, code)
+            diagnostics = diagnostics or browser_diagnostics(error, context, page, events)
+            logger.warning('Browser login failed platform=%s job=%s stage=%s code=%s transitions=%s diagnostics=%s',
+                           platform, state['id'], stage, code, transitions, json.dumps(diagnostics, sort_keys=True))
             self.save(platform, state, state='error', image=False, error_code=code, stage=stage,
-                      message=f'{stage}：{reason}（{code}）')
+                      diagnostics=diagnostics, message=f'{stage}：{reason}（{code}）')
         finally:
-            # sync_playwright closes the driver/context even on early returns or failures.
-            self.path(platform, 'image').unlink(missing_ok=True)
-            lease.release()
+            # Releasing the platform lease must not depend on screenshot cleanup succeeding.
+            try:
+                self.path(platform, 'image').unlink(missing_ok=True)
+            finally:
+                lease.release()
 
     def stop(self):
         self.stopping.set()

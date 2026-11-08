@@ -107,14 +107,24 @@ def test_failed_empty_and_repeated_collection_preserve_history(tmp_path,monkeypa
 
 def test_independent_locks_and_durable_slots(tmp_path,monkeypatch):
     import app.services.cci_coal as module
+    import app.services.commodities as commodities
     from app.services.commodities import Commodities
+    # Freeze both clocks before constructing stores: refresh() intentionally rejects
+    # slots older than their initialization, so a fixed slot with wall-clock setup
+    # becomes invalid as soon as the real date passes it.
+    current = [datetime(2026,11,8,9,59,tzinfo=timezone.utc)]
+    monkeypatch.setattr(module, 'now', lambda: current[0])
+    monkeypatch.setattr(commodities, 'now', lambda: current[0])
     store=CCICoal(Settings(_env_file=None,log_dir=tmp_path))
     a00=Commodities(Settings(_env_file=None,log_dir=tmp_path))
     old=a00.history()['rows']
     lock=a00.lock()
     monkeypatch.setattr(module,'fetch_rows',lambda *a,**k:[])
-    slot=latest_slot(datetime(2026,11,8,10,tzinfo=timezone.utc))
     try:
+        assert not store.refresh(slot=latest_slot(current[0]))
+        assert store.thread is None
+        current[0] = datetime(2026,11,8,10,tzinfo=timezone.utc)
+        slot=latest_slot(current[0])
         assert store.refresh(slot=slot)
         store.thread.join(5)
         assert not store.thread.is_alive()
