@@ -56,6 +56,14 @@ class MarginSourceError(ValueError):
 # Only these application-authored messages may reach persistent state or logs.
 # Exception strings from HTTP clients, workbook parsers and callers are not safe.
 _SAFE_REASONS = {
+    '东方财富响应超过读取上限。': 'response_too_large',
+    '读取东方财富数据失败，请稍后重试。': 'network_error',
+    '东方财富返回的数据格式无效。': 'invalid_response',
+    '东方财富接口未返回成功结果。': 'provider_error',
+    '东方财富分页数据不完整或发生变化，请重试。': 'incomplete_response',
+    '东方财富统计日期无效或超出请求范围。': 'report_date_range',
+    '东方财富担保比例不是有效百分比。': 'invalid_ratio',
+    '东方财富尚未披露该日担保比例，将继续补采。': 'not_disclosed',
     '中证链接不在允许的 HTTPS 来源范围内。': 'unsafe_url',
     '中证链接路径无效。': 'unsafe_url',
     '中证链接不是预期的日报文件或目录。': 'unsafe_url',
@@ -99,7 +107,7 @@ def safe_error_details(exc):
         if reason in _SAFE_REASONS:
             details.update(code=_SAFE_REASONS[reason], reason=reason)
         else:
-            match = re.fullmatch(r'中证服务器返回 HTTP ([1-5][0-9]{2})。', reason)
+            match = re.fullmatch(r'(?:中证|东方财富)服务器返回 HTTP ([1-5][0-9]{2})。', reason)
             if match:
                 details.update(code='http_status', reason=reason, http_status=int(match[1]))
     if (type(exc) is MarginSourceError and isinstance(exc.cause_type, str)
@@ -112,6 +120,9 @@ def safe_report_url(url):
     """Omit untrusted URLs from diagnostics, including credentials and queries."""
     if not isinstance(url, str) or len(url) > 2048 or any(ord(c) < 32 or ord(c) == 127 for c in url):
         return None
+    from app.services.margin_eastmoney import is_report_url
+    if is_report_url(url):
+        return url
     try:
         return _safe_url(url, 'report')
     except (MarginSourceError, ValueError):

@@ -11,7 +11,7 @@ from app.main import create_app
 from app.services import margin_guarantee as m
 
 
-MOMENT = datetime(2026, 10, 28, 20, tzinfo=m.CHINA)
+MOMENT = datetime(2026, 10, 28, 8, tzinfo=m.CHINA)
 BASE = '/api/v1/margin-guarantee'
 
 
@@ -201,7 +201,7 @@ def test_empty_history_and_six_year_stats_keep_percent_units_and_strict_rank(mon
     assert m.six_years_ago(date(2024, 2, 29)) == date(2018, 2, 28)
 
 
-def test_fixed_china_20_slot_and_cross_worker_schedule_claim(monitor, monkeypatch):
+def test_fixed_china_08_slot_and_cross_worker_schedule_claim(monitor, monkeypatch):
     calls = provider(monkeypatch, [])
     another = m.MarginGuarantee(monitor.settings, client_factory=lambda: nullcontext(object()), delay=0)
     before = MOMENT-timedelta(seconds=1)
@@ -219,7 +219,7 @@ def test_fixed_china_20_slot_and_cross_worker_schedule_claim(monitor, monkeypatc
     assert len(calls['lists']) == 2
 
 
-def test_start_after_20_installs_scheduler_without_startup_backfill(monitor, monkeypatch):
+def test_start_after_08_installs_scheduler_without_startup_backfill(monitor, monkeypatch):
     monitor.settings.margin_worker_enabled = True
     called = []
     monkeypatch.setattr(monitor, 'refresh', lambda *a, **kw: called.append(kw))
@@ -234,7 +234,7 @@ def test_start_after_20_installs_scheduler_without_startup_backfill(monitor, mon
     monitor.start()
     monitor.tick(MOMENT+timedelta(minutes=30))
     assert called == []
-    assert monitor.status(MOMENT)['next_run_at'] == '2026-10-29T20:00:00+08:00'
+    assert monitor.status(MOMENT)['next_run_at'] == '2026-10-29T08:00:00+08:00'
     monitor.tick(MOMENT+timedelta(days=1))
     assert len(called) == 1
 
@@ -276,7 +276,7 @@ def test_api_lifespan_is_local_read_only_until_explicit_refresh(engine, tmp_path
         history = client.get(BASE+'/history')
         assert history.status_code == 200 and history.json()['latest'] is None
         assert history.headers['cache-control'] == 'no-store'
-        assert client.get(BASE+'/status').json()['daily_time'] == '20:00'
+        assert client.get(BASE+'/status').json()['daily_time'] == '08:00'
         assert calls['lists'] == []
         assert client.post(BASE+'/cancel').json() == {'cancelled': False}
         real_refresh = service.refresh
@@ -349,7 +349,7 @@ def test_catalog_failure_is_distinct_and_does_not_expose_exception(monitor, monk
     status = monitor.status(MOMENT)
     assert status['recent_failures'] == []
     assert status['last_failure']['scope'] == 'catalog'
-    assert '披露目录' in status['error']
+    assert '数据接口' in status['error']
     assert secret not in str(status) + str(monitor.read_state()) + caplog.text
     assert monitor.history(MOMENT)['latest']['date'] == '2026-10-26'
 

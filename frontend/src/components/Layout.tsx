@@ -134,7 +134,7 @@ export function Layout() {
                 ? 'coalindex.com（非官方）'
                 : '长江有色金属网（CCMN）'
               : location.pathname === '/margin-guarantee'
-                ? '中证数据'
+                ? '东方财富'
                 : '聚宽采集'}{' '}
             <ArrowUpRight size={12} />
           </span>

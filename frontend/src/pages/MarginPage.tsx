@@ -40,6 +40,8 @@ export function MarginPage() {
   const [busy, setBusy] = useState(false)
   const [stopping, setStopping] = useState(false)
   const [revision, setRevision] = useState(0)
+  const [chartDays, setChartDays] = useState(0)
+  const [chartReset, setChartReset] = useState(0)
   const reload = useCallback(() => setRevision((value) => value + 1), [])
   const saveStatus = useCallback((next: MarginStatus) => {
     currentStatus.current = next
@@ -156,83 +158,6 @@ export function MarginPage() {
         </div>
       </PageHeader>
 
-      <section className="margin-update panel" aria-label="两融数据更新">
-        <div className="margin-update-row">
-          <div>
-            <strong>中证数据 · 每天北京时间 20:00 检查更新</strong>
-            <p>
-              {latest
-                ? `当前展示 ${latest.date} 已公布数据；当天未公布时保留最近一期。`
-                : '首次采集补齐近六年历史，后续按日期增量更新。'}
-            </p>
-          </div>
-          <div className="margin-update-actions">
-            {running ? (
-              <button
-                className="button button-quiet"
-                onClick={() => void act('cancel')}
-                disabled={busy || cancelling || !admin}
-              >
-                <Square size={15} />
-                {cancelling ? '正在停止…' : '停止采集'}
-              </button>
-            ) : (
-              <button
-                className="button button-primary"
-                onClick={() => void act('refresh')}
-                disabled={busy || loading || !admin}
-              >
-                <Download size={16} />
-                {busy ? '正在启动…' : latest ? '更新数据' : '采集历史数据'}
-              </button>
-            )}
-          </div>
-        </div>
-        <div className="margin-progress-area" aria-live="polite">
-          {running ? (
-            <>
-              <div className="margin-progress-label">
-                <span>{status?.stage || '准备采集'}</span>
-                <span>
-                  {progress == null ? '处理中' : `${progress.toFixed(0)}%`}
-                  {status?.total
-                    ? ` · ${status.processed.toLocaleString('zh-CN')} / ${status.total.toLocaleString('zh-CN')}`
-                    : ''}
-                </span>
-              </div>
-              <progress aria-label="两融采集进度" max={100} value={progress ?? undefined} />
-            </>
-          ) : (
-            <span className="margin-idle-state">
-              {status?.stage || '等待更新'}
-              {status?.last_success_at
-                ? ` · 上次完成 ${new Date(status.last_success_at).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai', hour12: false })}`
-                : ''}
-            </span>
-          )}
-        </div>
-        {status?.source_corrections?.map((correction) => (
-          <p className="margin-idle-state" key={correction.report_date}>
-            中证目录将统计日期为 {correction.observation_date} 的日报标为 {correction.report_date}，
-            已核验原文件并按统计日期保存。
-            <a href={correction.source_url} target="_blank" rel="noreferrer">
-              查看原始日报
-            </a>
-          </p>
-        ))}
-        {shownError && (
-          <div className="margin-error" role="alert">
-            <span>
-              {shownError}
-              {data?.points.length ? ' 已保留现有数据。' : ''}
-            </span>
-            <button className="button button-quiet" onClick={reload} disabled={loading}>
-              重新加载
-            </button>
-          </div>
-        )}
-      </section>
-
       <div className="stats-grid margin-stats" aria-busy={loading}>
         <StatCard
           label="最新平均维持担保比例"
@@ -308,26 +233,118 @@ export function MarginPage() {
               target="_blank"
               rel="noreferrer"
             >
-              查看官方原表
+              查看数据来源
             </a>
           )}
         </div>
+        <div className="margin-chart-toolbar">
+          <div className="range-switch" aria-label="两融历史范围">
+            {[
+              [30, '近1月'],
+              [90, '近3月'],
+              [180, '近半年'],
+              [365, '近1年'],
+              [0, '全部'],
+            ].map(([value, label]) => (
+              <button
+                key={value}
+                className={chartDays === value ? 'active' : ''}
+                aria-pressed={chartDays === value}
+                onClick={() => {
+                  setChartDays(Number(value))
+                  setChartReset((current) => current + 1)
+                }}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+          <span>拖动底部滑块缩放 · Ctrl + 滚轮缩放 · 触屏双指缩放</span>
+        </div>
         {data?.points.length ? (
-          <MarginChart points={data.points} />
+          <MarginChart points={data.points} days={chartDays} resetKey={chartReset} />
         ) : loading ? (
           <div className="skeleton margin-chart-placeholder" aria-label="正在加载两融数据" />
         ) : (
           <div className="margin-chart-placeholder">
             <EmptyState
               title="暂无两融担保比例数据"
-              description="点击“采集历史数据”读取中证数据官方报表；完成的记录会保存，可中断后继续。"
+              description="点击“采集历史数据”获取近六年记录；已保存的数据可继续补采。"
             />
           </div>
         )}
         <div className="panel-bottom">
           <span>240% / 150% 为观察参考线，不代表统一监管阈值。</span>
-          <span>来源：中证数据</span>
+          <span>来源：东方财富；历史记录保留原来源</span>
         </div>
+      </section>
+
+      <section className="margin-update panel" aria-label="两融数据更新">
+        <div className="margin-update-row">
+          <div>
+            <strong>东方财富 · 每天北京时间 08:00 检查更新</strong>
+            <p>
+              {latest
+                ? `当前展示 ${latest.date} 已公布数据；当天未公布时保留最近一期。`
+                : '首次采集补齐近六年历史，后续按日期增量更新。'}
+            </p>
+          </div>
+          <div className="margin-update-actions">
+            {running ? (
+              <button
+                className="button button-quiet"
+                onClick={() => void act('cancel')}
+                disabled={busy || cancelling || !admin}
+              >
+                <Square size={15} />
+                {cancelling ? '正在停止…' : '停止采集'}
+              </button>
+            ) : (
+              <button
+                className="button button-primary"
+                onClick={() => void act('refresh')}
+                disabled={busy || loading || !admin}
+              >
+                <Download size={16} />
+                {busy ? '正在启动…' : latest ? '更新数据' : '采集历史数据'}
+              </button>
+            )}
+          </div>
+        </div>
+        <div className="margin-progress-area" aria-live="polite">
+          {running ? (
+            <>
+              <div className="margin-progress-label">
+                <span>{status?.stage || '准备采集'}</span>
+                <span>
+                  {progress == null ? '处理中' : `${progress.toFixed(0)}%`}
+                  {status?.total
+                    ? ` · ${status.processed.toLocaleString('zh-CN')} / ${status.total.toLocaleString('zh-CN')}`
+                    : ''}
+                </span>
+              </div>
+              <progress aria-label="两融采集进度" max={100} value={progress ?? undefined} />
+            </>
+          ) : (
+            <span className="margin-idle-state">
+              {status?.stage || '等待更新'}
+              {status?.last_success_at
+                ? ` · 上次完成 ${new Date(status.last_success_at).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai', hour12: false })}`
+                : ''}
+            </span>
+          )}
+        </div>
+        {shownError && (
+          <div className="margin-error" role="alert">
+            <span>
+              {shownError}
+              {data?.points.length ? ' 已保留现有数据。' : ''}
+            </span>
+            <button className="button button-quiet" onClick={reload} disabled={loading}>
+              重新加载
+            </button>
+          </div>
+        )}
       </section>
     </div>
   )

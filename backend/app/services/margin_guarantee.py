@@ -1,4 +1,4 @@
-"""中证两融担保比例：独立本地存储、增量补采、北京时间20点调度。"""
+"""两融担保比例：东方财富接口、独立本地存储、北京时间08点调度。"""
 from contextlib import contextmanager
 from datetime import date, datetime, timedelta, timezone
 import json
@@ -13,13 +13,14 @@ import httpx
 import portalocker
 
 from app.services.margin_source import (
-    MarginReport, MarginSourceError, fetch_point, list_reports, safe_error_details, safe_report_url,
+    MarginReport, MarginSourceError, safe_error_details, safe_report_url,
     TITLE_DATE_CORRECTION,
 )
+from app.services.margin_eastmoney import API_URL, RatioReport, fetch_point, list_reports
 
 LOG = logging.getLogger(__name__)
 CHINA = timezone(timedelta(hours=8))
-DAILY_TIME = '20:00'
+DAILY_TIME = '08:00'
 
 
 def now():
@@ -35,7 +36,7 @@ def six_years_ago(day):
 
 def latest_slot(moment):
     moment = moment.astimezone(CHINA)
-    slot = moment.replace(hour=20, minute=0, second=0, microsecond=0)
+    slot = moment.replace(hour=8, minute=0, second=0, microsecond=0)
     return slot if moment >= slot else slot - timedelta(days=1)
 
 
@@ -44,7 +45,7 @@ class CollectionCancelled(Exception):
 
 
 def failure_summary(failure):
-    label = {'catalog': '披露目录', 'report': '日报', 'collection': '采集任务'}[failure['scope']]
+    label = {'catalog': '数据接口', 'report': '日数据', 'collection': '采集任务'}[failure['scope']]
     day = ' ' + failure['date'] if failure.get('date') else ''
     kind = failure.get('cause_type', failure['error_type'])
     return f"{label}{day}：{failure['reason']} [{failure['code']}/{kind}]"
@@ -198,7 +199,7 @@ class MarginGuarantee:
             if slot and state.get('scheduled_slot') == slot:
                 lock.release()
                 return False
-            state.update(run_id=uuid.uuid4().hex, active=True, error=None, stage='检查中证官方披露目录',
+            state.update(run_id=uuid.uuid4().hex, active=True, error=None, stage='读取东方财富两融数据',
                          processed=0, total=None, percent=None, last_attempt_at=moment.isoformat(),
                          recent_failures=[], last_failure=None)
             if slot:
@@ -235,11 +236,18 @@ class MarginGuarantee:
         try:
             with self.db() as db:
                 latest_report = db.execute('SELECT max(trade_date) FROM reports').fetchone()[0]
+                pending_api = db.execute(
+                    'SELECT min(r.trade_date) FROM reports r LEFT JOIN points p '
+                    'ON p.trade_date=r.trade_date WHERE p.trade_date IS NULL AND r.source_url LIKE ?',
+                    (API_URL + '?%',)).fetchone()[0]
             start = (max(cutoff, date.fromisoformat(latest_report)-timedelta(days=7))
-                     if state.get('catalog_ready') and latest_report else cutoff)
+                     if state.get('eastmoney_ready') and latest_report else cutoff)
+            if pending_api:
+                start = max(cutoff, min(start, date.fromisoformat(pending_api)))
             with self.client_factory() as client:
                 check_cancel()
                 reports = list_reports(client, start, today, check_cancel=check_cancel)
+                fetched = {(str(report.trade_date), report.url): report for report in reports}
                 check_cancel()
                 with self.db() as db:
                     for report in reports:
@@ -261,14 +269,17 @@ class MarginGuarantee:
                 if any(row['trade_date'] == TITLE_DATE_CORRECTION['observation_date'] for row in pending):
                     pending.sort(key=lambda row: (row['trade_date'] == TITLE_DATE_CORRECTION['report_date']
                                                   and row['source_url'] == TITLE_DATE_CORRECTION['source_url']))
-                state.update(catalog_ready=True, total=len(pending), percent=0 if pending else 100)
+                state.update(catalog_ready=True, eastmoney_ready=True,
+                             total=len(pending), percent=0 if pending else 100)
                 self.write_state(state)
                 for index, row in enumerate(pending):
                     check_cancel()
-                    state['stage'] = '读取中证日报 ' + row['trade_date']
+                    state['stage'] = '保存两融担保比例 ' + row['trade_date']
                     self.write_state(state)
+                    report = None
                     try:
-                        report = MarginReport(date.fromisoformat(row['trade_date']), row['source_url'])
+                        report = fetched.get((row['trade_date'], row['source_url'])) or MarginReport(
+                            date.fromisoformat(row['trade_date']), row['source_url'])
                         point = fetch_point(client, report)
                         check_cancel()
                         correction = point.get('source_correction')
@@ -320,7 +331,8 @@ class MarginGuarantee:
                     if consecutive_failures >= 3:
                         stopped_after_failures = True
                         raise RuntimeError('Three consecutive official reports failed')
-                    if self.delay:
+                    # Batched JSON values are already in memory; only throttle actual fetches.
+                    if self.delay and not isinstance(report, RatioReport):
                         self.stop_event.wait(self.delay)
                 check_cancel()
             if failures:
@@ -337,7 +349,7 @@ class MarginGuarantee:
             if not stopped_after_failures:
                 state['last_failure'] = dict(scope=scope, **safe_error_details(exc))
             prefix = ('连续三份日报读取失败，已停止本轮。' if stopped_after_failures
-                      else '中证数据读取或校验失败。')
+                      else '两融数据读取或校验失败。')
             state.update(stage='更新失败，已保存的数据保留',
                          error=prefix + failure_summary(state['last_failure'])
                                + ' 请稍后重试；再次更新会继续补采。')

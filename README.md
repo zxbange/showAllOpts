@@ -517,7 +517,7 @@ npm run dev
 
 运行新脚本 [`collectors/市场情绪跟踪_数据库版.py`](collectors/市场情绪跟踪_数据库版.py) 或新版批量采集，再在页面同步“市场情绪跟踪”。首次分窗口回填，之后只补缺失日期；数据库每天一行汇总，不保存全市场逐股行情。详情见 [市场情绪说明](docs/market-sentiment.md)。
 
-两融担保比例直接读取中证数据官方日报，不依赖聚宽或 MySQL。服务运行时每天北京时间 **20:00** 检查新增披露，首次补采近六年；启动不立即采集，页面“更新数据”可手动触发。已校验记录按日保存到本地 SQLite，中断后跳过已保存日期继续补采。若当天尚未发布，保留旧记录并显示真实数据日期。详情见[两融担保比例说明](docs/margin-guarantee.md)。
+两融担保比例直接读取东方财富 JSON 接口，不依赖聚宽或 MySQL。服务运行时每天北京时间 **08:00** 检查新增披露，首次补采近六年；启动不立即采集，页面“更新数据”可手动触发。已校验记录按日保存到本地 SQLite，中断后跳过已保存日期继续补采。若当天尚未发布，保留旧记录并显示真实数据日期。详情见[两融担保比例说明](docs/margin-guarantee.md)。
 
 ## ETF 份额采集与仪表盘
 
@@ -579,10 +579,10 @@ npm run dev
 | `GET /api/v1/etf-shares/history?group=hs300&days=365` | ETF 最新份额与区间曲线；支持 hs300 / zz500，days=0 查看全部 |
 | `GET /api/v1/microcap-temperature/history?days=365` | 微盘温度计最新指标、历史曲线及区间统计；days=0 查看全部 |
 | `GET /api/v1/market-sentiment/history?days=0` | 站上 MA20 比例、样本数、情绪状态与区间统计；默认近三年 |
-| `GET /api/v1/margin-guarantee/history` | 中证两融平均维持担保比例、近六年历史和采集状态 |
-| `GET /api/v1/margin-guarantee/status` | 中证采集进度、最近检查结果和下次20点任务时间 |
-| `POST /api/v1/margin-guarantee/refresh` | 后台补采或增量更新中证数据 |
-| `POST /api/v1/margin-guarantee/cancel` | 停止当前中证采集，保留已保存记录 |
+| `GET /api/v1/margin-guarantee/history` | 两融平均维持担保比例、近六年历史和采集状态 |
+| `GET /api/v1/margin-guarantee/status` | 两融采集进度、最近检查结果和下次08点任务时间 |
+| `POST /api/v1/margin-guarantee/refresh` | 后台补采或增量更新两融数据 |
+| `POST /api/v1/margin-guarantee/cancel` | 停止当前两融采集，保留已保存记录 |
 | `GET /api/v1/market-crowding/history?days=365` | 抱团拥挤度最新值、历史及区间统计；days=0 查看全部 |
 | `GET /api/v1/industry-momentum/latest` | 最新完整读取的日期快照及前一个有记录日期的差值 |
 | `GET /api/v1/industry-momentum/industries/{code}/history?days=365&end_date=2026-10-16` | 单行业历史及区间统计 |

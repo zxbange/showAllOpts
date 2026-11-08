@@ -11,9 +11,9 @@ const status: MarginStatus = {
   last_attempt_at: null,
   last_success_at: null,
   error: null,
-  daily_time: '20:00',
+  daily_time: '08:00',
   timezone: 'Asia/Shanghai',
-  next_run_at: '2026-10-28T20:00:00+08:00',
+  next_run_at: '2026-10-28T08:00:00+08:00',
 }
 const points = [222, 303.51, 257.6, 255.6273].map((ratio, index) => ({
   date: ['2020-10-27', '2026-05-13', '2026-10-23', '2026-10-26'][index],
@@ -57,6 +57,82 @@ const empty: MarginHistory = {
   },
 }
 
+test('margin ranges and zoom work and survive a data refresh', async ({ page }, info) => {
+  const many = Array.from({ length: 240 }, (_, index) => ({
+    ...points[0],
+    date: new Date(Date.UTC(2026, 0, index + 1)).toISOString().slice(0, 10),
+    ratio: 250 + Math.sin(index / 10) * 20,
+  }))
+  await page.route('**/api/v1/margin-guarantee/**', (route) =>
+    route.fulfill({
+      json: route.request().url().endsWith('/status')
+        ? status
+        : {
+            ...history,
+            points: many,
+            latest: many.at(-1),
+            start_date: many[0].date,
+            end_date: many.at(-1)!.date,
+          },
+    }),
+  )
+  await page.goto('/margin-guarantee')
+  const chart = page.locator('.margin-chart')
+  await expect(chart.locator('canvas')).toBeVisible()
+  const zoom = () =>
+    page.evaluate(async () => {
+      const url = performance
+        .getEntriesByType('resource')
+        .map((entry) => entry.name)
+        .find((value) => /\/echarts_core\.js\?/.test(value))!
+      const { getInstanceByDom } = await import(url)
+      const option = getInstanceByDom(document.querySelector('.margin-chart')).getOption()
+      return {
+        start: option.dataZoom[0].start as number,
+        end: option.dataZoom[0].end as number,
+        wheel: option.dataZoom[0].zoomOnMouseWheel,
+        slider: option.dataZoom[1].type,
+        referenceLines: option.series[0].markLine.data.map((line: { yAxis: number }) => line.yAxis),
+      }
+    })
+  expect(await zoom()).toMatchObject({
+    start: 0,
+    end: 100,
+    wheel: 'ctrl',
+    slider: 'slider',
+    referenceLines: [240, 150],
+  })
+  await page.getByRole('button', { name: '近1月', exact: true }).click()
+  await expect.poll(async () => (await zoom()).start).toBeGreaterThan(80)
+  if (info.project.name === 'desktop') {
+    await chart.scrollIntoViewIfNeeded()
+    const box = (await chart.boundingBox())!
+    await page.mouse.move(box.x + box.width / 2, box.y + 160)
+    const before = await zoom()
+    await page.keyboard.down('Control')
+    try {
+      await page.mouse.wheel(0, -200)
+    } finally {
+      await page.keyboard.up('Control')
+    }
+    await expect
+      .poll(async () => {
+        const current = await zoom()
+        return current.end - current.start
+      })
+      .toBeLessThan(before.end - before.start)
+  }
+  const before = await zoom()
+  await page.getByRole('button', { name: '刷新两融展示数据' }).click()
+  await expect(page.locator('.margin-trend')).toHaveAttribute('aria-busy', 'false')
+  expect(await zoom()).toEqual(before)
+  await page.getByRole('button', { name: '全部', exact: true }).click()
+  await expect.poll(async () => (await zoom()).start).toBe(0)
+  expect((await zoom()).end).toBe(100)
+  expect((await zoom()).referenceLines).toEqual([240, 150])
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
+})
+
 test('market mood third tab renders official percentage units and keeps chart during reload', async ({
   page,
 }, testInfo) => {
@@ -81,9 +157,15 @@ test('market mood third tab renders official percentage units and keeps chart du
   await expect(page.locator('.margin-stats')).toContainText('-1.97 个百分点')
   await expect(page.locator('.margin-stats')).toContainText('25.0%')
   await expect(page.locator('.date-badge')).toContainText('2026-10-26')
-  await expect(page.getByText('中证数据 · 每天北京时间 20:00 检查更新')).toBeVisible()
+  await expect(page.getByText('东方财富 · 每天北京时间 08:00 检查更新')).toBeVisible()
   await expect(page.locator('.margin-chart canvas')).toBeVisible()
-  await expect(page.getByRole('link', { name: '查看官方原表' })).toHaveAttribute(
+  expect(
+    await page.locator('.margin-update').evaluate((element) => {
+      const chart = document.querySelector('.margin-trend')!
+      return Boolean(chart.compareDocumentPosition(element) & Node.DOCUMENT_POSITION_FOLLOWING)
+    }),
+  ).toBe(true)
+  await expect(page.getByRole('link', { name: '查看数据来源' })).toHaveAttribute(
     'href',
     points[3].source_url,
   )
@@ -244,9 +326,7 @@ test('first saved record appears during backfill and later history reads are thr
   expect(peakConcurrent).toBe(1)
 })
 
-test('verified source date correction remains visible after reload without an error', async ({
-  page,
-}) => {
+test('legacy date correction does not add explanatory text to the page', async ({ page }) => {
   const correctedStatus: MarginStatus = {
     ...status,
     stage: '更新完成',
@@ -269,12 +349,11 @@ test('verified source date correction remains visible after reload without an er
     }),
   )
   await page.goto('/margin-guarantee')
-  await expect(page.getByText('已核验原文件并按统计日期保存。', { exact: false })).toBeVisible()
-  await expect(page.getByRole('link', { name: '查看原始日报' })).toHaveAttribute(
-    'href',
-    correctedStatus.source_corrections![0].source_url,
-  )
+  await expect(page.locator('.margin-chart canvas')).toBeVisible()
+  await expect(page.getByText('已核验原文件并按统计日期保存。', { exact: false })).toHaveCount(0)
+  await expect(page.getByRole('link', { name: '查看原始日报' })).toHaveCount(0)
   await expect(page.locator('.margin-error')).toHaveCount(0)
   await page.reload()
-  await expect(page.getByText('已核验原文件并按统计日期保存。', { exact: false })).toBeVisible()
+  await expect(page.locator('.margin-chart canvas')).toBeVisible()
+  await expect(page.getByText('已核验原文件并按统计日期保存。', { exact: false })).toHaveCount(0)
 })

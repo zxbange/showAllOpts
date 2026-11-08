@@ -27,9 +27,18 @@ use([
   CanvasRenderer,
 ])
 
-export function MarginChart({ points }: { points: MarginPoint[] }) {
+export function MarginChart({
+  points,
+  days = 0,
+  resetKey = 0,
+}: {
+  points: MarginPoint[]
+  days?: number
+  resetKey?: number
+}) {
   const element = useRef<HTMLDivElement>(null)
   const chart = useRef<EChartsType | null>(null)
+  const previousRange = useRef<string | null>(null)
   useEffect(() => {
     if (!element.current) return
     chart.current = init(element.current)
@@ -43,6 +52,21 @@ export function MarginChart({ points }: { points: MarginPoint[] }) {
   }, [])
   useEffect(() => {
     const latest = points.at(-1)
+    const rangeKey = `${days}:${resetKey}`
+    const reset = previousRange.current !== rangeKey
+    previousRange.current = rangeKey
+    const cutoff = latest ? new Date(latest.date + 'T00:00:00Z') : null
+    if (cutoff) cutoff.setUTCDate(cutoff.getUTCDate() - days)
+    const first =
+      days && cutoff
+        ? Math.max(
+            0,
+            points.findIndex((point) => point.date >= cutoff.toISOString().slice(0, 10)),
+          )
+        : 0
+    const zoom = reset
+      ? { start: points.length > 1 ? (100 * first) / (points.length - 1) : 0, end: 100 }
+      : {}
     chart.current?.setOption(
       {
         animation: !window.matchMedia('(prefers-reduced-motion: reduce)').matches,
@@ -51,8 +75,13 @@ export function MarginChart({ points }: { points: MarginPoint[] }) {
           enabled: true,
           description: '近六年全市场平均维持担保比例，240%和150%为观察参考线。',
         },
-        grid: { left: 16, right: 24, top: 56, bottom: 80, containLabel: true },
-        legend: { top: 6, left: 16, textStyle: { color: chartColors.muted, fontSize: 13 } },
+        grid: { left: 16, right: 24, top: 70, bottom: 80, containLabel: true },
+        legend: {
+          type: 'scroll',
+          top: 4,
+          selectedMode: false,
+          textStyle: { color: chartColors.muted, fontSize: 13 },
+        },
         tooltip: {
           trigger: 'axis',
           renderMode: 'richText',
@@ -76,19 +105,24 @@ export function MarginChart({ points }: { points: MarginPoint[] }) {
           min: (range: { min: number }) => Math.floor(Math.min(range.min, 150) / 20) * 20,
           max: (range: { max: number }) => Math.ceil(Math.max(range.max, 240) / 20) * 20,
           axisLabel: { color: chartColors.muted, formatter: '{value}%', fontSize: 12 },
-          splitLine: { lineStyle: { color: chartColors.grid, type: 'dashed' } },
+          splitLine: { lineStyle: { color: chartColors.grid } },
         },
         dataZoom: [
-          { type: 'inside', zoomOnMouseWheel: false },
+          { type: 'inside', zoomOnMouseWheel: 'ctrl', ...zoom },
           {
             type: 'slider',
             bottom: 12,
             height: 24,
-            borderColor: 'transparent',
+            ...zoom,
+            borderColor: chartColors.border,
             backgroundColor: chartColors.surface,
             fillerColor: chartColors.coralFill,
             textStyle: { color: chartColors.muted },
             handleStyle: { color: chartColors.coral },
+            dataBackground: {
+              lineStyle: { color: chartColors.muted },
+              areaStyle: { color: chartColors.surface },
+            },
           },
         ],
         series: [
@@ -101,7 +135,7 @@ export function MarginChart({ points }: { points: MarginPoint[] }) {
             connectNulls: false,
             lineStyle: { width: 2.4, color: chartColors.coral },
             itemStyle: { color: chartColors.coral },
-            areaStyle: { color: chartColors.coralFill },
+            emphasis: { focus: 'series' },
             markLine: {
               silent: true,
               symbol: 'none',
@@ -139,9 +173,9 @@ export function MarginChart({ points }: { points: MarginPoint[] }) {
           },
         ],
       },
-      { notMerge: true },
+      { notMerge: false },
     )
-  }, [points])
+  }, [points, days, resetKey])
   return (
     <div
       ref={element}

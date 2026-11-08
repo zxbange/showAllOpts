@@ -1,6 +1,6 @@
 .margin-page .margin-update {
   padding: 20px 24px;
-  margin-bottom: 22px;
+  margin-top: 22px;
 }
 .margin-update-row {
   display: flex;
@@ -77,6 +77,16 @@
 .margin-chart,
 .margin-chart-placeholder {
   height: 440px;
+}
+.margin-chart-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 12px 0;
+  color: var(--muted);
+  font-size: 13px;
 }
 .margin-chart-placeholder {
   display: grid;
