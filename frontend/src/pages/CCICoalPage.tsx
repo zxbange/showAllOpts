@@ -39,10 +39,25 @@ type Data = {
     checkedAt?: string
     targetDate?: string
     observed?: number
+    targetHits?: number
+    recovery?: {
+      dateFrom: string | null
+      dateTo: string
+      initializedFrom?: { grade: string; dateFrom: string; origin: string }[]
+      pendingCount: number
+      checkedCount: number
+      unavailableCount: number
+      deferredCount: number
+      requestCount: number
+    }
     inserted?: number
     changed?: number
     grades?: {
       grade: string
+      dateFrom?: string
+      dateTo?: string
+      inserted?: number
+      changed?: number
       returned: number | null
       latestQuoteDate: string | null
       targetHits: number
@@ -205,7 +220,7 @@ export function CCICoalPage() {
               disabled={busy || data?.status.running}
               onClick={() => void refresh()}
             >
-              {busy || data?.status.running ? '更新中…' : '更新今日'}
+              {busy || data?.status.running ? '更新中…' : '更新数据'}
             </button>
           )}
         </div>
@@ -220,25 +235,58 @@ export function CCICoalPage() {
           <p>正在读取报价…</p>
         )}
         <small>
-          每天 21:00 自动采集 ·
-          北京时间，仅查询当天；未完整取得时每30分钟重试，最多3次，跨日停止。保留既有历史。
+          每天 21:00
+          自动采集（北京时间）；手动与自动更新均按三档分别补齐从最后一次获取到今天的来源可用报价，
+          不做更早的全量历史补采。当日未完整取得时每30分钟重试，最多3次，跨日停止。保留既有历史。
           {data?.status.stage}
           {data?.status.checkedAt
             ? ` · 最近采集：${new Date(data.status.checkedAt).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai', hour12: false })}`
             : ''}
         </small>
         {data?.status.targetDate && (
-          <div role="status" aria-label="CCI当日更新状态">
+          <div role="status" aria-label="CCI数据更新状态">
             <p>
-              目标日期：{data.status.targetDate} · 命中 {data.status.observed ?? 0}/3 档 · 新增{' '}
-              {data.status.inserted ?? 0} · 变更 {data.status.changed ?? 0}
+              更新范围：{data.status.recovery?.dateFrom ?? data.status.targetDate} 至{' '}
+              {data.status.recovery?.dateTo ?? data.status.targetDate} · 返回{' '}
+              {data.status.observed ?? 0} 条报价 · 新增 {data.status.inserted ?? 0} · 变更{' '}
+              {data.status.changed ?? 0}
             </p>
+            <p>
+              今日（{data.status.targetDate}）命中 {data.status.targetHits ?? 0}/3 档
+            </p>
+            {data.status.recovery && (
+              <p>
+                尚缺 {data.status.recovery.pendingCount} 条 · 已尝试查询{' '}
+                {data.status.recovery.checkedCount} 条 · 来源暂无报价{' '}
+                {data.status.recovery.unavailableCount} 条 · 本次未查询{' '}
+                {data.status.recovery.deferredCount} 条 · 请求 {data.status.recovery.requestCount}{' '}
+                次（报价条数按日期和档位计）
+              </p>
+            )}
+            {data.status.recovery?.initializedFrom?.some(
+              (item) => item.origin === 'installation_date',
+            ) && (
+              <p>
+                暂无历史报价的档位从首次采集记录日期开始：
+                {data.status.recovery.initializedFrom
+                  .filter((item) => item.origin === 'installation_date')
+                  .map((item) => `${item.grade} ${item.dateFrom}`)
+                  .join('、')}
+                。
+              </p>
+            )}
             {data.status.grades?.map((result) => (
-              <p key={result.grade}>
-                {result.grade}：
-                {result.error || (result.targetHits ? '已获取当日报价' : '来源无当日报价')}
+              <p key={`${result.grade}:${result.dateFrom}:${result.dateTo}`}>
+                {result.grade}（{result.dateFrom ?? data.status.targetDate} 至{' '}
+                {result.dateTo ?? data.status.targetDate}）：
+                {result.error
+                  ? `请求失败：${result.error}`
+                  : result.returned
+                    ? '已获取来源报价'
+                    : '来源暂无报价'}
                 {' · 返回 '}
-                {result.returned ?? '未知'} 条{' · 本次返回最新报价日期：'}
+                {result.returned ?? '未知'} 条 · 今日命中 {result.targetHits} 档
+                {' · 本次返回最新报价日期：'}
                 {result.latestQuoteDate ?? '无'}
               </p>
             ))}

@@ -186,8 +186,8 @@ def test_today_results_history_and_diagnostics(tmp_path, monkeypatch, caplog, mo
     assert len(store.history()['rows'])==len(old)+hits
 
 
-def test_reject_history_range():
-    with httpx.Client() as client, pytest.raises(CCIError):
+def test_reject_oversized_history_window():
+    with httpx.Client(trust_env=False) as client, pytest.raises(CCIError):
         fetch_rows(client,'2026-01-01','2026-11-03')
 
 
@@ -235,7 +235,7 @@ def test_expired_slot_is_skipped_without_querying_today(tmp_path, monkeypatch, i
 
     def fetch(client, start, end, **kwargs):
         requests.append((start, end))
-        return [quote(day=start, grade=grade) for grade in GRADES]
+        return [quote(day=end, grade=grade) for grade in kwargs['grades']]
 
     monkeypatch.setattr(module, 'fetch_rows', fetch)
     current[0] = datetime.fromisoformat(resumed)
@@ -263,11 +263,14 @@ def test_expired_slot_is_skipped_without_querying_today(tmp_path, monkeypatch, i
     assert restarted.refresh(slot=today_slot)
     restarted.thread.join(5)
     assert not restarted.thread.is_alive()
-    assert requests == [(today_slot.date().isoformat(), today_slot.date().isoformat())]
+    assert requests[0] == (today_slot.date().isoformat(), today_slot.date().isoformat())
+    assert len(requests) > 1  # The 21:00 update now also recovers the missed interval.
+    assert all(start >= '2026-11-02' and end <= today_slot.date().isoformat() for start, end in requests)
     assert restarted.status()['outcome'] == 'completed'
     assert restarted.status()['targetDate'] == today_slot.date().isoformat()
     assert restarted.status()['slot'] == today_slot.isoformat()
-    assert len(restarted.history()['rows']) == len(original) + 3
+    assert len(restarted.history()['rows']) > len(original) + 3
+    assert restarted.status()['recovery']['checkedCount'] > 3
 
 
 def test_slot_delayed_across_shanghai_midnight_is_skipped(tmp_path, monkeypatch):
@@ -310,7 +313,13 @@ def cci_scheduled_store(tmp_path, monkeypatch):
     current = [datetime(2026, 11, 4, 9, tzinfo=timezone.utc)]
     monkeypatch.setattr(module, 'now', lambda: current[0])
     monkeypatch.setattr(commodities, 'now', lambda: current[0])
-    return module, current, CCICoal(Settings(_env_file=None, log_dir=tmp_path))
+    store = CCICoal(Settings(_env_file=None, log_dir=tmp_path))
+    # These scheduler tests isolate daily claims/retries from recovery planning,
+    # which is covered with real window responses in test_cci_recovery.py.
+    with store.db() as db:
+        db.executemany('INSERT INTO cci_recovery VALUES(?,?,?)',
+                       [(grade, '2026-11-04', 'installation_date') for grade in GRADES])
+    return module, current, store
 
 
 def run_scheduled(store, moment):
@@ -378,7 +387,9 @@ def test_same_day_retry_quota_persists_and_resets_next_day(tmp_path, monkeypatch
     assert store.history()['rows'] == original
     current[0] = datetime(2026, 11, 5, 13, tzinfo=timezone.utc)
     run_scheduled(store, current[0])
-    assert requests[-1] == '2026-11-05' and len(requests) == 5
+    assert requests[4] == '2026-11-05'
+    # Missing Nov 4 is now eligible for recovery on Nov 5, without new daily slots.
+    assert len(requests) == (8 if outcome == 'empty' else 5)
 
 
 def test_retry_deadline_is_shanghai_midnight(tmp_path, monkeypatch):

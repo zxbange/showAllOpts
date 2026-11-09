@@ -10,6 +10,7 @@ SOURCE_URL = 'https://coalindex.com/market'
 ABOUT_URL = 'https://coalindex.com/about'
 START = '2026-01-01'
 GRADES = ('CCI5500', 'CCI5000', 'CCI4500')
+MAX_WINDOW_DAYS = 31
 
 
 class CCIError(ValueError):
@@ -102,29 +103,47 @@ def safe_error(exc):
     return '响应解析或校验失败'
 
 
-def fetch_rows(client, start, end, *, should_stop=lambda: False, diagnostics=None):
-    # Daily collection deliberately has no historical range or retry path.
-    target = date.fromisoformat(start)
-    if start != end or target.isoformat() != start or start < START:
-        raise CCIError('仅允许查询目标当天')
+def fetch_rows(client, start, end, *, grades=GRADES, should_stop=lambda: False, diagnostics=None):
+    """Fetch one bounded date window, without guessing an upstream paging contract.
+
+    The collector owns recovery floors, window planning and retry/request budgets.
+    A complete daily-grade response has at most one observation per calendar day;
+    totals and duplicates are checked before accepting any rows for that grade.
+    """
+    try:
+        first, last = date.fromisoformat(start), date.fromisoformat(end)
+    except (TypeError, ValueError):
+        raise CCIError('请求日期无效') from None
+    if (first.isoformat() != start or last.isoformat() != end or start < START
+            or not 0 <= (last - first).days < MAX_WINDOW_DAYS):
+        raise CCIError('查询范围必须为不超过31天的有效日期窗口')
+    if (not isinstance(grades, (tuple, list)) or not grades
+            or any(grade not in GRADES for grade in grades)
+            or len(set(grades)) != len(grades)):
+        raise CCIError('请求CCI档位无效')
     result = []
     diagnostics = diagnostics if diagnostics is not None else []
-    for grade in GRADES:
-        if should_stop():
-            raise CCIError('采集已停止')
+    for grade in grades:
         began = monotonic()
         detail = dict(grade=grade, dateFrom=start, dateTo=end, returned=None,
-                      latestQuoteDate=None, targetHits=0, error=None, errorType=None,
-                      inserted=0, changed=0)
+                      latestQuoteDate=None, targetHits=0, observed=0, error=None, errorType=None,
+                      inserted=0, changed=0, requested=False)
         diagnostics.append(detail)
+        if should_stop():
+            # Preserve validated grades; unattempted is not source-empty.
+            detail.update(error='采集已停止', errorType='CCIError', elapsedMs=0)
+            continue
         try:
             params = dict(tab='steamcoal-index', date_from=start, date_to=end, index_name=grade)
+            detail['requested'] = True
             with client.stream('GET', 'https://coalindex.com/api/market', params=params) as response:
                 detail['httpStatus'] = response.status_code
                 response.raise_for_status()
                 chunks = []
                 size = 0
                 for chunk in response.iter_bytes():
+                    if should_stop():
+                        raise CCIError('采集已停止')
                     size += len(chunk)
                     if size > 2_000_000:
                         raise CCIError('公开报价响应过大')
@@ -142,7 +161,8 @@ def fetch_rows(client, start, end, *, should_stop=lambda: False, diagnostics=Non
                         pass
                 detail['latestQuoteDate'] = max(dates, default=None)
             rows = parse_response(payload, grade, start, end)
-            detail['targetHits'] = len(rows)
+            detail['targetHits'] = sum(row['quoteDate'] == end for row in rows)
+            detail['observed'] = len(rows)
             result.extend(rows)
         except Exception as exc:
             detail.update(error=safe_error(exc), errorType=type(exc).__name__)
