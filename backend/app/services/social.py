@@ -349,7 +349,7 @@ class SocialMonitor(NotificationMixin, CubeMonitorMixin):
             db.execute("UPDATE posts SET payload=json_set(payload,'$.name',?) WHERE author_id=? "
                        "AND COALESCE(json_extract(payload,'$.name'),'') IN ('',?)", (name, identifier, row['uid']))
 
-    def collect(self, author, posts, baseline=None, finalize=True, notify_since=None):
+    def collect(self, author, posts, baseline=None, finalize=True, notify_since=None, *, next_page=None):
         discovered = now()
         cutoff = retention_cutoff(datetime.fromisoformat(discovered))
         with self.db() as db:
@@ -374,6 +374,10 @@ class SocialMonitor(NotificationMixin, CubeMonitorMixin):
                            'VALUES(?,?,?,?,?,?,?,?,?)',
                            (author['id'], author['platform'], author['uid'], post['id'], json.dumps(post, ensure_ascii=False),
                             post['time'], discovered, 'baseline' if historical else aggregate_status(delivery), json.dumps(delivery)))
+            if next_page is not None:
+                # A saved post becomes a resume overlap marker. Commit its page
+                # cursor atomically, or a failed checkpoint could skip unread pages.
+                db.execute('UPDATE authors SET scan_page=? WHERE id=?', (next_page, author['id']))
             if finalize:
                 db.execute('UPDATE authors SET initialized=1,last_check=?,last_error=NULL WHERE id=?', (now(), author['id']))
         return True
@@ -701,13 +705,9 @@ class SocialMonitor(NotificationMixin, CubeMonitorMixin):
                 return not row or not row['enabled'] or not cfg['enabled'] or cfg.get('platforms', {}).get(author['platform'], {}).get('paused', False)
 
         def save_page(posts, next_page, complete):
-            if not self.collect(author, posts, baseline=not author['initialized'], finalize=False, notify_since=notify_since):
+            if not self.collect(author, posts, baseline=not author['initialized'], finalize=False,
+                                notify_since=notify_since, next_page=next_page):
                 raise MonitoringDeferred('用户已暂停或删除，本页补抓进度保留')
-            with self.db() as db:
-                db.execute('BEGIN IMMEDIATE')
-                if not self.active_author(db, author):
-                    raise MonitoringDeferred('用户已暂停或删除，原任务停止')
-                db.execute('UPDATE authors SET scan_page=? WHERE id=?', (next_page, author['id']))
 
         source = dict(author, cookie=self.decode(current[author['platform'] + '_cookie']),
                       _known_ids=known, _scan_since=scan_since, _scan_page=author['scan_page'],

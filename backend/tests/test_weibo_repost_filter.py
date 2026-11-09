@@ -83,12 +83,37 @@ def test_filtered_known_boundary_still_completes_scan():
     assert checkpoints == [(['102'], 1, True)]
 
 
-def test_filtered_resume_page_preserves_deeper_cursor():
-    result, requests, checkpoints = run_pages({1: [post('105')], 4: [post('102')],
-                                               5: [post('101', '赞')]}, {'_scan_page': 4}, 3)
+def test_filtered_resume_pages_cover_new_front_before_deeper_cursor():
+    # A filtered page is still nonempty: do not finish or jump over page 2.
+    # A previously saved row that is now filtered remains a valid overlap.
+    result, requests, checkpoints = run_pages({
+        1: [post('105')], 2: [post('104', '赞')], 3: [post('103')],
+        5: [post('102')], 6: [post('101', '赞')],
+    }, {'_scan_page': 5, '_known_ids': {'103'},
+        '_scan_since': '2026-10-25T11:00:00+08:00'}, 5)
+    assert [row['id'] for row in result] == ['101', '104']
+    assert not result.complete and requests == [1, 2, 3, 5, 6]
+    assert checkpoints == [([], 2, False), (['104'], 3, False),
+                           ([], 5, False), ([], 6, False), (['101'], 7, False)]
+
+
+def test_filtered_resume_without_overlap_keeps_contiguous_progress():
+    pages = {1: [post('105')], 2: [post('104', '赞')], 3: [post('103')],
+             4: [post('102')], 5: [post('101', '赞')]}
+    result, requests, checkpoints = run_pages(pages, {'_scan_page': 4}, 3)
+    assert [row['id'] for row in result] == ['104']
+    assert not result.complete and requests == [1, 2, 3]
+    assert checkpoints == [([], 2, False), (['104'], 3, False), ([], 4, False)]
+    # Resume after the budget limit: the filtered pages were not persisted as
+    # posts, but they must not block reaching the later commented repost.
+    result, requests, checkpoints = run_pages(pages, {
+        '_scan_page': checkpoints[-1][1], '_known_ids': {'104'},
+        '_scan_since': '2026-10-25T11:00:00+08:00',
+    }, 5)
     assert [row['id'] for row in result] == ['101']
-    assert not result.complete and requests == [1, 4, 5]
-    assert checkpoints == [([], 4, False), ([], 5, False), (['101'], 6, False)]
+    assert result.complete and requests == [1, 2, 4, 5, 6]
+    assert checkpoints == [([], 2, False), ([], 4, False), ([], 5, False),
+                           (['101'], 6, False), ([], 1, True)]
 
 
 def test_filtered_timestamp_boundary_is_preserved():

@@ -44,7 +44,7 @@ def copy_etf(cache, path, previous, full=False, *, source=None, identity=None):
     local_maps = {}
     local_names = set()
     bounds = {}
-    local_count = 0
+    local_counts = {}
     if previous is not None and not full:
         local = create_engine('sqlite:///file:' + previous.as_posix() + '?mode=ro&uri=true', poolclass=NullPool)
         try:
@@ -55,7 +55,7 @@ def copy_etf(cache, path, previous, full=False, *, source=None, identity=None):
                         continue
                     bounds[table.name] = recent_start(connection, table, local_names)
                     local_maps[table.name] = manifest(connection, table, bounds[table.name])
-                    local_count += connection.scalar(select(func.count()).select_from(table))
+                    local_counts[table.name] = connection.scalar(select(func.count()).select_from(table))
         finally:
             local.dispose()
     with (source if source is not None else cache.source).connect() as source:
@@ -72,8 +72,15 @@ def copy_etf(cache, path, previous, full=False, *, source=None, identity=None):
             cache.sync_notes['etf-shares'] = None if price_exists else '源库尚无 ETF 收盘价表，保留份额展示，市值暂不估算。'
             remote = {table.name: manifest(source, table, bounds.get(table.name)) if table.name in source_tables else {}
                       for table in tables}
-            count = local_count + sum(len(remote[t.name]) - len(local_maps.get(t.name, {})) for t in tables)
-            if not full and previous is not None and all(t.name in local_names for t in tables) and remote == local_maps:
+            absent = {table.name for table in tables if table.name not in source_tables}
+            # A missing optional table means an empty series for every date, not
+            # just the incremental window. Counts must also remove the old history.
+            count = sum(local_counts.values()) + sum(
+                len(remote[t.name]) - (local_counts.get(t.name, 0) if t.name in absent
+                                      else len(local_maps.get(t.name, {}))) for t in tables)
+            missing_rows = any(local_counts.get(name, 0) for name in absent)
+            if (not full and previous is not None and not missing_rows
+                    and all(t.name in local_names for t in tables) and remote == local_maps):
                 return previous.name, count
             destination = create_engine('sqlite:///' + path.as_posix(), poolclass=NullPool)
             try:
@@ -82,6 +89,12 @@ def copy_etf(cache, path, previous, full=False, *, source=None, identity=None):
                 tables[0].metadata.create_all(destination, tables=tables)
                 with destination.begin() as target:
                     for table in tables:
+                        if table.name in absent:
+                            # Only mutate the unpublished copy. An empty table also
+                            # resets its own cursor, so restoration backfills history.
+                            # Inspection/query errors still abort the whole refresh.
+                            target.execute(table.delete())
+                            continue
                         old, new = local_maps.get(table.name, {}), remote[table.name]
                         changed = {key for key in old.keys() | new.keys() if old.get(key) != new.get(key)}
                         for batch in chunks(changed):

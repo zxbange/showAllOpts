@@ -220,7 +220,9 @@ export function CCICoalPage() {
           <p>正在读取报价…</p>
         )}
         <small>
-          每天 18:00 自动采集 · 北京时间，仅查询当天，保留既有历史。{data?.status.stage}
+          每天 21:00 自动采集 ·
+          北京时间，仅查询当天；未完整取得时每30分钟重试，最多3次，跨日停止。保留既有历史。
+          {data?.status.stage}
           {data?.status.checkedAt
             ? ` · 最近采集：${new Date(data.status.checkedAt).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai', hour12: false })}`
             : ''}

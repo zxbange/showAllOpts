@@ -257,104 +257,231 @@ test('pending stop suppresses background reads and late pre-operation status can
   }
 })
 
-test('manual sync outside trading window keeps monitoring off and survives navigation', async ({page}, info) => {
+test('manual sync outside trading window keeps monitoring off and survives navigation', async ({
+  page,
+}, info) => {
   let manual: any = null
   let calls = 0
   let version = 0
-  const config = {host:'mock.db.test',port:3306,database:'mock',username:'reader',table:'positions',password_set:true}
-  await page.route('**/api/v1/personal-holdings/**', async route => {
+  const config = {
+    host: 'mock.db.test',
+    port: 3306,
+    database: 'mock',
+    username: 'reader',
+    table: 'positions',
+    password_set: true,
+  }
+  await page.route('**/api/v1/personal-holdings/**', async (route) => {
     const path = new URL(route.request().url()).pathname.split('/').pop()
-    if (path === 'configuration') return route.fulfill({json:config})
-    if (path === 'history') return route.fulfill({json:{days:[],events:[],next_before:null}})
+    if (path === 'configuration') return route.fulfill({ json: config })
+    if (path === 'history')
+      return route.fulfill({ json: { days: [], events: [], next_before: null } })
     if (path === 'sync') {
       calls++
       expect(route.request().headers()['x-csrf-token']).toBe('test-csrf')
       expect(route.request().postDataJSON().request_id).toMatch(/^[a-f0-9-]+$/)
-      manual = {id:'mock',status:'pending',error:null}
+      manual = { id: 'mock', status: 'pending', error: null }
     }
-    return route.fulfill({json:{configured:true,enabled:false,baseline:version>0,version,
-      rows:version ? [{strategy2:'模拟策略',name:'模拟银行',code:'000001',amt:'100'}] : [],
-      window_open:false,trading_day:false,calendar_error:null,error:null,observed_at:null,manual}})
+    return route.fulfill({
+      json: {
+        configured: true,
+        enabled: false,
+        baseline: version > 0,
+        version,
+        rows: version
+          ? [{ strategy2: '模拟策略', name: '模拟银行', code: '000001', amt: '100' }]
+          : [],
+        window_open: false,
+        trading_day: false,
+        calendar_error: null,
+        error: null,
+        observed_at: null,
+        manual,
+      },
+    })
   })
   await page.goto('/personal-holdings')
-  await page.getByRole('button',{name:'立即同步',exact:true}).click()
-  await expect(page.getByRole('button',{name:'同步中…'})).toBeDisabled()
+  await page.getByRole('button', { name: '立即同步', exact: true }).click()
+  await expect(page.getByRole('button', { name: '同步中…' })).toBeDisabled()
   expect(calls).toBe(1)
   await page.reload()
-  await expect(page.getByRole('button',{name:'同步中…'})).toBeDisabled()
-  manual.status='completed';version=1
-  await expect(page.getByRole('cell',{name:'000001',exact:true})).toBeVisible({timeout:10000})
-  await expect(page.getByRole('button',{name:'开始监控',exact:true})).toBeEnabled()
+  await expect(page.getByRole('button', { name: '同步中…' })).toBeDisabled()
+  manual.status = 'completed'
+  version = 1
+  await expect(page.getByRole('cell', { name: '000001', exact: true })).toBeVisible({
+    timeout: 10000,
+  })
+  await expect(page.getByRole('button', { name: '开始监控', exact: true })).toBeEnabled()
   await expect(page.getByRole('status')).toContainText('同步完成')
   expect(calls).toBe(1)
-  await page.screenshot({path:info.outputPath('manual.png'),fullPage:true})
-  await page.getByRole('button',{name:'立即同步',exact:true}).click()
-  await expect(page.getByRole('button',{name:'同步中…'})).toBeDisabled()
+  await page.screenshot({ path: info.outputPath('manual.png'), fullPage: true })
+  await page.getByRole('button', { name: '立即同步', exact: true }).click()
+  await expect(page.getByRole('button', { name: '同步中…' })).toBeDisabled()
   expect(calls).toBe(2)
-  manual.status='completed'
-  await expect(page.getByRole('button',{name:'立即同步',exact:true})).toBeEnabled({timeout:10000})
+  manual.status = 'completed'
+  await expect(page.getByRole('button', { name: '立即同步', exact: true })).toBeEnabled({
+    timeout: 10000,
+  })
 })
 
-test('compact data precedes controls and history is isolated by Shanghai date', async ({page}, info) => {
-  await page.route('**/api/v1/personal-holdings/**', async route => {
-    const url=new URL(route.request().url())
-    if(url.pathname.endsWith('/configuration')) return route.fulfill({json:{host:'mock.test',port:3306,database:'mock',username:'reader',table:'positions',password_set:true}})
-    if(url.pathname.endsWith('/history')) {
-      const day=url.searchParams.get('day')!
-      return route.fulfill({json:{days:['2026-11-02','2026-11-01'],next_before:null,events:[{id:day.endsWith('02')?2:1,strategy2:'模拟策略',name:day.endsWith('02')?'今日股票':'昨日股票',code:'000001',delta:'100',after:'200',before:'100',kind:'add',observed_at:day.endsWith('02')?'2026-11-01T16:05:00Z':'2026-11-01T07:00:00Z'}]}})
+test('compact data precedes controls and history is isolated by Shanghai date', async ({
+  page,
+}, info) => {
+  await page.route('**/api/v1/personal-holdings/**', async (route) => {
+    const url = new URL(route.request().url())
+    if (url.pathname.endsWith('/configuration'))
+      return route.fulfill({
+        json: {
+          host: 'mock.test',
+          port: 3306,
+          database: 'mock',
+          username: 'reader',
+          table: 'positions',
+          password_set: true,
+        },
+      })
+    if (url.pathname.endsWith('/history')) {
+      const day = url.searchParams.get('day')!
+      return route.fulfill({
+        json: {
+          days: ['2026-11-02', '2026-11-01'],
+          next_before: null,
+          events: [
+            {
+              id: day.endsWith('02') ? 2 : 1,
+              strategy2: '模拟策略',
+              name: day.endsWith('02') ? '今日股票' : '昨日股票',
+              code: '000001',
+              delta: '100',
+              after: '200',
+              before: '100',
+              kind: 'add',
+              observed_at: day.endsWith('02') ? '2026-11-01T16:05:00Z' : '2026-11-01T07:00:00Z',
+            },
+          ],
+        },
+      })
     }
-    return route.fulfill({json:{configured:true,enabled:false,baseline:true,version:1,rows:['趋势策略','价值策略','反弹策略'].map(strategy2=>({strategy2,code:'000001',name:'模拟银行',amt:'200'})),window_open:false,trading_day:true,calendar_error:null,error:null,observed_at:'2026-11-01T16:05:00Z'}})
+    return route.fulfill({
+      json: {
+        configured: true,
+        enabled: false,
+        baseline: true,
+        version: 1,
+        rows: ['趋势策略', '价值策略', '反弹策略'].map((strategy2) => ({
+          strategy2,
+          code: '000001',
+          name: '模拟银行',
+          amt: '200',
+        })),
+        window_open: false,
+        trading_day: true,
+        calendar_error: null,
+        error: null,
+        observed_at: '2026-11-01T16:05:00Z',
+      },
+    })
   })
   await page.goto('/personal-holdings')
-  await page.getByLabel('历史日期',{exact:true}).selectOption('2026-11-02')
-  await expect(page.getByRole('heading',{name:'2026-11-02 北京时间'})).toBeVisible()
-  await expect(page.getByRole('cell',{name:'今日股票',exact:true})).toBeVisible()
-  await expect(page.getByRole('cell',{name:'00:05:00',exact:true})).toBeVisible()
-  await page.getByLabel('历史日期',{exact:true}).selectOption('2026-11-01')
-  await expect(page.getByRole('heading',{name:'2026-11-01 北京时间'})).toBeVisible()
-  await expect(page.getByRole('cell',{name:'昨日股票',exact:true})).toBeVisible()
-  await expect(page.getByText('今日股票',{exact:true})).toHaveCount(0)
-  const columnCount=await page.locator('.holdings-groups').evaluate(el=>getComputedStyle(el).gridTemplateColumns.split(' ').length)
-  expect(columnCount).toBe(info.project.name==='desktop'?3:1)
-  const positions=await page.getByRole('region',{name:'当前持仓',exact:true}).boundingBox()
-  const history=await page.getByRole('region',{name:'仓位变动',exact:true}).boundingBox()
-  const toolbar=await page.locator('.holdings-toolbar').boundingBox()
-  const config=await page.locator('.holdings-configuration').boundingBox()
+  await page.getByLabel('历史日期', { exact: true }).selectOption('2026-11-02')
+  await expect(page.getByRole('heading', { name: '2026-11-02 北京时间' })).toBeVisible()
+  await expect(page.getByRole('cell', { name: '今日股票', exact: true })).toBeVisible()
+  await expect(page.getByRole('cell', { name: '00:05:00', exact: true })).toBeVisible()
+  await page.getByLabel('历史日期', { exact: true }).selectOption('2026-11-01')
+  await expect(page.getByRole('heading', { name: '2026-11-01 北京时间' })).toBeVisible()
+  await expect(page.getByRole('cell', { name: '昨日股票', exact: true })).toBeVisible()
+  await expect(page.getByText('今日股票', { exact: true })).toHaveCount(0)
+  const columnCount = await page
+    .locator('.holdings-groups')
+    .evaluate((el) => getComputedStyle(el).gridTemplateColumns.split(' ').length)
+  expect(columnCount).toBe(info.project.name === 'desktop' ? 3 : 1)
+  const positions = await page.getByRole('region', { name: '当前持仓', exact: true }).boundingBox()
+  const history = await page.getByRole('region', { name: '仓位变动', exact: true }).boundingBox()
+  const toolbar = await page.locator('.holdings-toolbar').boundingBox()
+  const config = await page.locator('.holdings-configuration').boundingBox()
   expect(positions!.y).toBeLessThan(history!.y)
-  expect(history!.y+history!.height).toBeLessThanOrEqual(toolbar!.y)
-  expect(toolbar!.y+toolbar!.height).toBeLessThanOrEqual(config!.y)
-  expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true)
-  await page.screenshot({path:info.outputPath('compact.png'),fullPage:true})
+  expect(history!.y + history!.height).toBeLessThanOrEqual(toolbar!.y)
+  expect(toolbar!.y + toolbar!.height).toBeLessThanOrEqual(config!.y)
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
+  await page.screenshot({ path: info.outputPath('compact.png'), fullPage: true })
 })
 
-test('bounded history separates stock columns, scrolls by keyboard and keeps pagination', async ({page}, info) => {
-  const record=(id:number)=>({id,strategy2:'模拟策略',name:`模拟股票${id}`,code:String(id).padStart(6,'0'),delta:'100',after:'200',before:'100',kind:'add',observed_at:'2026-11-02T02:00:00Z'})
-  await page.route('**/api/v1/personal-holdings/**',async route=>{
-    const url=new URL(route.request().url())
-    if(url.pathname.endsWith('/configuration')) return route.fulfill({json:null})
-    if(url.pathname.endsWith('/history')) return route.fulfill({json:{days:['2026-11-02'],events:url.searchParams.has('before')?[record(1)]:Array.from({length:40},(_,i)=>record(41-i)),next_before:url.searchParams.has('before')?null:2}})
-    return route.fulfill({json:{configured:false,enabled:false,baseline:false,version:0,rows:[],window_open:false,trading_day:true,calendar_error:null,error:null,observed_at:null}})
+test('bounded history separates stock columns, scrolls by keyboard and keeps pagination', async ({
+  page,
+}, info) => {
+  const record = (id: number) => ({
+    id,
+    strategy2: '模拟策略',
+    name: `模拟股票${id}`,
+    code: String(id).padStart(6, '0'),
+    delta: '100',
+    after: '200',
+    before: '100',
+    kind: 'add',
+    observed_at: '2026-11-02T02:00:00Z',
+  })
+  await page.route('**/api/v1/personal-holdings/**', async (route) => {
+    const url = new URL(route.request().url())
+    if (url.pathname.endsWith('/configuration')) return route.fulfill({ json: null })
+    if (url.pathname.endsWith('/history'))
+      return route.fulfill({
+        json: {
+          days: ['2026-11-02'],
+          events: url.searchParams.has('before')
+            ? [record(1)]
+            : Array.from({ length: 40 }, (_, i) => record(41 - i)),
+          next_before: url.searchParams.has('before') ? null : 2,
+        },
+      })
+    return route.fulfill({
+      json: {
+        configured: false,
+        enabled: false,
+        baseline: false,
+        version: 0,
+        rows: [],
+        window_open: false,
+        trading_day: true,
+        calendar_error: null,
+        error: null,
+        observed_at: null,
+      },
+    })
   })
   await page.goto('/personal-holdings')
-  await page.getByLabel('历史日期',{exact:true}).selectOption('2026-11-02')
-  const section=page.getByRole('region',{name:'仓位变动',exact:true})
-  await expect(page.getByLabel('记录日期',{exact:true})).toHaveCount(0)
-  await expect(section.getByRole('columnheader',{name:'股票',exact:true})).toBeVisible()
-  await expect(section.getByRole('columnheader',{name:'代码',exact:true})).toBeVisible()
-  const scroll=page.getByRole('region',{name:'仓位变动表，可上下左右滚动',exact:true})
-  const size=await scroll.evaluate(el=>({h:el.clientHeight,full:el.scrollHeight}))
+  await page.getByLabel('历史日期', { exact: true }).selectOption('2026-11-02')
+  const section = page.getByRole('region', { name: '仓位变动', exact: true })
+  await expect(page.getByLabel('记录日期', { exact: true })).toHaveCount(0)
+  await expect(section.getByRole('columnheader', { name: '股票', exact: true })).toBeVisible()
+  await expect(section.getByRole('columnheader', { name: '代码', exact: true })).toBeVisible()
+  const scroll = page.getByRole('region', { name: '仓位变动表，可上下左右滚动', exact: true })
+  const size = await scroll.evaluate((el) => ({ h: el.clientHeight, full: el.scrollHeight }))
   expect(size.h).toBeLessThanOrEqual(480)
   expect(size.full).toBeGreaterThan(size.h)
-  await scroll.focus();await page.keyboard.press('PageDown')
-  await expect.poll(()=>scroll.evaluate(el=>el.scrollTop)).toBeGreaterThan(0)
-  await page.getByRole('button',{name:'加载更多'}).click()
+  await scroll.focus()
+  await page.keyboard.press('PageDown')
+  await expect.poll(() => scroll.evaluate((el) => el.scrollTop)).toBeGreaterThan(0)
+  await page.getByRole('button', { name: '加载更多' }).click()
   await expect(section.getByRole('row')).toHaveCount(42)
-  await expect(page.getByRole('button',{name:'加载更多'})).toHaveCount(0)
+  await expect(page.getByRole('button', { name: '加载更多' })).toHaveCount(0)
   expect((await scroll.boundingBox())!.height).toBeLessThanOrEqual(480)
-  await scroll.evaluate(el=>{el.scrollTop=0})
-  await expect(page.getByText('按策略查看持仓，保存每次观测到的仓位变化。',{exact:true})).toHaveCount(0)
-  await expect(page.getByText('记录的是两次完整快照间的净变化，不代表逐笔成交；时间为北京时间的实际检测时间。',{exact:true})).toHaveCount(0)
-  await expect(page.getByText('每15秒查询，包含午间。关页后后台继续；首次完整读取建立基准，不记买入。',{exact:true})).toHaveCount(0)
-  expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true)
-  await page.screenshot({path:info.outputPath('bounded-history.png'),fullPage:true})
+  await scroll.evaluate((el) => {
+    el.scrollTop = 0
+  })
+  await expect(
+    page.getByText('按策略查看持仓，保存每次观测到的仓位变化。', { exact: true }),
+  ).toHaveCount(0)
+  await expect(
+    page.getByText(
+      '记录的是两次完整快照间的净变化，不代表逐笔成交；时间为北京时间的实际检测时间。',
+      { exact: true },
+    ),
+  ).toHaveCount(0)
+  await expect(
+    page.getByText('每15秒查询，包含午间。关页后后台继续；首次完整读取建立基准，不记买入。', {
+      exact: true,
+    }),
+  ).toHaveCount(0)
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
+  await page.screenshot({ path: info.outputPath('bounded-history.png'), fullPage: true })
 })

@@ -16,7 +16,6 @@ from app.services.etf_diagnostics import log_database_failure
 import httpx
 import portalocker
 from sqlalchemy import create_engine
-from sqlalchemy.engine import make_url
 
 LOG = logging.getLogger(__name__)
 CHINA = ZoneInfo('Asia/Shanghai')

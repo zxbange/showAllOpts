@@ -29,7 +29,8 @@ test('CCI peer module, gaps, grade selection, schedule, responsive navigation', 
     'page',
   )
   await expect(page.locator('.commodity-chart canvas')).toBeVisible()
-  await expect(page.getByText(/每天 18:00 自动采集/)).toBeVisible()
+  await expect(page.getByText(/每天 21:00 自动采集/)).toBeVisible()
+  await expect(page.getByText(/每30分钟重试，最多3次，跨日停止/)).toBeVisible()
   await expect(page.getByText(/11:00/)).toHaveCount(0)
   await expect(page.getByRole('row')).toHaveCount(587)
   await page.getByLabel('CCI报价档位').selectOption('CCI5000')

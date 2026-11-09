@@ -292,9 +292,11 @@ def fetch_posts(author, pages):
                     author['_on_author_name'](name)
                 author_name_reported = True
         found = {}
-        page_numbers = ([1] if resume > 1 else []) + list(range(resume, resume + pages - int(resume > 1)))
+        # Page numbers move when new posts arrive. Walk the new front pages
+        # until they overlap the saved prefix before using its deeper cursor.
+        page, resume_due = 1, resume > 1
         complete = False
-        for page in page_numbers:
+        for page_index in range(pages):
             if author.get('_should_stop', lambda: False)():
                 raise MonitoringDeferred('监控已暂停或进入夜间休眠')
             if platform == "weibo":
@@ -309,7 +311,7 @@ def fetch_posts(author, pages):
                 items = xueqiu_items(data)
                 if items is None:
                     raise RuntimeError("雪球未返回有效帖子列表，请检查 UID、Cookie 或访问限制")
-            page_posts, boundary = [], False
+            page_posts, boundary, overlap = [], False, False
             skipped_reposts = 0
             for item in items:
                 # Exclude recommendations belonging to a different author.
@@ -333,8 +335,10 @@ def fetch_posts(author, pages):
                     if not pinned:
                         boundary = True
                     continue
-                if not pinned and identifier in known and (since is None or (timestamp and timestamp <= since)):
-                    boundary = True
+                if not pinned and identifier in known:
+                    overlap = True
+                    if since is None or (timestamp and timestamp <= since):
+                        boundary = True
                 if not pinned and stop_before and timestamp and timestamp < stop_before:
                     boundary = True
                 if identifier in known:
@@ -356,15 +360,25 @@ def fetch_posts(author, pages):
                 page_posts.append(post)
             if skipped_reposts:
                 LOG.info('Social weibo skipped uncommented reposts page=%s count=%s', page, skipped_reposts)
-            # The newest page is rechecked during a resumed scan, without losing
-            # the deeper cursor or mistaking the new checkpoint rows for its end.
-            top_recheck = resume > 1 and page == 1
-            complete = not top_recheck and (not items or boundary or (initial and page == page_numbers[-1]))
-            next_page = 1 if complete else resume if top_recheck else page + 1
+            if page >= resume:
+                resume_due = False
+            complete = not items or (not resume_due and (
+                boundary or (initial and page_index == pages - 1)))
+            if complete:
+                next_page = 1
+            elif resume_due and overlap:
+                next_page = resume
+                resume_due = False
+            else:
+                next_page = page + 1
+            # Before overlap, persist the contiguous prefix, not the old deep
+            # cursor: on another interruption these new posts become known and
+            # must not let the next run jump over the still-unread front pages.
             if callback:
                 callback(page_posts, next_page, complete)
             if complete:
                 break
+            page = next_page
     return PostBatch(sorted(found.values(), key=lambda post: int(post["id"])), complete)
 
 

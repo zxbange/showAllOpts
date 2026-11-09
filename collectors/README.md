@@ -10,9 +10,11 @@ collectors/
 ├── rules/                  公共代码维护源，不在聚宽运行时导入
 │   ├── earnings_followup.py
 │   ├── earnings_version.py
+│   ├── momentum_threshold.py
 │   └── result_journal.py
 └── tools/                  仅在本地使用的代码同步工具
     ├── sync_earnings_version.py
+    ├── sync_momentum_threshold.py
     └── sync_result_journal.py
 ```
 
@@ -56,6 +58,7 @@ collectors/
 | --- | --- | --- |
 | `rules/earnings_followup.py` | 断层后续涨幅及历史清理 | 净利润断层独立版、批量版 |
 | `rules/earnings_version.py` | 财季版本及同步标记 | 净利润断层独立版、批量版 |
+| `rules/momentum_threshold.py` | 行业动量严格大于20%的精确判断 | 行业动量独立版、批量版 |
 | `rules/result_journal.py` | 采集结果变更记录 | 市场情绪跟踪、微盘温度计、ETF动量热度独立版及批量版 |
 
 公共代码在本地维护阶段预先嵌入采集脚本，运行时不会加载源文件。修改公共规则后，在项目根目录执行：
@@ -63,6 +66,7 @@ collectors/
 ```bash
 python collectors/tools/sync_earnings_version.py
 python collectors/tools/sync_result_journal.py
+python collectors/tools/sync_momentum_threshold.py
 ```
 
 只核对一致性、不改文件：
@@ -70,9 +74,16 @@ python collectors/tools/sync_result_journal.py
 ```bash
 python collectors/tools/sync_earnings_version.py --check
 python collectors/tools/sync_result_journal.py --check
+python collectors/tools/sync_momentum_threshold.py --check
 ```
 
 这些工具只同步标记的公共代码块，不会把独立策略的全部修改自动同步到批量版。修改策略时仍需同步检查两个入口。
+
+## 行业动量20%边界
+
+行业动量的前排股票只计入20个交易日涨幅**严格大于20%**的股票，恰好20%不计入。独立版和批量版共用 `rules/momentum_threshold.py` 的内嵌规则，按行情端点提供的十进制值精确比较 `5 × 期末收盘价 > 6 × 期初收盘价`，不先转浮点、计算除法或用容差/四舍五入改变边界。该判断保留多位小数输入精度，不受 Decimal 计算精度设置影响；空值、非有限数和非正价格不参与统计。若上游已经损失精度，本规则无法恢复原始行情。
+
+此修复只影响之后重新计算的结果，**不会自动修正已入库的历史计数、动量或排名**。批量采集仍保留已有日期，网页重新同步缓存也不会重算源数据。修复历史需另行确认受影响日期、使用的行情口径及安全重算方案；不要为应用本修复而清空历史表。
 
 ## 配置与目录约定
 
