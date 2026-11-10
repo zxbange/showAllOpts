@@ -71,6 +71,7 @@ test('six performance modules preserve URLs and folder layers, contrast and hit 
             Math.round(tabs[i].getBoundingClientRect().right - t.getBoundingClientRect().left),
           ),
         colors: tabs.map((t) => getComputedStyle(t, '::before').backgroundColor),
+        tones: tabs.map((t) => t.dataset.tone),
         contrasts: tabs.map((t) => {
           const foreground = luminance(getComputedStyle(t).color),
             background = luminance(getComputedStyle(t, '::before').backgroundColor)
@@ -84,7 +85,10 @@ test('six performance modules preserve URLs and folder layers, contrast and hit 
     expect(result.inactiveHeights).toEqual([44, 44, 44, 44, 44])
     expect(result.topLayer).toBe(true)
     expect(result.overlaps.every((v) => v === 12)).toBe(true)
-    expect(new Set(result.colors).size).toBe(5)
+    expect(result.tones).toEqual(['0', '1', '2', '3', '4', '0'])
+    // Six tabs cycle five base tones. When the first/last tone is active,
+    // its active shade differs from the other tab's inactive shade.
+    expect(new Set(result.colors).size).toBe(names.indexOf(name) % 5 === 0 ? 6 : 5)
     expect(Math.min(...result.contrasts)).toBeGreaterThanOrEqual(4.5)
   }
   for (const link of await nav.getByRole('link').all()) {
