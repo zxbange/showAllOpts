@@ -92,7 +92,9 @@ async function inspectChart(page: Page) {
           connectNulls: line.connectNulls,
           visible: !model.isSeriesFiltered(model.getSeriesByIndex(index)),
           referenceStyle: line.markLine?.lineStyle.type,
-          references: line.markLine?.data ?? [],
+          // ECharts may add/remove empty internal label/emphasis defaults after
+          // setOption. Compare the benchmark identity and value across updates.
+          references: (line.markLine?.data ?? []).map(({ name, yAxis }) => ({ name, yAxis })),
         }),
       ),
     }
