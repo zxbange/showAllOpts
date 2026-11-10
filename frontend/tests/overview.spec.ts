@@ -117,7 +117,7 @@ test('group tabs preserve direct links, active navigation and mobile layout', as
     const cards = await tabs.boundingBox()
     expect(cards!.y + cards!.height).toBeLessThanOrEqual(heading!.y)
     await expect(tabs.locator('.module-card')).toHaveCount(
-      group === '市场情绪' ? 4 : group === '业绩选股' ? 6 : 2,
+      group === '市场情绪' ? 5 : group === '业绩选股' ? 6 : 2,
     )
     await tabs.getByRole('link', { name: label, exact: true }).click()
     await expect(page).toHaveURL(new RegExp(second + '$'))
@@ -139,7 +139,7 @@ test('group tabs preserve direct links, active navigation and mobile layout', as
 test('shared module cards stay available while loading and after failures', async ({ page }) => {
   test.setTimeout(60000)
   for (const [path, count] of [
-    ['etf-shares', 4],
+    ['etf-shares', 5],
     ['dividend-selection', 6],
   ] as const) {
     let release!: () => void

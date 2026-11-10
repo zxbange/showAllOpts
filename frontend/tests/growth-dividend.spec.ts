@@ -106,6 +106,9 @@ test('five-year default, all history, date entry and manual zoom survive refresh
     'true',
   )
   const chart = await inspectChart(page)
+  // The development server mounts effects twice under React StrictMode.
+  // Compare later reads to the settled initial load instead of assuming one GET.
+  const initialReads = reads
   expect(chart).toMatchObject({
     start: '2021-11-10',
     end: '2026-11-10',
@@ -157,6 +160,7 @@ test('five-year default, all history, date entry and manual zoom survive refresh
     'aria-pressed',
     'false',
   )
+  expect(reads).toBe(initialReads)
   snapshot = {
     ...history,
     end_date: '2026-11-11',
@@ -168,7 +172,7 @@ test('five-year default, all history, date entry and manual zoom survive refresh
   await expect
     .poll(() => inspectChart(page))
     .toMatchObject({ start: manual.start, end: manual.end })
-  expect(reads).toBe(2)
+  expect(reads).toBe(initialReads + 1)
   await page.getByRole('button', { name: '近5年', exact: true }).click()
   await expect
     .poll(() => inspectChart(page))
