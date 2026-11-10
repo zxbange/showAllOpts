@@ -8,6 +8,10 @@ import { AccountAccess } from './components/AccountAccess'
 import { UsersPage } from './pages/UsersPage'
 import { PersonalHoldingsPage } from './pages/PersonalHoldingsPage'
 
+const CashCowPage = lazy(() =>
+  import('./pages/CashCowPage').then((m) => ({ default: m.CashCowPage })),
+)
+
 const CommoditiesPage = lazy(() =>
   import('./pages/CommoditiesPage').then((m) => ({ default: m.CommoditiesPage })),
 )
@@ -81,6 +85,14 @@ export default function App() {
               element={
                 <Suspense fallback={<LoadingState />}>
                   <CommoditiesPage />
+                </Suspense>
+              }
+            />
+            <Route
+              path="cash-cow"
+              element={
+                <Suspense fallback={<LoadingState />}>
+                  <CashCowPage />
                 </Suspense>
               }
             />

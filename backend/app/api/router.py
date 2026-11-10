@@ -1,3 +1,4 @@
+from app.api.routes.cash_cow import router as cash_cow_router
 from app.api.routes.commodities import router as commodities_router
 from app.api.routes.sentiment import router as sentiment_router
 from app.api.routes.margin_guarantee import router as margin_guarantee_router
@@ -20,6 +21,7 @@ from app.api.routes.momentum import router as momentum_router
 
 router = APIRouter(prefix='/api/v1')
 router.include_router(commodities_router)
+router.include_router(cash_cow_router)
 router.include_router(personal_holdings_router)
 router.include_router(social_router)
 router.include_router(social_browser_router)
@@ -80,6 +82,10 @@ def modules():
         'id': 'dividend-selection', 'name': '高股息选股',
         'description': '纯高股息前25只，低估值非银行前25只、银行前10只，展示最新结果。',
         'path': '/dividend-selection', 'status': 'available',
+    }, {
+        'id': 'cash-cow', 'name': '奶牛股',
+        'description': '十年连续分红、现金流覆盖、合理支付率与长期股息率。',
+        'path': '/cash-cow', 'status': 'available',
     }, {
         'id': 'high-growth', 'name': '高增长',
         'description': '年报与三类季报分别检验归母净利润及 EPS 的持续增长。',

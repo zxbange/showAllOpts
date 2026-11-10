@@ -45,3 +45,13 @@ describe('national team ETF navigation', () => {
     )
   })
 })
+
+it('keeps cash cow inside the single performance group and searchable from the overview', () => {
+  const group = groupForPath('/cash-cow')!
+  expect(group.name).toBe('业绩选股')
+  expect(group.labels).toHaveLength(6)
+  const overview = researchModules.filter((module) => module.name === '业绩选股')
+  expect(overview).toHaveLength(1)
+  expect(overview[0].searchTerms).toContain('奶牛股')
+  expect(researchModules.some((module) => module.id === 'cash-cow')).toBe(false)
+})

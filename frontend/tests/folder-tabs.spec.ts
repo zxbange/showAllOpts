@@ -1,6 +1,6 @@
 import { test, expect } from './fixtures'
 
-test('five performance modules preserve URLs and folder layers, contrast and hit targets', async ({
+test('six performance modules preserve URLs and folder layers, contrast and hit targets', async ({
   page,
 }, info) => {
   await page.route('**/api/v1/**', (route) =>
@@ -14,8 +14,9 @@ test('five performance modules preserve URLs and folder layers, contrast and hit
     '纯高股息',
     '高股息低估值（非银行业）',
     '高股息低估值（银行业）',
+    '奶牛股',
   ]
-  await expect(nav.getByRole('link')).toHaveCount(5)
+  await expect(nav.getByRole('link')).toHaveCount(6)
   expect(await nav.getByRole('link').allTextContents()).toEqual(names)
   await expect(nav.getByRole('link', { name: '纯高股息', exact: true })).toHaveAttribute(
     'aria-current',
@@ -80,7 +81,7 @@ test('five performance modules preserve URLs and folder layers, contrast and hit
       }
     })
     expect(result.activeHeight).toBe(54)
-    expect(result.inactiveHeights).toEqual([44, 44, 44, 44])
+    expect(result.inactiveHeights).toEqual([44, 44, 44, 44, 44])
     expect(result.topLayer).toBe(true)
     expect(result.overlaps.every((v) => v === 12)).toBe(true)
     expect(new Set(result.colors).size).toBe(5)
@@ -97,9 +98,9 @@ test('five performance modules preserve URLs and folder layers, contrast and hit
     expect(unobstructed).toBe(true)
   }
   await page.keyboard.press('Enter')
-  await expect(page).toHaveURL(/method=bank$/)
+  await expect(page).toHaveURL(/cash-cow$/)
   await page.reload()
-  await expect(nav.getByRole('link', { name: names[4], exact: true })).toHaveAttribute(
+  await expect(nav.getByRole('link', { name: names[5], exact: true })).toHaveAttribute(
     'aria-current',
     'page',
   )
@@ -110,7 +111,7 @@ test('five performance modules preserve URLs and folder layers, contrast and hit
     'page',
   )
   await page.goForward()
-  await expect(nav.getByRole('link', { name: names[4], exact: true })).toHaveAttribute(
+  await expect(nav.getByRole('link', { name: names[5], exact: true })).toHaveAttribute(
     'aria-current',
     'page',
   )

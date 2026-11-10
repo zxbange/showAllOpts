@@ -20,6 +20,8 @@ from app.services.social_browser import BrowserLogin
 from app.services.margin_guarantee import MarginGuarantee
 from app.services.commodities import Commodities
 from app.services.cci_coal import CCICoal
+from app.services.cash_cow import CashCowScreen
+from app.services.cash_cow_schedule import MonthlyCashCowScheduler
 from app.services.accounts import Accounts
 from app.services.etf_collection import ETFCollection
 from app.services.personal_holdings import PersonalHoldings
@@ -59,6 +61,13 @@ def create_app(settings: Settings | None = None, engine: Engine | None = None) -
             cci_coal = CCICoal(settings)
             cleanup.push_async_callback(asyncio.to_thread, cci_coal.stop)
             application.state.cci_coal = cci_coal
+            cash_cow = {years: CashCowScreen(settings, years=years) for years in (3, 5, 10)}
+            for screen in cash_cow.values():
+                cleanup.push_async_callback(asyncio.to_thread, screen.stop)
+            application.state.cash_cow = cash_cow
+            cash_cow_schedule = MonthlyCashCowScheduler(settings, cash_cow)
+            cleanup.push_async_callback(asyncio.to_thread, cash_cow_schedule.stop)
+            application.state.cash_cow_schedule = cash_cow_schedule
             holdings = PersonalHoldings(settings)
             cleanup.push_async_callback(asyncio.to_thread, holdings.stop)
             application.state.personal_holdings = holdings
@@ -72,6 +81,8 @@ def create_app(settings: Settings | None = None, engine: Engine | None = None) -
             margin_guarantee.start()
             commodities.start()
             cci_coal.start()
+            if settings.cash_cow_worker_enabled:
+                cash_cow_schedule.start()
             logger.info('Application ready cache_enabled=%s', settings.cache_enabled)
             yield
         logger.info('Application shutdown complete')

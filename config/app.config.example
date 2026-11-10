@@ -3,8 +3,10 @@
 APP_NAME=ShowAllOpts API
 # Background polling for the social monitor; all pages require site login.
 SOCIAL_WORKER_ENABLED=true
-# 中证两融担保比例独立采集，每天北京时间20:00；启动不立即下载。
+# 中证两融担保比例独立采集，每天北京时间21:00；启动不立即下载。
 MARGIN_WORKER_ENABLED=true
+# 奶牛股：北京时间每月最后自然日21:00依次更新3/5/10年结果
+CASH_COW_WORKER_ENABLED=true
 # Server-side QR login requires an administrator session.
 SOCIAL_BROWSER_CHANNEL=
 SOCIAL_BROWSER_HEADLESS=true

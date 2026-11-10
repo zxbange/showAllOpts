@@ -70,7 +70,7 @@ test('dividend module switches rules, searches and shows overlap on desktop/mobi
   await expect(page.getByRole('heading', { level: 1 })).toContainText('高股息选股')
   await expect(page.locator('tbody tr')).toHaveCount(25)
   await expect(page.locator('tbody tr').first()).toContainText('20.00%')
-  await expect(page.locator('.page-header .module-card')).toHaveCount(5)
+  await expect(page.locator('.page-header .module-card')).toHaveCount(6)
   await page.getByRole('link', { name: /高股息低估值（银行业）/ }).click()
   await expect(page.locator('tbody tr')).toHaveCount(10)
   await expect(
