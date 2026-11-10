@@ -1,6 +1,13 @@
 .cash-cow-page {
   min-width: 0;
 }
+/* Keep the complete control row inside the viewport. Mobile Chromium otherwise
+   scales/pans the visual viewport, displacing button and fixed-nav hit targets. */
+.cash-cow-page .heading-actions {
+  flex-wrap: wrap;
+  min-width: 0;
+  max-width: 100%;
+}
 .cash-cow-summary,
 .cash-cow-results {
   padding: 20px;

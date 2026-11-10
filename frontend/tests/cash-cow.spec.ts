@@ -99,7 +99,9 @@ test('search and ten annual rows work without overflowing mobile viewport', asyn
   await expect(page.locator('.cash-cow-table')).toContainText('年均收盘价')
   await expect(page.locator('.cash-cow-stock summary')).toContainText('5.00%')
   await expect(page.locator('.cash-cow-counts')).toContainText('待核验 10')
-  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
+  expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(
+    page.viewportSize()!.width,
+  )
 })
 
 for (const insufficient of [0, 10])
@@ -425,3 +427,41 @@ test('switching views during a pending refresh keeps one command and shares canc
   expect(starts).toBe(1)
   expect(cancels).toBe(1)
 })
+
+// innerWidth can grow with mobile overflow, so compare against the configured
+// device width and assert the actual visual viewport remains at its normal scale.
+for (const hasSnapshot of [false, true])
+  test(`cash cow controls fit the viewport and remain clickable with snapshot=${hasSnapshot}`, async ({
+    page,
+  }) => {
+    let starts = 0
+    await mock(page, hasSnapshot ? saved : { snapshot: null, items: [], status: idle })
+    await page.route('**/api/v1/cash-cow/refresh', (route) => {
+      starts++
+      return route.fulfill({ status: 503, json: { detail: '布局测试启动失败' } })
+    })
+    await page.goto('/cash-cow')
+    const update = page.getByRole('button', { name: '更新全部周期' })
+    await expect(update).toBeEnabled()
+    const viewportWidth = page.viewportSize()!.width
+    expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(
+      viewportWidth,
+    )
+    expect(await page.evaluate(() => window.visualViewport?.scale ?? 1)).toBeCloseTo(1, 2)
+    for (const control of [page.getByLabel('筛选年限'), update]) {
+      const box = await control.boundingBox()
+      expect(box).not.toBeNull()
+      expect(box!.x).toBeGreaterThanOrEqual(0)
+      expect(box!.x + box!.width).toBeLessThanOrEqual(viewportWidth)
+    }
+    await update.click()
+    await expect(page.getByRole('alert')).toContainText('布局测试启动失败')
+    expect(starts).toBe(1)
+    await page.getByRole('button', { name: '重新读取' }).click()
+    await expect(page.getByRole('alert')).toHaveCount(0)
+    await page
+      .getByRole('navigation', { name: '主导航' })
+      .getByRole('link', { name: '总览', exact: true })
+      .click()
+    await expect(page).toHaveURL(/\/$/)
+  })
