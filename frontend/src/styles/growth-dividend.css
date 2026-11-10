@@ -90,6 +90,31 @@
 .growth-dividend-legend .line-sample.dashed {
   border-top-style: dashed;
 }
+.growth-dividend-benchmarks {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 20px;
+  padding: 4px 6px;
+}
+.growth-dividend-benchmark {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  color: var(--line-color);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+.growth-dividend-benchmark .line-sample {
+  flex: 0 0 24px;
+  border-top: 1px dotted var(--line-color);
+  opacity: 0.6;
+}
+.growth-dividend-benchmark-note {
+  margin: 8px 6px 14px;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.8;
+}
 .growth-dividend-chart,
 .growth-dividend-placeholder {
   height: 470px;
@@ -215,6 +240,13 @@
   }
   .growth-dividend-legend .line-sample {
     width: 21px;
+  }
+  .growth-dividend-benchmarks {
+    gap: 8px 14px;
+    padding-inline: 0;
+  }
+  .growth-dividend-benchmark-note {
+    margin-inline: 0;
   }
   .growth-dividend-chart,
   .growth-dividend-placeholder {

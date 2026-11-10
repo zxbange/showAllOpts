@@ -160,7 +160,7 @@ export function SentimentChart({ points }: { points: SentimentPoint[] }) {
       ref={element}
       className="trend-chart sentiment-chart"
       role="img"
-      aria-label="市场情绪历史折线图：站上20日均线股票比例，冰点线20%，过热线80%，支持缩放"
+      aria-label="市场热度历史折线图：站上20日均线股票比例，冰点线20%，过热线80%，支持缩放"
     />
   )
 }

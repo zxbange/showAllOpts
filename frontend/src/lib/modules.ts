@@ -148,7 +148,7 @@ export const individualModules: ResearchModule[] = [
   },
   {
     id: 'market-sentiment',
-    name: '市场情绪跟踪',
+    name: '市场热度',
     path: '/market-sentiment',
     category: '市场结构',
     description: '全市场站上20日均线的股票比例，跟踪冰点与过热。',
@@ -228,15 +228,15 @@ export const individualModules: ResearchModule[] = [
 export const moduleGroups = [
   {
     name: '市场情绪',
-    description: '成交集中度、市场情绪、创红比、两融担保比例及指数 ETF 份额与流通市值。',
+    description: '指数 ETF 份额与流通市值、创红比、成交集中度、市场热度及两融担保比例。',
     ids: [
       'etf-shares',
+      'growth-dividend',
       'market-crowding',
       'market-sentiment',
       'margin-guarantee',
-      'growth-dividend',
     ],
-    labels: ['国家队动态', '抱团拥挤度', '市场情绪跟踪', '两融担保比例', '创红比'],
+    labels: ['国家队动态', '创红比', '抱团拥挤度', '市场热度', '两融担保比例'],
   },
   {
     name: '动量观察',

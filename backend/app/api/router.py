@@ -53,7 +53,7 @@ def modules():
         'description': '抱团拥挤度、全市场站上 MA20 比例、两融担保比例与创红比。',
         'path': '/market-crowding', 'status': 'available',
     }, {
-        'id': 'market-sentiment', 'name': '市场情绪跟踪',
+        'id': 'market-sentiment', 'name': '市场热度',
         'description': '站上20日均线股票比例，低于20%为冰点，高于80%为过热。',
         'path': '/market-sentiment', 'status': 'available',
     }, {

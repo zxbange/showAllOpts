@@ -42,7 +42,7 @@ test('sentiment navigation, three-year default, chart and range changes', async 
   })
   await page.goto('/market-crowding')
   const tabs = page.getByRole('navigation', { name: '市场情绪模块切换' })
-  await tabs.getByRole('link', { name: '市场情绪跟踪', exact: true }).click()
+  await tabs.getByRole('link', { name: '市场热度', exact: true }).click()
   await expect(page.getByRole('heading', { level: 1 })).toContainText('市场情绪')
   await expect(page.getByRole('button', { name: '近3年', exact: true })).toHaveAttribute(
     'aria-pressed',
@@ -60,7 +60,7 @@ test('sentiment navigation, three-year default, chart and range changes', async 
   })
   await page.getByRole('button', { name: '近1月', exact: true }).click()
   await expect(page.locator('.panel-heading')).toContainText('2026-09-24')
-  await page.getByRole('button', { name: '刷新市场情绪数据' }).click()
+  await page.getByRole('button', { name: '刷新市场热度数据' }).click()
   await expect(page.locator('.sentiment-chart canvas')).toBeVisible()
   expect([...new Set(ranges)]).toEqual(['0', '30'])
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
@@ -92,6 +92,6 @@ test('sentiment failure retry and empty state preserve module tabs', async ({ pa
   ).toHaveCount(5)
   failed = false
   await page.getByRole('button', { name: '重新加载' }).click()
-  await expect(page.getByRole('heading', { name: '暂无市场情绪数据' })).toBeVisible()
+  await expect(page.getByRole('heading', { name: '暂无市场热度数据' })).toBeVisible()
   await expect(page.locator('.sentiment-chart')).toHaveCount(0)
 })

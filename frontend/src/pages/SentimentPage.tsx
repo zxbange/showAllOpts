@@ -24,7 +24,7 @@ export function SentimentPage() {
       <PageHeader>
         <div>
           <h1>
-            市场情绪 <span className="heading-tag">市场情绪跟踪</span>
+            市场情绪 <span className="heading-tag">市场热度</span>
           </h1>
           <p>全市场站上20日均线的股票比例：低于20%为冰点，高于80%为过热。</p>
         </div>
@@ -35,7 +35,7 @@ export function SentimentPage() {
           </span>
           <button
             className="button button-quiet icon-button"
-            aria-label="刷新市场情绪数据"
+            aria-label="刷新市场热度数据"
             onClick={reload}
             disabled={loading}
           >
@@ -89,7 +89,7 @@ export function SentimentPage() {
           <div>
             <div className="panel-title">
               <span className="status-dot" />
-              <h2>全市场情绪走势</h2>
+              <h2>全市场热度走势</h2>
               {latest && (
                 <span className={'sentiment-state sentiment-' + latest.state}>
                   {states[latest.state]}
@@ -102,7 +102,7 @@ export function SentimentPage() {
                 : '按交易日记录 · 保留最近3年'}
             </p>
           </div>
-          <div className="range-switch" aria-label="市场情绪历史范围">
+          <div className="range-switch" aria-label="市场热度历史范围">
             {[
               { days: 30, label: '近1月' },
               { days: 90, label: '近3月' },
@@ -133,8 +133,8 @@ export function SentimentPage() {
           </>
         ) : (
           <EmptyState
-            title="暂无市场情绪数据"
-            description="请先在聚宽运行市场情绪采集，再通过“数据同步”更新“市场情绪跟踪”。"
+            title="暂无市场热度数据"
+            description="请先在聚宽运行对应采集脚本，再通过“数据同步”更新“市场热度”。"
           />
         )}
       </section>

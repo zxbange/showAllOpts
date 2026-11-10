@@ -8,7 +8,7 @@ from app.schemas.sentiment import SentimentHistory
 from app.services.sentiment import SentimentService
 from app.services.momentum import china_today
 
-router = APIRouter(prefix='/market-sentiment', tags=['市场情绪跟踪'])
+router = APIRouter(prefix='/market-sentiment', tags=['市场热度'])
 
 
 @router.get('/history', response_model=SentimentHistory)

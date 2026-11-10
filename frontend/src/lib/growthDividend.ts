@@ -19,6 +19,54 @@ export const growthDividendLines = [
   { key: 'star50_dividend_ratio', name: '科创红利比', code: '', color: '#c65342', ratio: true },
 ] as const
 
+type GrowthDividendRatioKey = Extract<(typeof growthDividendLines)[number], { ratio: true }>['key']
+
+export interface GrowthDividendBenchmark {
+  key: GrowthDividendRatioKey
+  name: string
+  color: string
+  sampleCount: number
+  levels: Array<{ percentile: 'P10' | 'P90' | 'P10/P90'; value: number }>
+}
+
+/** Full-history percentiles are independent of the chart's visible date window. */
+export function growthDividendBenchmarks(points: GrowthDividendPoint[]): GrowthDividendBenchmark[] {
+  return growthDividendLines.flatMap((line) => {
+    if (!line.ratio) return []
+    const samples = points
+      .filter((point) => line.key !== 'chinext_dividend_ratio' || point.date >= '2018-01-01')
+      .map((point) => point[line.key])
+      .filter(
+        (value): value is number =>
+          typeof value === 'number' && Number.isFinite(value) && value > 0,
+      )
+      .sort((a, b) => a - b)
+    if (!samples.length) return []
+    const quantile = (fraction: number) => {
+      const position = (samples.length - 1) * fraction
+      const lower = Math.floor(position)
+      return samples[lower] + (samples[Math.ceil(position)] - samples[lower]) * (position - lower)
+    }
+    const p10 = quantile(0.1)
+    const p90 = quantile(0.9)
+    return [
+      {
+        key: line.key,
+        name: line.name,
+        color: line.color,
+        sampleCount: samples.length,
+        levels:
+          p10 === p90
+            ? [{ percentile: 'P10/P90' as const, value: p10 }]
+            : [
+                { percentile: 'P10' as const, value: p10 },
+                { percentile: 'P90' as const, value: p90 },
+              ],
+      },
+    ]
+  })
+}
+
 /** Calendar-year subtraction clamps leap day instead of drifting into March. */
 export function calendarYearsAgo(day: string, years: number): string {
   const [year, month, date] = day.split('-').map(Number)
@@ -52,7 +100,10 @@ export function growthDividendSpan(
   return start <= end ? { start, end } : null
 }
 
-export function growthDividendSeries(points: GrowthDividendPoint[]) {
+export function growthDividendSeries(
+  points: GrowthDividendPoint[],
+  benchmarks = growthDividendBenchmarks(points),
+) {
   return growthDividendLines.map((line) => ({
     id: line.key,
     name: line.name,
@@ -69,6 +120,23 @@ export function growthDividendSeries(points: GrowthDividendPoint[]) {
       width: line.ratio ? 2.1 : 1.8,
     },
     itemStyle: { color: line.color },
+    markLine: line.ratio
+      ? {
+          silent: true,
+          animation: false,
+          symbol: 'none',
+          // Complete labels live below the chart, so nearby levels cannot overlap
+          // each other or be clipped against the right axis on narrow screens.
+          label: { show: false },
+          lineStyle: { color: line.color, type: 'dotted' as const, width: 1, opacity: 0.5 },
+          data: (benchmarks.find((benchmark) => benchmark.key === line.key)?.levels ?? []).map(
+            (level) => ({
+              name: `${line.name} ${level.percentile} ${growthDividendValue(level.value, true)}`,
+              yAxis: level.value,
+            }),
+          ),
+        }
+      : undefined,
     emphasis: { focus: 'series' as const },
     z: line.ratio ? 4 : 3,
   }))

@@ -13,17 +13,17 @@ describe('national team ETF navigation', () => {
   it('puts 国家队动态 first and keeps five distinct market tabs in matching label order', () => {
     expect(market.ids).toEqual([
       'etf-shares',
+      'growth-dividend',
       'market-crowding',
       'market-sentiment',
       'margin-guarantee',
-      'growth-dividend',
     ])
     expect(market.labels).toEqual([
       '国家队动态',
-      '抱团拥挤度',
-      '市场情绪跟踪',
-      '两融担保比例',
       '创红比',
+      '抱团拥挤度',
+      '市场热度',
+      '两融担保比例',
     ])
     expect(
       market.ids.map((id) => individualModules.find((module) => module.id === id)?.name),

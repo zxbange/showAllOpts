@@ -55,7 +55,9 @@ async function inspectChart(page: Page) {
       .map((entry) => entry.name)
       .find((value) => /\/echarts_core\.js\?/.test(value))!
     const { getInstanceByDom } = await import(url)
-    const option = getInstanceByDom(document.querySelector('.growth-dividend-chart')).getOption()
+    const instance = getInstanceByDom(document.querySelector('.growth-dividend-chart'))
+    const option = instance.getOption()
+    const model = instance.getModel()
     const zoom = option.dataZoom[0]
     const dateAt = (value: number | string) =>
       typeof value === 'number' ? option.xAxis[0].data[value] : value
@@ -68,20 +70,29 @@ async function inspectChart(page: Page) {
       slider: option.dataZoom[1].type,
       dates: option.xAxis[0].data as string[],
       selected: option.legend[0].selected as Record<string, boolean>,
+      leftExtent: model.getComponent('yAxis', 0).axis.scale.getExtent() as [number, number],
+      rightExtent: model.getComponent('yAxis', 1).axis.scale.getExtent() as [number, number],
       series: option.series.map(
-        (line: {
-          name: string
-          yAxisIndex: number
-          lineStyle: { type: string; color: string }
-          data: Array<number | null>
-          connectNulls: boolean
-        }) => ({
+        (
+          line: {
+            name: string
+            yAxisIndex: number
+            lineStyle: { type: string; color: string }
+            data: Array<number | null>
+            connectNulls: boolean
+            markLine?: { lineStyle: { type: string }; data: Array<{ name: string; yAxis: number }> }
+          },
+          index: number,
+        ) => ({
           name: line.name,
           axis: line.yAxisIndex,
           style: line.lineStyle.type,
           color: line.lineStyle.color,
           data: line.data,
           connectNulls: line.connectNulls,
+          visible: !model.isSeriesFiltered(model.getSeriesByIndex(index)),
+          referenceStyle: line.markLine?.lineStyle.type,
+          references: line.markLine?.data ?? [],
         }),
       ),
     }
@@ -128,11 +139,28 @@ test('five-year default, all history, date entry and manual zoom survive refresh
   expect(chart.series[2].data[4]).toBeNull()
   expect(chart.series[3].data[0]).toBe(0.5)
   expect(chart.series.every((line) => !line.connectNulls)).toBe(true)
+  const references = chart.series.map((line) => line.references)
+  expect(references.slice(0, 3)).toEqual([[], [], []])
+  expect(chart.series.slice(3).map((line) => line.referenceStyle)).toEqual(['dotted', 'dotted'])
+  // These are calculated from all ten historical dates, including observations
+  // outside the five-year view; the early STAR nulls are not zero samples.
+  expect(references[3][0].yAxis).toBeCloseTo(0.5054216867469879, 12)
+  expect(references[3][1].yAxis).toBeCloseTo(0.5388209920920201, 12)
+  expect(references[4][0].yAxis).toBeCloseTo(0.2220704529115744, 12)
+  expect(references[4][1].yAxis).toBeCloseTo(0.23966553436111837, 12)
+  const benchmarkLabels = page.locator('.growth-dividend-benchmark')
+  await expect(benchmarkLabels).toHaveText([
+    '创红比 P10 0.5054',
+    '创红比 P90 0.5388',
+    '科创红利比 P10 0.2221',
+    '科创红利比 P90 0.2397',
+  ])
   await expect(page.getByText('每个交易日北京时间 18:00 更新')).toBeVisible()
   await page.getByRole('button', { name: '全部', exact: true }).click()
   await expect
     .poll(() => inspectChart(page))
     .toMatchObject({ start: '2018-01-02', end: '2026-11-10' })
+  expect((await inspectChart(page)).series.map((line) => line.references)).toEqual(references)
   await page.getByRole('button', { name: '隐藏科创50', exact: true }).click()
   await expect.poll(async () => (await inspectChart(page)).selected['科创50']).toBe(false)
   await page.getByRole('button', { name: '显示科创50', exact: true }).click()
@@ -143,6 +171,23 @@ test('five-year default, all history, date entry and manual zoom survive refresh
   await expect
     .poll(() => inspectChart(page))
     .toMatchObject({ start: '2020-01-02', end: '2021-11-10' })
+  const custom = await inspectChart(page)
+  expect(custom.series.map((line) => line.references)).toEqual(references)
+  // Local ratios do not reach the full-history P10/P90, but the right axis
+  // still contains all four visible benchmarks. The left axis stays local.
+  expect(custom.rightExtent[0]).toBeLessThan(references[4][0].yAxis)
+  expect(custom.rightExtent[1]).toBeGreaterThan(references[3][1].yAxis)
+  expect(custom.leftExtent[1]).toBeLessThan(points.at(-1)!.dividend!)
+  await page.getByRole('button', { name: '隐藏创红比', exact: true }).click()
+  await expect(benchmarkLabels).toHaveText(['科创红利比 P10 0.2221', '科创红利比 P90 0.2397'])
+  await expect.poll(async () => (await inspectChart(page)).series[3].visible).toBe(false)
+  expect((await inspectChart(page)).rightExtent[1]).toBeLessThan(references[3][0].yAxis)
+  await page.getByRole('button', { name: '隐藏科创红利比', exact: true }).click()
+  await expect(benchmarkLabels).toHaveCount(0)
+  await expect.poll(async () => (await inspectChart(page)).series[4].visible).toBe(false)
+  await page.getByRole('button', { name: '显示创红比', exact: true }).click()
+  await page.getByRole('button', { name: '显示科创红利比', exact: true }).click()
+  await expect(benchmarkLabels).toHaveCount(4)
   await page.evaluate(async () => {
     const url = performance
       .getEntriesByType('resource')
@@ -156,10 +201,17 @@ test('five-year default, all history, date entry and manual zoom survive refresh
     })
   })
   const manual = await inspectChart(page)
+  expect(manual.series.map((line) => line.references)).toEqual(references)
   await expect(page.getByRole('button', { name: '近5年', exact: true })).toHaveAttribute(
     'aria-pressed',
     'false',
   )
+  const draftStart = page.getByLabel('创红比开始日期', { exact: true })
+  await draftStart.fill('2020-01-01')
+  await page.getByRole('button', { name: '隐藏科创50', exact: true }).click()
+  await expect(draftStart).toHaveValue('2020-01-01')
+  await page.getByRole('button', { name: '显示科创50', exact: true }).click()
+  await expect(draftStart).toHaveValue('2020-01-01')
   expect(reads).toBe(initialReads)
   snapshot = {
     ...history,
@@ -171,12 +223,25 @@ test('five-year default, all history, date entry and manual zoom survive refresh
   await expect(page.locator('.date-badge')).toContainText('2026-11-11')
   await expect
     .poll(() => inspectChart(page))
-    .toMatchObject({ start: manual.start, end: manual.end })
+    .toMatchObject({
+      start: manual.start,
+      end: manual.end,
+      dates: snapshot.points.map((point) => point.date),
+    })
+  await expect(draftStart).toHaveValue('2020-01-01')
+  const updated = await inspectChart(page)
+  expect(updated.series[3].references[0].yAxis).toBeCloseTo(2100 / 4150, 12)
+  expect(updated.series[3].references[1].yAxis).toBeCloseTo(2900 / 5350, 12)
+  expect(updated.series[4].references[0].yAxis).toBeCloseTo(1180 / 5350, 12)
+  expect(updated.series.map((line) => line.references)).not.toEqual(references)
   expect(reads).toBe(initialReads + 1)
   await page.getByRole('button', { name: '近5年', exact: true }).click()
   await expect
     .poll(() => inspectChart(page))
     .toMatchObject({ start: '2023-11-10', end: '2026-11-11' })
+  expect((await inspectChart(page)).series.map((line) => line.references)).toEqual(
+    updated.series.map((line) => line.references),
+  )
   // Today's entirely missing row is visible in the full calendar but must not
   // become the end of the default five-year window or invalidate the date form.
   snapshot = {
@@ -198,6 +263,9 @@ test('five-year default, all history, date entry and manual zoom survive refresh
   await expect(endInput).toHaveAttribute('max', '2026-11-12')
   await expect(endInput).toHaveValue('2026-11-11')
   await expect.poll(() => inspectChart(page)).toMatchObject({ end: '2026-11-11' })
+  expect((await inspectChart(page)).series.map((line) => line.references)).toEqual(
+    updated.series.map((line) => line.references),
+  )
   await page.getByRole('button', { name: '全部', exact: true }).click()
   await expect(endInput).toHaveValue('2026-11-12')
   expect(await endInput.evaluate((input: HTMLInputElement) => input.checkValidity())).toBe(true)
@@ -291,10 +359,10 @@ test('new tab stays inside market sentiment and read-only accounts cannot trigge
   const tabs = page.getByRole('navigation', { name: '市场情绪模块切换' })
   await expect(tabs.getByRole('link')).toHaveText([
     '国家队动态',
-    '抱团拥挤度',
-    '市场情绪跟踪',
-    '两融担保比例',
     '创红比',
+    '抱团拥挤度',
+    '市场热度',
+    '两融担保比例',
   ])
   await tabs.getByRole('link', { name: '创红比', exact: true }).click()
   await expect(page).toHaveURL(/growth-dividend$/)

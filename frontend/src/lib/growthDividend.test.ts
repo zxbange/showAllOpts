@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   calendarYearsAgo,
+  growthDividendBenchmarks,
   growthDividendSeries,
   growthDividendSpan,
   growthDividendValue,
@@ -82,4 +83,78 @@ it('renders raw index levels on the left and unscaled ratios as dashed lines on 
   expect(series.every((line) => !line.connectNulls)).toBe(true)
   expect(growthDividendValue(null, true)).toBe('—')
   expect(growthDividendValue(0.1234567, true)).toBe('0.1235')
+})
+
+describe('full-history percentile benchmarks', () => {
+  const sample = (
+    date: string,
+    chinext: number | null,
+    star50: number | null = null,
+  ): GrowthDividendPoint => ({
+    ...points[0],
+    date,
+    chinext_dividend_ratio: chinext,
+    star50_dividend_ratio: star50,
+  })
+
+  it('interpolates independent historical samples and excludes pre-2018 ChiNext values', () => {
+    const history = [
+      sample('2017-12-29', 9999),
+      sample('2018-01-02', 0.5),
+      sample('2019-12-31', 0.1),
+      sample('2020-01-02', 0.4, 1),
+      sample('2022-01-04', 0.2, 0.2),
+      sample('2026-11-10', 0.3, 0.6),
+    ]
+    const original = structuredClone(history)
+    const [chinext, star50] = growthDividendBenchmarks(history)
+    expect(chinext.sampleCount).toBe(5)
+    expect(chinext.levels.map((level) => level.percentile)).toEqual(['P10', 'P90'])
+    expect(chinext.levels[0].value).toBeCloseTo(0.14, 12)
+    expect(chinext.levels[1].value).toBeCloseTo(0.46, 12)
+    expect(star50.sampleCount).toBe(3)
+    expect(star50.levels[0].value).toBeCloseTo(0.28, 12)
+    expect(star50.levels[1].value).toBeCloseTo(0.92, 12)
+    expect(history).toEqual(original)
+  })
+
+  it('ignores missing, non-finite and non-positive ratios without creating zero samples', () => {
+    const invalid = [null, NaN, Infinity, -Infinity, 0, -0.2].map((value) =>
+      sample('2020-01-02', value, value),
+    )
+    expect(growthDividendBenchmarks(invalid)).toEqual([])
+    expect(growthDividendBenchmarks([])).toEqual([])
+    const [single] = growthDividendBenchmarks([...invalid, sample('2026-11-10', 0.3)])
+    expect(single).toMatchObject({
+      key: 'chinext_dividend_ratio',
+      sampleCount: 1,
+      levels: [{ percentile: 'P10/P90', value: 0.3 }],
+    })
+    expect(growthDividendSeries(invalid).filter((line) => line.markLine?.data.length)).toEqual([])
+    const constant = growthDividendSeries([sample('2020-01-02', 0.3), sample('2026-11-10', 0.3)])
+    expect(constant[3].markLine?.data).toEqual([{ name: '创红比 P10/P90 0.3000', yAxis: 0.3 }])
+    expect(constant[4].markLine?.data).toEqual([])
+  })
+
+  it('updates when observations are corrected or added, but ignores newly missing dates', () => {
+    const history = [sample('2018-01-02', 0.2), sample('2026-11-10', 0.8)]
+    const before = growthDividendBenchmarks(history)
+    expect(before[0].levels[0].value).toBeCloseTo(0.26, 12)
+    expect(before[0].levels[1].value).toBeCloseTo(0.74, 12)
+    expect(growthDividendBenchmarks([...history, sample('2026-11-11', null)])).toEqual(before)
+    const after = growthDividendBenchmarks([
+      history[0],
+      sample('2026-11-10', 0.4),
+      sample('2026-11-11', 0.6),
+    ])
+    expect(after[0].sampleCount).toBe(3)
+    expect(after[0].levels[0].value).toBeCloseTo(0.24, 12)
+    expect(after[0].levels[1].value).toBeCloseTo(0.56, 12)
+    const series = growthDividendSeries(history, before)
+    expect(series.slice(0, 3).every((line) => line.markLine === undefined)).toBe(true)
+    expect(series[3].markLine?.lineStyle).toMatchObject({ type: 'dotted', width: 1 })
+    expect(series[3].markLine?.data.map((line) => line.yAxis)).toEqual(
+      before[0].levels.map((level) => level.value),
+    )
+  })
 })

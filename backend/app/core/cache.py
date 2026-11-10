@@ -42,7 +42,7 @@ CHINA = timezone(timedelta(hours=8))
 MODULES = {
     'industry-momentum': ('行业动量', (IndustryMomentum,)),
     'market-crowding': ('抱团拥挤度', (MarketCrowding,)),
-    'market-sentiment': ('市场情绪跟踪', (MarketSentiment,)),
+    'market-sentiment': ('市场热度', (MarketSentiment,)),
     'microcap-temperature': ('微盘温度计', (MicrocapTemperature,)),
     # Price table is optional and reconciled by etf_sync; keep legacy cache identity stable.
     'etf-shares': ('ETF份额仪表盘', (ETFShare,)),
