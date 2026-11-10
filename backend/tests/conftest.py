@@ -55,3 +55,6 @@ def client(engine, tmp_path):
 def direct_database_for_existing_tests(monkeypatch):
     # Existing repository/API tests intentionally verify source queries. Cache tests opt in explicitly.
     monkeypatch.setenv('CACHE_ENABLED', 'false')
+    # Index history has a real startup backfill in production. Offline tests must
+    # opt in explicitly and install their own provider fixtures before starting it.
+    monkeypatch.setenv('GROWTH_DIVIDEND_WORKER_ENABLED', 'false')

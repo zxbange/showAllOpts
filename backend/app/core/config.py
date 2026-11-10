@@ -70,6 +70,7 @@ class Settings(BaseSettings):
     etf_collection_batch_days: int = Field(default=5, ge=1, le=20)
     social_worker_enabled: bool = True
     margin_worker_enabled: bool = True
+    growth_dividend_worker_enabled: bool = True
     cash_cow_worker_enabled: bool = True
     social_browser_login_key: SecretStr = SecretStr('')
     social_browser_channel: str = ''

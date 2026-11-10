@@ -213,12 +213,13 @@ test('compact bookmarks scroll and support keyboard without activating the wrong
   await page.goto('/etf-shares')
   const nav = page.getByRole('navigation', { name: '市场情绪模块切换' })
   const first = nav.getByRole('link', { name: '国家队动态', exact: true })
-  const last = nav.getByRole('link', { name: '两融担保比例', exact: true })
+  const last = nav.getByRole('link', { name: '创红比', exact: true })
   await expect(nav.getByRole('link')).toHaveText([
     '国家队动态',
     '抱团拥挤度',
     '市场情绪跟踪',
     '两融担保比例',
+    '创红比',
   ])
   await first.focus()
   await page.keyboard.press('End')
@@ -259,7 +260,7 @@ test('compact bookmarks scroll and support keyboard without activating the wrong
   await expect(last).toBeFocused()
   await expect(page).toHaveURL(/etf-shares$/)
   await page.keyboard.press('Enter')
-  await expect(page).toHaveURL(/margin-guarantee$/)
+  await expect(page).toHaveURL(/growth-dividend$/)
   await expect(last).toHaveAttribute('aria-current', 'page')
   await expect(nav.locator('[aria-current="page"]')).toHaveCount(1)
   await page.reload()

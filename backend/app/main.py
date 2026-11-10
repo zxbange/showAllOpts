@@ -18,6 +18,7 @@ from app.core.logging import ensure_logging
 from app.services.social import SocialMonitor
 from app.services.social_browser import BrowserLogin
 from app.services.margin_guarantee import MarginGuarantee
+from app.services.growth_dividend import GrowthDividend
 from app.services.commodities import Commodities
 from app.services.cci_coal import CCICoal
 from app.services.cash_cow import CashCowScreen
@@ -55,6 +56,9 @@ def create_app(settings: Settings | None = None, engine: Engine | None = None) -
             margin_guarantee = MarginGuarantee(settings)
             cleanup.push_async_callback(asyncio.to_thread, margin_guarantee.stop)
             application.state.margin_guarantee = margin_guarantee
+            growth_dividend = GrowthDividend(settings)
+            cleanup.push_async_callback(asyncio.to_thread, growth_dividend.stop)
+            application.state.growth_dividend = growth_dividend
             commodities = Commodities(settings)
             cleanup.push_async_callback(asyncio.to_thread, commodities.stop)
             application.state.commodities = commodities
@@ -79,6 +83,7 @@ def create_app(settings: Settings | None = None, engine: Engine | None = None) -
             cache.start()
             social.start()
             margin_guarantee.start()
+            growth_dividend.start()
             commodities.start()
             cci_coal.start()
             if settings.cash_cow_worker_enabled:

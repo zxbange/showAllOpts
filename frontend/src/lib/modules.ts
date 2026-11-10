@@ -158,6 +158,17 @@ export const individualModules: ResearchModule[] = [
     illustration: 'temperature',
   },
   {
+    id: 'growth-dividend',
+    name: '创红比',
+    path: '/growth-dividend',
+    category: '市场结构',
+    description: '创业板指、科创50与中证红利的点位及相对比值。',
+    tags: ['创红比', '科创红利比', '科创50', '每日18:00更新'],
+    icon: ChartNoAxesCombined,
+    tone: 'coral',
+    illustration: 'concentration',
+  },
+  {
     id: 'margin-guarantee',
     name: '两融担保比例',
     path: '/margin-guarantee',
@@ -217,9 +228,15 @@ export const individualModules: ResearchModule[] = [
 export const moduleGroups = [
   {
     name: '市场情绪',
-    description: '成交集中度、市场情绪、两融担保比例及指数 ETF 份额与合计流通市值。',
-    ids: ['etf-shares', 'market-crowding', 'market-sentiment', 'margin-guarantee'],
-    labels: ['国家队动态', '抱团拥挤度', '市场情绪跟踪', '两融担保比例'],
+    description: '成交集中度、市场情绪、创红比、两融担保比例及指数 ETF 份额与流通市值。',
+    ids: [
+      'etf-shares',
+      'market-crowding',
+      'market-sentiment',
+      'margin-guarantee',
+      'growth-dividend',
+    ],
+    labels: ['国家队动态', '抱团拥挤度', '市场情绪跟踪', '两融担保比例', '创红比'],
   },
   {
     name: '动量观察',

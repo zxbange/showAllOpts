@@ -45,6 +45,10 @@ const SentimentPage = lazy(() =>
   import('./pages/SentimentPage').then((module) => ({ default: module.SentimentPage })),
 )
 
+const GrowthDividendPage = lazy(() =>
+  import('./pages/GrowthDividendPage').then((module) => ({ default: module.GrowthDividendPage })),
+)
+
 const MarginPage = lazy(() =>
   import('./pages/MarginPage').then((module) => ({ default: module.MarginPage })),
 )
@@ -191,6 +195,14 @@ export default function App() {
               element={
                 <Suspense fallback={<LoadingState />}>
                   <SentimentPage />
+                </Suspense>
+              }
+            />
+            <Route
+              path="growth-dividend"
+              element={
+                <Suspense fallback={<LoadingState />}>
+                  <GrowthDividendPage />
                 </Suspense>
               }
             />

@@ -7,7 +7,7 @@ import app.main as main
 from app.core.config import Settings
 
 
-@pytest.mark.parametrize('failure', [None, 'margin.start', 'holdings.stop'])
+@pytest.mark.parametrize('failure', [None, 'margin.start', 'growth_dividend.start', 'holdings.stop'])
 def test_worker_cleanup_covers_startup_and_shutdown_failure(monkeypatch, engine, tmp_path, failure):
     events = []
 
@@ -24,6 +24,7 @@ def test_worker_cleanup_covers_startup_and_shutdown_failure(monkeypatch, engine,
 
     for cls, name in [('SnapshotCache', 'cache'), ('SocialMonitor', 'social'),
                       ('BrowserLogin', 'browser'), ('MarginGuarantee', 'margin'),
+                      ('GrowthDividend', 'growth_dividend'),
                       ('PersonalHoldings', 'holdings')]:
         monkeypatch.setattr(main, cls, Mock(return_value=worker(name)))
     monkeypatch.setattr(main, 'ensure_logging', lambda *_: None)
@@ -39,6 +40,6 @@ def test_worker_cleanup_covers_startup_and_shutdown_failure(monkeypatch, engine,
             run()
     else:
         run()
-    assert events[-6:] == ['holdings.stop', 'margin.stop',
+    assert events[-7:] == ['holdings.stop', 'growth_dividend.stop', 'margin.stop',
                            'browser.stop', 'social.stop', 'cache.stop', 'database.dispose']
-    assert ('serving' in events) == (failure != 'margin.start')
+    assert ('serving' in events) == (failure not in ('margin.start', 'growth_dividend.start'))

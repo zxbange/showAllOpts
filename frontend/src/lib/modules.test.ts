@@ -10,18 +10,25 @@ import {
 describe('national team ETF navigation', () => {
   const market = moduleGroups.find((group) => group.name === '市场情绪')!
 
-  it('puts 国家队动态 first and keeps four distinct market tabs in matching label order', () => {
+  it('puts 国家队动态 first and keeps five distinct market tabs in matching label order', () => {
     expect(market.ids).toEqual([
       'etf-shares',
       'market-crowding',
       'market-sentiment',
       'margin-guarantee',
+      'growth-dividend',
     ])
-    expect(market.labels).toEqual(['国家队动态', '抱团拥挤度', '市场情绪跟踪', '两融担保比例'])
+    expect(market.labels).toEqual([
+      '国家队动态',
+      '抱团拥挤度',
+      '市场情绪跟踪',
+      '两融担保比例',
+      '创红比',
+    ])
     expect(
       market.ids.map((id) => individualModules.find((module) => module.id === id)?.name),
     ).toEqual(market.labels)
-    expect(new Set(market.ids).size).toBe(4)
+    expect(new Set(market.ids).size).toBe(5)
     for (const id of market.ids) expect(groupForPath('/' + id)).toBe(market)
   })
 

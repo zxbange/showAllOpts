@@ -1,0 +1,231 @@
+.growth-dividend-page .growth-dividend-stats {
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+}
+.growth-dividend-stats .stat-card {
+  padding: 20px;
+}
+.growth-dividend-stats .stat-value {
+  font-size: 29px;
+  white-space: nowrap;
+}
+.growth-dividend-stats .stat-note {
+  min-height: 24px;
+  font-size: 12px;
+}
+.growth-dividend-toolbar,
+.growth-dividend-dates,
+.growth-dividend-update-heading,
+.growth-dividend-progress-label,
+.growth-dividend-error {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.growth-dividend-toolbar {
+  justify-content: space-between;
+  flex-wrap: wrap;
+  margin: 8px 0 20px;
+}
+.growth-dividend-dates {
+  gap: 8px;
+  max-width: 100%;
+  color: var(--muted);
+}
+.growth-dividend-dates label {
+  min-width: 0;
+}
+.growth-dividend-dates input {
+  width: 139px;
+  max-width: 100%;
+  min-width: 0;
+  min-height: 38px;
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--background, #fff);
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+}
+.growth-dividend-dates .button {
+  min-height: 38px;
+  padding: 8px 12px;
+  flex-shrink: 0;
+}
+.growth-dividend-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 14px;
+  padding: 0 6px 10px;
+}
+.growth-dividend-legend button {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  min-height: 34px;
+  padding: 4px 6px;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+}
+.growth-dividend-legend button:hover,
+.growth-dividend-legend button:focus-visible {
+  background: var(--surface);
+}
+.growth-dividend-legend button.muted {
+  opacity: 0.5;
+}
+.growth-dividend-legend small {
+  color: var(--muted);
+  font-size: 11px;
+}
+.growth-dividend-legend .line-sample {
+  width: 25px;
+  border-top: 2px solid var(--line-color);
+}
+.growth-dividend-legend .line-sample.dashed {
+  border-top-style: dashed;
+}
+.growth-dividend-chart,
+.growth-dividend-placeholder {
+  height: 470px;
+}
+.growth-dividend-placeholder {
+  display: grid;
+  place-items: center;
+}
+.growth-dividend-trend .panel-bottom {
+  flex-wrap: wrap;
+  gap: 8px 20px;
+  font-size: 12px;
+}
+.growth-dividend-update {
+  padding: 20px 24px;
+  margin-top: 22px;
+}
+.growth-dividend-update-heading {
+  justify-content: space-between;
+}
+.growth-dividend-update-heading strong {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 15px;
+  font-weight: 600;
+}
+.growth-dividend-update-heading .button {
+  flex-shrink: 0;
+}
+.growth-dividend-update-heading p,
+.growth-dividend-progress,
+.growth-dividend-update-meta {
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.7;
+}
+.growth-dividend-update-heading p {
+  margin: 6px 0 0;
+}
+.growth-dividend-progress {
+  margin-top: 14px;
+}
+.growth-dividend-progress-label {
+  justify-content: space-between;
+}
+.growth-dividend-progress progress {
+  display: block;
+  width: 100%;
+  height: 7px;
+  margin: 8px 0;
+  accent-color: #3568b4;
+}
+.growth-dividend-update-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 20px;
+  margin-top: 5px;
+}
+.growth-dividend-pending {
+  color: #98620d;
+}
+.growth-dividend-error {
+  justify-content: space-between;
+  margin-top: 12px;
+  padding: 12px 14px;
+  border-radius: 8px;
+  background: #fff0e9;
+  color: #993b2c;
+  font-size: 13px;
+}
+.growth-dividend-error .button {
+  flex-shrink: 0;
+}
+.growth-dividend-range-error {
+  color: #993b2c;
+  font-size: 13px;
+}
+.growth-dividend-method {
+  margin-top: 22px;
+}
+.growth-dividend-method p {
+  max-width: none;
+}
+@media (max-width: 1200px) {
+  .growth-dividend-page .growth-dividend-stats {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+@media (max-width: 700px) {
+  .growth-dividend-page .growth-dividend-stats {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .growth-dividend-stats .stat-card {
+    padding: 16px 14px;
+  }
+  .growth-dividend-stats .stat-value {
+    font-size: 25px;
+  }
+  .growth-dividend-toolbar {
+    gap: 16px;
+  }
+  .growth-dividend-dates {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+    width: 100%;
+  }
+  .growth-dividend-dates input {
+    width: 100%;
+  }
+  .growth-dividend-dates .button {
+    grid-column: 3;
+    justify-self: end;
+  }
+  .growth-dividend-legend {
+    gap: 2px 6px;
+    padding-inline: 0;
+  }
+  .growth-dividend-legend button {
+    min-height: 40px;
+    font-size: 12px;
+    gap: 5px;
+  }
+  .growth-dividend-legend .line-sample {
+    width: 21px;
+  }
+  .growth-dividend-chart,
+  .growth-dividend-placeholder {
+    height: 390px;
+  }
+  .growth-dividend-update {
+    padding: 18px;
+  }
+  .growth-dividend-update-heading,
+  .growth-dividend-error {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+}
