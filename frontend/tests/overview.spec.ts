@@ -103,6 +103,7 @@ test('group tabs preserve direct links, active navigation and mobile layout', as
     ['市场情绪', 'etf-shares', 'market-crowding', '抱团拥挤度'],
     ['微盘观察', 'microcap-temperature', 'microcap-breadth', '微盘新高新低'],
     ['业绩选股', 'high-growth', 'earnings-gap', '净利润断层'],
+    ['业绩选股', 'high-growth', 'cash-cow', '奶牛股'],
   ]) {
     await page.goto('/' + first)
     const tabs = page.getByRole('navigation', { name: group + '模块切换' })
@@ -111,7 +112,7 @@ test('group tabs preserve direct links, active navigation and mobile layout', as
     const cards = await tabs.boundingBox()
     expect(cards!.y + cards!.height).toBeLessThanOrEqual(heading!.y)
     await expect(tabs.locator('.module-card')).toHaveCount(
-      group === '市场情绪' ? 4 : group === '业绩选股' ? 5 : 2,
+      group === '市场情绪' ? 4 : group === '业绩选股' ? 6 : 2,
     )
     await tabs.getByRole('link', { name: label, exact: true }).click()
     await expect(page).toHaveURL(new RegExp(second + '$'))
@@ -134,7 +135,7 @@ test('shared module cards stay available while loading and after failures', asyn
   test.setTimeout(60000)
   for (const [path, count] of [
     ['etf-shares', 4],
-    ['dividend-selection', 5],
+    ['dividend-selection', 6],
   ] as const) {
     let release!: () => void
     const response = new Promise<void>((resolve) => {
@@ -291,6 +292,7 @@ test('page-local module bookmarks stay above titles and preserve ordinary contro
   )
   for (const path of [
     '/dividend-selection',
+    '/cash-cow',
     '/institution-ownership',
     '/commodities?instrument=cci',
     '/social-monitor',
