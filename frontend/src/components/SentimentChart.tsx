@@ -14,6 +14,7 @@ import {
 import { CanvasRenderer } from 'echarts/renderers'
 import { chartColors } from '../lib/chartTheme'
 import type { SentimentPoint } from '../types/sentiment'
+import { heatDenominator, heatSourceLabel, marketSourceSegments } from '../lib/marketCollection'
 
 use([
   LineChart,
@@ -67,7 +68,20 @@ export function SentimentChart({ points }: { points: SentimentPoint[] }) {
           backgroundColor: chartColors.background,
           borderColor: chartColors.border,
           textStyle: { color: chartColors.text },
-          valueFormatter: (v: unknown) => Number(v).toFixed(2) + '%',
+          formatter: (params: unknown) => {
+            const values = (Array.isArray(params) ? params : [params]) as Array<{
+              dataIndex?: number
+            }>
+            const point = points[values.find((value) => value.dataIndex != null)?.dataIndex ?? -1]
+            if (!point) return ''
+            const universe = heatDenominator(point) === 'universe'
+            return [
+              point.date,
+              heatSourceLabel(point),
+              `站上MA20比例：${(point.ratio * 100).toFixed(2)}%`,
+              `站上 ${point.above_count.toLocaleString('zh-CN')} 只 / ${universe ? '股票总数' : '有效股票'} ${(universe ? point.universe_count : point.eligible_count).toLocaleString('zh-CN')} 只`,
+            ].join('\n')
+          },
         },
         xAxis: {
           type: 'category',
@@ -99,12 +113,15 @@ export function SentimentChart({ points }: { points: SentimentPoint[] }) {
           },
         ],
         series: [
-          {
+          ...marketSourceSegments(points, 'heat').map((segment, segmentIndex) => ({
+            id: `heat-segment-${segmentIndex}`,
             name: '站上MA20比例',
             type: 'line',
-            data: points.map((p) => p.ratio * 100),
+            data: points.map((p, index) =>
+              index >= segment.start && index <= segment.end ? p.ratio * 100 : null,
+            ),
             smooth: false,
-            showSymbol: points.length < 3,
+            showSymbol: segment.end - segment.start < 2,
             connectNulls: false,
             lineStyle: { width: 2.5 },
             itemStyle: { color: blue },
@@ -125,19 +142,23 @@ export function SentimentChart({ points }: { points: SentimentPoint[] }) {
                 padding: [6, 8],
                 formatter: () => '当前 ' + ((latest?.ratio ?? 0) * 100).toFixed(1) + '%',
               },
-              data: latest
-                ? [{ coord: [latest.date, latest.ratio * 100], value: latest.ratio * 100 }]
-                : [],
+              data:
+                latest && segment.end === points.length - 1
+                  ? [{ coord: [latest.date, latest.ratio * 100], value: latest.ratio * 100 }]
+                  : [],
             },
             markArea: {
               silent: true,
               label: { show: false },
-              data: [
-                [{ yAxis: 0, itemStyle: { color: 'rgba(33,123,112,0.05)' } }, { yAxis: 20 }],
-                [{ yAxis: 80, itemStyle: { color: 'rgba(196,72,55,0.05)' } }, { yAxis: 100 }],
-              ],
+              data:
+                segmentIndex === 0
+                  ? [
+                      [{ yAxis: 0, itemStyle: { color: 'rgba(33,123,112,0.05)' } }, { yAxis: 20 }],
+                      [{ yAxis: 80, itemStyle: { color: 'rgba(196,72,55,0.05)' } }, { yAxis: 100 }],
+                    ]
+                  : [],
             },
-          },
+          })),
           ...[
             { name: '冰点线 20%', value: 20, color: chartColors.jade },
             { name: '过热线 80%', value: 80, color: chartColors.coral },

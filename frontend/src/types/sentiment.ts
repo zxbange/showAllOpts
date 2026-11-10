@@ -1,4 +1,6 @@
-export interface SentimentPoint {
+import type { MarketPointSource } from './marketCollection'
+
+export interface SentimentPoint extends MarketPointSource {
   date: string
   ratio: number
   above_count: number

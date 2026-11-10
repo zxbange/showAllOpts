@@ -25,6 +25,7 @@ from app.services.cash_cow import CashCowScreen
 from app.services.cash_cow_schedule import MonthlyCashCowScheduler
 from app.services.accounts import Accounts
 from app.services.etf_collection import ETFCollection
+from app.services.market_collection import MarketCollection
 from app.services.personal_holdings import PersonalHoldings
 from app.api.routes.accounts import router as accounts_router, require_user
 from fastapi import Depends
@@ -79,6 +80,12 @@ def create_app(settings: Settings | None = None, engine: Engine | None = None) -
             cleanup.push_async_callback(asyncio.to_thread, etf_collection.stop)
             application.state.etf_collection = etf_collection
             etf_collection.start()
+            market_collection = MarketCollection(settings, refresh=cache.refresh_market_collection)
+            market_collection.shared_configuration = etf_collection.configuration
+            cleanup.push_async_callback(asyncio.to_thread, market_collection.stop)
+            application.state.market_collection = market_collection
+            if settings.market_collection_worker_enabled:
+                market_collection.start()
             holdings.start()
             cache.start()
             social.start()

@@ -1,4 +1,5 @@
 from datetime import date, datetime
+from typing import Literal
 
 from pydantic import BaseModel
 
@@ -7,6 +8,7 @@ class CrowdingPoint(BaseModel):
     date: date
     ratio: float
     smoothed_ratio: float
+    source: Literal['joinquant', 'sina'] = 'joinquant'
 
 
 class CrowdingLatest(BaseModel):
@@ -17,6 +19,7 @@ class CrowdingLatest(BaseModel):
     top_money: float
     total_money: float
     updated_at: datetime
+    source: Literal['joinquant', 'sina'] = 'joinquant'
 
 
 class CrowdingSummary(BaseModel):

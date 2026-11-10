@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 
 from app.core.config import Settings
-from app.core.logging import PollingAccessFilter, StandardFormatter, configure_logging, daily_handler
+from app.core.logging import PollingAccessFilter, StandardFormatter, configure_logging, daily_handler, logging_config
 
 
 def access_record(path, status=200, method='GET', level=logging.INFO, name='uvicorn.access'):
@@ -112,6 +112,19 @@ def test_formatter_strips_color_and_redacts_urls_for_console_too():
     text = stream.getvalue()
     assert '\x1b' not in text and 'user:pass' not in text and 'a%20b%40c' not in text
     assert text.count('| frontend |') == 2
+
+
+def test_collection_writer_passwords_and_encoded_variants_are_redacted(tmp_path):
+    from urllib.parse import quote, quote_plus
+    password = 'writer-only pass@2026'
+    settings = Settings(_env_file=None, log_dir=tmp_path,
+                        market_collection_writer_url='mysql+pymysql://writer:' + quote(password, safe='') + '@db.example/market',
+                        etf_collection_writer_url='mysql+pymysql://writer:etf-private-pass@db.example/market')
+    formatter = StandardFormatter(logging_config(settings)['formatters']['standard']['secrets'])
+    record = logging.LogRecord('app.test', logging.ERROR, __file__, 1,
+                               'driver: ' + password + ' ' + quote(password, safe='') + ' ' + quote_plus(password) + ' etf-private-pass', (), None)
+    result = formatter.format(record)
+    assert all(value not in result for value in (password, quote(password, safe=''), quote_plus(password), 'etf-private-pass'))
 
 
 def test_daily_rollover_keeps_existing_data_and_limits_archives(tmp_path):

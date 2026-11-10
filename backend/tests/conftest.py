@@ -58,3 +58,4 @@ def direct_database_for_existing_tests(monkeypatch):
     # Index history has a real startup backfill in production. Offline tests must
     # opt in explicitly and install their own provider fixtures before starting it.
     monkeypatch.setenv('GROWTH_DIVIDEND_WORKER_ENABLED', 'false')
+    monkeypatch.setenv('MARKET_COLLECTION_WORKER_ENABLED', 'false')

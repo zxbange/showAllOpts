@@ -7,8 +7,9 @@ from app.schemas.crowding import (
 
 
 class CrowdingService:
-    def __init__(self, repository: CrowdingRepository):
+    def __init__(self, repository: CrowdingRepository, provenance=None):
         self.repository = repository
+        self.provenance = provenance or (lambda row: {})
 
     def history(self, days: int, end: date) -> CrowdingHistory:
         rows = self.repository.history(end)
@@ -20,7 +21,13 @@ class CrowdingService:
         numerator = denominator = 0.0
         # pandas ewm(span=10, adjust=True), calculated BEFORE slicing the display window.
         decay = 1 - 2 / 11
+        previous_source = None
         for row in rows:
+            metadata = self.provenance(row)
+            source = metadata.get('source', 'joinquant')
+            if previous_source is not None and source != previous_source:
+                numerator = denominator = 0.0
+            previous_source = source
             ratio = float(row.ratio)
             numerator = ratio + decay * numerator
             denominator = 1 + decay * denominator
@@ -28,6 +35,7 @@ class CrowdingService:
                 points.append(CrowdingPoint(
                     date=row.trade_date, ratio=ratio,
                     smoothed_ratio=numerator / denominator,
+                    **metadata,
                 ))
         values = [point.ratio for point in points]
         return CrowdingHistory(
@@ -37,6 +45,7 @@ class CrowdingService:
                 stock_count=latest.stock_count, top_stock_count=latest.top_stock_count,
                 top_money=float(latest.top_money), total_money=float(latest.total_money),
                 updated_at=latest.updated_at,
+                **self.provenance(latest),
             ),
             summary=CrowdingSummary(
                 observed_days=len(values), average_ratio=sum(values) / len(values),

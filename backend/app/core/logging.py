@@ -8,6 +8,7 @@ from pathlib import Path
 from urllib.parse import quote, quote_plus
 
 from concurrent_log_handler import ConcurrentTimedRotatingFileHandler
+from sqlalchemy.engine import make_url
 
 from app.core.config import Settings
 
@@ -21,7 +22,8 @@ SECRET_FIELD = re.compile(
 class PollingAccessFilter(logging.Filter):
     """Omit only successful GET polling; keep failures and unexpected formats."""
 
-    paths = frozenset({'/api/v1/etf-shares/collection-status', '/api/v1/cache/status'})
+    paths = frozenset({'/api/v1/etf-shares/collection-status', '/api/v1/cache/status',
+                       '/api/v1/market-collection/status'})
 
     def filter(self, record):
         if record.name != 'uvicorn.access' or record.levelno >= logging.WARNING:
@@ -83,6 +85,16 @@ def logging_config(settings: Settings):
     secrets = [settings.db_password.get_secret_value()]
     secrets.append(settings.social_browser_login_key.get_secret_value())
     secrets.extend([settings.validation_admin_key.get_secret_value(), settings.validation_encryption_key.get_secret_value()])
+    for field in ('market_collection_writer_url', 'etf_collection_writer_url'):
+        raw = getattr(settings, field).get_secret_value()
+        if raw:
+            secrets.append(raw)
+            try:
+                password = make_url(raw).password
+                if password:
+                    secrets.append(password)
+            except Exception:
+                pass
     secrets.extend(value for value in (settings.db_host, settings.db_user, settings.db_name)
                    if len(value) >= 4)
     return {

@@ -135,7 +135,9 @@ export function Layout() {
                 : '长江有色金属网（CCMN）'
               : location.pathname === '/margin-guarantee'
                 ? '东方财富'
-                : '聚宽采集'}{' '}
+                : ['/market-sentiment', '/market-crowding'].includes(location.pathname)
+                  ? '新浪日采集 / 聚宽历史（按记录标注）'
+                  : '聚宽采集'}{' '}
             <ArrowUpRight size={12} />
           </span>
         </footer>

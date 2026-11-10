@@ -5,8 +5,10 @@ import { useResource } from '../hooks/useResource'
 import { PageHeader } from '../components/PageHeader'
 import { StatCard } from '../components/StatCard'
 import { SentimentChart } from '../components/SentimentChart'
+import { MarketCollectionPanel } from '../components/MarketCollectionPanel'
 import { EmptyState, ErrorState } from '../components/States'
 import { formatDate } from '../lib/format'
+import { heatDenominator, heatSourceLabel, marketSourceSegments } from '../lib/marketCollection'
 import '../styles/sentiment.css'
 
 const percent = (value: number | null | undefined) =>
@@ -19,6 +21,9 @@ export function SentimentPage() {
   const loader = useCallback((signal: AbortSignal) => getSentimentHistory(days, signal), [days])
   const { data, error, loading, reload } = useResource(loader)
   const latest = data?.latest
+  const totalDenominator = heatDenominator(latest) === 'universe'
+  const differentMethod = !!latest && (totalDenominator || latest.price_basis === 'bfq')
+  const mixedSources = marketSourceSegments(data?.points ?? [], 'heat').length > 1
   return (
     <div className="page-enter sentiment-page">
       <PageHeader>
@@ -43,6 +48,7 @@ export function SentimentPage() {
           </button>
         </div>
       </PageHeader>
+      <MarketCollectionPanel onCollected={reload} />
       {error ? (
         <ErrorState message={error} retry={reload} />
       ) : (
@@ -59,7 +65,11 @@ export function SentimentPage() {
               label="站上均线股票"
               value={number(latest?.above_count)}
               suffix="只"
-              note={'有效样本 ' + number(latest?.eligible_count) + ' 只'}
+              note={
+                totalDenominator
+                  ? `股票总数 ${number(latest?.universe_count)} 只 · 有效MA20 ${number(latest?.eligible_count)} 只`
+                  : `有效样本 ${number(latest?.eligible_count)} 只 · 股票总数 ${number(latest?.universe_count)} 只`
+              }
               icon={<Users size={18} />}
             />
             <StatCard
@@ -83,6 +93,13 @@ export function SentimentPage() {
             />
           </div>
         </>
+      )}
+      {latest && (
+        <p className="market-source-note">
+          最新记录：<strong>{heatSourceLabel(latest)}</strong> ·
+          {totalDenominator ? '以全A股票总数为分母' : '以有效股票数为分母'}
+          {mixedSources && '。图中按来源与记录口径分段；既有历史保留原值。'}
+        </p>
       )}
       <section className="panel trend-panel" aria-busy={loading}>
         <div className="panel-heading">
@@ -134,21 +151,38 @@ export function SentimentPage() {
         ) : (
           <EmptyState
             title="暂无市场热度数据"
-            description="请先在聚宽运行对应采集脚本，再通过“数据同步”更新“市场热度”。"
+            description="请查看“市场日采集”中的配置与任务状态。完成一次写入账户配置后，交易日18:00自动启动，采集完成后显示数据。"
           />
         )}
       </section>
       <div className="method-card">
         <div>
           <h3>统计口径</h3>
-          <p>
-            收盘价严格高于当日 MA20 的股票数 ÷ 有效股票数。包含
-            ST，剔除当日停牌及不足20日数据的股票；20%和80%本身属于正常区间。
+          {differentMethod ? (
+            <>
+              <p>
+                当前最新记录采用{latest?.price_basis === 'bfq' ? '不复权' : '前复权'} MA20，
+                站上均线股票数 ÷ {totalDenominator ? '全A股票总数' : '有效股票数'}。
+                这是既有记录的已存口径，页面保留其原值；20%和80%本身属于正常区间。
+              </p>
+              <span>
+                新采集以聚宽原脚本的前复权、20个交易日MA20和有效股票数分母为目标，通过核验后才发布。
+              </span>
+            </>
+          ) : (
+            <>
+              <p>
+                按聚宽原脚本口径：前复权收盘价高于含当日20个交易日 MA20 的股票数 ÷ 有效股票数。
+                包含ST；当日停牌及不足20日均值的股票不计入有效样本，20%和80%本身属于正常区间。
+              </p>
+              <span>
+                历史停牌日沿用前收盘价，相等价格按原脚本容差处理。行情或复权数据不全时，不发布当日比例。
+              </span>
+            </>
+          )}
+          <p className="market-collection-note">
+            新浪日采集与聚宽历史的数据来源不同；新采集以聚宽原脚本算法为目标，通过口径核验后才发布。既有记录保留原值，并按记录标注来源与口径。
           </p>
-          <span>
-            按历史上市、退市日期还原聚宽覆盖的 A
-            股；MA20采用前复权收盘价，含当日，历史停牌日沿用前收盘价。
-          </span>
         </div>
       </div>
     </div>

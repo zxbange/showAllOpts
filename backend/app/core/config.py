@@ -65,6 +65,9 @@ class Settings(BaseSettings):
     validation_encryption_key: SecretStr = SecretStr('')
     validation_allowed_targets: list[str] = []
     etf_collection_enabled: bool = True
+    market_collection_enabled: bool = True
+    market_collection_worker_enabled: bool = True
+    market_collection_writer_url: SecretStr = SecretStr('')
     etf_collection_writer_url: SecretStr = SecretStr('')
     etf_collection_lookback_days: int = Field(default=300, ge=1, le=1500)
     etf_collection_batch_days: int = Field(default=5, ge=1, le=20)

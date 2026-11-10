@@ -17,6 +17,7 @@ from app.api.routes.breadth import router as breadth_router
 from app.api.routes.earnings import router as earnings_router
 from app.api.routes.etf import router as etf_router
 from app.api.routes.crowding import router as crowding_router
+from app.api.routes.market_collection import router as market_collection_router
 from app.api.routes.microcap import router as microcap_router
 from app.api.routes.momentum import router as momentum_router
 
@@ -30,6 +31,7 @@ router.include_router(ownership_router)
 router.include_router(momentum_router)
 router.include_router(crowding_router)
 router.include_router(sentiment_router)
+router.include_router(market_collection_router)
 router.include_router(margin_guarantee_router)
 router.include_router(growth_dividend_router)
 router.include_router(microcap_router)

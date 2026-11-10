@@ -12,8 +12,10 @@ import { getCrowdingHistory } from '../api/client'
 import { useResource } from '../hooks/useResource'
 import { formatDate } from '../lib/format'
 import { CrowdingChart } from '../components/CrowdingChart'
+import { MarketCollectionPanel } from '../components/MarketCollectionPanel'
 import { StatCard } from '../components/StatCard'
 import { EmptyState, ErrorState, LoadingState } from '../components/States'
+import { crowdingSourceLabel, marketSourceSegments } from '../lib/marketCollection'
 
 const percent = (value: number | null | undefined) =>
   value == null ? '—' : (value * 100).toFixed(2) + '%'
@@ -24,6 +26,7 @@ export function CrowdingPage() {
   const loader = useCallback((signal: AbortSignal) => getCrowdingHistory(days, signal), [days])
   const { data, error, loading, reload } = useResource(loader)
   const latest = data?.latest
+  const mixedSources = marketSourceSegments(data?.points ?? [], 'crowding').length > 1
   return (
     <div className="page-enter crowding-page">
       <PageHeader>
@@ -48,6 +51,7 @@ export function CrowdingPage() {
           </button>
         </div>
       </PageHeader>
+      <MarketCollectionPanel onCollected={reload} />
       {loading ? (
         <LoadingState />
       ) : error ? (
@@ -55,7 +59,7 @@ export function CrowdingPage() {
       ) : data && !latest ? (
         <EmptyState
           title="暂无拥挤度数据"
-          description="请先在聚宽采集入库，再通过“数据同步”更新本模块。"
+          description="请查看“市场日采集”中的配置与任务状态。市场热度与抱团拥挤度共用一次日采集，完成后自动显示数据。"
         />
       ) : data && latest ? (
         <>
@@ -75,18 +79,22 @@ export function CrowdingPage() {
             />
             <StatCard
               label="区间平均占比"
-              value={percent(data.summary.average_ratio)}
-              note={`基于 ${data.summary.observed_days} 个交易日原始值`}
+              value={mixedSources ? '—' : percent(data.summary.average_ratio)}
+              note={
+                mixedSources
+                  ? '区间包含不同来源，分别查看各段趋势'
+                  : `基于 ${data.summary.observed_days} 个交易日原始值`
+              }
               icon={<ChartNoAxesCombined size={18} />}
             />
             <StatCard
               label="区间变化"
               value={
-                data.summary.change_pp == null
+                mixedSources || data.summary.change_pp == null
                   ? '—'
                   : `${data.summary.change_pp > 0 ? '+' : ''}${data.summary.change_pp.toFixed(2)}`
               }
-              note="个百分点 · 期末占比 − 期初占比"
+              note={mixedSources ? '跨来源区间不计算整体变化' : '个百分点 · 期末占比 − 期初占比'}
               icon={<TrendingUp size={18} />}
             />
           </div>
@@ -108,6 +116,12 @@ export function CrowdingPage() {
           </div>
         </>
       ) : null}
+      {latest && (
+        <p className="market-source-note">
+          最新记录：<strong>{crowdingSourceLabel(latest)}</strong>
+          {mixedSources && '。旧历史与新浪日采集按来源分段，EMA 10 从各段分别起算。'}
+        </p>
+      )}
       <section className="panel trend-panel">
         <div className="panel-heading">
           <div>
@@ -118,7 +132,7 @@ export function CrowdingPage() {
             <p>
               {data?.start_date
                 ? `${formatDate(data.start_date)} — ${formatDate(data.end_date)}`
-                : '按交易日记录 · 从 2020 年起采集'}
+                : '按交易日记录 · 已有历史保留'}
             </p>
           </div>
           <div className="range-switch" aria-label="拥挤度历史范围">
@@ -174,6 +188,9 @@ export function CrowdingPage() {
             停牌股仍计入股票总数；卡片显示原始值，EMA 10
             仅作平滑参考。时间范围按自然日，缺失日不补零。
           </span>
+          <p className="market-collection-note">
+            新浪日采集采用聚宽原脚本的前5%成交额占比算法；行情来源不同，旧聚宽历史保持原值，来源切换处分段显示。
+          </p>
         </div>
       </div>
     </div>

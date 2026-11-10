@@ -522,6 +522,22 @@ class SnapshotCache:
         entry = self.read_state().get('modules', {}).get('etf-shares', {})
         return not entry.get('error') and entry.get('progress', {}).get('status') == 'complete'
 
+    def refresh_market_collection(self):
+        """Publish daily aggregates, including repaired earlier dates, in isolation."""
+        if not self.settings.cache_enabled:
+            return True
+        lock = self.acquire()
+        if lock is None:
+            return False
+        modules = ['market-sentiment', 'market-crowding']
+        # These aggregate tables are small. Full reconciliation also picks up
+        # older repaired dates in the crowding table's append-oriented cache.
+        self._refresh_locked(lock, modules, 'market-collection', full=True, preserve_pending=True)
+        state = self.read_state().get('modules', {})
+        return all(not state.get(module, {}).get('error') and
+                   state.get(module, {}).get('progress', {}).get('status') == 'complete'
+                   for module in modules)
+
     def _run_background(self, lock, selected, reason, slot, full):
         try:
             self._refresh_locked(lock, selected, reason, slot, full)

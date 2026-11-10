@@ -9,8 +9,9 @@ def sentiment_state(above: int, eligible: int):
 
 
 class SentimentService:
-    def __init__(self, repository: SentimentRepository):
+    def __init__(self, repository: SentimentRepository, provenance=None):
         self.repository = repository
+        self.provenance = provenance or (lambda row: {})
 
     def history(self, days: int, end: date) -> SentimentHistory:
         rows = self.repository.history(end)
@@ -19,9 +20,13 @@ class SentimentService:
         if days:
             start = rows[-1].trade_date - timedelta(days=days - 1)
             rows = [row for row in rows if row.trade_date >= start]
-        points = [SentimentPoint(date=row.trade_date, ratio=float(row.ratio), above_count=row.above_count,
-                  eligible_count=row.eligible_count, universe_count=row.universe_count,
-                  state=sentiment_state(row.above_count, row.eligible_count)) for row in rows]
+        points = []
+        for row in rows:
+            metadata = self.provenance(row)
+            denominator = row.universe_count if metadata.get('denominator') == 'universe' else row.eligible_count
+            points.append(SentimentPoint(date=row.trade_date, ratio=float(row.ratio), above_count=row.above_count,
+                          eligible_count=row.eligible_count, universe_count=row.universe_count,
+                          state=sentiment_state(row.above_count, denominator), **metadata))
         values = [point.ratio for point in points]
         return SentimentHistory(
             start_date=points[0].date, end_date=points[-1].date,

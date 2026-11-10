@@ -14,6 +14,7 @@ import {
 } from 'echarts/components'
 import { CanvasRenderer } from 'echarts/renderers'
 import type { CrowdingHistory } from '../types/crowding'
+import { crowdingSourceLabel, marketSourceSegments } from '../lib/marketCollection'
 
 use([
   LineChart,
@@ -49,6 +50,7 @@ export function CrowdingChart({
   }, [])
   useEffect(() => {
     const points = data.points
+    const segments = marketSourceSegments(points, 'crowding')
     chart.current?.setOption(
       {
         animation: !window.matchMedia('(prefers-reduced-motion: reduce)').matches,
@@ -63,11 +65,23 @@ export function CrowdingChart({
         tooltip: {
           trigger: 'axis',
           renderMode: 'richText',
+          confine: true,
           backgroundColor: chartColors.background,
           borderColor: chartColors.border,
           textStyle: { color: chartColors.text },
-          valueFormatter: (value: unknown) =>
-            value == null ? '暂无记录' : Number(value).toFixed(2) + '%',
+          formatter: (params: unknown) => {
+            const values = (Array.isArray(params) ? params : [params]) as Array<{
+              dataIndex?: number
+            }>
+            const point = points[values.find((value) => value.dataIndex != null)?.dataIndex ?? -1]
+            if (!point) return ''
+            return [
+              point.date,
+              crowdingSourceLabel(point),
+              `原始占比：${(point.ratio * 100).toFixed(2)}%`,
+              ...(showSmooth ? [`EMA 10：${(point.smoothed_ratio * 100).toFixed(2)}%`] : []),
+            ].join('\n')
+          },
         },
         xAxis: {
           type: 'category',
@@ -106,13 +120,16 @@ export function CrowdingChart({
           },
         ],
         series: [
-          {
+          ...segments.map((segment, segmentIndex) => ({
+            id: `crowding-segment-${segmentIndex}`,
             name: '原始占比',
             type: 'line',
-            data: points.map((p) => p.ratio * 100),
+            data: points.map((p, index) =>
+              index >= segment.start && index <= segment.end ? p.ratio * 100 : null,
+            ),
             smooth: false,
             connectNulls: false,
-            showSymbol: points.length < 3,
+            showSymbol: segment.end - segment.start < 2,
             lineStyle: { width: 2 },
             itemStyle: { color: chartColors.jade },
             areaStyle: { opacity: 0.1 },
@@ -122,17 +139,18 @@ export function CrowdingChart({
                 formatter: (p: { value: number }) => Number(p.value).toFixed(1) + '%',
                 fontSize: 12,
               },
-              data: points.length
-                ? [
-                    {
-                      coord: [
-                        points[points.length - 1].date,
-                        points[points.length - 1].ratio * 100,
-                      ],
-                      value: points[points.length - 1].ratio * 100,
-                    },
-                  ]
-                : [],
+              data:
+                points.length && segment.end === points.length - 1
+                  ? [
+                      {
+                        coord: [
+                          points[points.length - 1].date,
+                          points[points.length - 1].ratio * 100,
+                        ],
+                        value: points[points.length - 1].ratio * 100,
+                      },
+                    ]
+                  : [],
             },
             markLine: {
               silent: true,
@@ -140,24 +158,25 @@ export function CrowdingChart({
               label: { position: 'insideEndTop', color: chartColors.muted, formatter: '区间均值' },
               lineStyle: { color: chartColors.muted, type: 'dashed' },
               data:
-                data.summary.average_ratio == null
+                segments.length > 1 || data.summary.average_ratio == null
                   ? []
                   : [{ yAxis: data.summary.average_ratio * 100 }],
             },
-          },
+          })),
           ...(showSmooth
-            ? [
-                {
-                  name: 'EMA 10 平滑',
-                  type: 'line',
-                  data: points.map((p) => p.smoothed_ratio * 100),
-                  smooth: false,
-                  connectNulls: false,
-                  showSymbol: false,
-                  lineStyle: { width: 2.5, color: chartColors.gold },
-                  itemStyle: { color: chartColors.gold },
-                },
-              ]
+            ? segments.map((segment, segmentIndex) => ({
+                id: `crowding-ema-segment-${segmentIndex}`,
+                name: 'EMA 10 平滑',
+                type: 'line',
+                data: points.map((p, index) =>
+                  index >= segment.start && index <= segment.end ? p.smoothed_ratio * 100 : null,
+                ),
+                smooth: false,
+                connectNulls: false,
+                showSymbol: false,
+                lineStyle: { width: 2.5, color: chartColors.gold },
+                itemStyle: { color: chartColors.gold },
+              }))
             : []),
         ],
       },
