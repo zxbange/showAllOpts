@@ -1,6 +1,9 @@
 import { test, expect, type Page } from './fixtures'
 import type { CashCowOverview, CashCowStatus } from '../src/types/cashCow'
 const idle: CashCowStatus = {
+  periods: [3, 5, 10],
+  collection_years: 10,
+  run_id: null,
   running: false,
   cancelling: false,
   stage: '等待更新',
@@ -71,7 +74,7 @@ test('empty page is read only until requested and has six navigation modules', a
   await expect(page.getByRole('heading', { name: '暂无筛选快照' })).toBeVisible()
   await expect(page.getByLabel('成功更新时间')).toContainText('最近成功更新 —')
   await expect(page.getByLabel('成功更新时间')).toContainText('上上一次 —')
-  await expect(page.getByRole('button', { name: '更新数据' })).toBeEnabled()
+  await expect(page.getByRole('button', { name: '更新全部周期' })).toBeEnabled()
   await expect(
     page.getByRole('navigation', { name: '业绩选股模块切换' }).getByRole('link'),
   ).toHaveCount(6)
@@ -125,21 +128,21 @@ test('refresh and cancel are single-flight and preserve published results', asyn
     route.fulfill({ json: { ...saved, status } }),
   )
   await page.route('**/api/v1/cash-cow/status?years=10', (route) => route.fulfill({ json: status }))
-  await page.route('**/api/v1/cash-cow/refresh?years=10', async (route) => {
+  await page.route('**/api/v1/cash-cow/refresh', async (route) => {
     starts++
     await new Promise((resolve) => setTimeout(resolve, 250))
     status = { ...idle, running: true, total: 100, processed: 2, stage: '采集中' }
     await route.fulfill({ json: { started: true } })
   })
-  await page.route('**/api/v1/cash-cow/cancel?years=10', async (route) => {
+  await page.route('**/api/v1/cash-cow/cancel', async (route) => {
     cancels++
     await new Promise((resolve) => setTimeout(resolve, 250))
     status = { ...status, cancelling: true }
     await route.fulfill({ json: { cancelled: true } })
   })
   await page.goto('/cash-cow')
-  await expect(page.getByRole('button', { name: '更新数据' })).toBeEnabled()
-  await page.getByRole('button', { name: '更新数据' }).evaluate((el: HTMLButtonElement) => {
+  await expect(page.getByRole('button', { name: '更新全部周期' })).toBeEnabled()
+  await page.getByRole('button', { name: '更新全部周期' }).evaluate((el: HTMLButtonElement) => {
     el.click()
     el.click()
   })
@@ -152,7 +155,7 @@ test('refresh and cancel are single-flight and preserve published results', asyn
   await expect(page.getByRole('button', { name: '正在停止…' })).toBeDisabled()
   expect(cancels).toBe(1)
   status = { ...idle, stage: '已停止' }
-  await expect(page.getByRole('button', { name: '更新数据' })).toBeEnabled({ timeout: 7000 })
+  await expect(page.getByRole('button', { name: '更新全部周期' })).toBeEnabled({ timeout: 7000 })
   await expect(page.getByText('测试股份', { exact: true })).toBeVisible()
   await expect(
     page.getByText('当前仍展示上次成功快照；失败或停止不会覆盖已保存结果。'),
@@ -164,10 +167,10 @@ test('failed collection retains prior snapshot and read failure is retryable', a
   await page.goto('/cash-cow')
   await expect(page.getByRole('alert')).toContainText('已保留上次成功结果')
   await expect(page.getByText('测试股份', { exact: true })).toBeVisible()
-  await page.route('**/api/v1/cash-cow/refresh?years=10', (route) =>
+  await page.route('**/api/v1/cash-cow/refresh', (route) =>
     route.fulfill({ status: 503, json: { detail: '启动失败' } }),
   )
-  await page.getByRole('button', { name: '更新数据' }).click()
+  await page.getByRole('button', { name: '更新全部周期' }).click()
   await expect(page.getByRole('alert')).toContainText('启动失败')
   await expect(page.getByText('测试股份', { exact: true })).toBeVisible()
   await page.getByRole('button', { name: '重新读取' }).click()
@@ -219,7 +222,9 @@ test('period selector follows URL and shows matching annual rows and definitions
     await expect(page.getByText(`${years}年股份`, { exact: true })).toBeVisible()
     await page.locator('.cash-cow-stock summary').click()
     await expect(page.locator('.cash-cow-table tbody tr')).toHaveCount(years)
-    await page.locator('.cash-cow-rules summary').click()
+    await page.locator('.cash-cow-rules').evaluate((el: HTMLDetailsElement) => {
+      el.open = true
+    })
     await expect(page.locator('.cash-cow-rules')).toContainText(`${years} 个完整年度`)
     await expect(page.locator('.cash-cow-rules')).toContainText(
       '每月最后一天 21:00 更新（北京时间）',
@@ -257,7 +262,7 @@ test('switching periods aborts old polling and ignores delayed snapshots without
 }) => {
   let polls = 0
   const writes: string[] = []
-  await mock(page, { ...saved, status: { ...idle, running: true, stage: '十年采集中' } })
+  await mock(page, { ...saved, status: { ...idle, running: true, stage: '全部周期采集中' } })
   await page.route('**/api/v1/cash-cow/status?years=10', async (route) => {
     polls++
     await new Promise((resolve) => setTimeout(resolve, 1500))
@@ -268,7 +273,17 @@ test('switching periods aborts old polling and ignores delayed snapshots without
     await route.fulfill({ json: periodData(3) })
   })
   await page.route('**/api/v1/cash-cow/latest?years=5', (route) =>
-    route.fulfill({ json: periodData(5) }),
+    route.fulfill({
+      json: {
+        ...periodData(5),
+        status: { ...idle, running: true, stage: '全部周期采集中', run_id: 'shared-run' },
+      },
+    }),
+  )
+  await page.route('**/api/v1/cash-cow/status?years=5', (route) =>
+    route.fulfill({
+      json: { ...idle, running: true, stage: '全部周期采集中', run_id: 'shared-run' },
+    }),
   )
   page.on('request', (request) => {
     if (request.method() === 'POST') writes.push(request.url())
@@ -282,7 +297,7 @@ test('switching periods aborts old polling and ignores delayed snapshots without
   await page.waitForTimeout(2600)
   await expect(page.getByText('5年股份', { exact: true })).toBeVisible()
   await expect(page.getByText('旧状态不应显示', { exact: true })).toHaveCount(0)
-  await expect(page.getByRole('button', { name: '更新数据' })).toBeEnabled()
+  await expect(page.getByRole('button', { name: '停止采集' })).toBeEnabled()
   expect(polls).toBe(1)
   expect(writes).toEqual([])
 })
@@ -311,7 +326,7 @@ for (const historyCount of [0, 1, 2])
     )
   })
 
-test('successful timestamps stay isolated by period and unchanged on failed or cancelled runs', async ({
+test('unified successful timestamps match across periods and remain unchanged on failed runs', async ({
   page,
 }) => {
   const historic = {
@@ -336,9 +351,7 @@ test('successful timestamps stay isolated by period and unchanged on failed or c
         ...periodData(3),
         snapshot: {
           ...historic,
-          updated_at: '2026-10-30T13:00:00Z',
-          previous_updated_at: null,
-          previous_previous_updated_at: null,
+          updated_at: '2026-10-31T13:00:00Z',
         },
         status: { ...idle, stage: '已取消，保留上次结果', last_attempt_at: '2026-11-30T13:00:00Z' },
       },
@@ -349,11 +362,66 @@ test('successful timestamps stay isolated by period and unchanged on failed or c
   await expect(history).toContainText('上上一次 2026/8/31 21:00:00')
   await expect(history).not.toContainText('2026/11/30')
   await page.getByLabel('筛选年限').selectOption('3')
-  await expect(history).toContainText('最近成功更新 2026/10/30 21:00:00')
-  await expect(history).toContainText('上一次 —')
-  await expect(history).toContainText('上上一次 —')
+  await expect(history).toContainText('最近成功更新 2026/10/31 21:00:00')
+  await expect(history).toContainText('上一次 2026/9/30 21:00:00')
+  await expect(history).toContainText('上上一次 2026/8/31 21:00:00')
   await expect(history).not.toContainText('2026/11/30')
   await page.getByLabel('筛选年限').selectOption('10')
   await expect(history).toContainText('最近成功更新 2026/10/31 21:00:00')
   await expect(history).toContainText('上上一次 2026/8/31 21:00:00')
+})
+
+test('switching views during a pending refresh keeps one command and shares cancellation', async ({
+  page,
+}) => {
+  let status = idle
+  let starts = 0
+  let cancels = 0
+  let finishStart!: () => void
+  const pending = new Promise<void>((resolve) => {
+    finishStart = resolve
+  })
+  await mock(page, saved)
+  await page.route('**/api/v1/cash-cow/latest?years=*', (route) =>
+    route.fulfill({
+      json: {
+        ...periodData(Number(new URL(route.request().url()).searchParams.get('years'))),
+        status,
+      },
+    }),
+  )
+  await page.route('**/api/v1/cash-cow/status?years=*', (route) => route.fulfill({ json: status }))
+  await page.route('**/api/v1/cash-cow/refresh', async (route) => {
+    starts++
+    await pending
+    status = { ...idle, running: true, stage: '全部周期采集中', run_id: 'one-run' }
+    await route.fulfill({ json: { started: true } })
+  })
+  await page.route('**/api/v1/cash-cow/cancel', (route) => {
+    cancels++
+    status = { ...status, cancelling: true }
+    return route.fulfill({ json: { cancelled: true } })
+  })
+  await page.goto('/cash-cow?years=3')
+  await page.getByRole('button', { name: '更新全部周期' }).click()
+  await expect.poll(() => starts).toBe(1)
+  await page.getByLabel('筛选年限').selectOption('5')
+  await expect(page.getByText('5年股份', { exact: true })).toBeVisible()
+  await expect(page.getByRole('button', { name: '正在提交…' })).toBeDisabled()
+  await page.getByRole('button', { name: '正在提交…' }).evaluate((el: HTMLButtonElement) => {
+    el.click()
+    el.click()
+  })
+  await page.getByLabel('筛选年限').selectOption('10')
+  await expect(page.getByRole('button', { name: '正在提交…' })).toBeDisabled()
+  finishStart()
+  await expect(page.getByRole('button', { name: '停止采集' })).toBeEnabled()
+  expect(starts).toBe(1)
+  await page.getByLabel('筛选年限').selectOption('3')
+  await page.getByRole('button', { name: '停止采集' }).click()
+  await expect(page.getByRole('button', { name: '正在停止…' })).toBeDisabled()
+  await page.getByLabel('筛选年限').selectOption('5')
+  await expect(page.getByRole('button', { name: '正在停止…' })).toBeDisabled()
+  expect(starts).toBe(1)
+  expect(cancels).toBe(1)
 })

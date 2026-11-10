@@ -1,4 +1,7 @@
 export interface CashCowStatus {
+  periods: [3, 5, 10]
+  collection_years: 10
+  run_id: string | null
   next_run_at?: string | null
   schedule_time?: string
   running: boolean

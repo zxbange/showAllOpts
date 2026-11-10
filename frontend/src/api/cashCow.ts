@@ -18,8 +18,5 @@ export const getCashCowLatest = (signal?: AbortSignal, years: CashCowPeriod = 10
   request<CashCowOverview>(`latest?years=${years}`, signal)
 export const getCashCowStatus = (signal?: AbortSignal, years: CashCowPeriod = 10) =>
   request<CashCowStatus>(`status?years=${years}`, signal)
-export const updateCashCow = (
-  action: 'refresh' | 'cancel',
-  signal?: AbortSignal,
-  years: CashCowPeriod = 10,
-) => request<{ started?: boolean; cancelled?: boolean }>(`${action}?years=${years}`, signal, 'POST')
+export const updateCashCow = (action: 'refresh' | 'cancel', signal?: AbortSignal) =>
+  request<{ started?: boolean; cancelled?: boolean }>(action, signal, 'POST')

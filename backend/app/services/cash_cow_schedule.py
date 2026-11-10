@@ -1,4 +1,4 @@
-"""Persistent, sequential month-end scheduling in Asia/Shanghai (UTC+8)."""
+"""Persistent, unified month-end scheduling in Asia/Shanghai (UTC+8)."""
 from calendar import monthrange
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
@@ -43,7 +43,7 @@ def latest_due(moment):
 
 class MonthlyCashCowScheduler:
     def __init__(self, settings, screens):
-        self.screens = dict(sorted(screens.items()))
+        self.screen = screens[10]
         self.root = settings.log_path / 'market-data' / 'cash-cow-schedule'
         self.root.mkdir(parents=True, exist_ok=True)
         self.stopped = threading.Event()
@@ -69,7 +69,7 @@ class MonthlyCashCowScheduler:
         return next_run(moment)
 
     def tick(self, moment=None):
-        """Start at most one period. Return that period, or None when not due."""
+        """Start one shared run. Return its periods, or None when not due."""
         moment = china_time(moment)
         lock = portalocker.Lock(str(self.root / 'tick.lock'), timeout=0,
                                 flags=portalocker.LOCK_EX | portalocker.LOCK_NB)
@@ -84,37 +84,36 @@ class MonthlyCashCowScheduler:
                 enabled_at = china_time(datetime.fromisoformat(db.execute(
                     'SELECT value FROM settings WHERE key=?', ('enabled_at',)).fetchone()[0]))
             due = latest_due(moment)
-            if due < enabled_at or any(screen.running() for screen in self.screens.values()):
+            screen = self.screen
+            if due < enabled_at or screen.running():
                 return None
             slot = due.date().isoformat()
-            for period, screen in self.screens.items():
-                state = screen.read_state()
-                if state.get('scheduled_success_slot') == slot:
-                    continue
-                interrupted = (state.get('active') and not screen.running()
-                               and state.get('current_scheduled_slot', state.get('scheduled_slot')) == slot)
-                with self.db() as db:
-                    saved = db.execute('SELECT slot, attempted_at FROM attempts WHERE period=?',
-                                       (period,)).fetchone()
-                attempted = []
-                if saved and saved[0] == slot:
-                    attempted.append(saved[1])
-                scheduled_attempt = state.get('scheduled_attempt_at', state.get('last_attempt_at'))
-                if state.get('scheduled_slot') == slot and scheduled_attempt:
-                    attempted.append(scheduled_attempt)
-                already_today = any(china_time(datetime.fromisoformat(stamp)).date() >= moment.date()
-                                    for stamp in attempted)
-                if already_today and not interrupted:
-                    continue
-                # refresh atomically establishes its collection lock and run state.
-                if screen.refresh(background=True, moment=moment, slot=slot):
-                    with self.db() as db:
-                        db.execute('INSERT OR REPLACE INTO attempts VALUES (?,?,?)',
-                                   (period, slot, moment.isoformat()))
-                    return period
-                # Another process/manual request won the collection lock. Do not
-                # launch a different period concurrently or consume today's retry.
+            state = screen.read_state()
+            if state.get('scheduled_success_slot') == slot:
                 return None
+            interrupted = (state.get('active') and not screen.running()
+                           and state.get('current_scheduled_slot', state.get('scheduled_slot')) == slot)
+            with self.db() as db:
+                # Period 0 identifies the unified job. Old per-window attempt
+                # records are retained but cannot suppress an incomplete upgrade.
+                saved = db.execute('SELECT slot, attempted_at FROM attempts WHERE period=0').fetchone()
+            attempted = []
+            if saved and saved[0] == slot:
+                attempted.append(saved[1])
+            scheduled_attempt = state.get('scheduled_attempt_at', state.get('last_attempt_at'))
+            if state.get('scheduled_slot') == slot and scheduled_attempt:
+                attempted.append(scheduled_attempt)
+            already_today = any(china_time(datetime.fromisoformat(stamp)).date() >= moment.date()
+                                for stamp in attempted)
+            if already_today and not interrupted:
+                return None
+            # Manual and scheduled entry points share the collection lock.
+            if screen.refresh(background=True, moment=moment, slot=slot):
+                with self.db() as db:
+                    db.execute('INSERT OR REPLACE INTO attempts VALUES (?,?,?)',
+                               (0, slot, moment.isoformat()))
+                return (3, 5, 10)
+            # Another process won the lock; do not consume today's retry.
             return None
         finally:
             lock.release()

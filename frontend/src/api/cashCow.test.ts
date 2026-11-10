@@ -36,8 +36,8 @@ it('uses authenticated single POSTs for start and cancel', async () => {
       options.headers.get('X-CSRF-Token'),
     ]),
   ).toEqual([
-    ['/api/v1/cash-cow/refresh?years=10', 'POST', 'csrf-test'],
-    ['/api/v1/cash-cow/cancel?years=10', 'POST', 'csrf-test'],
+    ['/api/v1/cash-cow/refresh', 'POST', 'csrf-test'],
+    ['/api/v1/cash-cow/cancel', 'POST', 'csrf-test'],
   ])
 })
 it('reports server errors without retrying a possibly accepted command', async () => {
@@ -49,17 +49,17 @@ it('reports server errors without retrying a possibly accepted command', async (
   expect(fetcher).toHaveBeenCalledTimes(1)
 })
 
-it('scopes every endpoint to the selected period', async () => {
+it('scopes reads to the selected period but mutations to the shared job', async () => {
   const fetcher = vi.fn().mockResolvedValue({ ok: true, json: async () => ({}) })
   vi.stubGlobal('fetch', fetcher)
   await getCashCowLatest(undefined, 3)
   await getCashCowStatus(undefined, 5)
-  await updateCashCow('refresh', undefined, 3)
-  await updateCashCow('cancel', undefined, 5)
+  await updateCashCow('refresh')
+  await updateCashCow('cancel')
   expect(fetcher.mock.calls.map(([url]) => url)).toEqual([
     '/api/v1/cash-cow/latest?years=3',
     '/api/v1/cash-cow/status?years=5',
-    '/api/v1/cash-cow/refresh?years=3',
-    '/api/v1/cash-cow/cancel?years=5',
+    '/api/v1/cash-cow/refresh',
+    '/api/v1/cash-cow/cancel',
   ])
 })

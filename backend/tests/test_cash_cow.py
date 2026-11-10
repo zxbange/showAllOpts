@@ -78,6 +78,9 @@ class Source:
     def per_share_dividends(self, code, start_year, end_year):
         return year_data()[1]
 
+    def per_share_dividends_by_period(self, code, end_year, periods):
+        return {period: self.per_share_dividends(code, end_year - period + 1, end_year) for period in periods}
+
     def current_dividend_yield(self, code):
         return dict(current_yield=4.5, latest_price=12, latest_price_date='2026-11-09', dividend_ttm_per_share=.54)
 
@@ -172,19 +175,11 @@ def test_cancel_accepted_during_serialization_cannot_publish(screen, monkeypatch
     assert screen.status()['stage'] == '已取消，保留上次结果'
 
 
-def test_latest_completion_boundary_reads_finished_snapshot(screen, monkeypatch):
+def test_latest_snapshot_and_status_share_success_timestamp(screen):
     run(screen)
-    status = screen.status
-
-    def completed_status():
-        # Finish another refresh at exactly the point /latest asks for status.
-        with screen.db() as db:
-            db.execute('UPDATE snapshot SET payload=? WHERE id=1',
-                       ('{"snapshot":{"as_of":"new"},"items":[]}',))
-        return status()
-
-    monkeypatch.setattr(screen, 'status', completed_status)
-    assert screen.latest()['snapshot']['as_of'] == 'new'
+    data = screen.latest()
+    assert data['snapshot']['updated_at'] == data['status']['last_success_at']
+    assert data['snapshot']['run_id'] == data['status']['run_id']
 
 
 def test_no_automatic_network_read_and_api(client, monkeypatch):
@@ -203,7 +198,7 @@ def test_no_automatic_network_read_and_api(client, monkeypatch):
     assert client.get('/api/v1/cash-cow/latest?years=4').status_code == 422
 
 
-def test_periods_screen_full_universe_independently_and_keep_separate_snapshots(tmp_path):
+def test_one_refresh_screens_all_windows_without_losing_shorter_candidates(tmp_path):
     class DifferentWindows(Source):
         def financials(self, year, codes):
             return {code: dict(adjusted_profit=(-1 if (code == '000002' and year == 2022)
@@ -213,16 +208,18 @@ def test_periods_screen_full_universe_independently_and_keep_separate_snapshots(
     settings = Settings(_env_file=None, log_dir=tmp_path)
     screens = {years: CashCowScreen(settings, years=years, source_factory=DifferentWindows,
                                     client_factory=lambda: nullcontext(None)) for years in (3, 5, 10)}
+    assert run(screens[3])
     for period, screen in screens.items():
-        assert run(screen)
         result = screen.latest()
         assert result['snapshot']['matched_count'] == {3: 3, 5: 2, 10: 1}[period]
         assert result['snapshot']['universe_count'] == 3
         assert result['snapshot']['start_year'] == 2026 - period
         assert all(len(item['years']) == period for item in result['items'])
-    # Running another window did not overwrite the first window's result.
+    # One selected view updates every window using one batch identity.
     assert screens[3].latest()['snapshot']['matched_count'] == 3
-    assert len({screen.root for screen in screens.values()}) == 3
+    assert len({screen.root for screen in screens.values()}) == 1
+    assert len({screen.latest()['snapshot']['run_id'] for screen in screens.values()}) == 1
+    assert len({screen.latest()['snapshot']['updated_at'] for screen in screens.values()}) == 1
 
 
 def test_scheduled_success_slot_only_written_after_success(screen):
@@ -244,7 +241,7 @@ def test_success_history_three_updates_and_restart(screen, monkeypatch):
         assert result['previous_updated_at'] == (moments[index - 1].isoformat() if index else None)
         assert result['previous_previous_updated_at'] == (moments[index - 2].isoformat() if index > 1 else None)
     # A new service instance reads the same persisted update history.
-    settings = Settings(_env_file=None, log_dir=screen.root.parents[2])
+    settings = Settings(_env_file=None, log_dir=screen.root.parents[1])
     restarted = CashCowScreen(settings)
     assert restarted.latest()['snapshot'] == screen.latest()['snapshot']
 
@@ -262,7 +259,7 @@ def test_failed_snapshot_commit_does_not_advance_success_history(screen, monkeyp
         with database() as db:
             class Connection:
                 def execute(self, sql, params=()):
-                    if sql.startswith('INSERT OR REPLACE INTO snapshot'):
+                    if sql.startswith('INSERT OR REPLACE INTO snapshots') and params[0] == 5:
                         raise sqlite3.OperationalError('test commit failure')
                     return db.execute(sql, params)
             yield Connection()

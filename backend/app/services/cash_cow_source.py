@@ -400,12 +400,26 @@ class EastmoneyCashCowSource:
                 baseline = shares
         return baseline is not None
 
+    def _dividend_events(self, code):
+        if code not in self.events:
+            self.events[code] = self._rows('RPT_F10_DIVIDEND_MAIN', f'(SECURITY_CODE="{code}")',
+                lambda r: (r.get('REPORT_TIME'), r.get('NOTICE_DATE'), r.get('INFO_CODE'),
+                           r.get('ASSIGN_PROGRESS'), r.get('ASSIGN_OBJECT')),
+                sort='NOTICE_DATE')
+        return self.events[code]
+
+    def per_share_dividends_by_period(self, code, end_year, periods):
+        # Raw events and capital history are fetched once. Share-basis validity
+        # depends on each window's start, so a historical split must not poison
+        # an otherwise valid shorter period.
+        rows = self._dividend_events(code)
+        return {period: self._annual_dividends(code, end_year - period + 1, end_year, rows)
+                for period in periods}
+
     def per_share_dividends(self, code, start_year, end_year):
-        rows = self._rows('RPT_F10_DIVIDEND_MAIN', f'(SECURITY_CODE="{code}")',
-            lambda r: (r.get('REPORT_TIME'), r.get('NOTICE_DATE'), r.get('INFO_CODE'),
-                       r.get('ASSIGN_PROGRESS'), r.get('ASSIGN_OBJECT')),
-            sort='NOTICE_DATE')
-        self.events[code] = rows
+        return self._annual_dividends(code, start_year, end_year, self._dividend_events(code))
+
+    def _annual_dividends(self, code, start_year, end_year, rows):
         annual, invalid, events = {}, set(), set()
         # Unnormalised corporate actions change the share basis across fiscal
         # and payment dates. Never compare their raw DPS with raw daily prices.

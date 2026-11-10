@@ -30,7 +30,6 @@ export function CashCowPage() {
   }, [params, setParams])
   return (
     <CashCowPeriodPage
-      key={years}
       years={years}
       onPeriodChange={(value) =>
         setParams((previous) => {
@@ -43,8 +42,8 @@ export function CashCowPage() {
   )
 }
 
-// A keyed period owns its requests, commands and snapshot. Switching aborts reads,
-// not the server-side job, and prevents late responses from crossing periods.
+// Commands belong to the shared job and survive period changes. Only reads are
+// aborted on switching views, so late responses cannot cross periods.
 function CashCowPeriodPage({
   years,
   onPeriodChange,
@@ -61,6 +60,7 @@ function CashCowPeriodPage({
   const [revision, setRevision] = useState(0)
   const [query, setQuery] = useState('')
   const command = useRef<AbortController | null>(null)
+  const loadedPeriod = useRef(years)
   const running = status?.running ?? false
 
   useEffect(() => () => command.current?.abort(), [])
@@ -97,6 +97,10 @@ function CashCowPeriodPage({
       if (!controller.signal.aborted) timer = window.setTimeout(poll, 2000)
     }
     setLoading(true)
+    if (loadedPeriod.current !== years) {
+      setData(null)
+      loadedPeriod.current = years
+    }
     void latest()
     return () => {
       controller.abort()
@@ -105,14 +109,17 @@ function CashCowPeriodPage({
   }, [revision, years])
 
   async function act(action: 'refresh' | 'cancel') {
-    if (command.current || !admin) return
+    if (command.current || loading || !status || status.cancelling || !admin) return
     const controller = new AbortController()
     command.current = controller
     setBusy(true)
     setError(null)
     try {
-      await updateCashCow(action, controller.signal, years)
-      if (!controller.signal.aborted) setRevision((v) => v + 1)
+      await updateCashCow(action, controller.signal)
+      if (!controller.signal.aborted) {
+        setLoading(true)
+        setRevision((v) => v + 1)
+      }
     } catch (e) {
       if (!controller.signal.aborted) setError(errorMessage(e))
     } finally {
@@ -134,6 +141,7 @@ function CashCowPeriodPage({
         <div>
           <h1>奶牛股</h1>
           <p>近 {years} 年持续分红，兼顾利润与经营现金流。</p>
+          <p>一次采集近 10 年数据，同时更新 3 / 5 / 10 年结果；切换年限仅查看结果。</p>
         </div>
         <div className="heading-actions">
           <label className="cash-cow-period">
@@ -163,7 +171,7 @@ function CashCowPeriodPage({
                 ? '正在停止…'
                 : running
                   ? '停止采集'
-                  : '更新数据'}
+                  : '更新全部周期'}
           </button>
         </div>
       </PageHeader>
@@ -275,7 +283,7 @@ function CashCowPeriodPage({
         {!snapshot ? (
           <div className="state-panel">
             <h3>{loading ? '正在加载' : '暂无筛选快照'}</h3>
-            <p>点击“更新数据”从公开接口采集并筛选，首次运行可能需要较长时间。</p>
+            <p>点击“更新全部周期”从公开接口采集并筛选，首次运行可能需要较长时间。</p>
           </div>
         ) : !data?.items.length ? (
           <div className="state-panel">

@@ -1,4 +1,4 @@
-"""Strict ten-fiscal-year cash-cow screen, independent of the source MySQL DB.
+"""Shared 3/5/10-fiscal-year cash-cow screen, independent of the source MySQL DB.
 
 Only complete, validated observations can qualify. Interrupted refreshes never
 replace a published snapshot. All currency amounts are CNY; rates use percent.
@@ -83,13 +83,17 @@ def finish_stock(stock, years, dividends, prices, period=10):
                            years=result)
 
 
+PERIODS = (3, 5, 10)
+
+
 class CashCowScreen:
+    """A period-specific view of one cross-process collection and publication."""
     def __init__(self, settings, *, years=10, source_factory=None, client_factory=None):
-        if years not in (3, 5, 10):
+        if years not in PERIODS:
             raise ValueError('仅支持近3年、5年或10年')
         self.years = years
         self.schedule_enabled = settings.cash_cow_worker_enabled
-        self.root = settings.log_path / 'market-data' / 'cash-cow' / str(years)
+        self.root = settings.log_path / 'market-data' / 'cash-cow'
         self.root.mkdir(parents=True, exist_ok=True)
         self.source_factory = source_factory
         self.client_factory = client_factory or (lambda: httpx.Client(
@@ -97,12 +101,38 @@ class CashCowScreen:
             follow_redirects=False, headers={'User-Agent': 'Mozilla/5.0 ShowAllOpts/1.0'}))
         self.stop_event = threading.Event()
         self.worker = None
-        with self.db() as db:
+        with self.publication_lock(), self.db() as db:
             db.executescript('''
                 CREATE TABLE IF NOT EXISTS state (id INTEGER PRIMARY KEY CHECK(id=1), payload TEXT NOT NULL);
                 INSERT OR IGNORE INTO state VALUES (1, '{}');
-                CREATE TABLE IF NOT EXISTS snapshot (id INTEGER PRIMARY KEY CHECK(id=1), payload TEXT NOT NULL);
+                CREATE TABLE IF NOT EXISTS snapshots (years INTEGER PRIMARY KEY, payload TEXT NOT NULL);
             ''')
+            # Upgrade without dropping an existing period's successful snapshot.
+            # Legacy files remain untouched; only missing unified rows are seeded.
+            legacy_success = {}
+            for period in PERIODS:
+                path = self.root / str(period) / 'screen.sqlite3'
+                if (path.is_file() and not db.execute(
+                        'SELECT 1 FROM snapshots WHERE years=?', (period,)).fetchone()):
+                    legacy = sqlite3.connect(f'{path.as_uri()}?mode=ro', uri=True)
+                    try:
+                        row = legacy.execute('SELECT payload FROM snapshot WHERE id=1').fetchone()
+                        if row:
+                            db.execute('INSERT INTO snapshots VALUES (?,?)', (period, row[0]))
+                            if legacy.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='state'").fetchone():
+                                old_state = legacy.execute('SELECT payload FROM state WHERE id=1').fetchone()
+                                if old_state:
+                                    legacy_success[period] = json.loads(old_state[0]).get('scheduled_success_slot')
+                    finally:
+                        legacy.close()
+            # A completely successful legacy month should not be re-collected on
+            # upgrade. Partial legacy completion still requires one unified run.
+            slots = set(legacy_success.values())
+            if len(legacy_success) == len(PERIODS) and len(slots) == 1 and None not in slots:
+                saved = db.execute('SELECT payload FROM state WHERE id=1').fetchone()[0]
+                if json.loads(saved) == {}:
+                    db.execute('UPDATE state SET payload=? WHERE id=1',
+                               (json.dumps(dict(scheduled_success_slot=slots.pop())),))
 
     @contextmanager
     def db(self):
@@ -143,28 +173,40 @@ class CashCowScreen:
             return self.root / ('cancel-' + identifier)
         return None
 
-    def status(self):
+    def _status(self, state, result):
         from app.services.cash_cow_schedule import next_run
-        with self.publication_lock():
-            state = self.read_state()
-            running = self.running()
+        running = self.running()
         marker = self.cancel_path(state)
-        return dict(years=self.years, next_run_at=next_run().isoformat() if self.schedule_enabled else None,
+        snapshot = result.get('snapshot') or {}
+        return dict(years=self.years, periods=list(PERIODS), collection_years=max(PERIODS),
+                    run_id=state.get('run_id'),
+                    next_run_at=next_run().isoformat() if self.schedule_enabled else None,
                     schedule_time='21:00', running=running, cancelling=bool(running and marker and marker.exists()),
                     stage=('上次更新中断，请重新更新' if not running and state.get('active')
                            else state.get('stage', '尚未筛选')),
                     processed=state.get('processed', 0), total=state.get('total'),
-                    last_attempt_at=state.get('last_attempt_at'), last_success_at=state.get('last_success_at'),
-                    previous_success_at=state.get('previous_success_at'),
-                    previous_previous_success_at=state.get('previous_previous_success_at'),
+                    last_attempt_at=state.get('last_attempt_at'),
+                    last_success_at=snapshot.get('updated_at'),
+                    previous_success_at=snapshot.get('previous_updated_at'),
+                    previous_previous_success_at=snapshot.get('previous_previous_updated_at'),
                     error=state.get('error'))
 
+    def _read_result(self, db):
+        row = db.execute('SELECT payload FROM snapshots WHERE years=?', (self.years,)).fetchone()
+        return json.loads(row[0]) if row else dict(snapshot=None, items=[])
+
+    def status(self):
+        with self.publication_lock(), self.db() as db:
+            state = json.loads(db.execute('SELECT payload FROM state WHERE id=1').fetchone()[0])
+            return self._status(state, self._read_result(db))
+
     def latest(self):
-        status = self.status()
-        with self.db() as db:
-            row = db.execute('SELECT payload FROM snapshot WHERE id=1').fetchone()
-        result = json.loads(row[0]) if row else dict(snapshot=None, items=[])
-        return dict(result, status=status, years=self.years)
+        # Read snapshot and state under the publication lock: the response never
+        # combines a new completion status with the previous run's snapshot.
+        with self.publication_lock(), self.db() as db:
+            state = json.loads(db.execute('SELECT payload FROM state WHERE id=1').fetchone()[0])
+            result = self._read_result(db)
+            return dict(result, status=self._status(state, result), years=self.years)
 
     def publication_lock(self):
         return portalocker.Lock(str(self.root / 'publication.lock'), timeout=5)
@@ -186,14 +228,17 @@ class CashCowScreen:
         lock = self.acquire()
         if lock is None:
             return False
-        moment = moment or now()
-        state = self.read_state()
-        state.update(run_id=uuid.uuid4().hex, active=True, stage='读取全A股股票池', phase='读取全A股股票池',
-                     processed=0, total=None, error=None, last_attempt_at=moment.isoformat(),
-                     current_scheduled_slot=slot)
-        if slot:
-            state.update(scheduled_slot=slot, scheduled_attempt_at=moment.isoformat())
+        state = None
         try:
+            moment = moment or now()
+            if moment.tzinfo is None:
+                raise ValueError('Collection requires a timezone-aware datetime')
+            state = self.read_state()
+            state.update(run_id=uuid.uuid4().hex, active=True, stage='读取全A股股票池（统一更新3/5/10年）',
+                         phase='读取全A股股票池', processed=0, total=None, error=None,
+                         last_attempt_at=moment.isoformat(), current_scheduled_slot=slot)
+            if slot:
+                state.update(scheduled_slot=slot, scheduled_attempt_at=moment.isoformat())
             self.write_state(state)
             if background:
                 self.worker = threading.Thread(target=self._collect, args=(lock, state, moment),
@@ -202,15 +247,19 @@ class CashCowScreen:
             else:
                 self._collect(lock, state, moment)
         except BaseException:
-            state.update(active=False, stage='启动失败', error='未能启动筛选，请重试。')
-            self.write_state(state)
-            lock.release()
+            try:
+                if state is not None:
+                    state.update(active=False, stage='启动失败', error='未能启动筛选，请重试。')
+                    self.write_state(state)
+            finally:
+                lock.release()
             raise
         return True
 
     def _collect(self, lock, state, moment):
         from app.services.cash_cow_source import EastmoneyCashCowSource, CashCowSourceError
         marker = self.cancel_path(state)
+        published = False
 
         def check_cancel():
             if self.stop_event.is_set() or marker.exists():
@@ -219,9 +268,7 @@ class CashCowScreen:
         def progress(stage, processed=None, total=None):
             check_cancel()
             if processed is not None:
-                state['phase'] = stage
-                state['stage'] = stage
-                state['processed'] = processed
+                state.update(phase=stage, stage=stage, processed=processed)
             else:
                 state['stage'] = state.get('phase', '读取公开数据') + ' · ' + stage
             if total is not None:
@@ -230,12 +277,10 @@ class CashCowScreen:
 
         try:
             end_year = moment.astimezone(CHINA).year - 1
-            start_year = end_year - self.years + 1
             with self.client_factory() as client:
                 source = (self.source_factory or EastmoneyCashCowSource)(client, check_cancel=check_cancel,
-                                                                           as_of=moment.astimezone(CHINA).date(),
-                                                                           progress=progress,
-                                                                           cache_dir=self.root.parent / 'source-cache')
+                    as_of=moment.astimezone(CHINA).date(), progress=progress,
+                    cache_dir=self.root / 'source-cache')
                 stocks = source.universe()
                 if not stocks:
                     raise CashCowSourceError('股票池为空，未替换已有结果。')
@@ -244,71 +289,116 @@ class CashCowScreen:
                     raise CashCowSourceError('股票池代码重复，未替换已有结果。')
                 pending = dict(universe)
                 annual = {code: [] for code in universe}
-                excluded = insufficient = 0
-                # Newest-first pruning reduces requests; every exclusion has a
-                # demonstrated failed rule, not an absent source observation.
-                for year in range(end_year, start_year - 1, -1):
+                candidates = {period: set() for period in PERIODS}
+                outcomes = {period: {} for period in PERIODS}
+
+                def reject(code, outcome, depth):
+                    pending.pop(code)
+                    # An older failure belongs only to windows containing that
+                    # year. Shorter windows' survivors are already frozen.
+                    for period in PERIODS:
+                        if period >= depth:
+                            outcomes[period][code] = outcome
+
+                # Cheap, newest-first annual predicates are evaluated once. At
+                # each boundary freeze the eligible set, then prune only longer
+                # windows. Never prune by a shorter window's average yield.
+                for depth in range(1, max(PERIODS) + 1):
                     if not pending:
                         break
-                    progress(f'核对{year}年分红与财报', len(stocks) - len(pending), len(stocks))
+                    year = end_year - depth + 1
+                    progress(f'初筛{year}年分红与财报（3/5/10年共用）',
+                             len(stocks) - len(pending), len(stocks))
                     dividends = source.dividends(year, codes=list(pending))
-                    eligible = []
                     for code in list(pending):
                         cash = (dividends.get(code) or {}).get('cash_dividend')
                         if numeric(cash) and cash <= 0:
-                            excluded += 1
-                            pending.pop(code)
-                        else:
-                            eligible.append(code)
-                    financials = source.financials(year, codes=eligible) if eligible else {}
-                    for code in eligible:
+                            reject(code, 'excluded', depth)
+                    financials = source.financials(year, codes=list(pending)) if pending else {}
+                    for code in list(pending):
                         outcome, row = evaluate_year(year, dividends.get(code), financials.get(code))
                         if outcome == 'eligible':
                             annual[code].append(row)
                         else:
-                            pending.pop(code)
-                            excluded += outcome == 'excluded'
-                            insufficient += outcome == 'insufficient'
-                items = []
-                for code, stock in pending.items():
-                    progress(f'核对{stock["name"]}的{self.years}年股息率', excluded + insufficient + len(items), len(stocks))
-                    dps = source.per_share_dividends(code, start_year, end_year)
-                    prices = source.prices(code, start_year, end_year)
-                    outcome, item = finish_stock(stock, sorted(annual[code], key=lambda r: r['year']), dps, prices, self.years)
-                    if outcome == 'matched':
-                        item.update(source.current_dividend_yield(code))
-                        items.append(item)
-                    else:
-                        excluded += outcome == 'excluded'
-                        insufficient += outcome == 'insufficient'
+                            reject(code, outcome, depth)
+                    if depth in candidates:
+                        candidates[depth] = set(pending)
+
+                items = {period: [] for period in PERIODS}
+                survivors = set().union(*candidates.values())
+                for index, code in enumerate(sorted(survivors)):
+                    check_cancel()
+                    stock = universe[code]
+                    periods = [period for period in PERIODS if code in candidates[period]]
+                    progress(f'核对候选{stock["name"]}的股息率（共用分红与行情）',
+                             len(stocks) - len(survivors) + index, len(stocks))
+                    dps = source.per_share_dividends_by_period(code, end_year, periods)
+                    usable = []
+                    for period in periods:
+                        window = range(end_year - period + 1, end_year + 1)
+                        if all(numeric(dps[period].get(year)) and dps[period][year] > 0 for year in window):
+                            usable.append(period)
+                        else:
+                            outcomes[period][code] = 'insufficient'
+                    # Invalid share basis needs no expensive historical prices.
+                    if not usable:
+                        continue
+                    prices = source.prices(code, end_year - max(usable) + 1, end_year)
+                    matched = []
+                    for period in usable:
+                        rows = sorted((row for row in annual[code] if row['year'] > end_year - period),
+                                      key=lambda row: row['year'])
+                        outcome, item = finish_stock(stock, rows, dps[period], prices, period)
+                        outcomes[period][code] = outcome
+                        if outcome == 'matched':
+                            matched.append(item)
+                            items[period].append(item)
+                    if matched:
+                        current = source.current_dividend_yield(code)
+                        for item in matched:
+                            item.update(current)
                 check_cancel()
-                items.sort(key=lambda row: (-row['average_yield'], row['code']))
                 updated_at = now().isoformat()
-                snapshot = dict(as_of=moment.astimezone(CHINA).date().isoformat(), updated_at=updated_at,
-                                previous_updated_at=state.get('last_success_at'),
-                                previous_previous_updated_at=state.get('previous_success_at'),
-                                years=self.years, start_year=start_year, end_year=end_year, universe_count=len(stocks),
-                                evaluated_count=excluded + len(items), excluded_count=excluded,
-                                insufficient_count=insufficient, matched_count=len(items),
-                                source='东方财富公开数据接口', rule_version=RULE_VERSION)
-                payload = json.dumps(dict(snapshot=snapshot, items=items), ensure_ascii=False, allow_nan=False)
-                # Cancellation acceptance and publication share a cross-process
-                # lock: an accepted cancellation cannot publish new results.
+                # One SQLite transaction publishes all periods and shared state.
+                # Prepare/serialize outside the publication lock so cancellation
+                # can still be accepted during potentially expensive encoding.
+                with self.db() as db:
+                    previous = {period: json.loads(payload).get('snapshot') or {} for period, payload in
+                                db.execute('SELECT years, payload FROM snapshots')}
+                payloads = {}
+                for period in PERIODS:
+                    check_cancel()
+                    if len(outcomes[period]) != len(stocks):
+                        raise RuntimeError('Incomplete period classification')
+                    items[period].sort(key=lambda row: (-row['average_yield'], row['code']))
+                    excluded = sum(value == 'excluded' for value in outcomes[period].values())
+                    insufficient = sum(value == 'insufficient' for value in outcomes[period].values())
+                    old = previous.get(period, {})
+                    snapshot = dict(as_of=moment.astimezone(CHINA).date().isoformat(), updated_at=updated_at,
+                        run_id=state['run_id'], previous_updated_at=old.get('updated_at'),
+                        previous_previous_updated_at=old.get('previous_updated_at'),
+                        years=period, start_year=end_year - period + 1, end_year=end_year,
+                        universe_count=len(stocks), evaluated_count=excluded + len(items[period]),
+                        excluded_count=excluded, insufficient_count=insufficient, matched_count=len(items[period]),
+                        source='东方财富公开数据接口', rule_version=RULE_VERSION)
+                    payloads[period] = json.dumps(dict(snapshot=snapshot, items=items[period]),
+                                                 ensure_ascii=False, allow_nan=False)
                 with self.publication_lock():
                     check_cancel()
                     success_state = dict(state, active=False, last_success_at=updated_at,
-                                         previous_success_at=state.get('last_success_at'),
-                                         previous_previous_success_at=state.get('previous_success_at'),
-                                         processed=len(stocks), total=len(stocks), stage='筛选完成')
+                        previous_success_at=state.get('last_success_at'),
+                        previous_previous_success_at=state.get('previous_success_at'),
+                        processed=len(stocks), total=len(stocks), stage='3/5/10年筛选完成')
                     if state.get('current_scheduled_slot'):
                         success_state['scheduled_success_slot'] = state['current_scheduled_slot']
                     with self.db() as db:
-                        db.execute('INSERT OR REPLACE INTO snapshot VALUES(1,?)', (payload,))
+                        for period, payload in payloads.items():
+                            db.execute('INSERT OR REPLACE INTO snapshots VALUES(?,?)', (period, payload))
                         db.execute('UPDATE state SET payload=? WHERE id=1',
                                    (json.dumps(success_state, ensure_ascii=False),))
-                    # Only a committed snapshot advances successful-update history.
                     state.clear()
                     state.update(success_state)
+                    published = True
         except CollectionCancelled:
             state.update(stage='已取消，保留上次结果')
         except Exception as exc:
@@ -317,11 +407,14 @@ class CashCowScreen:
                          error=str(exc) if isinstance(exc, CashCowSourceError) else '筛选暂未完成，请稍后重试。')
         finally:
             state['active'] = False
-            with self.publication_lock():
+            try:
+                if not published:
+                    with self.publication_lock():
+                        self.write_state(state)
+            finally:
                 try:
-                    self.write_state(state)
-                finally:
                     marker.unlink(missing_ok=True)
+                finally:
                     lock.release()
 
     def stop(self):
