@@ -185,7 +185,6 @@ export function CCICoalPage() {
       <header>
         <span className="eyebrow">大宗商品 · 动力煤</span>
         <h1>CCI动力煤</h1>
-        <p>三档人民币报价 · 元/吨 · 自2026-01-01</p>
       </header>
       <section className="commodity-summary">
         {grades.map((g) => {
@@ -203,13 +202,6 @@ export function CCICoalPage() {
           )
         })}
       </section>
-      <p className="commodity-source-note">
-        来源：
-        <a href="https://coalindex.com/about" target="_blank" rel="noreferrer">
-          coalindex.com 网络汇集（非官方）
-        </a>
-        。日期或涨跌缺失时留空，不补零、不沿用前值。
-      </p>
       {(error || data?.status.error) && <p role="alert">{error || data?.status.error}</p>}
       <section className="commodity-panel">
         <div className="commodity-heading">
@@ -234,15 +226,7 @@ export function CCICoalPage() {
         ) : (
           <p>正在读取报价…</p>
         )}
-        <small>
-          每天 21:00
-          自动采集（北京时间）；手动与自动更新均按三档分别补齐从最后一次获取到今天的来源可用报价，
-          不做更早的全量历史补采。当日未完整取得时每30分钟重试，最多3次，跨日停止。保留既有历史。
-          {data?.status.stage}
-          {data?.status.checkedAt
-            ? ` · 最近采集：${new Date(data.status.checkedAt).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai', hour12: false })}`
-            : ''}
-        </small>
+        <small>每天 21:00 自动采集（北京时间）</small>
         {data?.status.targetDate && (
           <div role="status" aria-label="CCI数据更新状态">
             <p>

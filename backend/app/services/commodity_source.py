@@ -89,6 +89,8 @@ def parse(content,url,known=None):
     if not START<=day.isoformat()<published.isoformat():raise QuoteError('报价日期不属于已发布历史')
     low,high,mean=[int(v.replace(',','')) for v in (quote[6],quote[7],quote[3])]
     if not 0<low<=mean<=high<1_000_000:raise QuoteError('价格区间校验失败')
+    if quote[4] != '持平' and quote[5] is None:
+        raise QuoteError('涨跌字段缺失')
     change=int(quote[5] or 0)*(-1 if quote[4]=='跌' else 1)
     return dict(quoteDate=day.isoformat(),low=low,high=high,mean=mean,change=change,publishedDate=published.isoformat(),sourceUrl=url,rangeEvidence='page',sourceSection='五、长江市场行情')
 
@@ -217,3 +219,68 @@ def homepage_review_link(content):
             continue
         return url
     return None
+
+
+def recovery_links(content, *, start, end, base=CATALOG):
+    """Only follow public aluminum links in the requested recovery interval.
+
+    A catalog is a recent-article list, not a complete historical date API.
+    Undated links remain candidates; their body must prove an actual quote date.
+    """
+    urls = []
+    for href, label in HomeDocument(content).anchors:
+        if not re.search(r'A00|铝', label):
+            continue
+        stamp = re.search(r'20\d{2}-\d{2}-\d{2}', label)
+        if stamp and not start <= stamp[0] <= end:
+            continue
+        url = urljoin(base, href)
+        try:
+            safe_url(url)
+        except (ValueError, TypeError):
+            continue
+        if url not in urls:
+            urls.append(url)
+    return urls[:60]
+
+
+def parse_recovery(content, url, *, today):
+    """Parse either verified historical layout, never prices from a forecast.
+
+    The public 2026-11-04 review moved dated spot evidence into section two.
+    Require that section's explicit month/day, market, price, change and range.
+    """
+    try:
+        row = parse(content, url)
+    except QuoteError:
+        safe_url(url)
+        raw = Document(content).text
+        part = re.search(r'二[、.．]现货(.*?)三[、.．]', raw)
+        if not part:
+            raise
+        pub = re.search(r'(20\d{2}-\d{2}-\d{2})', raw[:part.start()])
+        if not pub:
+            raise QuoteError('无法确认正文发布日期')
+        published = date.fromisoformat(pub[1])
+        quote = re.search(
+            r'(\d{1,2})月(\d{1,2})日长江现货A00铝均价([\d,]+)元/吨'
+            r'[，,](?:较前交易日)?(上涨|下跌|涨|跌|持平)(\d+)?(?:元/吨|元)?'
+            r'[，,]价格区间([\d,]+)[-—~～]([\d,]+)元(?:/吨)?', part[1])
+        if not quote:
+            raise QuoteError('未找到明确的A00现货历史区间')
+        month, day = map(int, quote.group(1, 2))
+        quoted = date(published.year - (month > published.month), month, day)
+        low, high, mean = [int(v.replace(',', '')) for v in quote.group(6, 7, 3)]
+        if not START <= quoted.isoformat() < published.isoformat():
+            raise QuoteError('报价日期不属于已发布历史')
+        if not 0 < low <= mean <= high < 1_000_000:
+            raise QuoteError('价格区间校验失败')
+        if quote[4] != '持平' and quote[5] is None:
+            raise QuoteError('涨跌字段缺失')
+        change = int(quote[5] or 0) * (-1 if quote[4] in ('跌', '下跌') else 1)
+        row = dict(quoteDate=quoted.isoformat(), low=low, high=high, mean=mean,
+                   change=change, publishedDate=published.isoformat(), sourceUrl=url,
+                   rangeEvidence='page', sourceSection='二、现货历史行情')
+    if row['publishedDate'] > today.isoformat() or row['quoteDate'] > today.isoformat():
+        raise QuoteError('报价日期不属于已发布历史')
+    return row

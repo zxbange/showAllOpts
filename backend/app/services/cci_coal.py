@@ -27,6 +27,8 @@ class CCICoal(Commodities):
     recovery_window_days = 31
     max_requests = 36
     max_collection_seconds = 120
+    # Repair only the reported pre-upgrade holes, not arbitrary earlier history.
+    historical_repair_days = ('2026-11-05', '2026-11-06')
     slot_for = staticmethod(latest_slot)
 
     def __init__(self, settings):
@@ -137,8 +139,11 @@ class CCICoal(Commodities):
         with self.db() as db:
             installation = datetime.fromisoformat(db.execute(
                 'SELECT initialized_at FROM schedule_meta WHERE id=1').fetchone()[0]).astimezone(CHINA).date().isoformat()
+            bounds = {}
             for grade in GRADES:
-                latest = db.execute('SELECT max(day) FROM cci_quotes WHERE grade=? AND day<=?', (grade, day)).fetchone()[0]
+                earliest, latest = db.execute(
+                    'SELECT min(day),max(day) FROM cci_quotes WHERE grade=? AND day<=?', (grade, day)).fetchone()
+                bounds[grade] = (earliest, latest)
                 floor = max(START, min(latest or installation, day))
                 db.execute('INSERT OR IGNORE INTO cci_recovery VALUES(?,?,?)',
                            (grade, floor, 'latest_quote' if latest else 'installation_date'))
@@ -146,7 +151,19 @@ class CCICoal(Commodities):
             existing = set(db.execute('SELECT day,grade FROM cci_quotes WHERE day<=?', (day,)))
             checks = {(d, g): (stamp, result) for d, g, stamp, result in db.execute(
                 'SELECT day,grade,checked_at,result FROM cci_gap_checks')}
-        missing = set()
+        # A newer quote may already have existed when recovery was introduced.
+        # Keep its frozen floor, but include the two known interior holes even
+        # when that floor is later. Fresh installations with no surrounding
+        # history must not start an unrelated historical backfill.
+        repairs = set()
+        for grade, floor, _ in floors:
+            earliest, latest = bounds[grade]
+            for repair_day in self.historical_repair_days:
+                key = (repair_day, grade)
+                if (earliest and latest and earliest < repair_day < latest
+                        and repair_day < floor and key not in existing):
+                    repairs.add(key)
+        missing = set(repairs)
         for grade, floor, _ in floors:
             cursor = date.fromisoformat(floor)
             while cursor.isoformat() <= day:
@@ -158,6 +175,9 @@ class CCICoal(Commodities):
         # and least-recently checked slots so long outages cannot starve later data.
         windows = []
         for grade, floor, _ in floors:
+            keys = {key for key in repairs if key[1] == grade}
+            if keys:
+                windows.append((min(key[0] for key in keys), max(key[0] for key in keys), grade, keys))
             cursor = date.fromisoformat(floor)
             while cursor.isoformat() < day:
                 end = min(cursor + timedelta(days=self.recovery_window_days - 1),
@@ -168,8 +188,9 @@ class CCICoal(Commodities):
                 cursor = date.fromisoformat(end) + timedelta(days=1)
         windows.sort(key=lambda window: (min(checks.get(key, ('', ''))[0] for key in window[3]),
                                          window[0], window[2]))
-        recovery = dict(dateFrom=min(row[1] for row in floors), dateTo=day,
+        recovery = dict(dateFrom=min([row[1] for row in floors] + [key[0] for key in repairs]), dateTo=day,
                         initializedFrom=[dict(grade=g, dateFrom=d, origin=o) for g, d, o in floors],
+                        historicalRepairDates=sorted({key[0] for key in repairs}),
                         pendingCount=len(missing), checkedCount=0, unavailableCount=0,
                         deferredCount=len(missing), requestCount=0)
         return windows, missing, recovery

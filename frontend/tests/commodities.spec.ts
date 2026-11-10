@@ -26,12 +26,25 @@ test('A00 ranges and missing evidence, navigation and responsive table', async (
           pagesParsed: 1,
           inserted: 0,
           changed: 0,
+          recovery: { day: '2026-11-03', result: 'unavailable' },
+          pendingCount: 5,
+          pendingTargets: [
+            '2026-11-03',
+            '2026-11-04',
+            '2026-11-05',
+            '2026-11-07',
+            '2026-11-08',
+          ].map((day) => ({ day })),
         },
       },
     })
   })
   await page.goto('/commodities')
   await expect(page.getByRole('heading', { name: 'A00铝', exact: true })).toBeVisible()
+  await expect(page.getByText('每日报价区间与均价 · 元/吨 · 自2026-10-08')).toHaveCount(0)
+  await expect(page.getByText(/失败日期回补：/)).toHaveCount(0)
+  await expect(page.getByText(/待核验日期.*个：/)).toHaveCount(0)
+  await expect(page.getByText(/每次最多尝试一个失败日/)).toHaveCount(0)
   await expect(
     page.getByRole('navigation', { name: '主导航' }).getByRole('link', { name: '大宗商品' }),
   ).toHaveAttribute('aria-current', 'page')

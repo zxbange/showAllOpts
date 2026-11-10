@@ -192,8 +192,8 @@ def test_missing_prior_date_not_filled_with_later_price(tmp_path,monkeypatch):
     assert job.status()['currentVerified']
 
 
-@pytest.mark.parametrize('mode,expected', [('explicit','recovered'),('wrong','date_mismatch'),('relative','quote_date_missing'),('network','source_request_or_processing_failed')])
-def test_one_targeted_homepage_review_only(tmp_path,monkeypatch,mode,expected):
+@pytest.mark.parametrize('mode,expected', [('explicit','recovered'),('wrong','no_matching_quote'),('relative','quote_date_missing'),('network','source_request_or_processing_failed')])
+def test_interval_recovery_keeps_unverified_dates_pending(tmp_path,monkeypatch,mode,expected):
     job=service(tmp_path,monkeypatch);original=commodities.fetch
     with job.db() as db:
         for day in ('2026-10-31','2026-11-01'):
@@ -210,12 +210,17 @@ def test_one_targeted_homepage_review_only(tmp_path,monkeypatch,mode,expected):
         return original(client,requested,catalog)
     monkeypatch.setattr(commodities,'fetch',fetch)
     job.collect(job.lock())
-    assert requests==[HOME,DATE_URL,url]
-    assert job.status()['recovery']=={'day':'2026-10-31','result':expected}
+    assert requests==[HOME,DATE_URL,CATALOG,url]
+    assert job.status()['recovery']['dateFrom']=='2026-10-31'
+    assert job.status()['recovery']['articlesChecked']==1
+    with job.db() as db:
+        assert db.execute('SELECT result FROM a00_source_checks WHERE url=?',(url,)).fetchone()[0]==expected
     assert job.status()['currentVerified']
     dates={r['quoteDate'] for r in job.history()['rows']}
     assert ('2026-10-31' in dates)==(mode=='explicit')
     assert job.status()['pendingCount']==(1 if mode=='explicit' else 2)
-    # On failure the next run rotates to the other failed date, not a full scan.
+    # A second run retains missing dates without inserting mismatched or invented prices.
+    before=job.history()['rows']
     job.collect(job.lock())
-    assert job.status()['recovery']['day']=='2026-11-01'
+    assert job.history()['rows']==before
+    assert job.status()['recovery']['pendingCount']==(1 if mode=='explicit' else 2)

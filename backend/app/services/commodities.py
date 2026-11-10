@@ -1,7 +1,8 @@
 """Independent persisted quotes. Daily Shanghai scheduling and manual collection share a cross-process lock."""
 from contextlib import contextmanager
 from pathlib import Path
-from datetime import datetime, timezone, timedelta
+from datetime import date, datetime, timezone, timedelta
+from time import monotonic
 from zoneinfo import ZoneInfo
 import logging
 import json
@@ -9,7 +10,9 @@ import sqlite3
 import threading
 import httpx
 import portalocker
-from app.services.commodity_source import HOME, fetch, home_date_reference, public_report_date, parse_home, QuoteError, QuoteIncomplete, explicit_home_date, homepage_review_link, parse, diagnostic_reason
+from app.services.commodity_source import (HOME, CATALOG, START, fetch, home_date_reference,
+    public_report_date, parse_home, QuoteError, QuoteIncomplete, explicit_home_date,
+    recovery_links, parse_recovery, diagnostic_reason)
 
 LOG = logging.getLogger(__name__)
 CHINA = ZoneInfo('Asia/Shanghai')
@@ -29,6 +32,8 @@ SEED=Path(__file__).resolve().parents[1]/'data/a00_changjiang.json'
 
 class Commodities:
     tracks_failed_targets = True
+    max_requests = 24
+    max_collection_seconds = 120
     schedule_label = '每天 11:00、18:00 · 北京时间'
     slot_for = staticmethod(latest_slot)
 
@@ -45,6 +50,8 @@ class Commodities:
             db.execute('CREATE TABLE IF NOT EXISTS recovery_attempts(day TEXT PRIMARY KEY, attempted_at TEXT NOT NULL, result TEXT NOT NULL)')
             db.execute('CREATE TABLE IF NOT EXISTS failed_targets(day TEXT PRIMARY KEY, reason TEXT NOT NULL, attempted_at TEXT NOT NULL)')
             db.execute('CREATE TABLE IF NOT EXISTS schedule_runs(slot TEXT PRIMARY KEY, status TEXT NOT NULL, finished_at TEXT)')
+            db.execute('CREATE TABLE IF NOT EXISTS a00_recovery(id INTEGER PRIMARY KEY, start_day TEXT NOT NULL, origin TEXT NOT NULL)')
+            db.execute('CREATE TABLE IF NOT EXISTS a00_source_checks(url TEXT PRIMARY KEY, checked_at TEXT NOT NULL, result TEXT NOT NULL)')
             for row in json.loads(SEED.read_text())['rows']:
                 # Keep research evidence but do not expose unverified range values.
                 if row['rangeEvidence']!='page':row=dict(row,low=None,high=None)
@@ -116,8 +123,43 @@ class Commodities:
             self.thread.start()
         except BaseException:lock.release();raise
         return True
+    def recovery_plan(self, today):
+        """Persist the initial floor before saving a new quote, so gaps cannot hide.
+
+        Existing failed observation dates remain in scope. Otherwise begin at the
+        latest stored quote, or the persisted installation date for an empty DB.
+        """
+        end = today.isoformat()
+        with self.db() as db:
+            latest = db.execute('SELECT max(day) FROM quotes WHERE day<=?', (end,)).fetchone()[0]
+            installed = datetime.fromisoformat(db.execute(
+                'SELECT initialized_at FROM schedule_meta WHERE id=1').fetchone()[0]).astimezone(CHINA).date().isoformat()
+            failed = db.execute('SELECT min(day) FROM failed_targets WHERE day>=? AND day<=?', (START, end)).fetchone()[0]
+            floor = max(START, min(latest or installed, end))
+            if failed:
+                floor = min(floor, failed)
+            db.execute('INSERT OR IGNORE INTO a00_recovery VALUES(1,?,?)',
+                       (floor, 'latest_quote' if latest else 'installation_date'))
+            floor, origin = db.execute('SELECT start_day,origin FROM a00_recovery WHERE id=1').fetchone()
+            existing = {r[0] for r in db.execute('SELECT day FROM quotes WHERE day<=?', (end,))}
+            cursor = date.fromisoformat(floor)
+            while cursor <= today:
+                day = cursor.isoformat()
+                if day not in existing:
+                    db.execute('INSERT OR IGNORE INTO failed_targets VALUES(?,?,?)',
+                               (day, 'not_yet_observed', now().isoformat()))
+                cursor += timedelta(days=1)
+            missing = {r[0] for r in db.execute('SELECT day FROM failed_targets WHERE day>=? AND day<=?', (floor, end)) if r[0] not in existing}
+        return missing, dict(dateFrom=floor, dateTo=end, origin=origin,
+                             pendingCount=len(missing), recoveredCount=0,
+                             articlesChecked=0, requestCount=0, deferredArticles=0,
+                             sourceLimited=True)
+
     def collect(self,lock,slot=None):
-        failures = fetched = parsed = inserted = changed = 0
+        failures = fetched = parsed = inserted = changed = requests = 0
+        began = monotonic()
+        missing = set()
+        limited = False
         current_verified = False
         target_result = 'pending'
         home_quote = None
@@ -128,9 +170,14 @@ class Commodities:
         target_day = slot.astimezone(CHINA).date() if slot else today
         target_mode = 'complete_spot' if slot is not None and slot.astimezone(CHINA).hour == 18 else 'current_spot'
 
+        def should_stop():
+            return self.stopping.is_set() or requests >= self.max_requests or monotonic() - began >= self.max_collection_seconds
+
         def status(stage, error=None, outcome='running'):
             with self.db() as db:
                 latest = db.execute('SELECT max(day) FROM quotes').fetchone()[0]
+            if recovery is not None:
+                recovery.update(pendingCount=len(missing), requestCount=requests)
             self.state(stage=stage, outcome=outcome, trigger='scheduled' if slot else 'manual',
                        slot=slot.isoformat() if slot else None, startedAt=started,
                        checkedAt=now().isoformat() if outcome != 'running' else None,
@@ -143,7 +190,11 @@ class Commodities:
                        noNew=inserted == 0 and changed == 0, error=error)
 
         def read(client, url, catalog=False):
-            nonlocal fetched
+            nonlocal fetched, requests, limited
+            if should_stop():
+                limited = True
+                raise QuoteError('本次采集达到上限')
+            requests += 1
             content = fetch(client, url, catalog)
             fetched += 1
             return content
@@ -157,18 +208,22 @@ class Commodities:
                 # Re-fetching unchanged prices is not a new or modified quote.
                 comparable = ('low', 'high', 'mean', 'change', 'rangeEvidence')
                 old = json.loads(previous[0]) if previous else None
-                differs = old is None or any(old.get(k) != row.get(k) for k in comparable)
+                # Historical recovery never rewrites an existing quote. Only the
+                # current actual date may be revised from the live homepage.
+                differs = old is None or (row['quoteDate'] == today.isoformat() and any(old.get(k) != row.get(k) for k in comparable))
                 if differs:
                     db.execute('INSERT INTO quotes VALUES(?,?) ON CONFLICT(day) DO UPDATE SET payload=excluded.payload',
                                (row['quoteDate'], json.dumps(row, ensure_ascii=False)))
                 db.execute('DELETE FROM failed_targets WHERE day=?', (row['quoteDate'],))
                 db.execute('DELETE FROM recovery_attempts WHERE day=?', (row['quoteDate'],))
+            missing.discard(row['quoteDate'])
             parsed += 1
             inserted += int(old is None)
             changed += int(old is not None and differs)
             return True
 
         try:
+            missing, recovery = self.recovery_plan(today)
             with self.db() as db:
                 db.execute('INSERT INTO failed_targets VALUES(?,?,?) ON CONFLICT(day) DO UPDATE SET reason=excluded.reason, attempted_at=excluded.attempted_at',
                            (target_day.isoformat(), 'interrupted_or_pending', started))
@@ -192,35 +247,61 @@ class Commodities:
                                      'unverified' if isinstance(exc, (QuoteError, ValueError)) else 'sourceReadFailed')
                     failures += 1
                     LOG.warning('Commodity current quote failed type=%s', type(exc).__name__)
-                # One failed observation date and at most one review request per
-                # run. Use only links already present on the public homepage.
-                with self.db() as db:
-                    pending = db.execute("""SELECT f.day FROM failed_targets f
-                        LEFT JOIN recovery_attempts r ON r.day=f.day
-                        WHERE f.day<? AND f.reason!='sourceNotPublished'
-                        ORDER BY coalesce(r.attempted_at,''),f.day LIMIT 1""",
-                        (target_day.isoformat(),)).fetchone()
-                if pending and not self.stopping.is_set():
-                    recovery = dict(day=pending[0], result='no_public_link')
-                    url = homepage_review_link(home) if home else None
-                    if url:
-                        try:
-                            row = parse(read(client, url), url)
-                            if self.stopping.is_set():
-                                recovery['result'] = 'interrupted'
-                            elif row['quoteDate'] != pending[0]:
-                                recovery['result'] = 'date_mismatch'
-                            else:
-                                recovery['result'] = 'recovered' if save(row) else 'interrupted'
-                        except Exception as exc:
-                            recovery['result'] = diagnostic_reason(exc)
-                            LOG.warning('Commodity recovery failed target=%s type=%s reason=%s source=%s',
-                                        pending[0], type(exc).__name__, recovery['result'], url)
+                # Query only when a real interval gap remains. Calendar dates
+                # are candidates, not assertions of trading days or publication.
+                historical = {day for day in missing if day < today.isoformat()}
+                if historical and not should_stop():
+                    candidates = recovery_links(home or '', start=recovery['dateFrom'],
+                                                end=today.isoformat(), base=HOME)
+                    try:
+                        catalog = read(client, CATALOG, True)
+                        candidates += recovery_links(catalog, start=recovery['dateFrom'], end=today.isoformat())
+                    except Exception as exc:
+                        failures += 1
+                        LOG.warning('Commodity recovery catalog failed type=%s', type(exc).__name__)
                     with self.db() as db:
-                        if recovery['result'] != 'recovered':
+                        for url in dict.fromkeys(candidates):
+                            db.execute("INSERT OR IGNORE INTO a00_source_checks VALUES(?,'','pending')", (url,))
+                        # Retain discovered links across catalog rotation/restarts;
+                        # never let one unavailable article starve all later ones.
+                        candidates = [r[0] for r in db.execute(
+                            'SELECT url FROM a00_source_checks ORDER BY checked_at,url')]
+                    attempted = 0
+                    for url in candidates:
+                        if not historical or should_stop():
+                            limited = bool(historical and should_stop())
+                            break
+                        result = 'no_matching_quote'
+                        try:
+                            row = parse_recovery(read(client, url), url, today=today)
+                            if self.stopping.is_set():
+                                result = 'interrupted'
+                            elif row['quoteDate'] in historical:
+                                if save(row):
+                                    recovery['recoveredCount'] += 1
+                                    historical.discard(row['quoteDate'])
+                                    result = 'recovered'
+                            # Out-of-window, existing and future rows cannot change
+                            # the historical data or the recovery floor.
+                        except Exception as exc:
+                            result = diagnostic_reason(exc)
+                            if not isinstance(exc, QuoteError):
+                                failures += 1
+                            LOG.warning('Commodity recovery article type=%s reason=%s', type(exc).__name__, result)
+                        attempted += 1
+                        recovery['articlesChecked'] += 1
+                        with self.db() as db:
+                            db.execute('UPDATE a00_source_checks SET checked_at=?,result=? WHERE url=?',
+                                       (now().isoformat(), result, url))
+                    recovery['deferredArticles'] = len(candidates) - attempted if historical else 0
+                    recovery['limited'] = limited
+                    with self.db() as db:
+                        for day in historical:
                             db.execute('INSERT INTO recovery_attempts VALUES(?,?,?) ON CONFLICT(day) DO UPDATE SET attempted_at=excluded.attempted_at,result=excluded.result',
-                                       (pending[0], now().isoformat(), recovery['result']))
-                    LOG.info('Commodity recovery target=%s result=%s', pending[0], recovery['result'])
+                                       (day, now().isoformat(), 'deferred' if limited else 'no_verified_public_quote'))
+                    LOG.info('Commodity recovery range=%s..%s checked=%s recovered=%s pending=%s limited=%s',
+                             recovery['dateFrom'], recovery['dateTo'], recovery['articlesChecked'],
+                             recovery['recoveredCount'], len(missing), limited)
             finished = True
         except Exception as exc:
             failures += 1
@@ -234,9 +315,11 @@ class Commodities:
                     outcome, stage, error = 'failed', '采集失败', '公开来源读取或核验失败，历史保留'
                 elif target_result in ('sourceNotPublished', 'targetDateUnavailable'):
                     outcome, stage, error = 'no_quote', '来源尚无目标日报价', None
-                elif failures or not current_verified:
-                    outcome, stage = 'partial', '部分采集失败'
-                    error = '最新报价未核验，已有历史保留' if not current_verified else '部分历史补采失败，最新报价已核验'
+                elif failures or not current_verified or any(day < today.isoformat() for day in missing):
+                    outcome, stage = 'partial', '部分报价已更新'
+                    error = ('最新报价未核验，已有历史保留' if not current_verified else
+                             '本次达到采集上限，未完成日期下次继续' if limited else
+                             '公开来源尚未提供全部缺失日期的可核验报价')
                 else:
                     outcome, error = 'completed', None
                     stage = '采集成功' if inserted or changed else '暂无新报价'

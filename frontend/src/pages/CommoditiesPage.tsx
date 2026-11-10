@@ -214,7 +214,6 @@ function A00Page() {
       <header>
         <span className="eyebrow">大宗商品 · 长江现货</span>
         <h1>A00铝</h1>
-        <p>每日报价区间与均价 · 元/吨 · 自2026-10-08</p>
       </header>
       <section className="commodity-summary">
         <div>
@@ -302,21 +301,6 @@ function A00Page() {
             <span>暂无新报价</span>
           )}
           {!data?.status.running && data?.status.stale && <span>已保存报价尚未更新至今日</span>}
-          {data?.status.recovery && (
-            <span>
-              失败日期回补：{data.status.recovery.day} ·{' '}
-              {data.status.recovery.result === 'recovered'
-                ? '已补回'
-                : '未取得可核验报价，保留待补'}
-            </span>
-          )}
-          {!!data?.status.pendingCount && (
-            <span>
-              待核验日期 {data.status.pendingCount} 个：
-              {data.status.pendingTargets?.map((item) => item.day).join('、')}
-              （未确认是否发布；每次最多尝试一个失败日，无法核验则保留）
-            </span>
-          )}
           <small>每天 11:00、18:00 自动采集 · 北京时间</small>
         </div>
       </section>

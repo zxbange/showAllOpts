@@ -52,6 +52,149 @@ def pairs(store):
     return {(r['quoteDate'], r['grade']) for r in store.history()['rows']}
 
 
+@pytest.mark.parametrize('scheduled', [False, True])
+def test_manual_and_scheduled_update_fill_last_quote_through_today(setup, monkeypatch, scheduled):
+    module, clock, _, store = setup
+    seed(store, *[('2026-11-04', g) for g in GRADES])
+    original = store.history()['rows']
+    clock[0] = datetime(2026, 11, 10, 13, tzinfo=timezone.utc)
+    available = {(d, g) for d in ('2026-11-05', '2026-11-06', '2026-11-09', '2026-11-10')
+                 for g in GRADES}
+    calls = install_source(monkeypatch, module, available)
+    assert store.refresh(slot=latest_slot(clock[0])) if scheduled else store.refresh()
+    store.thread.join(5)
+    assert not store.thread.is_alive()
+    assert pairs(store) == available | {('2026-11-04', g) for g in GRADES}
+    assert all(row in store.history()['rows'] for row in original)
+    assert set(calls) == {(start, end, g) for start, end in
+                          [('2026-11-04', '2026-11-09'), ('2026-11-10', '2026-11-10')]
+                          for g in GRADES}
+    state = store.status()
+    assert state['trigger'] == ('scheduled' if scheduled else 'manual')
+    assert state['recovery']['dateFrom'] == '2026-11-04'
+    assert state['targetHits'] == 3 and state['inserted'] == 12
+    assert state['recovery']['unavailableCount'] == 6  # No invented Nov 7/8 prices.
+
+
+@pytest.mark.parametrize('persisted_floor', [False, True])
+def test_reported_november_holes_recover_before_newer_floor(setup, monkeypatch, persisted_floor):
+    module, clock, settings, store = setup
+    seed(store, *[(d, g) for d in ('2026-11-04', '2026-11-09') for g in GRADES])
+    original = store.history()['rows']
+    if persisted_floor:
+        with store.db() as db:
+            db.executemany('INSERT INTO cci_recovery VALUES(?,?,?)',
+                           [(g, '2026-11-09', 'latest_quote') for g in GRADES])
+    clock[0] = datetime(2026, 11, 10, 1, tzinfo=timezone.utc)
+    available = {(d, g) for d in ('2026-11-03', '2026-11-05', '2026-11-06',
+                                  '2026-11-07', '2026-11-08', '2026-11-09', '2026-11-10')
+                 for g in GRADES}
+    calls = install_source(monkeypatch, module, available)
+    store.collect(store.lock())
+    expected = {(d, g) for d in ('2026-11-04', '2026-11-05', '2026-11-06',
+                                 '2026-11-09', '2026-11-10') for g in GRADES}
+    assert pairs(store) == expected
+    assert all(row in store.history()['rows'] for row in original)
+    assert set(calls) == {(start, end, g) for start, end in
+                          [('2026-11-05', '2026-11-06'), ('2026-11-10', '2026-11-10')]
+                          for g in GRADES}
+    state = store.status()
+    assert state['recovery']['dateFrom'] == '2026-11-05'
+    assert state['recovery']['historicalRepairDates'] == ['2026-11-05', '2026-11-06']
+    assert {row['dateFrom'] for row in state['recovery']['initializedFrom']} == {'2026-11-09'}
+    assert state['inserted'] == 9 and state['changed'] == 0
+    assert state['recovery']['pendingCount'] == 0
+    calls.clear()
+    restarted = CCICoal(settings)
+    restarted.collect(restarted.lock())
+    assert pairs(restarted) == expected
+    assert restarted.status()['inserted'] == restarted.status()['changed'] == 0
+    assert restarted.status()['recovery']['historicalRepairDates'] == []
+    assert calls == [('2026-11-10', '2026-11-10', g) for g in GRADES]
+
+
+def test_reported_holes_retry_empty_and_failed_windows_without_overwriting_history(setup, monkeypatch):
+    module, clock, settings, store = setup
+    seed(store, *[(d, g) for d in ('2026-11-04', '2026-11-09') for g in GRADES],
+         ('2026-11-05', 'CCI5000'))
+    original = store.history()['rows']
+    clock[0] = datetime(2026, 11, 10, 1, tzinfo=timezone.utc)
+    available = {(d, g) for d in ('2026-11-05', '2026-11-06', '2026-11-10') for g in GRADES}
+    available.remove(('2026-11-06', 'CCI5500'))
+    fail = [True]
+    calls = install_source(monkeypatch, module, available,
+                           lambda start, end, grade: fail[0] and start < '2026-11-09' and grade == 'CCI4500')
+    store.collect(store.lock())
+    state = store.status()
+    assert state['outcome'] == 'partial'
+    assert state['recovery']['pendingCount'] == 3
+    assert state['recovery']['unavailableCount'] == 1
+    assert all(row in store.history()['rows'] for row in original)
+    assert ('2026-11-06', '2026-11-06', 'CCI5000') in calls
+    assert ('2026-11-05', '2026-11-06', 'CCI5000') not in calls
+    fail[0] = False
+    available.add(('2026-11-06', 'CCI5500'))
+    calls.clear()
+    restarted = CCICoal(settings)
+    restarted.collect(restarted.lock())
+    assert restarted.status()['recovery']['pendingCount'] == 0
+    assert restarted.status()['inserted'] == 3
+    assert all(row in restarted.history()['rows'] for row in original)
+    assert ('2026-11-06', '2026-11-06', 'CCI5500') in calls
+    assert not any(start < '2026-11-09' and g == 'CCI5000' for start, end, g in calls)
+
+
+def test_reported_holes_do_not_expand_fresh_installation_or_future_targets(setup):
+    _, clock, _, store = setup
+    clock[0] = datetime(2026, 11, 10, 1, tzinfo=timezone.utc)
+    with store.db() as db:
+        db.execute('UPDATE schedule_meta SET initialized_at=?', (clock[0].isoformat(),))
+    windows, missing, state = store.recovery_plan('2026-11-10')
+    assert windows == []
+    assert missing == {('2026-11-10', g) for g in GRADES}
+    assert state['historicalRepairDates'] == []
+    seed(store, *[(d, g) for d in ('2026-11-04', '2026-11-09') for g in GRADES])
+    _, missing, state = store.recovery_plan('2026-11-04')
+    assert missing == set()
+    assert state['historicalRepairDates'] == []
+
+
+def test_reported_holes_share_request_budget_and_resume_after_restart(setup, monkeypatch):
+    module, clock, settings, store = setup
+    seed(store, *[(d, g) for d in ('2026-11-04', '2026-11-09') for g in GRADES])
+    clock[0] = datetime(2026, 11, 10, 13, tzinfo=timezone.utc)
+    available = {(d, g) for d in ('2026-11-05', '2026-11-06', '2026-11-10') for g in GRADES}
+    calls = install_source(monkeypatch, module, available)
+    for remaining in (4, 2, 0):
+        store = CCICoal(settings)
+        store.max_requests = 4
+        calls.clear()
+        store.collect(store.lock())
+        state = store.status()
+        assert len(calls) == state['recovery']['requestCount'] == 4
+        assert state['recovery']['pendingCount'] == remaining
+    assert available <= pairs(store)
+
+
+def test_source_empty_reported_holes_do_not_starve_normal_recovery(setup, monkeypatch):
+    module, clock, _, store = setup
+    seed(store, *[(d, g) for d in ('2026-11-04', '2026-11-09') for g in GRADES])
+    clock[0] = datetime(2026, 11, 12, 13, tzinfo=timezone.utc)
+    available = {(d, g) for d in ('2026-11-10', '2026-11-11', '2026-11-12') for g in GRADES}
+    calls = install_source(monkeypatch, module, available)
+    store.max_requests = 4  # Today's three requests, then one historical window.
+    for _ in range(6):
+        store.collect(store.lock())
+        clock[0] += timedelta(minutes=1)
+    assert available <= pairs(store)
+    assert store.status()['recovery']['pendingCount'] == 6
+    historical = [(start, end, g) for start, end, g in calls if start < '2026-11-12']
+    assert len(historical) == 6
+    assert set(historical) == {(start, end, g) for start, end in
+                               [('2026-11-05', '2026-11-06'), ('2026-11-09', '2026-11-11')]
+                               for g in GRADES}
+
+
 def test_each_grade_recovers_from_its_own_latest_quote_not_early_seed(setup, monkeypatch):
     module, clock, _, store = setup
     latest = dict(zip(GRADES, ['2026-11-02', '2026-11-04', '2026-11-06']))
