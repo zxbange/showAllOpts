@@ -4,6 +4,7 @@ Free public website endpoints are not contractual APIs. Missing or inconsistent
 responses fail closed. No credential, local-file or paid-service dependency.
 """
 from datetime import date, timedelta
+from contextlib import nullcontext
 import json
 import math
 import re
@@ -14,11 +15,22 @@ import hashlib
 import os
 from pathlib import Path
 import tempfile
+from urllib.parse import urlsplit
 
 DATACENTER = 'https://datacenter-web.eastmoney.com/api/data/v1/get'
 UNIVERSE = 'https://82.push2.eastmoney.com/api/qt/clist/get'
 PRICES = 'https://push2his.eastmoney.com/api/qt/stock/kline/get'
 MAX_BYTES = 12 * 1024 * 1024
+MAX_REDIRECTS = 3
+# Only known public API origins, never arbitrary eastmoney.com subdomains.
+# The quote service redirects some server networks to its delayed-data host.
+REDIRECT_HOSTS = {
+    '82.push2.eastmoney.com': {'82.push2.eastmoney.com', '82.push2delay.eastmoney.com'},
+    'push2his.eastmoney.com': {'push2his.eastmoney.com', 'push2hisdelay.eastmoney.com'},
+    'datacenter-web.eastmoney.com': {'datacenter-web.eastmoney.com'},
+    'datacenter.eastmoney.com': {'datacenter.eastmoney.com'},
+}
+REDIRECT_STATUSES = {301, 302, 303, 307, 308}
 
 
 class CashCowSourceError(RuntimeError):
@@ -139,26 +151,39 @@ class EastmoneyCashCowSource:
         raise CashCowSourceError('数据源重试失败')
 
     def _get_once(self, url, params):
-        self._rate_limit()
         try:
-            # Streaming bounds downloaded bytes as well as parsed JSON size.
-            if hasattr(self.client, 'stream'):
-                with self.client.stream('GET', url, params=params, timeout=25) as response:
+            original = httpx.URL(url, params=params)
+            current, visited = original, {str(original)}
+            for redirects in range(MAX_REDIRECTS + 1):
+                # Bound/cancel every hop and override an injected client's own
+                # automatic redirect setting before any destination is visited.
+                self._rate_limit()
+                streaming = hasattr(self.client, 'stream')
+                context = (self.client.stream('GET', current, timeout=25, follow_redirects=False)
+                           if streaming else nullcontext(self.client.get(
+                               current, timeout=25, follow_redirects=False)))
+                with context as response:
+                    if response.status_code in REDIRECT_STATUSES:
+                        if redirects >= MAX_REDIRECTS:
+                            raise CashCowSourceError('东方财富数据源重定向次数过多，已停止采集')
+                        current = self._redirect_target(original, current, response.headers.get('location'))
+                        if str(current) in visited:
+                            raise CashCowSourceError('东方财富数据源重定向循环，已停止采集')
+                        visited.add(str(current))
+                        # Close without downloading the redirect response body.
+                        continue
                     response.raise_for_status()
+                    # Streaming bounds decompressed bytes as well as JSON size,
+                    # including the final response after a permitted redirect.
                     chunks, size = [], 0
-                    for chunk in response.iter_bytes():
+                    for chunk in response.iter_bytes() if streaming else [response.content]:
                         self.check_cancel()
                         size += len(chunk)
                         if size > MAX_BYTES:
                             raise CashCowSourceError('数据源响应过大，已停止采集')
                         chunks.append(chunk)
                     data = json.loads(b''.join(chunks))
-            else:
-                response = self.client.get(url, params=params, timeout=25)
-                response.raise_for_status()
-                if len(response.content) > MAX_BYTES:
-                    raise CashCowSourceError('数据源响应过大，已停止采集')
-                data = response.json()
+                    break
         except CashCowSourceError:
             raise
         except Exception as exc:
@@ -168,6 +193,28 @@ class EastmoneyCashCowSource:
         if not isinstance(data, dict):
             raise CashCowSourceError('数据源响应格式异常')
         return data
+
+    @staticmethod
+    def _redirect_target(original, current, location):
+        if not location:
+            raise CashCowSourceError('东方财富数据源重定向地址缺失')
+        try:
+            target = current.join(location)
+            allowed = REDIRECT_HOSTS.get(original.host, set())
+            # Same API path and complete query: a redirect must not silently
+            # remove the market scope, report year, page number or price basis.
+            valid = (target.scheme == 'https' and target.host in allowed
+                     and target.port in (None, 443)
+                     and urlsplit(location).username is None
+                     and urlsplit(str(target)).username is None
+                     and not target.fragment
+                     and target.raw_path.split(b'?')[0] == original.raw_path.split(b'?')[0]
+                     and sorted(target.params.multi_items()) == sorted(original.params.multi_items()))
+        except (ValueError, httpx.InvalidURL):
+            valid = False
+        if not valid:
+            raise CashCowSourceError('东方财富数据源重定向地址不受信任或请求参数改变，已停止采集')
+        return target
 
     def _rows(self, report, filter_text, key, sort='SECURITY_CODE', columns='ALL'):
         parameters = [report, filter_text, sort, columns]

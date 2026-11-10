@@ -9,12 +9,12 @@ test('six performance modules preserve URLs and folder layers, contrast and hit 
   await page.goto('/dividend-selection')
   const nav = page.getByRole('navigation', { name: '业绩选股模块切换' })
   const names = [
+    '奶牛股',
     '高增长',
     '净利润断层',
     '纯高股息',
     '高股息低估值（非银行业）',
     '高股息低估值（银行业）',
-    '奶牛股',
   ]
   await expect(nav.getByRole('link')).toHaveCount(6)
   expect(await nav.getByRole('link').allTextContents()).toEqual(names)
@@ -24,9 +24,9 @@ test('six performance modules preserve URLs and folder layers, contrast and hit 
   )
   const initialHeight = await nav.evaluate((el) => el.getBoundingClientRect().height)
   for (const [name, method] of [
-    [names[3], 'value'],
-    [names[4], 'bank'],
-    [names[2], 'classic'],
+    ['高股息低估值（非银行业）', 'value'],
+    ['高股息低估值（银行业）', 'bank'],
+    ['纯高股息', 'classic'],
   ]) {
     await nav.getByRole('link', { name, exact: true }).click()
     await expect(page).toHaveURL(new RegExp(`dividend-selection\\?method=${method}$`))
@@ -97,10 +97,12 @@ test('six performance modules preserve URLs and folder layers, contrast and hit 
     })
     expect(unobstructed).toBe(true)
   }
+  await page.keyboard.press('Home')
+  await expect(nav.getByRole('link', { name: '奶牛股', exact: true })).toBeFocused()
   await page.keyboard.press('Enter')
   await expect(page).toHaveURL(/cash-cow$/)
   await page.reload()
-  await expect(nav.getByRole('link', { name: names[5], exact: true })).toHaveAttribute(
+  await expect(nav.getByRole('link', { name: '奶牛股', exact: true })).toHaveAttribute(
     'aria-current',
     'page',
   )
@@ -111,7 +113,7 @@ test('six performance modules preserve URLs and folder layers, contrast and hit 
     'page',
   )
   await page.goForward()
-  await expect(nav.getByRole('link', { name: names[5], exact: true })).toHaveAttribute(
+  await expect(nav.getByRole('link', { name: '奶牛股', exact: true })).toHaveAttribute(
     'aria-current',
     'page',
   )
@@ -120,5 +122,21 @@ test('six performance modules preserve URLs and folder layers, contrast and hit 
   await expect(page.getByRole('link', { name: '进入高股息选股', exact: true })).toHaveCount(0)
   await page.getByRole('textbox', { name: '搜索研究模块' }).fill('高股息')
   await expect(page.locator('.research-card')).toHaveCount(1)
-  await expect(page.getByRole('link', { name: '进入业绩选股', exact: true })).toBeVisible()
+  const entry = page.getByRole('link', { name: '进入业绩选股', exact: true })
+  await expect(entry).toHaveAttribute('href', '/cash-cow')
+  await entry.click()
+  await expect(page).toHaveURL(/cash-cow$/)
+  await expect(nav.getByRole('link').first()).toHaveText('奶牛股')
+  await expect(nav.getByRole('link').first()).toHaveAttribute('aria-current', 'page')
+  await nav.getByRole('link', { name: '高增长', exact: true }).click()
+  await expect(page).toHaveURL(/high-growth$/)
+  const mainEntry = page
+    .getByRole('navigation', { name: '主导航' })
+    .getByRole('link', { name: '业绩选股', exact: true })
+  for (let repeat = 0; repeat < 2; repeat += 1) {
+    await mainEntry.click()
+    await expect(page).toHaveURL(/cash-cow$/)
+    await expect(nav.getByRole('link').first()).toHaveAttribute('aria-current', 'page')
+    await expect(nav.locator('[aria-current="page"]')).toHaveCount(1)
+  }
 })

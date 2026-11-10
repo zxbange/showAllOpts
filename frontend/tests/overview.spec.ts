@@ -25,6 +25,10 @@ test('overview directory is independent of database, searchable and categorized'
     'href',
     '/microcap-temperature',
   )
+  await expect(page.getByRole('link', { name: '进入业绩选股', exact: true })).toHaveAttribute(
+    'href',
+    '/cash-cow',
+  )
   await page.getByRole('button', { name: '风格观察 1', exact: true }).click()
   await expect(page.locator('.research-card')).toHaveCount(1)
   await expect(page.getByRole('link', { name: '进入微盘观察', exact: true })).toBeVisible()
@@ -72,13 +76,13 @@ test('all module routes remain reachable from navigation', async ({ page }) => {
     ['动量观察', 'industry-momentum'],
     ['市场情绪', 'etf-shares'],
     ['微盘观察', 'microcap-temperature'],
-    ['业绩选股', 'high-growth'],
+    ['业绩选股', 'cash-cow'],
   ]) {
     await navigation.getByRole('link', { name, exact: true }).click()
     await expect(page).toHaveURL(new RegExp(path + '$'))
     await expect(page.getByRole('heading', { level: 1 })).toContainText(
       (
-        { 动量观察: '行业动量', 微盘观察: '微盘温度计', 业绩选股: '高增长' } as Record<
+        { 动量观察: '行业动量', 微盘观察: '微盘温度计', 业绩选股: '奶牛股' } as Record<
           string,
           string
         >
@@ -102,7 +106,8 @@ test('group tabs preserve direct links, active navigation and mobile layout', as
     ['动量观察', 'industry-momentum', 'etf-momentum', 'ETF动量热度'],
     ['市场情绪', 'etf-shares', 'market-crowding', '抱团拥挤度'],
     ['微盘观察', 'microcap-temperature', 'microcap-breadth', '微盘新高新低'],
-    ['业绩选股', 'high-growth', 'earnings-gap', '净利润断层'],
+    ['业绩选股', 'cash-cow', 'earnings-gap', '净利润断层'],
+    ['业绩选股', 'cash-cow', 'high-growth', '高增长'],
     ['业绩选股', 'high-growth', 'cash-cow', '奶牛股'],
   ]) {
     await page.goto('/' + first)

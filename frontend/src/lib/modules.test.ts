@@ -46,12 +46,44 @@ describe('national team ETF navigation', () => {
   })
 })
 
-it('keeps cash cow inside the single performance group and searchable from the overview', () => {
+describe('cash cow performance navigation', () => {
   const group = groupForPath('/cash-cow')!
-  expect(group.name).toBe('业绩选股')
-  expect(group.labels).toHaveLength(6)
-  const overview = researchModules.filter((module) => module.name === '业绩选股')
-  expect(overview).toHaveLength(1)
-  expect(overview[0].searchTerms).toContain('奶牛股')
-  expect(researchModules.some((module) => module.id === 'cash-cow')).toBe(false)
+
+  it('puts cash cow first and keeps every existing performance tab', () => {
+    expect(group.name).toBe('业绩选股')
+    expect(group.ids).toEqual(['cash-cow', 'high-growth', 'earnings-gap', 'dividend-selection'])
+    expect(group.labels).toEqual([
+      '奶牛股',
+      '高增长',
+      '净利润断层',
+      '纯高股息',
+      '高股息低估值（非银行业）',
+      '高股息低估值（银行业）',
+    ])
+    for (const id of group.ids) expect(groupForPath('/' + id)).toBe(group)
+  })
+
+  it('opens cash cow from the single overview and main navigation entry without moving other groups', () => {
+    const overview = researchModules.filter((module) => module.name === '业绩选股')
+    expect(overview).toHaveLength(1)
+    expect(overview[0]).toMatchObject({
+      id: 'cash-cow',
+      path: '/cash-cow',
+      category: '业绩观察',
+      tags: group.labels,
+    })
+    expect(overview[0].searchTerms).toEqual(
+      expect.arrayContaining(['奶牛股', '高增长', '净利润断层', '高股息选股']),
+    )
+    expect(researchModules).toHaveLength(7)
+    expect(navigationModules.map((module) => [module.name, module.path])).toEqual([
+      ['市场情绪', '/etf-shares'],
+      ['动量观察', '/industry-momentum'],
+      ['微盘观察', '/microcap-temperature'],
+      ['大宗商品', '/commodities'],
+      ['个股机构持仓', '/institution-ownership'],
+      ['业绩选股', '/cash-cow'],
+      ['博主动态监控', '/social-monitor'],
+    ])
+  })
 })

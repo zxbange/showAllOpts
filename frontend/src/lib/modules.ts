@@ -37,17 +37,6 @@ export interface ResearchModule {
 
 export const individualModules: ResearchModule[] = [
   {
-    id: 'cash-cow',
-    name: '奶牛股',
-    path: '/cash-cow',
-    category: '业绩观察',
-    description: '近3/5/10年持续分红、利润与现金流覆盖筛选。',
-    tags: ['3/5/10年分红', '现金流覆盖'],
-    icon: Coins,
-    tone: 'jade',
-    illustration: 'dividend',
-  },
-  {
     id: 'commodities',
     name: '大宗商品',
     path: '/commodities',
@@ -90,6 +79,17 @@ export const individualModules: ResearchModule[] = [
     icon: TrendingUp,
     tone: 'coral',
     illustration: 'etf-heat',
+  },
+  {
+    id: 'cash-cow',
+    name: '奶牛股',
+    path: '/cash-cow',
+    category: '业绩观察',
+    description: '近3/5/10年持续分红、利润与现金流覆盖筛选。',
+    tags: ['3/5/10年分红', '现金流覆盖'],
+    icon: Coins,
+    tone: 'jade',
+    illustration: 'dividend',
   },
   {
     id: 'high-growth',
@@ -235,15 +235,15 @@ export const moduleGroups = [
   },
   {
     name: '业绩选股',
-    description: '持续增长、净利润断层、高股息与奶牛股筛选。',
-    ids: ['high-growth', 'earnings-gap', 'dividend-selection', 'cash-cow'],
+    description: '奶牛股、持续增长、净利润断层与高股息筛选。',
+    ids: ['cash-cow', 'high-growth', 'earnings-gap', 'dividend-selection'],
     labels: [
+      '奶牛股',
       '高增长',
       '净利润断层',
       '纯高股息',
       '高股息低估值（非银行业）',
       '高股息低估值（银行业）',
-      '奶牛股',
     ],
   },
 ]
