@@ -1,14 +1,16 @@
 # main 自动部署：一次配置，之后 push 自动发布
 
-## CI 浏览器依赖下载
+## CI 浏览器环境
 
-GitHub 托管 Ubuntu 24.04 x64 runner 的 Ubuntu 软件源通过 `mirror+file` 优先访问 Azure 镜像。2026-11-11 两次发布检查因 `azure.archive.ubuntu.com` DNS 解析失败，浏览器依赖安装被阻塞，端到端未启动、部署安全跳过。
+2026-11-11 发布检查先后遇到 Azure Ubuntu 镜像及官方 archive/security 源 DNS 解析失败，浏览器依赖无法安装，端到端未启动，部署安全跳过。单纯换源并不足以解决这次网络故障。
 
-前端 CI 现在先运行 `scripts/ci_ubuntu_apt.py`，仅在一次性的 GitHub 托管 Ubuntu 24.04 x64 runner 上把已识别的 Ubuntu deb822 URI 改为官方 `https://archive.ubuntu.com/ubuntu/`，独立 security 段使用 `https://security.ubuntu.com/ubuntu/`。保留原 suites、components、Ubuntu 签名密钥与认证规则，不改 DNS、不增加第三方镜像，不修改生产服务器。
+前端 CI 使用微软官方预装浏览器镜像 `mcr.microsoft.com/playwright:v1.64.1-noble`，固定为已从官方注册表校验的多架构清单摘要 `sha256:2f05f8a734509a7b3f26a912639488ee08f58a7b292d14d62271bcff9038768f`。镜像含 Chromium 及其系统依赖，CI 不再现场执行 APT 或下载另一个浏览器。仍使用 Node 22 和 `npm ci` 安装项目锁定依赖。
 
-APT 下载最多重试2次，每次 HTTP/HTTPS 等待20秒；索引更新有任何错误即失败，不用陈旧索引伪装成功。浏览器与系统依赖安装步骤总限时8分钟。`npm ci`、单测、构建、锁定版本的 Chromium、全部 Playwright 测试及部署依赖门槛不变，失败仍阻止部署。
+运行完整 E2E 前，`frontend/scripts/verify-ci-browser.mjs` 核对锁文件、实际安装的三个 Playwright 包与镜像标记版本一致，确认使用镜像浏览器目录且没有替代可执行文件，并实际启动、关闭 Chromium。版本不符、浏览器缺失或无法运行都会失败。升级 Playwright 锁文件时须同步审核官方镜像版本及摘要。
 
-依据：[GitHub runner 镜像源配置](https://github.com/actions/runner-images/blob/main/images/ubuntu/scripts/build/configure-apt-sources.sh)、[Ubuntu APT 配置](https://manpages.ubuntu.com/manpages/noble/man5/apt.conf.5.html)。
+单测、构建、桌面和移动端全部 Playwright 测试、失败证据及后端/前端共同通过才能部署的门槛均保留。镜像拉取或测试失败仍阻止部署；不改 DNS、签名校验、生产服务器设置，也不放宽权限或启用特权容器。原直接换源脚本已移除，避免保留无效配置路径。
+
+依据：[Playwright 官方 CI 容器方案](https://playwright.dev/docs/ci#via-containers)、[官方镜像和版本匹配要求](https://playwright.dev/docs/docker)、[微软镜像清单](https://mcr.microsoft.com/v2/playwright/manifests/v1.64.1-noble)。
 
 固定目标：`ubuntu@119.28.106.127:22`，项目 `/home/ubuntu/showAllOpts`，网站 `http://119.28.106.127:8081`。以下材料尚未执行；代码审核发布后填写真实提交号。
 
