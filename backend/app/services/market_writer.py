@@ -6,7 +6,7 @@ import json
 import uuid
 from zoneinfo import ZoneInfo
 
-from sqlalchemy import inspect, select
+from sqlalchemy import func, inspect, select
 
 from app.core.result_sync import HEAD, CHANGE
 from app.models.sentiment import MarketSentiment
@@ -33,7 +33,7 @@ def row_hash(kind, row):
     return hashlib.sha256(json.dumps(normalized, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
 
 
-def _intent(owner, day, kind, value=None, methodology=None, previous_hash=None):
+def _intent(owner, day, kind, value=None, methodology=None, previous_hash=None, source=None):
     key = f'write-intent:{day.isoformat()}:{kind}'
     with owner.connect() as db:
         if value is not None:
@@ -45,6 +45,9 @@ def _intent(owner, day, kind, value=None, methodology=None, previous_hash=None):
                 db.execute('INSERT OR IGNORE INTO metadata(key,value) VALUES(?,?)',
                            (f'write-intent-history:{day.isoformat()}:{kind}:{value_hash}', value_hash))
             db.execute('INSERT OR REPLACE INTO metadata(key,value) VALUES(?,?)', (key, value))
+            if source in ('sina', 'public_market'):
+                db.execute('INSERT OR REPLACE INTO metadata(key,value) VALUES(?,?)',
+                           (f'source:{kind}:{value}', source))
             if methodology is not None:
                 # Bind the calculation contract to the exact database row, not
                 # just its date. Old observations must never acquire a new label.
@@ -168,7 +171,8 @@ def write_market_results(owner, day, heat, crowding, snapshot):
                 # replay recognizes only the exact values that we intended to write.
                 _intent(owner, day, kind, expected,
                         JOINQUANT_HEAT_METHOD if kind == 'heat' else None,
-                        previous_hash=row_hash(kind, existing) if existing is not None else None)
+                        previous_hash=row_hash(kind, existing) if existing is not None else None,
+                        source='public_market' if snapshot.get('source') == 'public_market' else 'sina')
                 if existing is None:
                     connection.execute(table.insert().values(**incoming))
                 else:
@@ -189,7 +193,31 @@ def write_market_results(owner, day, heat, crowding, snapshot):
     except WriterFailure:
         raise
     except Exception as error:
-        raise WriterFailure(writer_error_code(error)) from None
+        raise WriterFailure(writer_error_code(error)) from error
+    finally:
+        if engine is not None:
+            engine.dispose()
+
+
+def read_market_dates(owner):
+    """Read each latest source date independently; never scan older date gaps.
+
+    A failed read is not an empty table and must never silently reset backfill.
+    """
+    engine = None
+    try:
+        engine = owner.configuration.engine(owner.configuration.load())
+        with engine.connect() as connection:
+            result = {}
+            for kind, model in MODELS.items():
+                query = select(func.max(model.trade_date))
+                if kind == 'crowding':
+                    query = query.where(model.top_pct == Decimal('0.050000'))
+                latest = connection.execute(query).scalar_one()
+                result[kind] = {str(latest)} if latest is not None else set()
+            return result
+    except Exception as error:
+        raise WriterFailure(writer_error_code(error)) from error
     finally:
         if engine is not None:
             engine.dispose()

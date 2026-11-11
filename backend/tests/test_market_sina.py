@@ -866,3 +866,20 @@ def test_dated_snapshot_cancellation_after_batch_keeps_verifiable_checkpoint():
             SinaMarketProvider(client).fetch_dated_snapshot(universe, DAY, checkpoint=checkpoint)
     assert saved[0]['date'] == str(DAY)
     assert saved[0]['hq_raw'][30] == str(DAY)
+
+
+def test_source_transport_diagnostics_are_safe_and_deduplicated_per_provider(caplog):
+    import logging
+    import httpx
+    def fail(request):
+        raise httpx.ReadTimeout('credential-do-not-log', request=request)
+    client = httpx.Client(transport=httpx.MockTransport(fail))
+    provider = SinaMarketProvider(client)
+    with caplog.at_level(logging.WARNING), pytest.raises(SinaDataError):
+        provider._request_text('https://example.invalid/?token=private-token', None, [])
+    with caplog.at_level(logging.WARNING), pytest.raises(SinaDataError):
+        provider._request_text('https://example.invalid/?token=private-token', None, [])
+    assert caplog.text.count('Market source request failed') == 1
+    assert 'reason=http_timeout' in caplog.text
+    assert 'frames=' in caplog.text
+    assert 'private-token' not in caplog.text and 'credential-do-not-log' not in caplog.text

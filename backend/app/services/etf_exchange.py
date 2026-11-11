@@ -12,11 +12,15 @@ from datetime import date, datetime, timedelta
 from decimal import Decimal, InvalidOperation
 import sys
 import time
+import logging
 from zoneinfo import ZoneInfo
 
 import httpx
 
 from app.core.etf_catalog import ETF_GROUPS
+from app.core.diagnostics import diagnostic_details
+
+LOG = logging.getLogger(__name__)
 
 SSE_SHARES = 'https://query.sse.com.cn/commonQuery.do'
 SZSE_SHARES = 'https://www.szse.cn/api/report/ShowReport/data'
@@ -172,7 +176,12 @@ class ExchangeClient:
                 response = self.client.get(url, params=params, headers={'Referer': referer})
                 response.raise_for_status()
                 return response.json()
-            except (httpx.HTTPError, ValueError):
+            except (httpx.HTTPError, ValueError) as error:
+                source = {SSE_SHARES: 'sse_shares', SZSE_SHARES: 'szse_shares',
+                          SSE_PRICE: 'sse_price', SZSE_QUOTE: 'szse_quote',
+                          SZSE_PRICE: 'szse_price', SZSE_CALENDAR: 'szse_calendar'}.get(url, 'exchange')
+                LOG.warning('ETF source request failed source=%s attempt=%s/%s %s',
+                            source, attempt + 1, self.attempts, diagnostic_details(error))
                 if attempt + 1 == self.attempts:
                     raise SourceError('Exchange request failed after bounded retries') from None
                 self.sleep(2 ** attempt)

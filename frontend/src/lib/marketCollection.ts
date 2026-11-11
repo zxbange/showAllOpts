@@ -57,6 +57,7 @@ export const marketResultLabel = (value: string | undefined) =>
     pending: '等待完整数据',
     written: '已入库',
     existing_preserved: '保留已有记录',
+    outside_window: '不在本次补缺范围',
     blocked: '未通过校验，未发布',
   })[value ?? ''] ?? '等待采集'
 
@@ -73,8 +74,8 @@ export function marketCollectionErrorMessage(value: string): string {
     writer_connection_failed: '暂时无法连接数据库，请检查采集账号和网络。',
     writer_write_failed: '数据写入未完成，保留上次成功结果，请重试。',
     writer_target_mismatch: '写入目标与页面数据库不一致，请重新读取配置。',
-    source_unavailable: '新浪数据暂不可用，请稍后重试。',
-    source_not_ready: '新浪当日数据尚未准备好，稍后会继续采集。',
+    source_unavailable: '行情来源暂不可用，请稍后重试。',
+    source_not_ready: '当日行情尚未准备好，稍后会继续采集。',
     source_rate_limited: '接口暂时限频，已保留进度，可稍后重试。',
     source_forbidden: '数据接口暂时拒绝访问，保留已有结果，请稍后重试。',
     source_partial: '当日数据尚未全部取得，已保留进度。',
@@ -92,12 +93,24 @@ export function marketCollectionErrorMessage(value: string): string {
     heat_methodology_unverified:
       '新浪市场热度尚未通过聚宽原脚本口径核验，暂不发布；抱团拥挤度按自身校验结果单独处理。',
     heat_methodology_mismatch: '已取得均线记录未通过聚宽口径核验，不作为新热度使用。',
+    universe_coverage_unverified: '缺少目标日完整证券主表证据，暂不补写该日结果。',
+    universe_incomplete: '交易所证券主表不完整，暂不发布结果。',
+    historical_count_unavailable: '目标日官方分类数量未完整取得，暂不补写该日。',
+    historical_count_mismatch: '历史候选池与目标日官方分类数量不符，保留待核验。',
+    historical_identity_conflict: '历史证券身份、上市区间或目标日交易/停牌记录存在冲突，暂不补写。',
+    unsupported_historical_schema: '目标日期的交易所历史报表结构尚未核验，保留该日缺口。',
+    historical_category_unknown: '部分历史证券的板块分类无法确认，暂不补写。',
+    adjustment_unavailable: '部分证券复权因子尚未核实，暂不发布热度。',
+    adjustment_precision_unverified: '复权显示精度可能改变均线判断，保留待核验，不发布热度。',
+    paused_unknown: '缺失行情没有明确的全天停牌证据，暂不发布。',
+    invalid_tdx_archive: '每日行情包未通过日期或内容校验，暂不发布。',
     quote_stale: '部分股票仍是较早交易日数据，暂不发布当日比例。',
     writer_journal_incomplete: '结果同步记录尚未完整，保留上次成功结果。',
     writer_methodology_mismatch: '本次结果的统计口径未通过校验，未写入；已有数据保留。',
     writer_value_mismatch: '本次结果的计数、比例或金额不一致，未写入；已有数据保留。',
     writer_result_invalid: '结果未通过写入校验，保留上次成功结果。',
-    before_collection_time: '当日采集从北京时间18:00开始，请在该时间后重试。',
+    before_collection_time:
+      '当日数据从北京时间18:30起纳入采集；此前手动采集只补齐最近已结束的交易日。',
     rate_limited: '接口暂时限频，已保留进度，可稍后重试。',
     incomplete_snapshot: '当日股票数据尚未齐全，暂不发布比例。',
     incomplete_market_data: '当日股票数据尚未齐全，暂不发布比例。',
@@ -114,7 +127,7 @@ export const heatDenominator = (point?: MarketPointSource | null) =>
   point?.denominator ?? 'eligible'
 
 export function heatSourceLabel(point?: MarketPointSource | null) {
-  const source = point?.source === 'sina' ? '新浪接口' : '聚宽历史'
+  const source = point?.source === 'public_market' ? '公开行情' : point?.source === 'sina' ? '新浪接口' : '聚宽历史'
   if (point?.source !== 'sina' && !point?.price_basis) return `${source} · 前复权MA20`
   return point.price_basis === 'qfq'
     ? `${source} · 前复权MA20`
@@ -124,7 +137,8 @@ export function heatSourceLabel(point?: MarketPointSource | null) {
 }
 
 export const crowdingSourceLabel = (point?: MarketPointSource | null) =>
-  point?.source === 'sina' ? '新浪接口 · 全A成交额' : '聚宽历史 · 全A成交额'
+  point?.source === 'public_market' ? '通达信日包 · 沪深股票及CDR成交额' :
+    point?.source === 'sina' ? '新浪接口 · 全A成交额' : '聚宽历史 · 全A成交额'
 
 /** Consecutive methods are independent lines; a provider change is not a price move. */
 export function marketSourceSegments<T extends MarketPointSource>(

@@ -119,7 +119,7 @@ export function CrowdingPage() {
       {latest && (
         <p className="market-source-note">
           最新记录：<strong>{crowdingSourceLabel(latest)}</strong>
-          {mixedSources && '。旧历史与新浪日采集按来源分段，EMA 10 从各段分别起算。'}
+          {mixedSources && '。旧历史与公开行情日采集按来源分段，EMA 10 从各段分别起算。'}
         </p>
       )}
       <section className="panel trend-panel">
@@ -189,7 +189,7 @@ export function CrowdingPage() {
             仅作平滑参考。时间范围按自然日，缺失日不补零。
           </span>
           <p className="market-collection-note">
-            新浪日采集采用聚宽原脚本的前5%成交额占比算法；行情来源不同，旧聚宽历史保持原值，来源切换处分段显示。
+            公开行情日采集采用聚宽原脚本的前5%成交额占比算法；行情来源不同，旧聚宽历史保持原值，来源切换处分段显示。
           </p>
         </div>
       </div>

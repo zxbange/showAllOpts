@@ -16,6 +16,7 @@ import {
   growthDividendLines,
   growthDividendBenchmarks,
   growthDividendSeries,
+  growthDividendRatioExtent,
   growthDividendSpan,
   growthDividendValue,
   type DateSpan,
@@ -106,21 +107,15 @@ export function GrowthDividendChart({
     const referenceValues = benchmarks
       .filter((benchmark) => visible[benchmark.name])
       .flatMap((benchmark) => benchmark.levels.map((level) => level.value))
-    const ratioExtent = (range: { min: number; max: number }) => {
-      const values = [range.min, range.max, ...referenceValues].filter(Number.isFinite)
-      if (!values.length) return undefined
-      const min = Math.min(...values)
-      const max = Math.max(...values)
-      const padding = (max - min || Math.abs(max) || 1) * 0.05
-      return { min: Math.max(0, min - padding), max: max + padding }
-    }
+    const ratioExtent = (range: { min: number; max: number }) =>
+      growthDividendRatioExtent(range, referenceValues)
     chart.current?.setOption(
       {
         animation: false,
         aria: {
           enabled: true,
           description:
-            '创业板指、中证红利、科创50以不同颜色的实线显示在左轴；创红比、科创红利比以虚线显示在右轴。淡色点线为各比值完整历史的P10和P90分位基准，缩放不改变基准。可切换图例及缩放日期。',
+            '创业板指、中证红利、科创50以不同颜色的实线显示在左轴；创红比、科创红利比以虚线显示在右轴。加粗水平实线为各比值完整历史的20%（P20）和80%（P80）分位基准，图中标注比值名称、分位和数值，缩放不改变基准。可切换图例及缩放日期。',
         },
         grid: { left: 10, right: 10, top: 40, bottom: 78, containLabel: true },
         legend: {
@@ -243,7 +238,7 @@ export function GrowthDividendChart({
         ref={element}
         className="trend-chart growth-dividend-chart"
         role="img"
-        aria-label="创红比历史折线图：三条指数实线、两条比值虚线和历史分位点线，左轴指数点位，右轴比值，支持缩放"
+        aria-label="创红比历史折线图：三条指数实线、两条比值虚线和历史20%与80%分位基准实线及标识，左轴指数点位，右轴比值，支持缩放"
       />
       <div className="growth-dividend-benchmarks" aria-label="历史分位基准">
         {shownBenchmarks.flatMap((benchmark) =>
@@ -260,7 +255,7 @@ export function GrowthDividendChart({
         )}
       </div>
       <p className="growth-dividend-benchmark-note">
-        淡色点线为历史10%与90%分位：创红比从2018-01-01起，科创红利比从首个有效数据日起。
+        加粗水平实线为历史20%（P20）与80%（P80）分位，图中标注名称、分位及数值：创红比从2018-01-01起，科创红利比从首个有效数据日起。
         按已加载完整历史计算，缩放不改变基准，新增或补齐数据后更新。
         {shownBenchmarks.some((benchmark) => benchmark.levels.length === 1) &&
           '相同分位值合并为一条基准线。'}

@@ -6,6 +6,11 @@ import socket
 import queue
 import threading
 import uuid
+import logging
+
+from app.core.diagnostics import diagnostic_details
+
+LOG = logging.getLogger(__name__)
 
 import pymysql
 from sqlalchemy import create_engine
@@ -232,21 +237,26 @@ class DatabaseSources:
     def build_engine(self, config):
         def connect():
             sock, connection = None, None
+            stage = 'validate_address'
             try:
                 address = self.allowed(config)
+                stage = 'create_driver'
                 connection = pymysql.connect(host=config['host'], port=config['port'],
                     user=config['username'], password=config['password'], database=config['database'],
                     charset='utf8mb4', connect_timeout=8, read_timeout=20, write_timeout=20,
                     ssl_disabled=True, defer_connect=True, autocommit=False)
+                stage = 'connect_socket'
                 sock = socket.create_connection((address, config['port']), timeout=8)
+                stage = 'authenticate'
                 connection.connect(sock=sock)
                 return connection
-            except Exception:
+            except Exception as error:
+                LOG.error('Database source connection failed stage=%s %s', stage, diagnostic_details(error))
                 if connection is not None:
                     try:
                         connection.close()
-                    except Exception:
-                        pass
+                    except Exception as cleanup_error:
+                        LOG.warning('Database source cleanup failed stage=close_driver %s', diagnostic_details(cleanup_error))
                 if sock is not None:
                     sock.close()
                 raise SourceError('连接失败：请检查允许目标、网络、账户和库名；详细凭证不会返回') from None

@@ -3,6 +3,8 @@ from contextlib import contextmanager
 from datetime import date, datetime, time, timedelta, timezone
 import json
 import logging
+from time import monotonic
+
 import math
 import sqlite3
 import threading
@@ -11,6 +13,8 @@ from zoneinfo import ZoneInfo
 
 import httpx
 import portalocker
+
+from app.core.diagnostics import diagnostic_details
 
 from app.services.growth_dividend_source import (
     CALENDAR_URL, INDEXES, START, IndexSourceError, fetch_calendar, fetch_prices,
@@ -230,7 +234,8 @@ class GrowthDividend:
                 self.worker.start()
             else:
                 self.collect(lock, state, moment, slot)
-        except BaseException:
+        except BaseException as exc:
+            LOG.error('Growth/dividend launch or cleanup failed details=%s', diagnostic_details(exc))
             try:
                 if background and state is not None:
                     state.update(active=False, stage='未能启动更新任务', error='任务启动失败，请重试。')
@@ -244,6 +249,10 @@ class GrowthDividend:
         marker = self.root / ('cancel-' + state['run_id'])
         cutoff = close_cutoff(moment)
         local = moment.astimezone(CHINA)
+        started = monotonic()
+        outcome = 'failed'
+        failed_windows = 0
+        LOG.info('Growth/dividend collection started source=public_index trigger=%s cutoff=%s', state.get('trigger', '-'), cutoff)
 
         def check_cancel():
             if self.stop_event.is_set() or marker.exists():
@@ -279,7 +288,7 @@ class GrowthDividend:
                 except (httpx.HTTPError, ValueError, TypeError) as exc:
                     state['calendar_error'] = ('交易日历暂不可用，保留已有数据并等待重试。'
                                               if not isinstance(exc, IndexSourceError) else str(exc))
-                    LOG.warning('Growth/dividend calendar failed type=%s', type(exc).__name__)
+                    LOG.warning('Growth/dividend calendar failed details=%s', diagnostic_details(exc))
                 with self.db() as db:
                     expected_days = [date.fromisoformat(row[0]) for row in db.execute(
                         'SELECT trade_date FROM calendar WHERE trade_date>=? AND trade_date<=? '
@@ -288,6 +297,7 @@ class GrowthDividend:
                                               (str(local.date()),)).fetchone() is not None
                     missing = self.pending(db, cutoff)
                 if slot and calendar_ok and not today_trades:
+                    outcome = 'market_closed'
                     state.update(stage='今日休市，等待下个交易日 18:00', total=0, percent=100)
                     return
                 if state['trigger'] == 'startup' and local.hour >= 18 and today_trades:
@@ -306,6 +316,8 @@ class GrowthDividend:
                 state.update(total=sum(len(group) for _, group in work), percent=0 if work else 100,
                              stage='补齐指数历史数据')
                 self.write_state(state)
+                LOG.info('Growth/dividend plan ready calendar_ok=%s windows=%s points=%s',
+                         calendar_ok, len(work), state['total'])
                 consecutive_failures = 0
                 for index, target_days in work:
                     check_cancel()
@@ -337,18 +349,20 @@ class GrowthDividend:
                         consecutive_failures = 0
                     except (httpx.HTTPError, ValueError, TypeError) as exc:
                         consecutive_failures += 1
+                        failed_windows += 1
                         state['recent_failures'] = (state['recent_failures'] + [dict(
                             index=index.name, start=str(target_days[0]), end=str(target_days[-1]),
                             reason=str(exc) if isinstance(exc, IndexSourceError) else '公开行情请求失败。',
                         )])[-10:]
                         self.write_state(state)
-                        LOG.warning('Growth/dividend window failed index=%s start=%s end=%s type=%s',
-                                    index.code, target_days[0], target_days[-1], type(exc).__name__)
+                        LOG.warning('Growth/dividend window failed index=%s start=%s end=%s details=%s',
+                                    index.code, target_days[0], target_days[-1], diagnostic_details(exc))
                         if consecutive_failures >= 4:
                             break
                 with self.db() as db:
                     pending = self.pending(db, cutoff)
                 if pending or not calendar_ok or not expected_days or state['recent_failures']:
+                    outcome = 'partial'
                     count = len({row['trade_date'] for row in pending})
                     state['error'] = '；'.join(part for part in [state.get('calendar_error'),
                         f'{count} 个交易日、{len(pending)} 条指数数据待补齐。' if pending else None,
@@ -356,21 +370,36 @@ class GrowthDividend:
                         '尚未取得有效交易日历。' if not expected_days else None] if part)
                     state['stage'] = '本次更新结束，未完成数据将继续补齐'
                 else:
+                    outcome = 'success'
                     state.update(stage='已更新至 ' + str(expected_days[-1]), error=None,
                                  last_success_at=now().isoformat(), percent=100)
                 state['initialized'] = True
         except CollectionCancelled:
+            outcome = 'cancelled'
             state.update(stage='已停止，已保存的数据将用于下次继续补齐', error=None)
         except Exception as exc:
-            LOG.exception('Growth/dividend collection failed type=%s', type(exc).__name__)
+            outcome = 'failed'
+            LOG.error('Growth/dividend collection failed details=%s', diagnostic_details(exc))
             state.update(stage='更新失败，已保存的数据保留', error='更新失败，请重试或等待下个交易日自动补齐。')
         finally:
             state['active'] = False
             try:
                 self.write_state(state)
                 marker.unlink(missing_ok=True)
+            except BaseException as exc:
+                outcome = 'failed'
+                LOG.error('Growth/dividend finalization failed details=%s', diagnostic_details(exc))
+                raise
             finally:
-                lock.release()
+                try:
+                    lock.release()
+                except BaseException as exc:
+                    outcome = 'failed'
+                    LOG.error('Collection lock release failed details=%s', diagnostic_details(exc))
+                    raise
+                finally:
+                    LOG.info('Growth/dividend collection finished outcome=%s processed=%s total=%s failed_windows=%s duration_seconds=%.3f',
+                             outcome, state.get('processed', 0), state.get('total'), failed_windows, monotonic() - started)
 
     def tick(self, moment=None):
         moment = moment or now()
@@ -403,7 +432,7 @@ class GrowthDividend:
                 try:
                     self.tick()
                 except Exception as exc:
-                    LOG.error('Growth/dividend scheduler failed type=%s', type(exc).__name__)
+                    LOG.error('Growth/dividend scheduler failed details=%s', diagnostic_details(exc))
                 self.stop_event.wait(30)
         self.scheduler = threading.Thread(target=loop, name='growth-dividend-scheduler', daemon=True)
         self.scheduler.start()

@@ -167,3 +167,47 @@ def test_writer_checks_original_crowding_contract(tmp_path, change):
     owner = Owner(tmp_path)
     with pytest.raises(WriterFailure, match='writer_value_mismatch'):
         write_market_results(owner, DAY, None, CROWDING | change, {})
+
+
+def test_read_market_dates_independent_and_filters_crowding_fraction(tmp_path):
+    from app.services.market_writer import read_market_dates
+    owner = Owner(tmp_path)
+    write_market_results(owner, DAY, HEAT, None, {})
+    write_market_results(owner, date(2026, 11, 6), HEAT, CROWDING, {})
+    write_market_results(owner, date(2026, 11, 9), None, CROWDING, {})
+    with owner.engine.begin() as connection:
+        connection.execute(MarketCrowding.__table__.insert().values(
+            trade_date=DAY, top_pct='.1', ratio='.4', top_money='400', total_money='1000',
+            stock_count=100, top_stock_count=10, updated_at=datetime(2026, 11, 10, 18)))
+    assert read_market_dates(owner) == {'heat': {'2026-11-10'}, 'crowding': {'2026-11-09'}}
+
+
+def test_public_source_is_bound_to_written_row_hash(tmp_path):
+    owner = Owner(tmp_path)
+    result = write_market_results(owner, DAY, HEAT, CROWDING, {'source': 'public_market'})
+    with owner.connect() as db:
+        for kind in ('heat', 'crowding'):
+            assert db.execute('SELECT value FROM metadata WHERE key=?',
+                              (f'source:{kind}:{result[kind + "_hash"]}',)).fetchone()[0] == 'public_market'
+
+
+@pytest.mark.parametrize('operation', ['read', 'write'])
+def test_writer_preserves_safe_driver_diagnostics_without_exposing_message(tmp_path, operation):
+    from pymysql.err import OperationalError
+    from app.core.diagnostics import diagnostic_details
+    from app.services.market_writer import read_market_dates
+    owner = Owner(tmp_path)
+    def unavailable(config):
+        raise OperationalError(1045, 'password=privatewritersecret host=private.invalid')
+    owner.configuration.engine = unavailable
+    with pytest.raises(WriterFailure) as caught:
+        if operation == 'read':
+            read_market_dates(owner)
+        else:
+            write_market_results(owner, DAY, HEAT, CROWDING, {})
+    details = diagnostic_details(caught.value)
+    assert 'mysql_errno=1045' in details
+    assert ':unavailable' in details
+    assert caught.value.__cause__ is not None
+    assert 'privatewritersecret' not in str(caught.value) + details
+    assert 'private.invalid' not in str(caught.value) + details

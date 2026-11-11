@@ -5,6 +5,11 @@ import hmac
 import json
 import re
 import time
+import logging
+
+from app.core.diagnostics import diagnostic_details
+
+LOG = logging.getLogger(__name__)
 from urllib.parse import urlsplit
 
 import httpx
@@ -84,18 +89,23 @@ def send_feishu(webhook, secret, text):
         with httpx.Client(timeout=30, follow_redirects=False) as client:
             response = client.post(webhook, content=data, headers={'Content-Type': 'application/json; charset=utf-8'})
             if response.status_code == 429:
+                LOG.warning('Notification rejected channel=feishu http_status=429 reason=rate_limited')
                 retry = response.headers.get('Retry-After', '60')
                 delay = min(3600, max(1, int(retry))) if retry.isdigit() else 60
                 raise NotificationError('飞书发送触发限流，稍后自动重试。', delay)
             result = response.json()
             code = result.get('code') if isinstance(result, dict) else None
             if code == 11232:
+                LOG.warning('Notification rejected channel=feishu http_status=%s provider_code=11232 reason=rate_limited', response.status_code)
                 retry = response.headers.get('Retry-After', '60')
                 delay = min(3600, max(1, int(retry))) if retry.isdigit() else 60
                 raise NotificationError('飞书发送触发限流，稍后自动重试。', delay)
             if not response.is_success or type(code) is not int or code != 0:
+                LOG.warning('Notification rejected channel=feishu http_status=%s provider_code=%s',
+                            response.status_code, code if type(code) is int and 0 <= code < 2**31 else '-')
                 raise NotificationError('飞书发送失败，请检查 Webhook、签名密钥或群机器人设置。')
-    except (httpx.HTTPError, ValueError):
+    except (httpx.HTTPError, ValueError) as error:
+        LOG.warning('Notification transport failed channel=feishu %s', diagnostic_details(error))
         raise NotificationError('飞书网络或响应异常，稍后自动重试。') from None
 
 
@@ -172,7 +182,8 @@ class NotificationMixin:
                     raise
                 except RuntimeError:
                     raise
-                except Exception:
+                except Exception as error:
+                    LOG.warning('Notification send failed channel=%s %s', channel, diagnostic_details(error))
                     raise NotificationError(CHANNEL_LABELS[channel] + '通知配置或发送异常，请检查渠道设置。') from None
         except portalocker.exceptions.LockException:
             raise NotificationError('通知发送繁忙，请稍后重试。') from None
@@ -237,6 +248,8 @@ class NotificationMixin:
                 except NotificationDeferred:
                     return errors
                 except RuntimeError as error:
+                    LOG.warning('Notification delivery deferred channel=%s part=%s total=%s %s',
+                                channel, index + 1, len(selected_parts), diagnostic_details(error))
                     self._save_delivery(table, status_column, row['id'], channel, last_error=str(error))
                     blocked.add(channel)
                     errors.append(error)

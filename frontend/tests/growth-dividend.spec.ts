@@ -80,7 +80,15 @@ async function inspectChart(page: Page) {
             lineStyle: { type: string; color: string }
             data: Array<number | null>
             connectNulls: boolean
-            markLine?: { lineStyle: { type: string }; data: Array<{ name: string; yAxis: number }> }
+            markLine?: {
+              lineStyle: { type: string; width: number; opacity: number }
+              label: { show: boolean }
+              data: Array<{
+                name: string
+                yAxis: number
+                label: { formatter: string; position: string }
+              }>
+            }
           },
           index: number,
         ) => ({
@@ -92,6 +100,10 @@ async function inspectChart(page: Page) {
           connectNulls: line.connectNulls,
           visible: !model.isSeriesFiltered(model.getSeriesByIndex(index)),
           referenceStyle: line.markLine?.lineStyle.type,
+          referenceWidth: line.markLine?.lineStyle.width,
+          referenceOpacity: line.markLine?.lineStyle.opacity,
+          referenceLabelsVisible: line.markLine?.label.show,
+          referenceLabels: (line.markLine?.data ?? []).map(({ label }) => label),
           // ECharts may add/remove empty internal label/emphasis defaults after
           // setOption. Compare the benchmark identity and value across updates.
           references: (line.markLine?.data ?? []).map(({ name, yAxis }) => ({ name, yAxis })),
@@ -143,19 +155,30 @@ test('five-year default, all history, date entry and manual zoom survive refresh
   expect(chart.series.every((line) => !line.connectNulls)).toBe(true)
   const references = chart.series.map((line) => line.references)
   expect(references.slice(0, 3)).toEqual([[], [], []])
-  expect(chart.series.slice(3).map((line) => line.referenceStyle)).toEqual(['dotted', 'dotted'])
+  expect(chart.series.slice(3).map((line) => line.referenceStyle)).toEqual(['solid', 'solid'])
   // These are calculated from all ten historical dates, including observations
   // outside the five-year view; the early STAR nulls are not zero samples.
-  expect(references[3][0].yAxis).toBeCloseTo(0.5054216867469879, 12)
-  expect(references[3][1].yAxis).toBeCloseTo(0.5388209920920201, 12)
-  expect(references[4][0].yAxis).toBeCloseTo(0.2220704529115744, 12)
-  expect(references[4][1].yAxis).toBeCloseTo(0.23966553436111837, 12)
+  expect(references[3][0].yAxis).toBeCloseTo(0.5105071448585038, 12)
+  expect(references[3][1].yAxis).toBeCloseTo(0.5354150799695354, 12)
+  expect(references[4][0].yAxis).toBeCloseTo(0.2236100533130236, 12)
+  expect(references[4][1].yAxis).toBeCloseTo(0.2368775872264932, 12)
+  expect(chart.series.slice(3).every((line) => line.referenceWidth >= 2)).toBe(true)
+  expect(chart.series.slice(3).every((line) => line.referenceOpacity >= 0.85)).toBe(true)
+  expect(chart.series.slice(3).every((line) => line.referenceLabelsVisible)).toBe(true)
+  expect(chart.series[3].referenceLabels).toMatchObject([
+    { position: 'insideStartBottom', formatter: '创红比\nP20 0.5105' },
+    { position: 'insideStartTop', formatter: '创红比\nP80 0.5354' },
+  ])
+  expect(chart.series[4].referenceLabels).toMatchObject([
+    { position: 'insideEndBottom', formatter: '科创红利比\nP20 0.2236' },
+    { position: 'insideEndTop', formatter: '科创红利比\nP80 0.2369' },
+  ])
   const benchmarkLabels = page.locator('.growth-dividend-benchmark')
   await expect(benchmarkLabels).toHaveText([
-    '创红比 P10 0.5054',
-    '创红比 P90 0.5388',
-    '科创红利比 P10 0.2221',
-    '科创红利比 P90 0.2397',
+    '创红比 P20 0.5105',
+    '创红比 P80 0.5354',
+    '科创红利比 P20 0.2236',
+    '科创红利比 P80 0.2369',
   ])
   await expect(page.getByText('每个交易日北京时间 18:00 更新')).toBeVisible()
   await page.getByRole('button', { name: '全部', exact: true }).click()
@@ -175,13 +198,13 @@ test('five-year default, all history, date entry and manual zoom survive refresh
     .toMatchObject({ start: '2020-01-02', end: '2021-11-10' })
   const custom = await inspectChart(page)
   expect(custom.series.map((line) => line.references)).toEqual(references)
-  // Local ratios do not reach the full-history P10/P90, but the right axis
+  // Local ratios do not reach the full-history P20/P80, but the right axis
   // still contains all four visible benchmarks. The left axis stays local.
   expect(custom.rightExtent[0]).toBeLessThan(references[4][0].yAxis)
   expect(custom.rightExtent[1]).toBeGreaterThan(references[3][1].yAxis)
   expect(custom.leftExtent[1]).toBeLessThan(points.at(-1)!.dividend!)
   await page.getByRole('button', { name: '隐藏创红比', exact: true }).click()
-  await expect(benchmarkLabels).toHaveText(['科创红利比 P10 0.2221', '科创红利比 P90 0.2397'])
+  await expect(benchmarkLabels).toHaveText(['科创红利比 P20 0.2236', '科创红利比 P80 0.2369'])
   await expect.poll(async () => (await inspectChart(page)).series[3].visible).toBe(false)
   expect((await inspectChart(page)).rightExtent[1]).toBeLessThan(references[3][0].yAxis)
   await page.getByRole('button', { name: '隐藏科创红利比', exact: true }).click()
@@ -232,9 +255,9 @@ test('five-year default, all history, date entry and manual zoom survive refresh
     })
   await expect(draftStart).toHaveValue('2020-01-01')
   const updated = await inspectChart(page)
-  expect(updated.series[3].references[0].yAxis).toBeCloseTo(2100 / 4150, 12)
-  expect(updated.series[3].references[1].yAxis).toBeCloseTo(2900 / 5350, 12)
-  expect(updated.series[4].references[0].yAxis).toBeCloseTo(1180 / 5350, 12)
+  expect(updated.series[3].references[0].yAxis).toBeCloseTo(2200 / 4300, 12)
+  expect(updated.series[3].references[1].yAxis).toBeCloseTo(2800 / 5200, 12)
+  expect(updated.series[4].references[0].yAxis).toBeCloseTo(0.22156721782890007, 12)
   expect(updated.series.map((line) => line.references)).not.toEqual(references)
   expect(reads).toBe(initialReads + 1)
   await page.getByRole('button', { name: '近5年', exact: true }).click()

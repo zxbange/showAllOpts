@@ -49,7 +49,7 @@ ETF_COLLECTION_WRITER_URL=
 ETF_COLLECTION_LOOKBACK_DAYS=300
 ETF_COLLECTION_BATCH_DAYS=5
 
-# 市场热度和抱团拥挤度：同源新浪API，交易日北京时间18:00开始采集。
+# 市场热度和抱团拥挤度：交易所主表及公开行情，交易日北京时间18:30开始采集。
 # 优先在页面一次保存写账号；无页面配置时，仅可复用同DB目标的已有ETF写账号。
 # 不使用DB_USER只读账号写入；不初始化多年历史。逐股MA20成功结果持久化，失败补采。
 MARKET_COLLECTION_ENABLED=true

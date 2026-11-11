@@ -7,6 +7,8 @@ from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 import json
 import logging
+from time import monotonic
+
 import math
 import sqlite3
 import threading
@@ -14,6 +16,8 @@ import uuid
 
 import httpx
 import portalocker
+
+from app.core.diagnostics import diagnostic_details
 
 LOG = logging.getLogger(__name__)
 CHINA = timezone(timedelta(hours=8))
@@ -246,7 +250,8 @@ class CashCowScreen:
                 self.worker.start()
             else:
                 self._collect(lock, state, moment)
-        except BaseException:
+        except BaseException as exc:
+            LOG.error('Cash cow launch or cleanup failed details=%s', diagnostic_details(exc))
             try:
                 if state is not None:
                     state.update(active=False, stage='启动失败', error='未能启动筛选，请重试。')
@@ -260,6 +265,9 @@ class CashCowScreen:
         from app.services.cash_cow_source import EastmoneyCashCowSource, CashCowSourceError
         marker = self.cancel_path(state)
         published = False
+        started = monotonic()
+        run_outcome = 'failed'
+        LOG.info('Cash cow collection started source=eastmoney periods=3,5,10')
 
         def check_cancel():
             if self.stop_event.is_set() or marker.exists():
@@ -287,6 +295,7 @@ class CashCowScreen:
                 universe = {stock['code']: stock for stock in stocks}
                 if len(universe) != len(stocks):
                     raise CashCowSourceError('股票池代码重复，未替换已有结果。')
+                LOG.info('Cash cow universe complete stocks=%s', len(stocks))
                 pending = dict(universe)
                 annual = {code: [] for code in universe}
                 candidates = {period: set() for period in PERIODS}
@@ -321,6 +330,7 @@ class CashCowScreen:
                             annual[code].append(row)
                         else:
                             reject(code, outcome, depth)
+                    LOG.info('Cash cow annual phase complete year=%s remaining=%s', year, len(pending))
                     if depth in candidates:
                         candidates[depth] = set(pending)
 
@@ -399,10 +409,18 @@ class CashCowScreen:
                     state.clear()
                     state.update(success_state)
                     published = True
+                    run_outcome = 'success'
+                for period in PERIODS:
+                    LOG.info('Cash cow period complete years=%s matched=%s excluded=%s insufficient=%s',
+                             period, len(items[period]),
+                             sum(value == 'excluded' for value in outcomes[period].values()),
+                             sum(value == 'insufficient' for value in outcomes[period].values()))
         except CollectionCancelled:
+            run_outcome = 'cancelled'
             state.update(stage='已取消，保留上次结果')
         except Exception as exc:
-            LOG.exception('Cash cow screen failed: %s', type(exc).__name__)
+            run_outcome = 'failed'
+            LOG.error('Cash cow screen failed details=%s', diagnostic_details(exc))
             state.update(stage='更新失败，保留上次结果',
                          error=str(exc) if isinstance(exc, CashCowSourceError) else '筛选暂未完成，请稍后重试。')
         finally:
@@ -411,11 +429,27 @@ class CashCowScreen:
                 if not published:
                     with self.publication_lock():
                         self.write_state(state)
+            except BaseException as exc:
+                run_outcome = 'failed'
+                LOG.error('Cash cow state finalization failed details=%s', diagnostic_details(exc))
+                raise
             finally:
                 try:
                     marker.unlink(missing_ok=True)
+                except BaseException as exc:
+                    run_outcome = 'failed'
+                    LOG.error('Cash cow marker cleanup failed details=%s', diagnostic_details(exc))
+                    raise
                 finally:
-                    lock.release()
+                    try:
+                        lock.release()
+                    except BaseException as exc:
+                        run_outcome = 'failed'
+                        LOG.error('Collection lock release failed details=%s', diagnostic_details(exc))
+                        raise
+                    finally:
+                        LOG.info('Cash cow collection finished outcome=%s processed=%s total=%s published=%s duration_seconds=%.3f',
+                                 run_outcome, state.get('processed', 0), state.get('total'), published, monotonic() - started)
 
     def stop(self):
         self.stop_event.set()

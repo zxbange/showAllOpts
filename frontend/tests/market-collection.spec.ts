@@ -8,7 +8,7 @@ const configuration = {
   port: 3306,
   database: 'market',
   enabled: true,
-  schedule: ['18:00'],
+  schedule: ['18:30'],
   source: 'etf',
   transport_secure: true,
   target_changed: false,
@@ -18,7 +18,7 @@ const idle = {
   configured: true,
   status: 'idle',
   timezone: 'Asia/Shanghai',
-  schedule: ['18:00'],
+  schedule: ['18:30'],
   trade_date: null as string | null,
   run_id: null as string | null,
   total: 0,
@@ -170,7 +170,7 @@ test('uses the original methodology with Sina data, preserves older metadata and
   expect(chart.firstTooltip).toContain('有效股票 100 只')
   expect(chart.lastTooltip).toContain('新浪接口 · 前复权MA20')
   expect(chart.lastTooltip).toContain('有效股票 100 只')
-  await expect(page.getByRole('region', { name: '市场日采集' })).toContainText('18:00')
+  await expect(page.getByRole('region', { name: '市场日采集' })).toContainText('18:30')
   const previousMethod = {
     ...heatPoints[2],
     price_basis: 'bfq',
@@ -598,4 +598,35 @@ test('progress polls preserve chart zoom and reload only once after published ca
   const beforeLeave = polls
   await page.clock.fastForward(60000)
   expect(polls).toBe(beforeLeave)
+})
+
+test('shows independent source dates and missing-day details with the manual cutoff', async ({
+  page,
+}) => {
+  await page.route('**/api/v1/market-collection/status', (route) =>
+    route.fulfill({
+      json: {
+        ...idle,
+        status: 'partial',
+        source_latest: { heat: '2026-11-10', crowding: '2026-11-06' },
+        gaps: [
+          {
+            trade_date: '2026-11-09',
+            status: 'blocked',
+            heat_status: 'outside_window',
+            crowding_status: 'blocked',
+            error: 'historical_snapshot_missing',
+          },
+        ],
+      },
+    }),
+  )
+  await page.goto('/market-sentiment')
+  const panel = page.getByRole('region', { name: '市场日采集' })
+  await expect(panel).toContainText('18:30前手动触发仅处理此前已结束的交易日')
+  await expect(panel).toContainText('热度截至 2026-11-10')
+  await expect(panel).toContainText('拥挤度截至 2026-11-06')
+  await panel.getByText('待补齐交易日（最近 1 条）').click()
+  await expect(panel).toContainText('2026-11-09 · 热度：不在本次补缺范围')
+  await expect(panel).toContainText('缺少目标交易日的完整快照')
 })

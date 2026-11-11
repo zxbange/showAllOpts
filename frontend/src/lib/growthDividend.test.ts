@@ -1,8 +1,13 @@
 import { describe, expect, it } from 'vitest'
+import { graphic, init, use } from 'echarts/core'
+import { LineChart } from 'echarts/charts'
+import { GridComponent, MarkLineComponent } from 'echarts/components'
+import { SVGRenderer } from 'echarts/renderers'
 import {
   calendarYearsAgo,
   growthDividendBenchmarks,
   growthDividendSeries,
+  growthDividendRatioExtent,
   growthDividendSpan,
   growthDividendValue,
 } from './growthDividend'
@@ -109,12 +114,12 @@ describe('full-history percentile benchmarks', () => {
     const original = structuredClone(history)
     const [chinext, star50] = growthDividendBenchmarks(history)
     expect(chinext.sampleCount).toBe(5)
-    expect(chinext.levels.map((level) => level.percentile)).toEqual(['P10', 'P90'])
-    expect(chinext.levels[0].value).toBeCloseTo(0.14, 12)
-    expect(chinext.levels[1].value).toBeCloseTo(0.46, 12)
+    expect(chinext.levels.map((level) => level.percentile)).toEqual(['P20', 'P80'])
+    expect(chinext.levels[0].value).toBeCloseTo(0.18, 12)
+    expect(chinext.levels[1].value).toBeCloseTo(0.42, 12)
     expect(star50.sampleCount).toBe(3)
-    expect(star50.levels[0].value).toBeCloseTo(0.28, 12)
-    expect(star50.levels[1].value).toBeCloseTo(0.92, 12)
+    expect(star50.levels[0].value).toBeCloseTo(0.36, 12)
+    expect(star50.levels[1].value).toBeCloseTo(0.84, 12)
     expect(history).toEqual(original)
   })
 
@@ -128,19 +133,25 @@ describe('full-history percentile benchmarks', () => {
     expect(single).toMatchObject({
       key: 'chinext_dividend_ratio',
       sampleCount: 1,
-      levels: [{ percentile: 'P10/P90', value: 0.3 }],
+      levels: [{ percentile: 'P20/P80', value: 0.3 }],
     })
     expect(growthDividendSeries(invalid).filter((line) => line.markLine?.data.length)).toEqual([])
     const constant = growthDividendSeries([sample('2020-01-02', 0.3), sample('2026-11-10', 0.3)])
-    expect(constant[3].markLine?.data).toEqual([{ name: '创红比 P10/P90 0.3000', yAxis: 0.3 }])
+    expect(constant[3].markLine?.data).toMatchObject([
+      {
+        name: '创红比 P20/P80 0.3000',
+        yAxis: 0.3,
+        label: { formatter: '创红比\nP20/P80\n0.3000' },
+      },
+    ])
     expect(constant[4].markLine?.data).toEqual([])
   })
 
   it('updates when observations are corrected or added, but ignores newly missing dates', () => {
     const history = [sample('2018-01-02', 0.2), sample('2026-11-10', 0.8)]
     const before = growthDividendBenchmarks(history)
-    expect(before[0].levels[0].value).toBeCloseTo(0.26, 12)
-    expect(before[0].levels[1].value).toBeCloseTo(0.74, 12)
+    expect(before[0].levels[0].value).toBeCloseTo(0.32, 12)
+    expect(before[0].levels[1].value).toBeCloseTo(0.68, 12)
     expect(growthDividendBenchmarks([...history, sample('2026-11-11', null)])).toEqual(before)
     const after = growthDividendBenchmarks([
       history[0],
@@ -148,13 +159,104 @@ describe('full-history percentile benchmarks', () => {
       sample('2026-11-11', 0.6),
     ])
     expect(after[0].sampleCount).toBe(3)
-    expect(after[0].levels[0].value).toBeCloseTo(0.24, 12)
-    expect(after[0].levels[1].value).toBeCloseTo(0.56, 12)
+    expect(after[0].levels[0].value).toBeCloseTo(0.28, 12)
+    expect(after[0].levels[1].value).toBeCloseTo(0.52, 12)
     const series = growthDividendSeries(history, before)
     expect(series.slice(0, 3).every((line) => line.markLine === undefined)).toBe(true)
-    expect(series[3].markLine?.lineStyle).toMatchObject({ type: 'dotted', width: 1 })
+    expect(series[3].markLine?.lineStyle).toMatchObject({ type: 'solid', width: 2.4, opacity: 0.9 })
+    expect(series[3].markLine?.label).toMatchObject({ show: true, opacity: 1 })
+    expect(series[3].markLine?.data.map((line) => line.label)).toEqual([
+      { position: 'insideStartBottom', formatter: '创红比\nP20 0.3200' },
+      { position: 'insideStartTop', formatter: '创红比\nP80 0.6800' },
+    ])
     expect(series[3].markLine?.data.map((line) => line.yAxis)).toEqual(
       before[0].levels.map((level) => level.value),
     )
   })
+})
+
+describe('on-chart percentile labels', () => {
+  use([LineChart, GridComponent, MarkLineComponent, SVGRenderer])
+
+  const scenarios = [
+    { name: 'distinct ratios', ratios: [0.5, 0.55, 0.6], starRatios: [0.2, 0.23, 0.25] },
+    {
+      name: 'nearly coincident references',
+      ratios: [0.1, 0.3, 0.3, 0.3, 0.30000001, 0.30000002, 0.9],
+      starRatios: [0.1, 0.3, 0.3, 0.3, 0.30000001, 0.30000002, 0.9],
+    },
+    { name: 'merged equal references', ratios: [0.3, 0.3], starRatios: [0.3, 0.3] },
+  ]
+
+  for (const width of [280, 320, 960]) {
+    for (const scenario of scenarios) {
+      it(`renders complete, separated labels at ${width}px for ${scenario.name}`, () => {
+        const history = scenario.ratios.map((ratio, index) => ({
+          ...points[0],
+          date: `2026-11-${String(index + 1).padStart(2, '0')}`,
+          chinext_dividend_ratio: ratio,
+          star50_dividend_ratio: scenario.starRatios[index],
+        }))
+        const benchmarks = growthDividendBenchmarks(history)
+        const referenceValues = benchmarks.flatMap((benchmark) =>
+          benchmark.levels.map((level) => level.value),
+        )
+        const ratioExtent = (range: { min: number; max: number }) =>
+          growthDividendRatioExtent(range, referenceValues)
+        const chart = init(null, undefined, { renderer: 'svg', ssr: true, width, height: 390 })
+        try {
+          chart.setOption({
+            animation: false,
+            grid: { left: 10, right: 10, top: 40, bottom: 78, containLabel: true },
+            xAxis: { type: 'category', data: history.map((point) => point.date) },
+            yAxis: [
+              { type: 'value', scale: true, axisLabel: { fontSize: 11 } },
+              {
+                type: 'value',
+                scale: true,
+                min: (range: { min: number; max: number }) => ratioExtent(range)?.min,
+                max: (range: { min: number; max: number }) => ratioExtent(range)?.max,
+                axisLabel: { fontSize: 11, formatter: (value: number) => value.toFixed(2) },
+              },
+            ],
+            series: growthDividendSeries(history, benchmarks),
+          })
+          // SVG SSR exercises ECharts' actual label layout without a browser.
+          // Browser typography/visual verification is still covered by Playwright.
+          chart.renderToSVGString()
+          const texts = new Set(
+            chart
+              .getZr()
+              .storage.getDisplayList()
+              .map((element) => element.parent as unknown)
+              .filter(
+                (element): element is InstanceType<typeof graphic.Text> =>
+                  element instanceof graphic.Text,
+              ),
+          )
+          const labels = [...texts].filter((label) => /P20|P80/.test(String(label.style.text)))
+          const expectedLabels = growthDividendSeries(history, benchmarks).flatMap(
+            (line) => line.markLine?.data.map((reference) => reference.label.formatter) ?? [],
+          )
+          expect(labels.map((label) => label.style.text).sort()).toEqual(expectedLabels.sort())
+          const bounds = labels.map((label) => {
+            const rect = label.getBoundingRect().clone()
+            rect.applyTransform(label.getComputedTransform()!)
+            return rect
+          })
+          for (const [index, rect] of bounds.entries()) {
+            expect(rect.x).toBeGreaterThanOrEqual(0)
+            expect(rect.y).toBeGreaterThanOrEqual(0)
+            expect(rect.x + rect.width).toBeLessThanOrEqual(width)
+            expect(rect.y + rect.height).toBeLessThan(312) // Above date labels and slider.
+            for (const other of bounds.slice(index + 1)) {
+              expect(rect.intersect(other)).toBe(false)
+            }
+          }
+        } finally {
+          chart.dispose()
+        }
+      })
+    }
+  }
 })

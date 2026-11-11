@@ -487,3 +487,30 @@ def test_changing_daily_time_cannot_create_second_automatic_run(tmp_path):
     assert not w.tick(EVENING.replace(hour=19, minute=0))
     assert len(c.calls) == count
     assert w.tick(EVENING.replace(hour=19, minute=0) + timedelta(days=1))
+
+
+def test_collection_logs_partial_summary_and_safe_failure(tmp_path, caplog):
+    import logging
+    w, c, _ = worker(tmp_path)
+    c.failure = True
+    with caplog.at_level(logging.INFO):
+        assert w.tick(EVENING) is False
+    assert 'ETF collection start' in caplog.text
+    assert 'ETF source finish' in caplog.text and 'failed=4' in caplog.text
+    assert 'ETF collection finish' in caplog.text and 'outcome=partial' in caplog.text
+    assert 'kind=shares' in caplog.text and 'frames=' in caplog.text
+    assert 'do not expose secret' not in caplog.text
+
+
+def test_collection_logs_unexpected_calendar_failure(tmp_path, caplog):
+    import logging
+    import httpx
+    w, c, _ = worker(tmp_path)
+    def failed_client(http):
+        raise httpx.ConnectTimeout('private-url-and-token')
+    c.ExchangeClient = failed_client
+    with caplog.at_level(logging.INFO):
+        assert w.tick(EVENING) is False
+    assert 'ETF collection failed' in caplog.text and 'phase=calendar' in caplog.text
+    assert 'reason=http_timeout' in caplog.text and 'outcome=failed' in caplog.text
+    assert 'private-url-and-token' not in caplog.text

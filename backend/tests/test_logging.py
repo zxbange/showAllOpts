@@ -177,3 +177,35 @@ def test_two_processes_write_without_missing_or_duplicate_records(tmp_path):
             if worker.is_alive():
                 worker.terminate()
                 worker.join(timeout=5)
+
+
+def test_formatter_redacts_unsaved_headers_webhooks_and_request_queries():
+    formatter = StandardFormatter()
+    message = ('Authorization: Bearer bearer-value\nCookie: sid=cookie-value; other=other-value\n'
+               'url=https://example.test/webhook/private-path?custom=private-query\n'
+               'api_key=private-api-key refresh_token=private-refresh\n'
+               'safe-count=12')
+    record = logging.LogRecord('app.test', logging.ERROR, __file__, 1, message, (), None)
+    output = formatter.format(record)
+    for secret in ('bearer-value', 'cookie-value', 'other-value', 'private-path',
+                   'private-query', 'private-api-key', 'private-refresh'):
+        assert secret not in output
+    assert 'safe-count=12' in output
+    access = access_record('/api/v1/unknown?arbitrary=private-query', 500)
+    assert 'private-query' not in formatter.format(access)
+    assert 'HTTP/1.1" 500' in formatter.format(access)
+    assert access.args[2].endswith('private-query')
+
+
+def test_formatter_never_outputs_raw_exception_or_source_lines():
+    formatter = StandardFormatter()
+    try:
+        raise ValueError('unlabelled-sensitive-value')
+    except ValueError:
+        import sys
+        record = logging.LogRecord('uvicorn.error', logging.ERROR, __file__, 1,
+                                   'Exception in ASGI application', (), sys.exc_info())
+    output = formatter.format(record)
+    assert 'unlabelled-sensitive-value' not in output
+    assert 'error_type=ValueError' in output and 'test_logging.py' in output
+    assert 'Traceback diagnostics:' in output

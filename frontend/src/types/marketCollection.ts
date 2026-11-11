@@ -1,5 +1,5 @@
 export interface MarketPointSource {
-  source?: 'joinquant' | 'sina'
+  source?: 'joinquant' | 'sina' | 'public_market'
   // New daily records follow the original JoinQuant qfq/eligible methodology.
   // Explicit older bfq/universe metadata remains readable without relabeling its values.
   price_basis?: 'qfq' | 'bfq'
@@ -28,6 +28,14 @@ export interface MarketCollectionStatus {
   cache_pending: boolean
   updated_at: string | null
   error: string | null
+  source_latest?: { heat: string | null; crowding: string | null }
+  gaps?: Array<{
+    trade_date: string
+    status: string
+    error: string | null
+    heat_status: string
+    crowding_status: string
+  }>
   progress?: { phase: string; completed: number; total: number; pending?: number } | null
 }
 

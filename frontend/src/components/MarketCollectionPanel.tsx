@@ -227,10 +227,10 @@ export function MarketCollectionPanel({ onCollected }: { onCollected: () => void
           <h2>
             <Database size={17} /> 市场日采集
           </h2>
-          <p>日采集使用新浪行情，以聚宽原脚本为目标口径；各指标通过核验后分别入库发布。</p>
+          <p>日采集使用交易所证券主表及公开行情，以聚宽原脚本为目标口径；各指标核验后分别发布，证据不足的缺口保留。</p>
         </div>
         <span className="market-collection-schedule">
-          <Clock3 size={15} /> 交易日 18:00 启动 · 北京时间
+          <Clock3 size={15} /> 交易日 18:30 启动 · 北京时间
         </span>
       </div>
       <div className="market-collection-overview">
@@ -279,6 +279,27 @@ export function MarketCollectionPanel({ onCollected }: { onCollected: () => void
           </button>
         )}
       </div>
+      <p className="market-collection-note">
+        自动与手动采集均从两张表各自最后数据日的下一个交易日起补齐，更早缺口不处理。18:30前手动触发仅处理此前已结束的交易日。
+      </p>
+      {status?.source_latest && (
+        <p className="market-collection-note">
+          本轮源库检查：热度截至 {status.source_latest.heat ?? '暂无数据'} · 拥挤度截至{' '}
+          {status.source_latest.crowding ?? '暂无数据'}
+        </p>
+      )}
+      {!!status?.gaps?.length && (
+        <details className="market-collection-settings">
+          <summary>待补齐交易日（最近 {status.gaps.length} 条）</summary>
+          {status.gaps.map((gap) => (
+            <p className="market-collection-note" key={gap.trade_date}>
+              {gap.trade_date} · 热度：{marketResultLabel(gap.heat_status)} · 拥挤度：
+              {marketResultLabel(gap.crowding_status)}
+              {gap.error && <> · {marketCollectionErrorMessage(gap.error)}</>}
+            </p>
+          ))}
+        </details>
+      )}
       {workerDisabled && (
         <p className="market-collection-notice" role="status">
           服务端采集任务未启用。账户配置可以保留，启用服务后才能自动或手动采集。
@@ -412,8 +433,8 @@ export function MarketCollectionPanel({ onCollected }: { onCollected: () => void
                   启用市场自动采集
                 </label>
                 <p className="market-collection-note">
-                  每个交易日北京时间 18:00
-                  启动。日常只采集目标交易日并重试未完成数据，已有历史记录保留。
+                  每个交易日北京时间 18:30
+                  启动。从各指标最后数据日之后补齐交易日，仅恢复该范围内进度，更早缺口不处理，已有历史记录保留。
                 </p>
                 <div className="market-collection-actions">
                   <button className="button" type="submit" disabled={configurationBlocked}>

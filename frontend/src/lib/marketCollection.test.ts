@@ -7,6 +7,7 @@ import {
   marketCollectionErrorMessage,
   marketCollectionNeedsReload,
   marketSourceSegments,
+  marketResultLabel,
 } from './marketCollection'
 import type { MarketCollectionStatus, MarketPointSource } from '../types/marketCollection'
 
@@ -15,7 +16,7 @@ const complete: MarketCollectionStatus = {
   configured: true,
   status: 'complete',
   timezone: 'Asia/Shanghai',
-  schedule: ['18:00'],
+  schedule: ['18:30'],
   trade_date: '2026-11-10',
   run_id: 'one',
   total: 5000,
@@ -156,4 +157,16 @@ it('explains missing MA20 and throttling without exposing unknown technical erro
   expect(marketCollectionErrorMessage('writer_value_mismatch')).toBe(
     '本次结果的计数、比例或金额不一致，未写入；已有数据保留。',
   )
+})
+
+it('keeps public market sources distinct from legacy Sina and JoinQuant', () => {
+  const point: MarketPointSource = { source: 'public_market', price_basis: 'qfq', denominator: 'eligible' }
+  expect(heatSourceLabel(point)).toBe('公开行情 · 前复权MA20')
+  expect(crowdingSourceLabel(point)).toBe('通达信日包 · 沪深股票及CDR成交额')
+  expect(marketSourceSegments([{ source: 'sina' }, point], 'crowding')).toHaveLength(2)
+  expect(marketCollectionErrorMessage('adjustment_unavailable')).toContain('复权因子')
+})
+
+it('labels out-of-window metrics without claiming publication', () => {
+  expect(marketResultLabel('outside_window')).toBe('不在本次补缺范围')
 })

@@ -9,6 +9,11 @@ from datetime import date, timedelta
 import math
 import re
 import time
+import logging
+
+from app.core.diagnostics import diagnostic_details
+
+LOG = logging.getLogger(__name__)
 
 import httpx
 
@@ -191,7 +196,7 @@ def fetch_prices(client, index, start, end, *, expected_dates, check_cancel=lamb
     expected = set(expected_dates)
     quotes = {}
     failures = []
-    for fetcher in (fetch_tencent, fetch_eastmoney):
+    for source, fetcher in (('tencent', fetch_tencent), ('eastmoney', fetch_eastmoney)):
         # Tencent occasionally resets a connection despite healthy adjacent
         # annual windows. Retry one transient failure before the fallback;
         # malformed data and empty/stale responses are never retried in a loop.
@@ -205,6 +210,8 @@ def fetch_prices(client, index, start, end, *, expected_dates, check_cancel=lamb
                         quotes[day] = quote
                 break
             except (httpx.HTTPError, ValueError, TypeError, KeyError) as exc:
+                LOG.warning('Index source request failed source=%s index=%s start=%s end=%s attempt=%s/%s %s',
+                            source, index.code, start, end, attempt + 1, attempts, diagnostic_details(exc))
                 transient = isinstance(exc, httpx.RequestError) or (
                     isinstance(exc, httpx.HTTPStatusError) and
                     (exc.response.status_code == 429 or exc.response.status_code >= 500))

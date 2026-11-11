@@ -10,7 +10,7 @@ class SentimentPoint(BaseModel):
     eligible_count: int
     universe_count: int
     state: Literal['cold', 'normal', 'hot']
-    source: Literal['joinquant', 'sina'] = 'joinquant'
+    source: Literal['joinquant', 'sina', 'public_market'] = 'joinquant'
     price_basis: Literal['qfq', 'bfq'] = 'qfq'
     denominator: Literal['eligible', 'universe'] = 'eligible'
 

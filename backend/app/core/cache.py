@@ -4,6 +4,7 @@ from datetime import datetime, timedelta, timezone
 import hashlib
 import json
 import logging
+from app.core.diagnostics import diagnostic_details
 import os
 import shutil
 import sqlite3
@@ -542,7 +543,7 @@ class SnapshotCache:
         try:
             self._refresh_locked(lock, selected, reason, slot, full)
         except Exception as exc:
-            logger.error('Cache refresh interrupted error_type=%s', type(exc).__name__)
+            logger.error('Cache refresh interrupted %s', diagnostic_details(exc))
 
     def cleanup(self, state):
         from app.core.ownership_baseline import cleanup_completed_baseline
@@ -599,7 +600,7 @@ class SnapshotCache:
                 try:
                     self.tick()
                 except Exception as exc:
-                    logger.error('Cache scheduler failed error_type=%s', type(exc).__name__)
+                    logger.error('Cache scheduler failed %s', diagnostic_details(exc))
                 self.stop_event.wait(30)
         self.scheduler = threading.Thread(target=loop, name='cache-scheduler', daemon=True)
         self.scheduler.start()

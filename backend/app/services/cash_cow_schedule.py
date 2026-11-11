@@ -3,10 +3,13 @@ from calendar import monthrange
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 import logging
+
 import sqlite3
 import threading
 
 import portalocker
+
+from app.core.diagnostics import diagnostic_details
 
 CHINA = timezone(timedelta(hours=8))
 LOG = logging.getLogger(__name__)
@@ -122,8 +125,8 @@ class MonthlyCashCowScheduler:
         while not self.stopped.is_set():
             try:
                 self.tick()
-            except Exception:
-                LOG.exception('Monthly cash-cow scheduling failed')
+            except Exception as exc:
+                LOG.error('Monthly cash-cow scheduling failed details=%s', diagnostic_details(exc))
             self.stopped.wait(30)
 
     def start(self):

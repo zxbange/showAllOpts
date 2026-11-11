@@ -106,8 +106,8 @@
 }
 .growth-dividend-benchmark .line-sample {
   flex: 0 0 24px;
-  border-top: 1px dotted var(--line-color);
-  opacity: 0.6;
+  border-top: 2.4px solid var(--line-color);
+  opacity: 0.9;
 }
 .growth-dividend-benchmark-note {
   margin: 8px 6px 14px;

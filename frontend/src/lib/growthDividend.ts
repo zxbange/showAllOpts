@@ -1,4 +1,5 @@
 import type { GrowthDividendPoint } from '../types/growthDividend'
+import { chartColors } from './chartTheme'
 
 export type GrowthDividendYears = 0 | 1 | 3 | 5
 export interface DateSpan {
@@ -26,7 +27,7 @@ export interface GrowthDividendBenchmark {
   name: string
   color: string
   sampleCount: number
-  levels: Array<{ percentile: 'P10' | 'P90' | 'P10/P90'; value: number }>
+  levels: Array<{ percentile: 'P20' | 'P80' | 'P20/P80'; value: number }>
 }
 
 /** Full-history percentiles are independent of the chart's visible date window. */
@@ -47,8 +48,8 @@ export function growthDividendBenchmarks(points: GrowthDividendPoint[]): GrowthD
       const lower = Math.floor(position)
       return samples[lower] + (samples[Math.ceil(position)] - samples[lower]) * (position - lower)
     }
-    const p10 = quantile(0.1)
-    const p90 = quantile(0.9)
+    const p20 = quantile(0.2)
+    const p80 = quantile(0.8)
     return [
       {
         key: line.key,
@@ -56,15 +57,29 @@ export function growthDividendBenchmarks(points: GrowthDividendPoint[]): GrowthD
         color: line.color,
         sampleCount: samples.length,
         levels:
-          p10 === p90
-            ? [{ percentile: 'P10/P90' as const, value: p10 }]
+          p20 === p80
+            ? [{ percentile: 'P20/P80' as const, value: p20 }]
             : [
-                { percentile: 'P10' as const, value: p10 },
-                { percentile: 'P90' as const, value: p90 },
+                { percentile: 'P20' as const, value: p20 },
+                { percentile: 'P80' as const, value: p80 },
               ],
       },
     ]
   })
+}
+
+/** Keep full-history references and their labels inside the visible ratio axis. */
+export function growthDividendRatioExtent(
+  range: { min: number; max: number },
+  referenceValues: number[],
+) {
+  const values = [range.min, range.max, ...referenceValues].filter(Number.isFinite)
+  if (!values.length) return undefined
+  const min = Math.min(...values)
+  const max = Math.max(...values)
+  // Room above/below the outer references for their two-line in-chart labels.
+  const padding = (max - min || Math.abs(max) || 1) * 0.25
+  return { min: Math.max(0, min - padding), max: max + padding }
 }
 
 /** Calendar-year subtraction clamps leap day instead of drifting into March. */
@@ -125,14 +140,40 @@ export function growthDividendSeries(
           silent: true,
           animation: false,
           symbol: 'none',
-          // Complete labels live below the chart, so nearby levels cannot overlap
-          // each other or be clipped against the right axis on narrow screens.
-          label: { show: false },
-          lineStyle: { color: line.color, type: 'dotted' as const, width: 1, opacity: 0.5 },
+          z: 6,
+          label: {
+            show: true,
+            color: line.color,
+            backgroundColor: chartColors.background,
+            borderColor: line.color,
+            borderWidth: 1,
+            borderRadius: 3,
+            padding: [3, 4],
+            fontSize: 11,
+            fontWeight: 600,
+            lineHeight: 15,
+            distance: [6, 5],
+            opacity: 1,
+          },
+          lineStyle: { color: line.color, type: 'solid' as const, width: 2.4, opacity: 0.9 },
           data: (benchmarks.find((benchmark) => benchmark.key === line.key)?.levels ?? []).map(
             (level) => ({
               name: `${line.name} ${level.percentile} ${growthDividendValue(level.value, true)}`,
               yAxis: level.value,
+              label: {
+                // Separate ratio labels horizontally and the two percentile
+                // labels vertically, even when levels are very close together.
+                position:
+                  line.key === 'chinext_dividend_ratio'
+                    ? level.percentile === 'P20'
+                      ? ('insideStartBottom' as const)
+                      : ('insideStartTop' as const)
+                    : level.percentile === 'P20'
+                      ? ('insideEndBottom' as const)
+                      : ('insideEndTop' as const),
+                // Keep full names and values inside the plot on narrow screens.
+                formatter: `${line.name}\n${level.percentile}${level.percentile === 'P20/P80' ? '\n' : ' '}${growthDividendValue(level.value, true)}`,
+              },
             }),
           ),
         }

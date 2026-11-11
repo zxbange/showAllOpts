@@ -9,6 +9,10 @@ import sqlite3
 import threading
 import logging
 import json
+import time
+import uuid
+
+from app.core.diagnostics import diagnostic_details
 
 from app.services.etf_configuration import ETFConfiguration, ConfigurationFailure, DEFAULT_COLLECTION_TIME, target_key
 from app.services.etf_diagnostics import log_database_failure
@@ -317,7 +321,7 @@ class ETFCollection:
             try:
                 self.tick(self.clock())
             except Exception as exc:
-                LOG.warning('ETF scheduler interrupted: %s', type(exc).__name__)
+                LOG.warning('ETF scheduler interrupted %s', diagnostic_details(exc))
 
     def tick(self, moment):
         if not self.configured:
@@ -370,6 +374,13 @@ class ETFCollection:
             return False
 
     def _run(self, db, slot, config, *, key=None, manual_id=None):
+        started = time.monotonic()
+        run = uuid.uuid4().hex[:12]
+        phase = 'startup'
+        last_completed = last_total = 0
+        LOG.info('ETF collection start run=%s source=exchanges trigger=%s date=%s',
+                 run, 'manual' if manual_id else 'scheduled', slot.date())
+
         def check_cancelled():
             if manual_id:
                 row = db.execute('SELECT status FROM manual_runs WHERE id=?', (manual_id,)).fetchone()
@@ -378,8 +389,14 @@ class ETFCollection:
             if self.stop_event.is_set():
                 raise CollectionInterrupted()
 
-        def progress(phase, completed=0, total=0):
+        def progress(next_phase, completed=0, total=0):
+            nonlocal phase, last_completed, last_total
             check_cancelled()
+            last_completed, last_total = completed, total
+            if next_phase != phase:
+                phase = next_phase
+                LOG.info('ETF collection stage run=%s phase=%s completed=%s total=%s seconds=%.3f',
+                         run, phase, completed, total, time.monotonic() - started)
             db.execute("INSERT OR REPLACE INTO metadata VALUES ('progress',?)",
                        (json.dumps(dict(phase=phase, completed=completed, total=total)),))
             if manual_id:
@@ -401,6 +418,9 @@ class ETFCollection:
             if isinstance(exc, WriterFailure):
                 db.execute("INSERT OR REPLACE INTO metadata VALUES ('writer_error',?)", (exc.code,))
             complete = False
+            LOG.log(logging.WARNING if state == 'interrupted' else logging.ERROR,
+                    'ETF collection failed run=%s phase=%s outcome=%s %s',
+                    run, phase, state, diagnostic_details(exc))
         if manual_id:
             # The single SQL update arbitrates a late cancel against completion.
             # A cancel accepted before this update must never be reported complete.
@@ -410,11 +430,14 @@ class ETFCollection:
                 status=CASE WHEN status='cancelling' THEN 'cancelled' ELSE ? END
                 WHERE id=? AND status IN ('running','cancelling')""", (state, error, state, manual_id))
             terminal = db.execute('SELECT status FROM manual_runs WHERE id=?', (manual_id,)).fetchone()
-            complete = complete and terminal['status'] == 'complete'
+            state = terminal['status']
+            complete = complete and state == 'complete'
         else:
             db.execute('UPDATE slots SET status=?,error=? WHERE slot=?', (state, error, key))
         db.execute("DELETE FROM metadata WHERE key='progress'")
         db.commit()
+        LOG.info('ETF collection finish run=%s outcome=%s completed=%s total=%s seconds=%.3f',
+                 run, state, last_completed, last_total, time.monotonic() - started)
         self._refresh(db)
         return complete
 
@@ -433,7 +456,7 @@ class ETFCollection:
                 db.execute("INSERT OR REPLACE INTO metadata VALUES ('cache_pending','0')")
                 db.commit()
         except Exception as exc:
-            LOG.warning('ETF cache publish failed: %s', type(exc).__name__)
+            LOG.warning('ETF cache publish failed %s', diagnostic_details(exc))
 
     def _collect(self, db, slot, config=None, progress=None, check_cancelled=None, manual=False):
         config = config or self.configuration.load()
@@ -492,6 +515,9 @@ class ETFCollection:
                        if manual or (kind, code) not in exhausted}
             shares, prices, attempted = [], [], set()
             completed, total = 0, len(targets)
+            failures = 0
+            LOG.info('ETF source plan source=exchanges date=%s funds=%s targets=%s exhausted=%s',
+                     end, len(funds), total, len(exhausted))
             for kind in ('shares', 'prices'):
                 for code, name in funds.items():
                     if (kind, code) not in targets:
@@ -505,12 +531,17 @@ class ETFCollection:
                     except CollectionInterrupted:
                         raise
                     except Exception as exc:
-                        LOG.warning('ETF source observation failed: %s', type(exc).__name__)
+                        failures += 1
+                        if failures <= 5:
+                            LOG.warning('ETF source observation failed kind=%s code=%s date=%s %s',
+                                        kind, code, end, diagnostic_details(exc))
                     else:
                         shares.extend(s)
                         prices.extend(p)
                     completed += 1
                     progress('fetching', completed, total)
+            LOG.info('ETF source finish source=exchanges date=%s attempted=%s failed=%s shares=%s prices=%s suppressed_failures=%s',
+                     end, completed, failures, len(shares), len(prices), max(0, failures - 5))
             engine = None
             stage = 'engine_create'
             try:

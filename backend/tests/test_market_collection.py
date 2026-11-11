@@ -1,6 +1,6 @@
-from contextlib import nullcontext
+from contextlib import contextmanager, nullcontext
 from copy import deepcopy
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 import hashlib
 import json
@@ -22,7 +22,7 @@ from app.services.market_methodology import JOINQUANT_HEAT_METHOD, LEGACY_SINA_H
 
 N = 120
 DAY = date(2026, 11, 10)
-EVENING = datetime(2026, 11, 10, 18, tzinfo=CHINA)
+EVENING = datetime(2026, 11, 10, 18, 30, tzinfo=CHINA)
 CALENDAR = [date(2026, 11, day) for day in (6, 9, 10, 11, 12, 13, 16)] + [date(2026, 12, 31)]
 
 
@@ -145,6 +145,7 @@ class Writer:
         self.calls = []
         self.error = None
         self.preserve = set()
+        self.dates = {'heat': set(), 'crowding': set()}
 
     def __call__(self, owner, day, heat, crowding, source):
         self.calls.append((day, deepcopy(heat), deepcopy(crowding), deepcopy(source)))
@@ -153,6 +154,7 @@ class Writer:
         result = dict(heat_status='pending', crowding_status='pending', heat_hash=None, crowding_hash=None)
         for kind, value in (('heat', heat), ('crowding', crowding)):
             if value is not None:
+                self.dates[kind].add(str(day))
                 result[kind + '_status'] = 'existing_preserved' if kind in self.preserve else 'written'
                 result[kind + '_hash'] = None if kind in self.preserve else hashlib.sha256(
                     json.dumps(value, sort_keys=True).encode()).hexdigest()
@@ -169,7 +171,8 @@ def worker(tmp_path, *, moment=EVENING, edge_cases=False, refresh=None):
     collection = MarketCollection(settings, refresh, clock=clock,
                                   provider_factory=lambda client: provider, writer=writer,
                                   client_factory=lambda: nullcontext(object()),
-                                  calendar_loader=lambda client: list(CALENDAR))
+                                  calendar_loader=lambda client: list(CALENDAR),
+                                  source_dates_loader=lambda owner: writer.dates)
     collection.start = lambda: None
     return collection, provider, writer, clock
 
@@ -230,7 +233,7 @@ def test_before_18_no_new_snapshot_and_naive_times_rejected(tmp_path):
     assert collection.tick()
 
 
-def test_first_morning_tick_survives_restart_and_reports_the_missed_evening(tmp_path):
+def test_empty_database_restart_bootstraps_only_latest_closed_session(tmp_path):
     first, provider, writer, clock = worker(tmp_path, moment=EVENING.replace(hour=9))
     assert not first.tick()
     assert first._meta('activation_date') == str(DAY)
@@ -238,9 +241,7 @@ def test_first_morning_tick_survives_restart_and_reports_the_missed_evening(tmp_
     restarted, resumed, saved, later = worker(tmp_path, moment=EVENING + timedelta(days=1))
     assert restarted.tick()
     missed = restarted._day(DAY)
-    assert missed['status'] == 'blocked'
-    assert missed['error'] == 'historical_snapshot_missing'
-    assert missed['snapshot_json'] is None
+    assert missed is None
     assert resumed.universe_calls == [DAY + timedelta(days=1)]
 
 
@@ -345,25 +346,24 @@ def test_saved_failed_day_recovers_exact_day_after_midnight_without_new_pool(tmp
     assert collection.tick()
     assert provider.universe_calls == [DAY]
     assert provider.quote_calls[-1] == ('sh600003', DAY, 41)
-    # Recovery this morning must not suppress the new 18:00 slot.
+    # Recovery this morning must not suppress the new 18:30 slot.
     clock.value = EVENING + timedelta(days=1)
     assert collection.tick()
     assert provider.universe_calls == [DAY, DAY + timedelta(days=1)]
 
 
-def test_missed_days_without_snapshot_blocked_not_fabricated(tmp_path):
+def test_empty_database_ignores_old_activation_date(tmp_path):
     collection, provider, writer, clock = worker(tmp_path)
     collection._put_meta(activation_date='2026-11-06')
     assert collection.tick()
     with collection.connect() as db:
         missed = [dict(row) for row in db.execute("SELECT * FROM days WHERE trade_date<'2026-11-10'")]
-    assert {row['trade_date'] for row in missed} == {'2026-11-06', '2026-11-09'}
-    assert all(row['status'] == 'blocked' and row['error'] == 'historical_snapshot_missing' and row['snapshot_json'] is None for row in missed)
+    assert missed == []
     assert provider.universe_calls == [DAY]
     assert {call[0] for call in writer.calls} == {DAY}
 
 
-def test_failed_universe_becomes_explicit_historical_gap_next_day(tmp_path):
+def test_empty_database_obsolete_failed_bootstrap_is_not_reopened(tmp_path):
     collection, provider, writer, clock = worker(tmp_path)
     provider.snapshot_override = snapshot(DAY)
     provider.snapshot_override['rows'].pop()
@@ -372,23 +372,23 @@ def test_failed_universe_becomes_explicit_historical_gap_next_day(tmp_path):
     provider.snapshot_override = None
     clock.advance(days=1)
     assert collection.tick()
-    assert collection._day(DAY)['status'] == 'blocked'
-    assert collection._day(DAY)['error'] == 'historical_snapshot_missing'
+    assert collection._day(DAY)['status'] == 'superseded'
+    assert collection._day(DAY)['error'] is None
     assert all(call[0] != DAY for call in writer.calls)
 
 
 def test_weekend_calendar_check_is_cached_and_not_a_synthetic_trading_day(tmp_path):
-    saturday = datetime(2026, 11, 14, 18, tzinfo=CHINA)
+    saturday = datetime(2026, 11, 14, 18, 30, tzinfo=CHINA)
     collection, provider, writer, clock = worker(tmp_path, moment=saturday)
     assert not collection.tick()
     assert not collection.tick(clock.advance(minutes=1))
     assert not provider.universe_calls and not writer.calls
     with collection.connect() as db:
-        assert db.execute('SELECT COUNT(*) FROM days').fetchone()[0] == 0
+        assert [row[0] for row in db.execute('SELECT trade_date FROM days')] == ['2026-11-13']
 
 
 def test_new_year_calendar_not_treated_as_known_holiday(tmp_path):
-    collection, provider, writer, clock = worker(tmp_path, moment=datetime(2027, 1, 4, 18, tzinfo=CHINA))
+    collection, provider, writer, clock = worker(tmp_path, moment=datetime(2027, 1, 4, 18, 30, tzinfo=CHINA))
     assert not collection.tick()
     assert collection.status()['error'] == 'calendar_incomplete'
     assert not provider.universe_calls
@@ -398,7 +398,7 @@ def test_new_year_calendar_not_treated_as_known_holiday(tmp_path):
 
 
 def test_incomplete_new_year_calendar_does_not_discard_saved_previous_day_repair(tmp_path):
-    collection, provider, writer, clock = worker(tmp_path, moment=datetime(2026, 12, 31, 18, tzinfo=CHINA))
+    collection, provider, writer, clock = worker(tmp_path, moment=datetime(2026, 12, 31, 18, 30, tzinfo=CHINA))
     provider.failures = {'sh600003'}
     assert not collection.tick()
     provider.failures.clear()
@@ -411,7 +411,7 @@ def test_incomplete_new_year_calendar_does_not_discard_saved_previous_day_repair
     assert collection.status()['error'] == 'calendar_incomplete'
 
 
-def test_initial_calendar_failure_retains_activation_day_for_later_gap_reporting(tmp_path):
+def test_initial_calendar_failure_does_not_expand_empty_table_backfill(tmp_path):
     collection, provider, writer, clock = worker(tmp_path)
 
     def unavailable(client):
@@ -422,8 +422,7 @@ def test_initial_calendar_failure_retains_activation_day_for_later_gap_reporting
     collection.calendar_loader = lambda client: list(CALENDAR)
     clock.advance(days=1)
     assert collection.tick()
-    assert collection._day(DAY)['status'] == 'blocked'
-    assert collection._day(DAY)['error'] == 'historical_snapshot_missing'
+    assert collection._day(DAY) is None
     assert provider.universe_calls == [DAY + timedelta(days=1)]
 
 
@@ -634,7 +633,8 @@ def test_unverified_heat_collects_dated_hq_only_and_never_runs_legacy_ma(tmp_pat
     assert writer.calls[0][2]['total_money'] == str(sum(Decimal(row['amount']) for row in saved['rows']).quantize(Decimal('.01')))
     stamp = state['updated_at']
     assert not collection.tick(clock.advance(minutes=10))
-    assert len(provider.hq_calls) == 3 and collection.status()['updated_at'] == stamp
+    assert len(provider.hq_calls) == 3 and collection.status()['updated_at'] != stamp
+    assert collection._day(DAY)['attempts'] == 2  # Bounded capability recheck, no raw refetch.
 
 
 def test_hq_batch_checkpoint_resumes_after_restart_without_repeating_successes(tmp_path):
@@ -794,7 +794,8 @@ def test_methodology_migration_archives_bfq_and_preserves_row_ownership(tmp_path
     assert not collection.tick()
     assert len(provider.quote_calls) == old_quotes
     assert collection._day(DAY)['heat_hash'] == old_hash
-    assert collection.status()['heat_status'] == 'blocked'
+    # Confirmed historical rows are preserved, never silently recalculated.
+    assert collection.status()['heat_status'] == 'existing_preserved'
     assert collection.status()['above_count'] == 0
 
 
@@ -859,3 +860,429 @@ def test_transport_failure_does_not_refresh_saved_node_snapshot(tmp_path):
     assert provider.universe_calls == [DAY]
     assert len(provider.hq_cached[-1]) == 40
     assert collection.status()['crowding_status'] == 'written'
+
+
+def historical_provider(provider):
+    provider.historical_capability = lambda: {'verified': True}
+    original = provider.fetch_universe
+    def dated(day):
+        result = original(day)
+        result.update(source_has_trading_date=True, dated_snapshot_verified=True,
+                      date_verified_by='verified_test_source')
+        for row in result['rows']:
+            row['date'] = str(day)
+        return result
+    provider.fetch_universe = dated
+
+
+def test_exact_1830_boundary_and_shanghai_timezone(tmp_path):
+    collection, provider, writer, clock = worker(tmp_path, moment=EVENING.replace(minute=29))
+    assert not collection.tick()
+    assert not provider.universe_calls
+    clock.advance(minutes=1)
+    assert collection.tick(clock().astimezone(timezone.utc))
+    assert collection.status()['schedule'] == ['18:30']
+    assert collection.status()['next_run_at'].endswith('18:30:00+08:00')
+
+
+def test_source_dates_independent_gap_repair_and_preservation(tmp_path):
+    collection, provider, writer, clock = worker(tmp_path)
+    historical_provider(provider)
+    writer.dates = {'heat': {'2026-11-06', '2026-11-09'}, 'crowding': {'2026-11-06'}}
+    assert collection.tick()
+    assert set(provider.universe_calls) == {date(2026, 11, 9), DAY}
+    backfill = next(call for call in writer.calls if call[0] == date(2026, 11, 9))
+    assert backfill[1] is None and backfill[2] is not None
+    assert collection._day('2026-11-09')['heat_status'] == 'existing_preserved'
+    assert collection.status()['gaps'] == []
+    previous_calls = len(writer.calls)
+    collection.request_run('same-day-recheck')
+    assert not collection.tick()
+    assert len(writer.calls) == previous_calls
+
+
+def test_manual_before_schedule_uses_latest_closed_session(tmp_path):
+    collection, provider, writer, clock = worker(tmp_path, moment=EVENING.replace(hour=10))
+    historical_provider(provider)
+    writer.dates = {'heat': {'2026-11-06'}, 'crowding': {'2026-11-06'}}
+    collection.request_run('morning-backfill')
+    assert collection.tick()
+    assert provider.universe_calls == [date(2026, 11, 9)]
+    assert collection._day(DAY) is None
+
+
+def test_unavailable_history_keeps_existing_metric_and_partial_run(tmp_path):
+    collection, provider, writer, clock = worker(tmp_path)
+    writer.dates = {'heat': {'2026-11-06', '2026-11-09'}, 'crowding': {'2026-11-06'}}
+    assert not collection.tick()
+    missing = collection._day('2026-11-09')
+    assert missing['heat_status'] == 'existing_preserved'
+    assert missing['crowding_status'] == 'blocked'
+    assert missing['error'] == 'historical_snapshot_missing'
+    assert collection.status()['runs'][0]['status'] == 'partial'
+
+
+def test_source_read_failure_is_not_treated_as_empty_database(tmp_path):
+    collection, provider, writer, clock = worker(tmp_path)
+    def failed(owner):
+        raise WriterFailure('writer_connection_failed')
+    collection.source_dates_loader = failed
+    assert not collection.tick()
+    assert collection.status()['error'] == 'writer_connection_failed'
+    assert not provider.universe_calls and not writer.calls
+
+
+def test_deleted_source_row_is_repaired_from_saved_checkpoint(tmp_path):
+    collection, provider, writer, clock = worker(tmp_path)
+    assert collection.tick()
+    writer.dates['crowding'].clear()
+    collection.request_run('repair-deleted')
+    assert collection.tick()
+    assert len(provider.universe_calls) == 1 and len(provider.quote_calls) == N
+    assert writer.calls[-1][1] is None and writer.calls[-1][2] is not None
+
+
+def test_completed_previous_session_manual_morning_is_success_not_time_error(tmp_path):
+    collection, provider, writer, clock = worker(tmp_path, moment=EVENING.replace(hour=10))
+    writer.dates = {'heat': {'2026-11-09'}, 'crowding': {'2026-11-09'}}
+    collection.request_run('already-complete')
+    assert not collection.tick()
+    assert collection.status()['runs'][0]['status'] == 'complete'
+    assert collection.status()['runs'][0]['error'] is None
+    assert not writer.calls and not provider.universe_calls
+
+
+def test_source_read_failure_preserves_completed_rows_and_cache_pending(tmp_path):
+    collection, provider, writer, clock = worker(tmp_path, refresh=lambda: False)
+    assert collection.tick()
+    prior = collection._day(DAY)
+    def failed(owner):
+        raise WriterFailure('writer_connection_failed')
+    collection.source_dates_loader = failed
+    collection.request_run('database-down')
+    assert not collection.tick()
+    assert collection._day(DAY)['heat_hash'] == prior['heat_hash']
+    assert collection.status()['cache_pending'] is True
+    assert collection.status()['runs'][0]['error'] == 'writer_connection_failed'
+    assert collection.status()['heat_status'] == 'written'
+
+
+def test_stream_and_get_share_request_start_budget(tmp_path, monkeypatch):
+    import app.services.market_collection as module
+    collection, _, _, _ = worker(tmp_path)
+    elapsed, starts = [0.0], []
+    monkeypatch.setattr(module.monotonic_time, 'monotonic', lambda: elapsed[0])
+    monkeypatch.setattr(collection.stop_event, 'wait', lambda delay: elapsed.__setitem__(0, elapsed[0] + delay))
+    class Client:
+        def get(self, *args, **kwargs):
+            starts.append(elapsed[0])
+            return httpx.Response(200)
+        @contextmanager
+        def stream(self, *args, **kwargs):
+            starts.append(elapsed[0])
+            yield httpx.Response(200, content=b'archive')
+    client = PacedHTTPClient(Client(), collection, lambda: None)
+    client.get('https://example.invalid/get')
+    with client.stream('GET', 'https://example.invalid/archive') as response:
+        assert b''.join(response.iter_bytes()) == b'archive'
+    client.get('https://example.invalid/get')
+    assert starts == pytest.approx([0, 1, 2])
+    assert collection._meta('last_http_at')
+
+
+@pytest.mark.parametrize('status', [403, 429])
+def test_stream_rate_limit_closes_response_before_body(tmp_path, status):
+    collection, _, _, _ = worker(tmp_path)
+    closed = []
+    class Client:
+        @contextmanager
+        def stream(self, *args, **kwargs):
+            try:
+                yield httpx.Response(status)
+            finally:
+                closed.append(True)
+    client = PacedHTTPClient(Client(), collection, lambda: None)
+    with pytest.raises(SinaRateLimitError) as error:
+        with client.stream('GET', 'https://example.invalid/archive'):
+            pytest.fail('rate-limited response was exposed')
+    assert error.value.status_code == status and closed == [True]
+
+
+def test_stream_cancellation_between_chunks_closes_transport(tmp_path):
+    collection, _, _, _ = worker(tmp_path)
+    consumed, closed = [], []
+    class Response:
+        status_code = 200
+        def iter_bytes(self):
+            for index in range(3):
+                consumed.append(index)
+                yield b'chunk'
+    class Client:
+        @contextmanager
+        def stream(self, *args, **kwargs):
+            try:
+                yield Response()
+            finally:
+                closed.append(True)
+    client = PacedHTTPClient(Client(), collection, lambda: collection._check(None))
+    with pytest.raises(CollectionInterrupted):
+        with client.stream('GET', 'https://example.invalid/archive') as response:
+            blocks = response.iter_bytes()
+            assert next(blocks) == b'chunk'
+            collection.stop_event.set()
+            next(blocks)
+    assert consumed == [0] and closed == [True]
+
+
+@pytest.mark.parametrize('heat_verified', [True, False])
+def test_verified_dated_crowding_publishes_before_pending_heat(tmp_path, heat_verified):
+    collection, provider, writer, clock = worker(tmp_path)
+    historical_provider(provider)
+    provider.heat_verified = heat_verified
+    provider.failures = {'sh600003'}
+    provider.on_quote = lambda symbol: (
+        None if writer.calls and writer.calls[0][2] is not None else pytest.fail('heat started before crowding commit'))
+    assert not collection.tick()
+    assert collection._day(DAY)['crowding_status'] == 'written'
+    assert collection._day(DAY)['heat_status'] in ('pending', 'blocked')
+    assert writer.calls[0][1] is None
+    assert writer.calls[0][2]['prices_verified'] is True
+    assert writer.calls[0][2]['price_verified_count'] == N
+    assert not any(call[1] for call in writer.calls)
+
+
+def test_verified_dated_crowding_survives_heat_network_pause(tmp_path):
+    collection, provider, writer, clock = worker(tmp_path)
+    historical_provider(provider)
+    provider.exceptions['sh600000'] = SinaRateLimitError(403)
+    assert not collection.tick()
+    assert collection._day(DAY)['crowding_status'] == 'written'
+    assert collection._day(DAY)['error'] == 'source_forbidden'
+    assert writer.calls[0][2]['prices_verified'] is True
+
+
+def test_existing_heat_and_repaired_dated_crowding_finish_without_factor_requests(tmp_path):
+    collection, provider, writer, clock = worker(tmp_path)
+    historical_provider(provider)
+    collection.source_dates_loader = lambda owner: {'heat': {DAY}, 'crowding': set()}
+    provider.on_quote = lambda symbol: pytest.fail('preserved heat must not be recalculated')
+    assert collection.tick()
+    row = collection._day(DAY)
+    assert row['status'] == 'complete' and row['error'] is None
+    assert row['heat_status'] == 'existing_preserved' and row['crowding_status'] == 'written'
+    assert provider.quote_calls == []
+
+
+def test_missing_factor_error_survives_per_stock_and_day_status(tmp_path):
+    collection, provider, writer, clock = worker(tmp_path)
+    historical_provider(provider)
+    original = provider.fetch_quote
+    def fetch(symbol, day, **kwargs):
+        if symbol == 'sh600000':
+            return {'symbol': symbol, 'day': str(day), 'status': 'transient_failure', 'error': 'adjustment_unavailable'}
+        return original(symbol, day, **kwargs)
+    provider.fetch_quote = fetch
+    assert not collection.tick()
+    assert collection._day(DAY)['error'] == 'adjustment_unavailable'
+    with collection.connect() as db:
+        row = db.execute('SELECT error FROM observations WHERE day=? AND symbol=?', (str(DAY), 'sh600000')).fetchone()
+    assert row['error'] == 'adjustment_unavailable'
+
+
+def test_diagnostic_logs_include_stage_counts_and_safe_errors_without_credentials(tmp_path, caplog):
+    import logging
+    collection, provider, writer, clock = worker(tmp_path)
+    historical_provider(provider)
+    with caplog.at_level(logging.INFO, logger='app.services.market_collection'):
+        assert collection.tick()
+    assert 'Market gap plan target=2026-11-10' in caplog.text
+    assert 'source=sina securities=120 dated=True' in caplog.text
+    assert 'Market heat validation date=2026-11-10' in caplog.text
+    assert 'Market publication date=2026-11-10' in caplog.text
+    assert 'phase=ma20' in caplog.text
+    assert 'password' not in caplog.text.lower()
+    assert 'mysql+' not in caplog.text
+
+
+def test_monday_source_friday_target_collects_tuesday_through_friday(tmp_path):
+    collection, provider, writer, clock = worker(tmp_path, moment=EVENING.replace(day=13))
+    historical_provider(provider)
+    writer.dates = {'heat': {'2026-11-09'}, 'crowding': {'2026-11-09'}}
+    assert collection.tick()
+    expected = [date(2026, 11, day) for day in (10, 11, 12, 13)]
+    assert provider.universe_calls == expected
+    assert {call[0] for call in writer.calls if call[1]} == set(expected)
+    assert {call[0] for call in writer.calls if call[2]} == set(expected)
+    assert collection._day('2026-11-06') is None
+    assert collection.status()['gaps'] == []
+
+
+def test_each_metric_boundary_excludes_earlier_holes_and_heat_requests(tmp_path):
+    collection, provider, writer, clock = worker(tmp_path, moment=EVENING.replace(day=13))
+    historical_provider(provider)
+    writer.dates = {'heat': {'2026-11-11'}, 'crowding': {'2026-11-09'}}
+    assert collection.tick()
+    assert {call[0] for call in writer.calls if call[1]} == {date(2026, 11, 12), date(2026, 11, 13)}
+    assert {call[0] for call in writer.calls if call[2]} == {date(2026, 11, day) for day in (10, 11, 12, 13)}
+    assert not any(day < date(2026, 11, 12) for _, day, _ in provider.quote_calls)
+    assert collection._day('2026-11-10')['heat_status'] == 'outside_window'
+    assert collection._day('2026-11-10')['crowding_status'] == 'written'
+    assert '2026-11-10' not in writer.dates['heat']
+
+
+@pytest.mark.parametrize('stale_status', ['pending', 'partial', 'blocked', 'paused'])
+def test_older_tracked_failures_do_not_expand_source_boundaries(tmp_path, stale_status):
+    collection, provider, writer, clock = worker(tmp_path, moment=EVENING.replace(day=13))
+    historical_provider(provider)
+    collection._migrate_heat_methodology()
+    with collection.connect() as db:
+        for day in ('2026-11-06', '2026-11-10'):
+            db.execute("INSERT INTO days(trade_date,status,error,created_at,updated_at) VALUES(?,?,?,?,?)",
+                       (day, stale_status, 'source_unavailable', clock().isoformat(), clock().isoformat()))
+    writer.dates = {'heat': {'2026-11-11'}, 'crowding': {'2026-11-11'}}
+    assert collection.tick()
+    assert provider.universe_calls == [date(2026, 11, 12), date(2026, 11, 13)]
+    assert collection._day('2026-11-10')['status'] == 'superseded'
+    assert collection._day('2026-11-06')['heat_status'] == 'outside_window'
+    assert collection.status()['gaps'] == []
+
+
+@pytest.mark.parametrize(('moment', 'expected_days'), [
+    (EVENING.replace(day=13, minute=29), (10, 11, 12)),
+    (EVENING.replace(day=14), (10, 11, 12, 13)),
+    (EVENING.replace(day=15, hour=10), (10, 11, 12, 13)),
+])
+def test_manual_closed_session_boundary_with_weekends(tmp_path, moment, expected_days):
+    collection, provider, writer, clock = worker(tmp_path, moment=moment)
+    historical_provider(provider)
+    writer.dates = {'heat': {'2026-11-09'}, 'crowding': {'2026-11-09'}}
+    collection.request_run('closed-only')
+    assert collection.tick()
+    assert provider.universe_calls == [date(2026, 11, day) for day in expected_days]
+
+
+def test_one_empty_metric_only_bootstraps_target_while_other_backfills(tmp_path):
+    collection, provider, writer, clock = worker(tmp_path, moment=EVENING.replace(day=13))
+    historical_provider(provider)
+    writer.dates = {'heat': set(), 'crowding': {'2026-11-09'}}
+    assert collection.tick()
+    assert {call[0] for call in writer.calls if call[1]} == {date(2026, 11, 13)}
+    assert {call[0] for call in writer.calls if call[2]} == {date(2026, 11, day) for day in (10, 11, 12, 13)}
+    assert collection._day('2026-11-10')['heat_status'] == 'outside_window'
+
+
+def test_failed_earlier_heat_does_not_advance_its_boundary_but_crowding_continues(tmp_path):
+    collection, provider, writer, clock = worker(tmp_path, moment=EVENING.replace(day=13))
+    historical_provider(provider)
+    writer.dates = {'heat': {'2026-11-09'}, 'crowding': {'2026-11-09'}}
+    original = provider.fetch_quote
+    def quote(symbol, day, **kwargs):
+        result = original(symbol, day, **kwargs)
+        if day == date(2026, 11, 10) and symbol == 'sh600003':
+            result.update(status='transient_failure', error='adjustment_unavailable')
+        return result
+    provider.fetch_quote = quote
+    assert not collection.tick()
+    assert writer.dates['heat'] == {'2026-11-09'}
+    assert writer.dates['crowding'] == {'2026-11-09', '2026-11-10', '2026-11-11', '2026-11-12', '2026-11-13'}
+    assert all(day == date(2026, 11, 10) for _, day, _ in provider.quote_calls)
+    provider.fetch_quote = original
+    collection.request_run('resume-earliest-heat')
+    assert collection.tick()
+    assert writer.dates['heat'] == writer.dates['crowding']
+    assert collection.status()['gaps'] == []
+
+
+@pytest.mark.parametrize('unhashable', [False, True])
+def test_malicious_source_error_code_never_enters_state_or_logs(tmp_path, caplog, unhashable):
+    collection, provider, writer, clock = worker(tmp_path)
+    secret = 'https://private.invalid/?token=supersecret\nFORGED LOG'
+    class SourceError(Exception):
+        code = {'secret': secret} if unhashable else secret
+    def failed(day):
+        raise SourceError(secret)
+    provider.fetch_universe = failed
+    assert not collection.tick()
+    assert collection._day(DAY)['error'] == 'quote_unavailable'
+    assert 'supersecret' not in json.dumps(collection.status()) + caplog.text
+    assert 'FORGED LOG' not in caplog.text
+
+
+@pytest.mark.parametrize('unsafe', ['privatewordsecret', {'token': 'privatewordsecret'}])
+def test_unresolved_quote_log_only_uses_known_error_codes(tmp_path, caplog, unsafe):
+    collection, provider, writer, clock = worker(tmp_path)
+    provider.quote_override = lambda quote: quote | {'error': unsafe, 'status': 'transient_failure'}
+    assert not collection.tick()
+    assert 'privatewordsecret' not in caplog.text
+    assert 'quote_unavailable' in caplog.text
+    assert collection._day(DAY)['error'] == 'source_partial'
+
+
+def test_automatic_upgrade_replaces_blocked_legacy_snapshot_with_current_method_marker(tmp_path):
+    collection, legacy, writer, clock = worker(tmp_path)
+    legacy.heat_verified = False
+    writer.dates['heat'] = {'2026-11-09'}
+    assert not collection.tick()
+    assert collection._meta('heat_methodology') == JOINQUANT_HEAT_METHOD
+    assert collection._day(DAY)['error'] == 'heat_methodology_unverified'
+    old_snapshot = collection._day(DAY)['snapshot_json']
+    old_crowding_hash = collection._day(DAY)['crowding_hash']
+    writer.dates['crowding'].add('2026-11-13')
+    writer.calls.clear()
+    clock.value = EVENING.replace(day=13)
+    provider = Provider(clock)
+    provider.source_id = 'public_market'
+    historical_provider(provider)
+    original = provider.fetch_universe
+    def public_snapshot(day):
+        return original(day) | {'source': 'public_market'}
+    provider.fetch_universe = public_snapshot
+    collection.provider_factory = lambda client: provider
+    assert collection.tick()  # No manual request or methodology-marker reset.
+    assert provider.universe_calls == [date(2026, 11, day) for day in (10, 11, 12, 13)]
+    assert collection._day(DAY)['crowding_hash'] == old_crowding_hash
+    assert all(call[2] is None for call in writer.calls)
+    assert collection._day(DAY)['status'] == 'complete'
+    with collection.connect() as db:
+        archived = [row[0] for row in db.execute("SELECT payload FROM methodology_archive WHERE kind='snapshot'")]
+    assert old_snapshot in archived
+    assert collection.status()['gaps'] == []
+
+
+def test_blocked_automatic_retries_obey_backoff_and_daily_budget(tmp_path):
+    collection, provider, writer, clock = worker(tmp_path)
+    provider.heat_verified = False
+    assert not collection.tick()
+    assert collection._day(DAY)['attempts'] == 1
+    assert not collection.tick(clock.advance(minutes=4))
+    assert collection._day(DAY)['attempts'] == 1
+    assert not collection.tick(clock.advance(minutes=1))
+    assert collection._day(DAY)['attempts'] == 2
+    assert not collection.tick(clock.advance(minutes=29))
+    assert collection._day(DAY)['attempts'] == 2
+    assert not collection.tick(clock.advance(minutes=1))
+    assert collection._day(DAY)['attempts'] == 3
+    assert not collection.tick(clock.advance(hours=3))
+    assert collection._day(DAY)['attempts'] == 3
+
+
+def test_crowding_table_failure_does_not_block_heat_frontier_or_repeat_same_day_write(tmp_path):
+    collection, provider, writer, clock = worker(tmp_path, moment=EVENING.replace(day=13))
+    historical_provider(provider)
+    writer.dates = {'heat': {'2026-11-09'}, 'crowding': {'2026-11-09'}}
+    attempts = []
+    def separate_tables(owner, day, heat, crowding, source):
+        attempts.append((day, heat is not None, crowding is not None))
+        if crowding is not None:
+            raise WriterFailure('writer_permission_denied')
+        return writer(owner, day, heat, crowding, source)
+    collection.writer = separate_tables
+    assert not collection.tick()
+    assert writer.dates['heat'] == {'2026-11-09', '2026-11-10', '2026-11-11', '2026-11-12', '2026-11-13'}
+    assert writer.dates['crowding'] == {'2026-11-09'}
+    assert [day for day, heat, crowding in attempts if crowding] == [date(2026, 11, 10)]
+    assert all(not (heat and crowding) for day, heat, crowding in attempts)
+    assert collection._day('2026-11-10')['error'] == 'writer_permission_denied'
+    assert collection._day('2026-11-10')['heat_status'] == 'written'
+    assert collection._day('2026-11-10')['crowding_status'] == 'pending'
+    assert collection.status()['runs'][0]['status'] == 'partial'

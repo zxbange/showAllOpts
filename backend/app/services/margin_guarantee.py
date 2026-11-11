@@ -3,6 +3,8 @@ from contextlib import contextmanager
 from datetime import date, datetime, timedelta, timezone
 import json
 import logging
+from time import monotonic
+
 import math
 import sqlite3
 import ssl
@@ -11,6 +13,8 @@ import uuid
 
 import httpx
 import portalocker
+
+from app.core.diagnostics import diagnostic_details
 
 from app.services.margin_source import (
     MarginReport, MarginSourceError, safe_error_details, safe_report_url,
@@ -205,7 +209,8 @@ class MarginGuarantee:
             if slot:
                 state['scheduled_slot'] = slot
             self.write_state(state)
-        except BaseException:
+        except BaseException as exc:
+            LOG.error('Margin collection initialization failed details=%s', diagnostic_details(exc))
             lock.release()
             raise
         if background:
@@ -213,7 +218,8 @@ class MarginGuarantee:
                                            name='margin-guarantee-collector', daemon=True)
             try:
                 self.worker.start()
-            except BaseException:
+            except BaseException as exc:
+                LOG.error('Margin collection launch failed details=%s', diagnostic_details(exc))
                 state.update(active=False, error='未能启动采集任务，请重试。', stage='启动失败')
                 self.write_state(state)
                 lock.release()
@@ -223,6 +229,8 @@ class MarginGuarantee:
         return True
 
     def _collect(self, lock, state, moment):
+        started = monotonic()
+        outcome = 'failed'
         marker = self.root / ('cancel-' + state['run_id'])
         def check_cancel():
             if self.stop_event.is_set() or marker.exists():
@@ -263,6 +271,7 @@ class MarginGuarantee:
                                          'ON p.trade_date=r.trade_date WHERE p.trade_date IS NULL AND r.trade_date<=? '
                                          + self.unresolved_sql() +
                                          'ORDER BY r.trade_date DESC', (today.isoformat(),)).fetchall()
+                LOG.info('Margin catalog complete reports=%s pending=%s', len(reports), len(pending))
                 scope = 'collection'
                 # If a correctly titled report also exists, verify it first so
                 # an inconsistent correction remains pending and visibly fails.
@@ -325,7 +334,8 @@ class MarginGuarantee:
                                        source_url=safe_report_url(row['source_url']), **safe_error_details(exc))
                         state['recent_failures'] = (state['recent_failures'] + [failure])[-3:]
                         state['last_failure'] = failure
-                        LOG.warning('Margin report failed details=%s', failure)
+                        LOG.warning('Margin report failed date=%s source=margin_report reason=%s details=%s',
+                                    row['trade_date'], safe_error_details(exc), diagnostic_details(exc))
                     state.update(processed=index+1, percent=round(100*(index+1)/len(pending), 1))
                     self.write_state(state)
                     if consecutive_failures >= 3:
@@ -341,10 +351,10 @@ class MarginGuarantee:
             else:
                 state.update(stage='更新完成' if pending else '没有新增披露', error=None,
                              last_success_at=now().isoformat(), percent=100)
-            LOG.info('Margin guarantee collection complete processed=%s failed=%s', state['processed'], failures)
+            outcome = 'partial' if failures else 'success'
         except CollectionCancelled:
             state.update(stage='已停止，已保存数据可继续补采', error=None)
-            LOG.info('Margin guarantee collection cancelled processed=%s', state['processed'])
+            outcome = 'cancelled'
         except Exception as exc:
             if not stopped_after_failures:
                 state['last_failure'] = dict(scope=scope, **safe_error_details(exc))
@@ -354,14 +364,27 @@ class MarginGuarantee:
                          error=prefix + failure_summary(state['last_failure'])
                                + ' 请稍后重试；再次更新会继续补采。')
             # Never log traceback/exception text: upstream errors can contain secrets or bodies.
-            LOG.error('Margin guarantee collection failed details=%s', state['last_failure'])
+            LOG.error('Margin guarantee collection failed scope=%s stopped_after_failures=%s reason=%s details=%s',
+                      scope, stopped_after_failures, safe_error_details(exc), diagnostic_details(exc))
         finally:
             state['active'] = False
             try:
                 self.write_state(state)
                 marker.unlink(missing_ok=True)
+            except BaseException as exc:
+                outcome = 'failed'
+                LOG.error('Margin finalization failed details=%s', diagnostic_details(exc))
+                raise
             finally:
-                lock.release()
+                try:
+                    lock.release()
+                except BaseException as exc:
+                    outcome = 'failed'
+                    LOG.error('Collection lock release failed details=%s', diagnostic_details(exc))
+                    raise
+                finally:
+                    LOG.info('Margin guarantee collection finished outcome=%s processed=%s total=%s failed=%s duration_seconds=%.3f',
+                             outcome, state.get('processed', 0), state.get('total'), failures, monotonic() - started)
 
     def tick(self, moment=None):
         moment = moment or now()
@@ -381,7 +404,7 @@ class MarginGuarantee:
                 try:
                     self.tick()
                 except Exception as exc:
-                    LOG.error('Margin scheduler failed error_type=%s', type(exc).__name__)
+                    LOG.error('Margin scheduler failed details=%s', diagnostic_details(exc))
                 self.stop_event.wait(30)
         self.scheduler = threading.Thread(target=loop, name='margin-guarantee-scheduler', daemon=True)
         self.scheduler.start()

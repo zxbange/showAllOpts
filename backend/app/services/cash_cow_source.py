@@ -9,6 +9,11 @@ import json
 import math
 import re
 import time
+import logging
+
+from app.core.diagnostics import diagnostic_details
+
+LOG = logging.getLogger(__name__)
 
 import httpx
 import hashlib
@@ -145,6 +150,8 @@ class EastmoneyCashCowSource:
                     and (cause.response.status_code == 429 or cause.response.status_code >= 500))
                 if attempt or not retryable:
                     raise
+                LOG.warning('Cash cow source retry source=eastmoney attempt=%s/2 delay_seconds=0.5 %s',
+                            attempt + 1, diagnostic_details(exc))
                 for _ in range(5):
                     self.check_cancel()
                     time.sleep(.1)

@@ -5,6 +5,7 @@ from datetime import date, datetime, timezone, timedelta
 from time import monotonic
 from zoneinfo import ZoneInfo
 import logging
+from app.core.diagnostics import diagnostic_details
 import json
 import sqlite3
 import threading
@@ -92,7 +93,7 @@ class Commodities:
             try:
                 self.refresh(slot=self.slot_for(now()))
             except Exception as exc:
-                LOG.error('Commodity scheduler failed type=%s', type(exc).__name__)
+                LOG.error('Commodity scheduler failed %s', diagnostic_details(exc))
             self.stopping.wait(5)
 
     def refresh(self, *, slot=None):
@@ -246,7 +247,7 @@ class Commodities:
                     target_result = ('partial' if isinstance(exc, QuoteIncomplete) else
                                      'unverified' if isinstance(exc, (QuoteError, ValueError)) else 'sourceReadFailed')
                     failures += 1
-                    LOG.warning('Commodity current quote failed type=%s', type(exc).__name__)
+                    LOG.warning('Commodity current quote failed %s', diagnostic_details(exc))
                 # Query only when a real interval gap remains. Calendar dates
                 # are candidates, not assertions of trading days or publication.
                 historical = {day for day in missing if day < today.isoformat()}
@@ -258,7 +259,7 @@ class Commodities:
                         candidates += recovery_links(catalog, start=recovery['dateFrom'], end=today.isoformat())
                     except Exception as exc:
                         failures += 1
-                        LOG.warning('Commodity recovery catalog failed type=%s', type(exc).__name__)
+                        LOG.warning('Commodity recovery catalog failed %s', diagnostic_details(exc))
                     with self.db() as db:
                         for url in dict.fromkeys(candidates):
                             db.execute("INSERT OR IGNORE INTO a00_source_checks VALUES(?,'','pending')", (url,))
@@ -305,7 +306,7 @@ class Commodities:
             finished = True
         except Exception as exc:
             failures += 1
-            LOG.error('Commodity collection failed type=%s', type(exc).__name__)
+            LOG.error('Commodity collection failed %s', diagnostic_details(exc))
         finally:
             try:
                 if self.stopping.is_set():

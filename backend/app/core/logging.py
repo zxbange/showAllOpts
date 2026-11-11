@@ -11,11 +11,18 @@ from concurrent_log_handler import ConcurrentTimedRotatingFileHandler
 from sqlalchemy.engine import make_url
 
 from app.core.config import Settings
+from app.core.diagnostics import diagnostic_details
 
 ANSI_ESCAPE = re.compile(r'\x1b\[[0-?]*[ -/]*[@-~]')
+# Kept for standalone diagnostic scripts importing this legacy helper.
 CREDENTIAL_URL = re.compile(r'(?i)([a-z][a-z0-9+.-]*://)[^\s/@]+:[^\s/@]+@')
+# Provider webhook paths and query strings may contain credentials too.
+FULL_URL = re.compile(r'''(?i)\b[a-z][a-z0-9+.-]*://[^\s'"<>]+''')
+AUTH_HEADER = re.compile(
+    r'''(?im)(\b(?:authorization|proxy-authorization|cookie|set-cookie)\b["']?\s*[:=]\s*)(?:"[^"]*"|'[^']*'|[^\r\n]+)'''
+)
 SECRET_FIELD = re.compile(
-    r'''(?i)(\b(?:password|passwd|pwd|token|secret|authorization)\b["']?\s*[:=]\s*)(?:"[^"]*"|'[^']*'|[^\s&,;\)\]\}]+)'''
+    r'''(?i)(\b(?:password|passwd|pwd|authorization|(?:access_|refresh_|session_)?token|secret|api[_-]?key|csrf[_-]?token)\b["']?\s*[:=]\s*)(?:"[^"]*"|'[^']*'|[^\s&,;\)\]\}]+)'''
 )
 
 
@@ -48,13 +55,21 @@ class StandardFormatter(logging.Formatter):
                               key=len, reverse=True)
 
     def format(self, record):
-        message = record.getMessage()
+        if record.name == 'uvicorn.access' and isinstance(record.args, tuple) and len(record.args) == 5 and isinstance(record.args[2], str):
+            args = list(record.args)
+            args[2] = args[2].split('?', 1)[0].split('#', 1)[0]
+            message = str(record.msg) % tuple(args)
+        else:
+            message = record.getMessage()
         if record.exc_info:
-            message += '\n' + self.formatException(record.exc_info)
+            # Raw tracebacks include exception messages and source lines, which
+            # may contain credentials unknown to the configured redactor.
+            message += '\nTraceback diagnostics: message=[REDACTED] ' + diagnostic_details(record.exc_info[1])
         if record.stack_info:
-            message += '\n' + record.stack_info
+            message += '\n[stack_info omitted; use exception diagnostics]'
         message = ANSI_ESCAPE.sub('', message)
-        message = CREDENTIAL_URL.sub(r'\1[REDACTED]@', message)
+        message = FULL_URL.sub('[REDACTED_URL]', message)
+        message = AUTH_HEADER.sub(r'\1[REDACTED]', message)
         message = SECRET_FIELD.sub(r'\1[REDACTED]', message)
         for value in self.secrets:
             message = message.replace(value, '[REDACTED]')

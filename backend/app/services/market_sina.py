@@ -9,6 +9,7 @@ from copy import deepcopy
 from datetime import date, datetime, timezone
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 import json
+import logging
 import math
 import re
 from typing import Any
@@ -16,8 +17,11 @@ from typing import Any
 import httpx
 import pandas as pd
 
+from app.core.diagnostics import diagnostic_details
 from app.services.market_methodology import JOINQUANT_HEAT_METHOD, LEGACY_SINA_HEAT_METHOD
 
+
+LOG = logging.getLogger(__name__)
 
 UNIVERSE_URL = (
     'https://vip.stock.finance.sina.com.cn/quotes_service/api/json_v2.php/'
@@ -236,6 +240,7 @@ class SinaMarketProvider:
             timeout=timeout, follow_redirects=False,
         )
         self.timeout = timeout
+        self._reported_http_failures = set()
 
     def __enter__(self):
         return self
@@ -264,7 +269,11 @@ class SinaMarketProvider:
             kwargs['headers'] = headers
         try:
             response = self.client.get(url, **kwargs)
-        except httpx.HTTPError:
+        except httpx.HTTPError as error:
+            failure = type(error).__name__
+            if failure not in self._reported_http_failures:
+                self._reported_http_failures.add(failure)
+                LOG.warning('Market source request failed stage=get_text source=market_http %s', diagnostic_details(error))
             raise SinaDataError('新浪行情网络请求失败。', code='network_error') from None
         raw_requests.append({'url': url, 'params': dict(params) if params is not None else None,
                              'status_code': response.status_code, 'text': response.text})

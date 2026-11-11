@@ -3,6 +3,7 @@ from contextlib import contextmanager
 from datetime import datetime, timezone, timedelta
 import json
 import logging
+from app.core.diagnostics import diagnostic_details
 import os
 import random
 import sqlite3
@@ -584,8 +585,10 @@ class SocialMonitor(NotificationMixin, CubeMonitorMixin):
                                        json={'chat_id': chat_id, 'text': text})
                 result = response.json()
                 if not response.is_success or not isinstance(result, dict) or result.get('ok') is not True:
+                    LOG.warning('Notification rejected channel=telegram http_status=%s', response.status_code)
                     raise RuntimeError(f'Telegram 发送失败（HTTP {response.status_code}），请检查 Token、Chat ID 或限流')
-        except (httpx.HTTPError, ValueError):
+        except (httpx.HTTPError, ValueError) as error:
+            LOG.warning('Notification transport failed channel=telegram %s', diagnostic_details(error))
             raise RuntimeError('Telegram 网络或响应异常，下轮自动重试') from None
 
     def test_telegram(self):
@@ -763,6 +766,8 @@ class SocialMonitor(NotificationMixin, CubeMonitorMixin):
                     self.check_author(author, current)
                 self.record_login_result(platform, current[platform + '_cookie'], 'normal')
             except PlatformIntervention as error:
+                LOG.warning('Social monitoring paused platform=%s reason=%s status=%s',
+                            author['platform'], error.reason_code, error.http_status)
                 if not self.record_login_result(platform, current[platform + '_cookie'],
                                                 'expired' if error.reason_code in ('login_expired', 'login_redirect') else 'restricted'):
                     continue
@@ -775,6 +780,8 @@ class SocialMonitor(NotificationMixin, CubeMonitorMixin):
                         db.execute(f'UPDATE {table} SET last_check=?,last_error=? WHERE id=?', (now(), str(error), author['id']))
                 error_message = '平台监控已暂停，需要人工处理；详情见平台状态'
             except RateLimited as error:
+                LOG.warning('Social monitoring deferred platform=%s reason=rate_limited retry_seconds=%s',
+                            author['platform'], error.retry_after)
                 self.platform_state(author['platform'], retry_at=time.time() + error.retry_after, reason=str(error), reason_code='rate_limited', http_status=None)
                 with self.db() as db:
                     db.execute('BEGIN IMMEDIATE')
@@ -803,8 +810,8 @@ class SocialMonitor(NotificationMixin, CubeMonitorMixin):
                 self.platform_state(author['platform'], failures=failures,
                                     reason=message, reason_code='fetch_failed', http_status=None,
                                     retry_at=time.time() + min(21600, random.uniform(POLL_INTERVAL_MIN, POLL_INTERVAL_MAX) * 2 ** min(failures - 1, 6)))
-                LOG.warning('Social fetch failed platform=%s target=%s type=%s', author['platform'],
-                            author.get('uid') or author.get('symbol'), type(error).__name__)
+                LOG.warning('Social fetch failed platform=%s kind=%s %s', author['platform'],
+                            'cube' if author.get('_kind') == 'cube' else 'author', diagnostic_details(error))
             finally:
                 self.finish_scheduled_author(platform, queue_id)
             try:
@@ -813,7 +820,7 @@ class SocialMonitor(NotificationMixin, CubeMonitorMixin):
                 self.deliver_notifications(current)
             except Exception as error:
                 error_message = str(error) if type(error) is RuntimeError else '通知发送失败，已保留对应渠道的待发送进度'
-                LOG.warning('Social delivery failed type=%s', type(error).__name__)
+                LOG.warning('Social delivery failed %s', diagnostic_details(error))
         self.save_next_check(error_message, checked)
 
     def start(self):
@@ -849,5 +856,5 @@ class SocialMonitor(NotificationMixin, CubeMonitorMixin):
             except portalocker.exceptions.LockException:
                 self.stop_event.wait(5)
             except Exception as error:
-                LOG.error('Social worker failure type=%s', type(error).__name__)
+                LOG.error('Social worker failure %s', diagnostic_details(error))
                 self.stop_event.wait(30)

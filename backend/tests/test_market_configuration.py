@@ -39,7 +39,7 @@ def test_no_readonly_fallback_and_encrypted_one_time_configuration(tmp_path):
     owner = Owner(tmp_path)
     assert owner.configuration.issue() == 'missing_writer_configuration'
     public = owner.configuration.save(form())
-    assert public['password_set'] and public['schedule'] == ['18:00'] and public['source'] == 'page'
+    assert public['password_set'] and public['schedule'] == ['18:30'] and public['source'] == 'page'
     assert 'password' not in public and 'test-secret-never-public' not in (owner.root / 'state.sqlite').read_bytes().decode(errors='ignore')
     restarted = Owner(tmp_path)
     assert restarted.configuration.public() == public

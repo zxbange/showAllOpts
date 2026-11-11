@@ -3,6 +3,7 @@ from contextlib import contextmanager
 from datetime import datetime, timezone
 import json
 import logging
+from app.core.diagnostics import diagnostic_details
 import re
 import sqlite3
 import threading
@@ -333,7 +334,7 @@ class PersonalHoldings:
                     if time.monotonic() >= self.cooldown:
                         self.poll()
                 except Exception as error:
-                    LOG.warning('Personal holdings worker failed type=%s', type(error).__name__)
+                    LOG.warning('Personal holdings worker failed %s', diagnostic_details(error))
                     self.release()
                     self.cooldown = time.monotonic()+INTERVAL
                 self.stop_event.wait(1)
