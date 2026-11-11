@@ -123,7 +123,8 @@ async function inspectChart(page: Page) {
       selected: option.legend[0].selected as Record<string, boolean>,
       leftExtent: model.getComponent('yAxis', 0).axis.scale.getExtent() as [number, number],
       rightExtent: model.getComponent('yAxis', 1).axis.scale.getExtent() as [number, number],
-      series: option.series.map(
+      series: Array.from(
+        option.series,
         (
           line: {
             name: string
@@ -447,6 +448,7 @@ test('new tab stays inside market sentiment and read-only accounts cannot trigge
     '抱团拥挤度',
     '市场热度',
     '两融担保比例',
+    '估值标尺',
   ])
   await tabs.getByRole('link', { name: '创红比', exact: true }).click()
   await expect(page).toHaveURL(/growth-dividend$/)

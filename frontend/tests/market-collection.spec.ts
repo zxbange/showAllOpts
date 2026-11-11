@@ -504,7 +504,7 @@ for (const scenario of [
     await page.goto('/market-sentiment')
     const panel = page.getByRole('region', { name: '市场日采集' })
     await expect(panel).toContainText('以聚宽原脚本为目标口径')
-    await expect(panel).toContainText('各指标核验后分别发布，证据不足的缺口保留。')
+    await expect(panel).toContainText('热度与拥挤度分别核验发布，证据不足的缺口保留。')
     await expect(panel).toContainText('市场热度 · 未通过校验，未发布')
     await expect(panel).toContainText(`抱团拥挤度 · ${scenario.crowdingLabel}`)
     await expect(panel).toContainText(scenario.explanation)

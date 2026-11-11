@@ -105,6 +105,7 @@ test('group tabs preserve direct links, active navigation and mobile layout', as
   for (const [group, first, second, label] of [
     ['动量观察', 'industry-momentum', 'etf-momentum', 'ETF动量热度'],
     ['市场情绪', 'etf-shares', 'market-crowding', '抱团拥挤度'],
+    ['市场情绪', 'market-crowding', 'valuation-ruler', '估值标尺'],
     ['微盘观察', 'microcap-temperature', 'microcap-breadth', '微盘新高新低'],
     ['业绩选股', 'cash-cow', 'earnings-gap', '净利润断层'],
     ['业绩选股', 'cash-cow', 'high-growth', '高增长'],
@@ -117,7 +118,7 @@ test('group tabs preserve direct links, active navigation and mobile layout', as
     const cards = await tabs.boundingBox()
     expect(cards!.y + cards!.height).toBeLessThanOrEqual(heading!.y)
     await expect(tabs.locator('.module-card')).toHaveCount(
-      group === '市场情绪' ? 5 : group === '业绩选股' ? 6 : 2,
+      group === '市场情绪' || group === '业绩选股' ? 6 : 2,
     )
     await tabs.getByRole('link', { name: label, exact: true }).click()
     await expect(page).toHaveURL(new RegExp(second + '$'))
@@ -139,7 +140,7 @@ test('group tabs preserve direct links, active navigation and mobile layout', as
 test('shared module cards stay available while loading and after failures', async ({ page }) => {
   test.setTimeout(60000)
   for (const [path, count] of [
-    ['etf-shares', 5],
+    ['etf-shares', 6],
     ['dividend-selection', 6],
   ] as const) {
     let release!: () => void
@@ -213,13 +214,15 @@ test('compact bookmarks scroll and support keyboard without activating the wrong
   await page.goto('/etf-shares')
   const nav = page.getByRole('navigation', { name: '市场情绪模块切换' })
   const first = nav.getByRole('link', { name: '国家队动态', exact: true })
-  const last = nav.getByRole('link', { name: '两融担保比例', exact: true })
+  const penultimate = nav.getByRole('link', { name: '两融担保比例', exact: true })
+  const last = nav.getByRole('link', { name: '估值标尺', exact: true })
   await expect(nav.getByRole('link')).toHaveText([
     '国家队动态',
     '创红比',
     '抱团拥挤度',
     '市场热度',
     '两融担保比例',
+    '估值标尺',
   ])
   await first.focus()
   await page.keyboard.press('End')
@@ -258,9 +261,17 @@ test('compact bookmarks scroll and support keyboard without activating the wrong
   await expect(first).toBeFocused()
   await page.keyboard.press('ArrowLeft')
   await expect(last).toBeFocused()
+  await page.keyboard.press('ArrowLeft')
+  await expect(penultimate).toBeFocused()
+  await page.keyboard.press('ArrowRight')
+  await expect(last).toBeFocused()
+  await page.keyboard.press('ArrowRight')
+  await expect(first).toBeFocused()
+  await page.keyboard.press('End')
+  await expect(last).toBeFocused()
   await expect(page).toHaveURL(/etf-shares$/)
   await page.keyboard.press('Enter')
-  await expect(page).toHaveURL(/margin-guarantee$/)
+  await expect(page).toHaveURL(/valuation-ruler$/)
   await expect(last).toHaveAttribute('aria-current', 'page')
   await expect(nav.locator('[aria-current="page"]')).toHaveCount(1)
   await page.reload()
