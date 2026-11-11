@@ -8,26 +8,44 @@ from datetime import date, datetime, timezone
 from decimal import Decimal
 import hashlib
 import io
+import logging
 import math
 import os
 from pathlib import Path
 import re
 import struct
 import tempfile
+import time
 import zipfile
 
+import httpx
+
+from app.services.market_diagnostics import (
+    record_http_failure, record_os_failure, record_source_progress, source_failure_context,
+)
 from app.services.market_sina import SinaDataError, SinaRateLimitError, _day
 
 DAILY_BASE_URL = 'https://www.tdx.com.cn/products/data/data/g4day'
 CORPORATE_URL = 'https://www.tdx.com.cn/products/data/data/dbf/gbbq.zip'
 MAX_ZIP_BYTES = 32 * 1024 * 1024
 MAX_EXPANDED_BYTES = 96 * 1024 * 1024
+DAILY_SOURCE_ID = 'tdx_daily_archive'
+LOG = logging.getLogger(__name__)
+# Daily ZIPs are larger/slower than ordinary catalogue requests. A read timeout
+# is an idle limit, not a total deadline. The cooperative budget is checked
+# around raw body blocks (including before decompression). An in-flight read
+# may take up to another 120 seconds; DNS/headers/pacing are not a hard wall-
+# clock deadline. Do not apply this policy to corporate actions or other feeds.
+DAILY_TIMEOUT = httpx.Timeout(20.0, connect=8.0, read=120.0)
+DAILY_DOWNLOAD_BUDGET = 600.0
+DOWNLOAD_PROGRESS_INTERVAL = 30.0
 
 
 def _invalid(message):
     return SinaDataError(message, code='invalid_tdx_archive')
 
 
+@source_failure_context(stage='zip_parse')
 def _members(data):
     if not data or len(data) > MAX_ZIP_BYTES:
         raise _invalid('TDX archive exceeds size bounds or is empty.')
@@ -45,22 +63,77 @@ def _members(data):
         raise _invalid('Invalid TDX ZIP payload.') from exc
 
 
-def _download(client, url):
+class _BudgetStream(httpx.SyncByteStream):
+    def __init__(self, chunks, check):
+        self.chunks, self.check = chunks, check
+
+    def __iter__(self):
+        while True:
+            self.check()
+            try:
+                block = next(self.chunks)
+            except StopIteration:
+                self.check()
+                return
+            self.check()
+            yield block
+
+
+@source_failure_context(stage='request')
+def _download(client, url, *, source_date=None, timeout=None, budget=None):
     # Streaming bounds both error responses and successful downloads. One request,
     # no retry and no alternate endpoint after access denial.
-    with client.stream('GET', url) as response:
-        if response.status_code in (403, 429):
-            raise SinaRateLimitError(response.status_code,
-                                     retry_after=response.headers.get('retry-after'))
-        response.raise_for_status()
-        if str(response.url) != url:
-            raise _invalid('TDX redirected to a different source URL.')
-        data = bytearray()
-        for block in response.iter_bytes():
-            data.extend(block)
-            if len(data) > MAX_ZIP_BYTES:
-                raise _invalid('TDX response exceeds size bounds.')
-        return bytes(data), dict(response.headers)
+    data = bytearray()
+    started = time.monotonic()
+    last_progress = started
+    response = None
+    def check():
+        nonlocal last_progress
+        if budget is None:
+            return
+        now = time.monotonic()
+        if now - started >= budget:
+            raise SinaDataError('TDX archive download exceeded its time budget.', code='request_deadline')
+        if now - last_progress >= DOWNLOAD_PROGRESS_INTERVAL:
+            LOG.info('Market source archive progress source_id=%s source_date=%s '
+                     'archive_bytes=%d received_bytes=%d elapsed_ms=%d',
+                     DAILY_SOURCE_ID, source_date, len(data), response.num_bytes_downloaded,
+                     int((now - started) * 1000))
+            last_progress = now
+    try:
+        options = {'timeout': timeout} if timeout is not None else {}
+        with client.stream('GET', url, **options) as response, source_failure_context(status_code=response.status_code):
+            if response.status_code in (403, 429):
+                raise SinaRateLimitError(response.status_code,
+                                         retry_after=response.headers.get('retry-after'))
+            response.raise_for_status()
+            if str(response.url) != url:
+                raise _invalid('TDX redirected to a different source URL.')
+            check()
+            # Preserve HTTPX decoding, while checking even raw chunks that
+            # produce no decoded output. PacedHTTPClient still owns cancellation.
+            decoded = None
+            chunks = response.iter_bytes()
+            if budget is not None and not response.is_stream_consumed:
+                decoded = httpx.Response(response.status_code, headers=response.headers,
+                    stream=_BudgetStream(iter(response.iter_raw()), check))
+                chunks = decoded.iter_bytes()
+            try:
+                for block in chunks:
+                    data.extend(block)
+                    if len(data) > MAX_ZIP_BYTES:
+                        raise _invalid('TDX response exceeds size bounds.')
+                    check()
+                check()
+            finally:
+                if decoded is not None:
+                    decoded.close()
+            return bytes(data), dict(response.headers)
+    except Exception as error:
+        if not getattr(error, 'stop_collection', False):
+            record_http_failure(error, error)
+            record_source_progress(error, archive_bytes=len(data))
+        raise
 
 
 def _atomic_cache(root, filename, data):
@@ -123,23 +196,50 @@ class TdxDailyArchives:
         return True
 
     def fetch(self, day):
-        day, url, filename = self._cache_identity(day)
-        path = self.cache_root / filename if self.cache_root else None
-        cached = path is not None and path.exists()
-        if cached:
-            if path.stat().st_size > MAX_ZIP_BYTES:
-                raise _invalid('Cached TDX payload exceeds size bounds.')
-            data = path.read_bytes()
-        else:
-            data, _headers = _download(self.client, url)
-        rows = self.parse(data, day, source_url=url)
-        if not cached:
-            _atomic_cache(self.cache_root, filename, data)
-        return dict(date=day.isoformat(), verified=True, publication_complete=None,
-                    rows=list(rows.values()),
-                    source_digest=hashlib.sha256(data).hexdigest(), source_url=url)
+        started = time.monotonic()
+        source_date = cache_state = archive_bytes = None
+        try:
+            with source_failure_context(source_id=DAILY_SOURCE_ID):
+                with source_failure_context(stage='window_validation'):
+                    day, url, filename = self._cache_identity(day)
+                    source_date = day.isoformat()
+                with source_failure_context(stage='cache_read'):
+                    path = self.cache_root / filename if self.cache_root else None
+                    cached = path is not None and path.exists()
+                    cache_state = 'hit' if cached else 'miss' if path is not None else 'disabled'
+                    LOG.info('Market source archive start source_id=%s source_date=%s cache_state=%s',
+                             DAILY_SOURCE_ID, source_date, cache_state)
+                    if cached:
+                        archive_bytes = path.stat().st_size
+                        if archive_bytes > MAX_ZIP_BYTES:
+                            raise _invalid('Cached TDX payload exceeds size bounds.')
+                        data = path.read_bytes()
+                if not cached:
+                    data, _headers = _download(self.client, url, source_date=source_date,
+                                              timeout=DAILY_TIMEOUT, budget=DAILY_DOWNLOAD_BUDGET)
+                archive_bytes = len(data)
+                with source_failure_context(stage='records_parse'):
+                    rows = self.parse(data, day, source_url=url)
+                if not cached:
+                    with source_failure_context(stage='cache_write'):
+                        _atomic_cache(self.cache_root, filename, data)
+                LOG.info('Market source archive complete source_id=%s source_date=%s cache_state=%s '
+                         'archive_bytes=%d records=%d elapsed_ms=%d',
+                         DAILY_SOURCE_ID, source_date, cache_state, archive_bytes, len(rows),
+                         int((time.monotonic() - started) * 1000))
+                return dict(date=day.isoformat(), verified=True, publication_complete=None,
+                            rows=list(rows.values()),
+                            source_digest=hashlib.sha256(data).hexdigest(), source_url=url)
+        except Exception as error:
+            if not getattr(error, 'stop_collection', False):
+                record_os_failure(error, error)
+                record_source_progress(error, source_date=source_date, cache_state=cache_state,
+                                       archive_bytes=archive_bytes,
+                                       elapsed_ms=int((time.monotonic() - started) * 1000))
+            raise
 
     @staticmethod
+    @source_failure_context(source_id=DAILY_SOURCE_ID, stage='records_parse')
     def parse(data, day, *, source_url=''):
         day = _day(day)
         stamp = day.strftime('%y%m%d')

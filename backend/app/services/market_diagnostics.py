@@ -5,6 +5,7 @@ Revalidate fields when copying and rendering, even if an injected adapter set
 the attributes. Nested contexts retain the innermost known failure stage.
 """
 from contextlib import contextmanager
+from datetime import date
 import socket
 import ssl
 
@@ -15,11 +16,13 @@ _SOURCES = frozenset({
     'eastmoney_dated_universe', 'eastmoney_listing_metadata',
     'exchange_master', 'sse_current', 'sse_delisted', 'szse_current', 'szse_cdr',
     'szse_delisted', 'szse_listing_suspended',
+    'tdx_daily_archive',
 })
 _STAGES = frozenset({
     'cache_read', 'cache_write', 'window_validation',
     'catalogue_validation', 'request', 'json_parse', 'page_validation',
     'metadata_validation', 'workbook_parse', 'rows_validation',
+    'zip_parse', 'records_parse',
 })
 _CODES = frozenset({
     'dated_report_invalid', 'dated_report_cache_invalid', 'dated_membership_window_unverified',
@@ -30,6 +33,7 @@ _CODES = frozenset({
     'invalid_name', 'invalid_page', 'invalid_symbol', 'invalid_type',
     'invalid_universe', 'invalid_workbook', 'missing_market', 'network_error',
     'rate_limited', 'request_deadline', 'catalogue_deadline', 'response_too_large',
+    'invalid_tdx_archive',
 })
 _TRANSPORT_TYPES = (
     (httpx.ConnectTimeout, 'connect_timeout'),
@@ -46,6 +50,8 @@ _TRANSPORT_TYPES = (
 _TRANSPORT_CATEGORIES = frozenset(category for _, category in _TRANSPORT_TYPES) | {'other_httpx'}
 _UNDERLYING_KINDS = frozenset({'ssl_certificate_verification', 'dns_error'})
 _MAX_CAUSES = 8
+_CACHE_STATES = frozenset({'hit', 'miss', 'disabled'})
+_PROGRESS_LIMITS = {'archive_bytes': 1024**4, 'elapsed_ms': 7 * 24 * 60 * 60 * 1000}
 
 
 def _known(value, allowed):
@@ -54,6 +60,15 @@ def _known(value, allowed):
 
 def _errno(value):
     return value if type(value) is int and -(2**31) <= value < 2**31 else None
+
+
+def _source_date(value):
+    if type(value) is not str or len(value) != 10:
+        return None
+    try:
+        return value if date.fromisoformat(value).isoformat() == value else None
+    except ValueError:
+        return None
 
 
 def _safe_context(error):
@@ -75,6 +90,19 @@ def _safe_context(error):
             number = _errno(context.get('underlying_errno'))
             if number is not None:
                 result['underlying_errno'] = number
+    source_date = _source_date(context.get('source_date'))
+    if source_date:
+        result['source_date'] = source_date
+    cache_state = _known(context.get('cache_state'), _CACHE_STATES)
+    if cache_state:
+        result['cache_state'] = cache_state
+    for key, limit in _PROGRESS_LIMITS.items():
+        value = context.get(key)
+        if type(value) is int and 0 <= value <= limit:
+            result[key] = value
+    number = _errno(context.get('os_errno'))
+    if number is not None:
+        result['os_errno'] = number
     return result
 
 
@@ -107,8 +135,52 @@ def record_transport_failure(error, wrapped):
     return wrapped
 
 
+def record_http_failure(error, wrapped):
+    """Preserve canonical HTTP/transport facts without changing error semantics."""
+    if not isinstance(error, httpx.HTTPError):
+        return wrapped
+    context = _safe_context(wrapped)
+    if isinstance(error, httpx.HTTPStatusError):
+        response = getattr(error, 'response', None)
+        status = response.status_code if isinstance(response, httpx.Response) else None
+        if type(status) is int and 100 <= status <= 599:
+            context['status_code'] = status
+        context['code'] = context['code'] or 'http_error'
+        wrapped.source_diagnostics = context
+        return wrapped
+    context['code'] = context['code'] or 'network_error'
+    wrapped.source_diagnostics = context
+    return record_transport_failure(error, wrapped)
+
+
+def record_source_progress(error, *, source_date=None, cache_state=None,
+                           archive_bytes=None, elapsed_ms=None):
+    """Attach only bounded counters and canonical dates; never paths or headers."""
+    if getattr(error, 'stop_collection', False):
+        return error
+    context = _safe_context(error)
+    for key, value in (('source_date', source_date), ('cache_state', cache_state),
+                       ('archive_bytes', archive_bytes), ('elapsed_ms', elapsed_ms)):
+        if value is not None:
+            context[key] = value
+    error.source_diagnostics = context
+    error.source_diagnostics = _safe_context(error)
+    return error
+
+
+def record_os_failure(error, wrapped):
+    """Retain a real OS error's bounded errno, without its path or message."""
+    if isinstance(error, OSError) and not getattr(error, 'stop_collection', False):
+        context = _safe_context(wrapped)
+        number = _errno(error.errno)
+        if number is not None:
+            context['os_errno'] = number
+        wrapped.source_diagnostics = context
+    return wrapped
+
+
 @contextmanager
-def source_failure_context(*, source_id=None, stage=None):
+def source_failure_context(*, source_id=None, stage=None, status_code=None):
     try:
         yield
     except Exception as error:
@@ -121,6 +193,8 @@ def source_failure_context(*, source_id=None, stage=None):
             status = getattr(error, 'status_code', None)
             if context['status_code'] is None and type(status) is int and 100 <= status <= 599:
                 context['status_code'] = status
+            if context['status_code'] is None and type(status_code) is int and 100 <= status_code <= 599:
+                context['status_code'] = status_code
             error.source_diagnostics = context
         raise
 
@@ -136,6 +210,8 @@ def source_failure_details(error):
     fields = [f'{key}={context[field] if context[field] is not None else "-"}'
               for key, field in (('source_id', 'source_id'), ('source_stage', 'stage'),
                                  ('source_code', 'code'), ('http_status', 'status_code'))]
-    fields.extend(f'{key}={context[key]}' for key in ('transport_category', 'underlying_kind', 'underlying_errno')
+    fields.extend(f'{key}={context[key]}' for key in (
+        'transport_category', 'underlying_kind', 'underlying_errno',
+        'source_date', 'cache_state', 'archive_bytes', 'elapsed_ms', 'os_errno')
                   if key in context)
     return ' '.join(fields)
