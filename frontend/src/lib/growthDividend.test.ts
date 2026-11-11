@@ -1,8 +1,20 @@
 import { describe, expect, it } from 'vitest'
 import { graphic, init, use } from 'echarts/core'
 import { LineChart } from 'echarts/charts'
-import { GridComponent, MarkLineComponent } from 'echarts/components'
+import {
+  DataZoomComponent,
+  GridComponent,
+  LegendComponent,
+  MarkLineComponent,
+} from 'echarts/components'
 import { SVGRenderer } from 'echarts/renderers'
+import { chartColors } from './chartTheme'
+import { mkdirSync, writeFileSync } from 'node:fs'
+import {
+  growthDividendAxisTicks,
+  growthDividendBenchmarkLabels,
+  growthDividendGrid,
+} from './growthDividendLabels'
 import {
   calendarYearsAgo,
   growthDividendBenchmarks,
@@ -139,9 +151,8 @@ describe('full-history percentile benchmarks', () => {
     const constant = growthDividendSeries([sample('2020-01-02', 0.3), sample('2026-11-10', 0.3)])
     expect(constant[3].markLine?.data).toMatchObject([
       {
-        name: '创红比 P20/P80 0.3000',
+        name: '创红比 P20/P80',
         yAxis: 0.3,
-        label: { formatter: '创红比\nP20/P80\n0.3000' },
       },
     ])
     expect(constant[4].markLine?.data).toEqual([])
@@ -163,20 +174,24 @@ describe('full-history percentile benchmarks', () => {
     expect(after[0].levels[1].value).toBeCloseTo(0.52, 12)
     const series = growthDividendSeries(history, before)
     expect(series.slice(0, 3).every((line) => line.markLine === undefined)).toBe(true)
-    expect(series[3].markLine?.lineStyle).toMatchObject({ type: 'solid', width: 2.4, opacity: 0.9 })
-    expect(series[3].markLine?.label).toMatchObject({ show: true, opacity: 1 })
-    expect(series[3].markLine?.data.map((line) => line.label)).toEqual([
-      { position: 'insideStartBottom', formatter: '创红比\nP20 0.3200' },
-      { position: 'insideStartTop', formatter: '创红比\nP80 0.6800' },
-    ])
+    expect(series[3].markLine?.lineStyle).toMatchObject({ type: 'dashed', width: 1, opacity: 0.5 })
+    expect(series[3].markLine?.label).toEqual({ show: false })
+    expect(series[3].markLine?.data.map((line) => line.name)).toEqual(['创红比 P20', '创红比 P80'])
     expect(series[3].markLine?.data.map((line) => line.yAxis)).toEqual(
       before[0].levels.map((level) => level.value),
     )
   })
 })
 
-describe('on-chart percentile labels', () => {
-  use([LineChart, GridComponent, MarkLineComponent, SVGRenderer])
+describe('axis-side percentile labels', () => {
+  use([
+    LineChart,
+    GridComponent,
+    MarkLineComponent,
+    DataZoomComponent,
+    LegendComponent,
+    SVGRenderer,
+  ])
 
   const scenarios = [
     { name: 'distinct ratios', ratios: [0.5, 0.55, 0.6], starRatios: [0.2, 0.23, 0.25] },
@@ -186,6 +201,17 @@ describe('on-chart percentile labels', () => {
       starRatios: [0.1, 0.3, 0.3, 0.3, 0.30000001, 0.30000002, 0.9],
     },
     { name: 'merged equal references', ratios: [0.3, 0.3], starRatios: [0.3, 0.3] },
+    {
+      name: 'daily movements',
+      ratios: Array.from(
+        { length: 120 },
+        (_, i) => 0.52 + Math.sin(i / 15) * 0.1 + Math.sin(i * 0.9) * 0.018,
+      ),
+      starRatios: Array.from(
+        { length: 120 },
+        (_, i) => 0.26 + Math.sin(i / 18 + 0.6) * 0.05 + Math.cos(i * 0.7) * 0.01,
+      ),
+    },
   ]
 
   for (const width of [280, 320, 960]) {
@@ -193,7 +219,12 @@ describe('on-chart percentile labels', () => {
       it(`renders complete, separated labels at ${width}px for ${scenario.name}`, () => {
         const history = scenario.ratios.map((ratio, index) => ({
           ...points[0],
-          date: `2026-11-${String(index + 1).padStart(2, '0')}`,
+          date: new Date(Date.UTC(2026, 5, index + 1)).toISOString().slice(0, 10),
+          dividend: 4200 + Math.sin(index / 22) * 350 + Math.cos(index * 0.75) * 60,
+          chinext: (4200 + Math.sin(index / 22) * 350 + Math.cos(index * 0.75) * 60) * ratio,
+          star50:
+            (4200 + Math.sin(index / 22) * 350 + Math.cos(index * 0.75) * 60) *
+            scenario.starRatios[index],
           chinext_dividend_ratio: ratio,
           star50_dividend_ratio: scenario.starRatios[index],
         }))
@@ -207,51 +238,165 @@ describe('on-chart percentile labels', () => {
         try {
           chart.setOption({
             animation: false,
-            grid: { left: 10, right: 10, top: 40, bottom: 78, containLabel: true },
-            xAxis: { type: 'category', data: history.map((point) => point.date) },
+            grid: { ...growthDividendGrid, containLabel: false },
+            legend: { show: false },
+            dataZoom: [
+              { type: 'inside', xAxisIndex: 0 },
+              { type: 'slider', bottom: 12, height: 26, xAxisIndex: 0 },
+            ],
+            xAxis: {
+              type: 'category',
+              boundaryGap: false,
+              data: history.map((point) => point.date),
+              axisLabel: { color: chartColors.muted, fontSize: 11, hideOverlap: true },
+              axisLine: { lineStyle: { color: chartColors.border } },
+              axisTick: { show: false },
+            },
             yAxis: [
-              { type: 'value', scale: true, axisLabel: { fontSize: 11 } },
               {
                 type: 'value',
+                position: 'left',
+                name: '指数点位',
+                scale: true,
+                nameTextStyle: { color: chartColors.muted, padding: [0, 0, 0, 30] },
+                axisLabel: { color: chartColors.muted, fontSize: 11, lineHeight: 12, margin: 8 },
+                splitLine: { lineStyle: { color: chartColors.grid } },
+              },
+              {
+                type: 'value',
+                position: 'right',
+                name: '比值',
+                nameTextStyle: { color: chartColors.muted },
+                splitLine: { show: false },
                 scale: true,
                 min: (range: { min: number; max: number }) => ratioExtent(range)?.min,
                 max: (range: { min: number; max: number }) => ratioExtent(range)?.max,
-                axisLabel: { fontSize: 11, formatter: (value: number) => value.toFixed(2) },
+                axisLabel: {
+                  color: chartColors.muted,
+                  fontSize: 11,
+                  lineHeight: 12,
+                  margin: 8,
+                  formatter: (value: number) => value.toFixed(2),
+                },
               },
             ],
             series: growthDividendSeries(history, benchmarks),
           })
-          // SVG SSR exercises ECharts' actual label layout without a browser.
-          // Browser typography/visual verification is still covered by Playwright.
-          chart.renderToSVGString()
-          const texts = new Set(
-            chart
-              .getZr()
-              .storage.getDisplayList()
-              .map((element) => element.parent as unknown)
-              .filter(
-                (element): element is InstanceType<typeof graphic.Text> =>
-                  element instanceof graphic.Text,
-              ),
-          )
-          const labels = [...texts].filter((label) => /P20|P80/.test(String(label.style.text)))
-          const expectedLabels = growthDividendSeries(history, benchmarks).flatMap(
-            (line) => line.markLine?.data.map((reference) => reference.label.formatter) ?? [],
-          )
-          expect(labels.map((label) => label.style.text).sort()).toEqual(expectedLabels.sort())
+          // SVG SSR exercises the actual axis text and overlay layout, including
+          // the numbers sharing each gutter. Browser typography is covered by Playwright.
+          const ticks = growthDividendAxisTicks(chart)
+          expect(ticks.length).toBeGreaterThan(0)
+          const overlay = growthDividendBenchmarkLabels(chart, benchmarks)
+          chart.getZr().add(overlay)
+          const svg = chart.renderToSVGString()
+          const labels = overlay
+            .children()
+            .filter(
+              (element): element is InstanceType<typeof graphic.Text> =>
+                element instanceof graphic.Text,
+            )
+          expect(labels.map((label) => label.style.text).sort()).toEqual([
+            '创 0.2',
+            '创 0.8',
+            '科 0.2',
+            '科 0.8',
+          ])
+          expect(labels.every((label) => label.style.opacity === 0.65)).toBe(true)
           const bounds = labels.map((label) => {
             const rect = label.getBoundingRect().clone()
-            rect.applyTransform(label.getComputedTransform()!)
+            const transform = label.getComputedTransform()
+            if (transform) rect.applyTransform(transform)
             return rect
           })
           for (const [index, rect] of bounds.entries()) {
             expect(rect.x).toBeGreaterThanOrEqual(0)
-            expect(rect.y).toBeGreaterThanOrEqual(0)
+            expect(rect.y).toBeGreaterThanOrEqual(growthDividendGrid.top)
             expect(rect.x + rect.width).toBeLessThanOrEqual(width)
-            expect(rect.y + rect.height).toBeLessThan(312) // Above date labels and slider.
-            for (const other of bounds.slice(index + 1)) {
+            expect(rect.y + rect.height).toBeLessThanOrEqual(390 - growthDividendGrid.bottom)
+            expect(
+              rect.x + rect.width <= growthDividendGrid.left ||
+                rect.x >= width - growthDividendGrid.right,
+            ).toBe(true)
+            for (const other of [...bounds.slice(index + 1), ...ticks]) {
               expect(rect.intersect(other)).toBe(false)
             }
+          }
+          const leaders = overlay
+            .children()
+            .filter(
+              (element): element is InstanceType<typeof graphic.Polyline> =>
+                element instanceof graphic.Polyline,
+            )
+          expect(leaders).toHaveLength(4)
+          for (const [index, benchmark] of benchmarks.entries()) {
+            const values =
+              benchmark.levels.length === 1
+                ? [benchmark.levels[0].value, benchmark.levels[0].value]
+                : benchmark.levels.map((level) => level.value).reverse()
+            for (const [offset, value] of values.entries()) {
+              expect(leaders[index * 2 + offset].shape.points[0][1]).toBeCloseTo(
+                chart.convertToPixel({ yAxisIndex: 1 }, value) as number,
+                8,
+              )
+            }
+          }
+          const redraw = (shown = benchmarks) => {
+            chart.getZr().remove(currentOverlay)
+            currentOverlay = growthDividendBenchmarkLabels(chart, shown)
+            chart.getZr().add(currentOverlay)
+            chart.renderToSVGString()
+            const newLabels = currentOverlay
+              .children()
+              .filter(
+                (element): element is InstanceType<typeof graphic.Text> =>
+                  element instanceof graphic.Text,
+              )
+            const currentTicks = growthDividendAxisTicks(chart)
+            const currentBounds = newLabels.map((label) => {
+              const rect = label.getBoundingRect().clone()
+              const transform = label.getComputedTransform()
+              if (transform) rect.applyTransform(transform)
+              return rect
+            })
+            for (const [index, rect] of currentBounds.entries()) {
+              expect(
+                rect.x + rect.width <= growthDividendGrid.left ||
+                  rect.x >= chart.getWidth() - growthDividendGrid.right,
+              ).toBe(true)
+              for (const other of [...currentBounds.slice(index + 1), ...currentTicks])
+                expect(rect.intersect(other)).toBe(false)
+            }
+            return newLabels.map((label) => label.style.text).sort()
+          }
+          let currentOverlay = overlay
+          const initialReferences = JSON.stringify(
+            growthDividendSeries(history, benchmarks).map((series) => series.markLine?.data),
+          )
+          chart.resize({ width: width === 960 ? 280 : 960, height: 390 })
+          expect(redraw()).toEqual(['创 0.2', '创 0.8', '科 0.2', '科 0.8'])
+          chart.dispatchAction({ type: 'dataZoom', start: 40, end: 80 })
+          expect(redraw()).toEqual(['创 0.2', '创 0.8', '科 0.2', '科 0.8'])
+          chart.dispatchAction({ type: 'legendUnSelect', name: '创红比' })
+          expect(redraw(benchmarks.slice(1))).toEqual(['科 0.2', '科 0.8'])
+          chart.dispatchAction({ type: 'legendUnSelect', name: '科创红利比' })
+          expect(redraw([])).toEqual([])
+          chart.dispatchAction({ type: 'legendSelect', name: '创红比' })
+          chart.dispatchAction({ type: 'legendSelect', name: '科创红利比' })
+          expect(redraw()).toEqual(['创 0.2', '创 0.8', '科 0.2', '科 0.8'])
+          expect(
+            JSON.stringify(growthDividendSeries(history).map((series) => series.markLine?.data)),
+          ).toBe(initialReferences)
+          // A collapsed chart cannot fit two labels. Skip the overlay rather than
+          // drawing coincident text, then restore it as soon as it has room.
+          chart.resize({ width, height: 130 })
+          expect(redraw()).toEqual([])
+          chart.resize({ width, height: 390 })
+          expect(redraw()).toEqual(['创 0.2', '创 0.8', '科 0.2', '科 0.8'])
+          // Optional synthetic previews for local visual QA; never production data.
+          const output = process.env.GROWTH_DIVIDEND_PREVIEW_DIR
+          if (output) {
+            mkdirSync(output, { recursive: true })
+            writeFileSync(`${output}/${width}-${scenario.name.replaceAll(' ', '-')}.svg`, svg)
           }
         } finally {
           chart.dispose()

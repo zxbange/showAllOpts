@@ -3,6 +3,7 @@ import { Clock3, Database, RefreshCw } from 'lucide-react'
 import { useAuth } from './AccountAccess'
 import { usePolling } from '../hooks/usePolling'
 import {
+  MarketCollectionRequestError,
   getMarketCollectionConfiguration,
   getMarketCollectionStatus,
   runMarketCollection,
@@ -12,6 +13,9 @@ import {
 import {
   marketCollectionActive,
   marketCollectionErrorMessage,
+  marketCollectionFindRun,
+  marketCollectionRunFailure,
+  marketCollectionRunMessage,
   marketCollectionLabels,
   marketCollectionNeedsReload,
   marketResultLabel,
@@ -59,12 +63,16 @@ export function MarketCollectionPanel({ onCollected }: { onCollected: () => void
   const [message, setMessage] = useState('')
   const [busy, setBusy] = useState('')
   const [uncertain, setUncertain] = useState(false)
+  const [confirming, setConfirming] = useState(false)
+  const [acceptedActive, setAcceptedActive] = useState(false)
   const mounted = useRef(false)
   const lock = useRef(false)
   const mutationVersion = useRef(0)
   const operation = useRef<AbortController | null>(null)
   const actionKind = useRef<'save' | 'test' | 'run' | null>(null)
   const requestId = useRef<string | null>(null)
+  const awaitingRun = useRef<string | null>(null)
+  const busyConflict = useRef(false)
   const previous = useRef<MarketCollectionStatus | null>(null)
   const onPublished = useRef(onCollected)
   onPublished.current = onCollected
@@ -86,10 +94,34 @@ export function MarketCollectionPanel({ onCollected }: { onCollected: () => void
     loadStatus,
     ({ value: next, version }) => {
       if (!mounted.current || lock.current || version !== mutationVersion.current) return
-      if (requestId.current && next.run_id === requestId.current) {
+      const matched = requestId.current && marketCollectionFindRun(next, requestId.current)
+      if (matched) {
         requestId.current = null
         setUncertain(false)
-        if (actionKind.current === 'run') setActionError('')
+        if (actionKind.current === 'run') {
+          setActionError('')
+          setMessage(marketCollectionRunMessage(matched))
+        }
+      }
+      // A successful POST must not reopen Start while its status read is still stale.
+      if (
+        !awaitingRun.current ||
+        marketCollectionFindRun(next, awaitingRun.current) ||
+        marketCollectionActive(next)
+      ) {
+        awaitingRun.current = null
+        setAcceptedActive(false)
+        setConfirming(false)
+        if (busyConflict.current) {
+          busyConflict.current = marketCollectionActive(next)
+          setMessage(
+            marketCollectionActive(next)
+              ? '已有采集正在运行，正在查看当前采集进度。'
+              : requestId.current
+                ? '上次请求的结果仍待确认，可重试同一请求。'
+                : '采集状态已更新，可按需重新发起采集。',
+          )
+        }
       }
       if (marketCollectionNeedsReload(previous.current, next)) onPublished.current()
       previous.current = next
@@ -97,7 +129,9 @@ export function MarketCollectionPanel({ onCollected }: { onCollected: () => void
       setStatusError('')
     },
     () => setStatusError('暂时无法读取采集状态，已有图表仍可查看。'),
-    marketCollectionActive(status) || status?.cache_pending ? 1500 : 30000,
+    marketCollectionActive(status) || status?.cache_pending || confirming || uncertain
+      ? 1500
+      : 30000,
   )
 
   useEffect(() => {
@@ -122,7 +156,7 @@ export function MarketCollectionPanel({ onCollected }: { onCollected: () => void
     return () => controller.abort()
   }, [admin, configVersion])
 
-  const running = marketCollectionActive(status)
+  const running = marketCollectionActive(status) || acceptedActive
   const workerDisabled = !!status?.worker_disabled || status?.status === 'worker_disabled'
   const passwordNeeded =
     !!config &&
@@ -140,7 +174,7 @@ export function MarketCollectionPanel({ onCollected }: { onCollected: () => void
   }
 
   async function submit(kind: 'save' | 'test') {
-    if (!admin || !config || running || lock.current || configurationBlocked) return
+    if (!admin || !config || running || confirming || lock.current || configurationBlocked) return
     lock.current = true
     actionKind.current = kind
     mutationVersion.current++
@@ -184,28 +218,50 @@ export function MarketCollectionPanel({ onCollected }: { onCollected: () => void
   }
 
   async function run() {
-    if (!admin || lock.current || running || workerDisabled || !status?.configured) return
+    if (!admin || lock.current || running || confirming || workerDisabled || !status?.configured)
+      return
     lock.current = true
     actionKind.current = 'run'
     mutationVersion.current++
     const controller = new AbortController()
     operation.current = controller
+    busyConflict.current = false
     setBusy('run')
     setActionError('')
     setMessage('')
+    const hadUncertainRequest = requestId.current !== null
     requestId.current ??= crypto.randomUUID()
     try {
-      await runMarketCollection(requestId.current, controller.signal)
+      const accepted = await runMarketCollection(requestId.current, controller.signal)
       if (!mounted.current || controller.signal.aborted) return
       requestId.current = null
       setUncertain(false)
-      setMessage('采集请求已提交，进度将在下方更新。')
+      const active = ['queued', 'running'].includes(accepted.status)
+      awaitingRun.current = active ? accepted.id : null
+      setAcceptedActive(active)
+      setConfirming(active)
+      setMessage(marketCollectionRunMessage(accepted))
     } catch (reason) {
       if (mounted.current && !controller.signal.aborted) {
-        setUncertain(true)
-        setActionError(
-          `${marketCollectionErrorMessage(reason instanceof Error ? reason.message : '')} 重试将沿用同一请求，不重复启动任务。`,
-        )
+        const failure = marketCollectionRunFailure(reason)
+        // A rejection of this retry does not resolve an earlier lost response.
+        const keepRequest = hadUncertainRequest || failure === 'uncertain'
+        if (!keepRequest) requestId.current = null
+        setUncertain(keepRequest)
+        if (failure === 'busy') {
+          awaitingRun.current =
+            reason instanceof MarketCollectionRequestError ? (reason.activeRun?.id ?? null) : null
+          setAcceptedActive(reason instanceof MarketCollectionRequestError && !!reason.activeRun)
+          busyConflict.current = true
+          setConfirming(true)
+          setMessage('采集服务已有任务占用，正在确认当前进度；请等待当前采集结束。')
+        } else {
+          setActionError(
+            failure === 'uncertain'
+              ? '暂时无法确认采集请求的结果，正在核对状态。重试将沿用同一请求，不重复启动任务。'
+              : marketCollectionErrorMessage(reason instanceof Error ? reason.message : ''),
+          )
+        }
       }
     } finally {
       lock.current = false
@@ -227,7 +283,9 @@ export function MarketCollectionPanel({ onCollected }: { onCollected: () => void
           <h2>
             <Database size={17} /> 市场日采集
           </h2>
-          <p>日采集使用交易所证券主表及公开行情，以聚宽原脚本为目标口径；各指标核验后分别发布，证据不足的缺口保留。</p>
+          <p>
+            日采集使用交易所证券主表及公开行情，以聚宽原脚本为目标口径；各指标核验后分别发布，证据不足的缺口保留。
+          </p>
         </div>
         <span className="market-collection-schedule">
           <Clock3 size={15} /> 交易日 18:30 启动 · 北京时间
@@ -237,7 +295,9 @@ export function MarketCollectionPanel({ onCollected }: { onCollected: () => void
         <div role="status">
           <strong>
             {status
-              ? (marketCollectionLabels[status.status] ?? '正在确认任务状态')
+              ? running
+                ? '采集中'
+                : (marketCollectionLabels[status.status] ?? '正在确认任务状态')
               : '正在读取采集状态…'}
           </strong>
           {status && (
@@ -263,7 +323,7 @@ export function MarketCollectionPanel({ onCollected }: { onCollected: () => void
         {admin && (
           <button
             className="button"
-            disabled={!!busy || running || workerDisabled || !status?.configured}
+            disabled={!!busy || running || confirming || workerDisabled || !status?.configured}
             onClick={() => void run()}
           >
             <RefreshCw size={15} className={busy === 'run' || running ? 'spin' : ''} />
@@ -271,16 +331,21 @@ export function MarketCollectionPanel({ onCollected }: { onCollected: () => void
               ? '提交中…'
               : running
                 ? '采集中…'
-                : uncertain
-                  ? '重试同一采集请求'
-                  : retry
-                    ? '重试未完成采集'
-                    : '立即采集'}
+                : confirming
+                  ? '正在确认采集状态…'
+                  : uncertain
+                    ? '重试同一采集请求'
+                    : retry
+                      ? '重试未完成采集'
+                      : '立即采集'}
           </button>
         )}
       </div>
       <p className="market-collection-note">
-        自动与手动采集均从两张表各自最后数据日的下一个交易日起补齐，更早缺口不处理。18:30前手动触发仅处理此前已结束的交易日。
+        自动与手动采集从两张表各自最后数据日的下一个交易日起补齐，并继续处理已登记的失败缺口；未登记的更早历史缺口不自动补采。18:30前手动触发仅处理此前已结束的交易日。
+      </p>
+      <p className="market-collection-note">
+        首轮先完整处理全部待采集数据，失败项先跳过；首轮结束后，仅对失败项最多再试3轮。仍失败的缺口保留到下次采集继续处理，成功记录不重复发布。
       </p>
       {status?.source_latest && (
         <p className="market-collection-note">
@@ -316,7 +381,9 @@ export function MarketCollectionPanel({ onCollected }: { onCollected: () => void
             max={total || 1}
             value={Math.min(completed, total || 1)}
           />
-          <small>采集需要时间；数据完整并通过校验后才发布当日比例，重试会继续未完成的数据。</small>
+          <small>
+            首轮失败项先跳过，完整采集一遍后仅重试失败项（最多3轮）；数据完整并通过校验后才发布当日比例。
+          </small>
         </div>
       )}
       {status && (
@@ -387,7 +454,7 @@ export function MarketCollectionPanel({ onCollected }: { onCollected: () => void
                   请通过 HTTPS 访问后保存或测试数据库凭据。
                 </p>
               )}
-              <fieldset disabled={!!busy || running || !config.transport_secure}>
+              <fieldset disabled={!!busy || running || confirming || !config.transport_secure}>
                 <div className="market-collection-fields">
                   <label>
                     采集写入账号
@@ -434,7 +501,10 @@ export function MarketCollectionPanel({ onCollected }: { onCollected: () => void
                 </label>
                 <p className="market-collection-note">
                   每个交易日北京时间 18:30
-                  启动。从各指标最后数据日之后补齐交易日，仅恢复该范围内进度，更早缺口不处理，已有历史记录保留。
+                  启动。每轮首采后，失败项最多再试3轮；同一采集请求或同一计划内重复检查、服务重启均不重置次数。新的手动采集请求或下一轮18:30计划会重新开始计次。
+                </p>
+                <p className="market-collection-note">
+                  已登记的失败缺口持续保留，不因后续日期采集成功而丢弃；未登记的更早历史缺口不自动补采，已有成功记录保留。
                 </p>
                 <div className="market-collection-actions">
                   <button className="button" type="submit" disabled={configurationBlocked}>
@@ -469,7 +539,7 @@ export function MarketCollectionPanel({ onCollected }: { onCollected: () => void
           )}
         </details>
       )}
-      {actionError && (
+      {actionError && !(actionKind.current === 'run' && running) && (
         <p className="market-collection-notice" role="alert">
           {actionError}
         </p>

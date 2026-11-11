@@ -15,7 +15,7 @@ from app.services.growth_dividend_source import fetch_calendar
 from app.services.market_methodology import JOINQUANT_HEAT_METHOD
 from app.services.market_history import audit_historical_membership, equity_namespace
 from app.services.market_sina import (
-    SinaDataError, SinaMarketProvider, SinaRateLimitError, _bars, _day, _number,
+    MarketDependencyError, SinaDataError, SinaMarketProvider, SinaRateLimitError, _bars, _day, _number,
     _symbol, calculate_joinquant_quote,
 )
 
@@ -94,6 +94,24 @@ class PublicMarketProvider(SinaMarketProvider):
         self._archive_evidence = {}
 
     @staticmethod
+    def _dependency_call(code, operation, *args):
+        try:
+            return operation(*args)
+        except (SinaRateLimitError, MarketDependencyError):
+            raise
+        except Exception as error:
+            # Cancellation is not an unavailable input and must never be
+            # swallowed by provider result normalization.
+            if getattr(error, 'stop_collection', False):
+                raise
+            if getattr(error, 'status_code', None) in (403, 429):
+                raise SinaRateLimitError(error.status_code) from None
+            original = getattr(error, 'code', None)
+            if original in ('invalid_tdx_archive', 'snapshot_invalid'):
+                code = original
+            raise MarketDependencyError(code) from None
+
+    @staticmethod
     def heat_capability():
         # This describes supported validation, not a waiver of per-stock checks.
         return {'methodology': JOINQUANT_HEAT_METHOD, 'verified': True,
@@ -115,29 +133,45 @@ class PublicMarketProvider(SinaMarketProvider):
         self._wanted_symbols = wanted
 
     def _sessions(self, day):
+        return self._dependency_call('calendar_unavailable', self._load_sessions, day)
+
+    def _load_sessions(self, day):
         if self._calendar_days is None:
-            days = [_day(value) for value in self.calendar_loader(self.client)]
+            days = [_day(value) for value in self._dependency_call('calendar_unavailable', self.calendar_loader, self.client)]
             if not days or days != sorted(set(days)):
-                raise SinaDataError('交易日历不完整。', code='calendar_unavailable')
+                raise MarketDependencyError('calendar_unavailable')
             self._calendar_days = days
         try:
             index = self._calendar_days.index(day)
         except ValueError:
-            raise SinaDataError('目标日期不是已确认交易日。', code='calendar_incomplete') from None
+            raise MarketDependencyError('calendar_incomplete') from None
         if index < 19:
-            raise SinaDataError('缺少均线所需的交易日历。', code='calendar_incomplete')
+            raise MarketDependencyError('calendar_incomplete')
         return self._calendar_days[index - 19:index + 1]
 
     def _daily_rows(self, day):
+        try:
+            return self._dependency_call('snapshot_invalid', self._load_daily_rows, day)
+        except MarketDependencyError as error:
+            # Only rejected archive bytes/payloads invalidate this date's cache.
+            # Calendar/master/connection failures must not discard good input.
+            if error.code in ('snapshot_invalid', 'invalid_tdx_archive'):
+                invalidate = getattr(self.archives, 'invalidate', None)
+                if callable(invalidate):
+                    invalidate(day)
+                self._daily.pop(day, None)
+            raise
+
+    def _load_daily_rows(self, day):
         if day not in self._daily:
-            data = self.archives.fetch(day)
+            data = self._dependency_call('source_unavailable', self.archives.fetch, day)
             if data.get('date') != str(day) or data.get('verified') is not True:
-                raise SinaDataError('每日行情包日期或完整性未通过校验。', code='snapshot_invalid')
+                raise MarketDependencyError('snapshot_invalid')
             rows = data['rows']
             rows = list(rows.values()) if isinstance(rows, dict) else rows
             by_symbol = {row['symbol']: row for row in rows}
             if len(by_symbol) != len(rows) or any(row.get('date') != str(day) for row in rows):
-                raise SinaDataError('每日行情包股票或日期不完整。', code='snapshot_invalid')
+                raise MarketDependencyError('snapshot_invalid')
             self._archive_evidence[day] = {'date': str(day), 'sha256': data.get('source_digest'),
                                            'source_url': data.get('source_url'), 'parsed_records': len(by_symbol)}
             self._raw_equities[day] = {symbol: row for symbol, row in by_symbol.items()
@@ -151,7 +185,7 @@ class PublicMarketProvider(SinaMarketProvider):
     def _pauses(self, start, end):
         key = (start, end)
         if key not in self._pause_data:
-            self._pause_data[key] = self.suspensions.fetch(start, end)
+            self._pause_data[key] = self._dependency_call('paused_unknown', self.suspensions.fetch, start, end)
         return self._pause_data[key]
 
     def _pause_evidence(self, symbol, day, start, end):
@@ -190,7 +224,7 @@ class PublicMarketProvider(SinaMarketProvider):
     def _historical_counts(self, day):
         try:
             return self.counts.fetch(day)
-        except SinaRateLimitError:
+        except (SinaRateLimitError, MarketDependencyError):
             raise
         except SinaDataError as error:
             if error.code == 'unsupported_historical_schema':
@@ -200,6 +234,8 @@ class PublicMarketProvider(SinaMarketProvider):
     def fetch_universe(self, day):
         try:
             return self._fetch_universe(day)
+        except (MarketDependencyError, SinaRateLimitError):
+            raise
         except (SinaDataError, ValueError):
             invalidate = getattr(self.archives, 'invalidate', None)
             if callable(invalidate):
@@ -210,7 +246,7 @@ class PublicMarketProvider(SinaMarketProvider):
     def _fetch_universe(self, day):
         day = _day(day)
         sessions = self._sessions(day)
-        master = self.master.fetch(day)
+        master = self._dependency_call('universe_incomplete', self.master.fetch, day)
         LOG.info('Market source master date=%s source=exchange securities=%d historical_verified=%s',
                  day, len(master.get('rows', [])), master.get('evidence', {}).get('membership_verified') is True)
         if (master.get('date') != str(day) or not master.get('rows')
@@ -266,12 +302,12 @@ class PublicMarketProvider(SinaMarketProvider):
 
     def _window_actions(self, symbol, sessions):
         if self._action_data is None:
-            self._action_data = self.actions.fetch()
+            self._action_data = self._dependency_call('adjustment_unavailable', self.actions.fetch)
         data = self._action_data
         if data.get('verified') is not True:
-            raise SinaDataError('除权资料不完整。', code='adjustment_unavailable')
+            raise MarketDependencyError('adjustment_unavailable')
         if _day(data['coverage_through']) < sessions[-1]:
-            raise SinaDataError('除权资料尚未更新到目标日。', code='adjustment_unavailable')
+            raise MarketDependencyError('adjustment_unavailable')
         return [row for row in data['rows'] if row['symbol'] == symbol
                 and row['category'] == 1 and sessions[0] < _day(row['date']) <= sessions[-1]]
 
@@ -343,6 +379,8 @@ class PublicMarketProvider(SinaMarketProvider):
                     'difference_error_bound': str(bound),
                     'scope': 'only_this_complete_raw_equal_qfq_window',
                     'all_scenarios_joinquant_equivalence': False}
+        except MarketDependencyError:
+            raise
         except SinaDataError as error:
             if error.code == 'adjustment_precision_unverified':
                 raise
@@ -423,10 +461,13 @@ class PublicMarketProvider(SinaMarketProvider):
                 quote['raw']['qfq_factors'] = [{'date': str(current), 'factor': str(factor)}
                                               for current, factor in self._factors[symbol]]
             return quote
-        except SinaRateLimitError:
+        except (SinaRateLimitError, MarketDependencyError):
             raise
         except (SinaDataError, KeyError, ValueError, TypeError) as error:
             code = getattr(error, 'code', 'quote_unavailable')
+            if code == 'adjustment_unavailable':
+                # Incomplete factors are failed evidence, not a successful cache.
+                self._factors.pop(symbol, None)
             if code in ('paused_unknown', 'snapshot_invalid', 'snapshot_quote_mismatch'):
                 invalidate = getattr(self.archives, 'invalidate', None)
                 if callable(invalidate):

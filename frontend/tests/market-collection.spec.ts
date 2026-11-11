@@ -117,6 +117,76 @@ test.beforeEach(async ({ page }) => {
   )
 })
 
+for (const { path, pageClass, history, emptyTitle, chart } of [
+  {
+    path: '/market-sentiment',
+    pageClass: '.sentiment-page',
+    history: heat,
+    emptyTitle: '暂无市场热度数据',
+    chart: '.sentiment-chart canvas',
+  },
+  {
+    path: '/market-crowding',
+    pageClass: '.crowding-page',
+    history: crowding,
+    emptyTitle: '暂无拥挤度数据',
+    chart: '.trend-chart canvas',
+  },
+]) {
+  for (const state of ['populated', 'loading', 'error', 'empty'] as const) {
+    test(`places collection last after methodology: ${path} ${state}`, async ({ page }) => {
+      let releaseHistory = () => {}
+      const historyReady = new Promise<void>((resolve) => {
+        releaseHistory = resolve
+      })
+      await page.route(`**/api/v1${path}/history?*`, async (route) => {
+        if (state === 'loading') await historyReady
+        await route.fulfill(
+          state === 'error'
+            ? { status: 503, json: { detail: 'History unavailable' } }
+            : {
+                json: state === 'empty' ? { ...history, latest: null, points: [] } : history,
+              },
+        )
+      })
+      try {
+        await page.goto(path)
+        const root = page.locator(pageClass)
+        if (state === 'populated') await expect(root.locator(chart)).toBeVisible()
+        if (state === 'loading') await expect(root.locator('.chart-skeleton')).toBeVisible()
+        if (state === 'error') {
+          await expect(root.getByRole('alert')).toContainText('History unavailable')
+        }
+        if (state === 'empty') {
+          await expect(root.getByRole('heading', { name: emptyTitle })).toBeVisible()
+        }
+
+        const panel = root.getByRole('region', { name: '市场日采集' })
+        await expect(panel).toHaveCount(1)
+        await expect(
+          page.locator(`${pageClass} > .method-card + .market-collection-panel:last-child`),
+        ).toHaveCount(1)
+        await panel.scrollIntoViewIfNeeded()
+        await expect(panel).toBeVisible()
+        const layout = await root.evaluate((element) => {
+          const method = element.querySelector('.method-card')!
+          const collection = element.querySelector('.market-collection-panel')!
+          return {
+            gap: collection.getBoundingClientRect().top - method.getBoundingClientRect().bottom,
+            marginTop: getComputedStyle(collection).marginTop,
+            fitsViewport: document.documentElement.scrollWidth <= innerWidth,
+          }
+        })
+        expect(layout.gap).toBeCloseTo(24, 0)
+        expect(layout.marginTop).toBe('24px')
+        expect(layout.fitsViewport).toBe(true)
+      } finally {
+        releaseHistory()
+      }
+    })
+  }
+}
+
 // The dev server resolves this test-only module through the same Vite import
 // graph as the components. Do not discover it from Resource Timing: fake clocks
 // and timing-buffer eviction can remove those entries despite a live chart.
@@ -644,9 +714,308 @@ test('shows independent source dates and missing-day details with the manual cut
   await page.goto('/market-sentiment')
   const panel = page.getByRole('region', { name: '市场日采集' })
   await expect(panel).toContainText('18:30前手动触发仅处理此前已结束的交易日')
+  await expect(panel).toContainText('首轮先完整处理全部待采集数据，失败项先跳过')
+  await expect(panel).toContainText('首轮结束后，仅对失败项最多再试3轮')
+  await expect(panel).toContainText('仍失败的缺口保留到下次采集继续处理，成功记录不重复发布')
+  await expect(panel).toContainText('并继续处理已登记的失败缺口')
+  await expect(panel).toContainText('未登记的更早历史缺口不自动补采')
+  await panel.getByText('日采集配置', { exact: true }).click()
+  await expect(panel).toContainText('同一采集请求或同一计划内重复检查、服务重启均不重置次数')
+  await expect(panel).toContainText('新的手动采集请求或下一轮18:30计划会重新开始计次')
+  await expect(panel).toContainText('已登记的失败缺口持续保留，不因后续日期采集成功而丢弃')
   await expect(panel).toContainText('热度截至 2026-11-10')
   await expect(panel).toContainText('拥挤度截至 2026-11-06')
   await panel.getByText('待补齐交易日（最近 1 条）').click()
   await expect(panel).toContainText('2026-11-09 · 热度：不在本次补缺范围')
   await expect(panel).toContainText('缺少目标交易日的完整快照')
 })
+
+for (const legacy of [false, true]) {
+  test(`a ${legacy ? 'legacy' : 'structured'} busy rejection follows shared work instead of offering uncertain retry`, async ({
+    page,
+  }) => {
+    await page.clock.install()
+    const ids: string[] = []
+    let state = { ...idle, running: false }
+    await page.route('**/api/v1/market-collection/status', (route) =>
+      route.fulfill({ json: state }),
+    )
+    await page.route('**/api/v1/market-collection/run', (route) => {
+      ids.push(route.request().postDataJSON().request_id)
+      if (ids.length === 1) {
+        state = { ...idle, status: 'partial', running: true, run_id: 'shared-job' }
+        return route.fulfill({
+          status: 409,
+          json: {
+            detail: legacy
+              ? '已有采集运行，请等待完成或暂停后重试'
+              : {
+                  code: 'collection_busy',
+                  message: '已有采集运行，请等待当前采集结束',
+                  active_run: { id: 'shared-job', status: 'running' },
+                },
+          },
+        })
+      }
+      state = { ...idle, running: true, status: 'running', run_id: ids[1] }
+      return route.fulfill({ status: 202, json: { id: ids[1], status: 'queued' } })
+    })
+    await page.goto('/market-sentiment')
+    const panel = page.getByRole('region', { name: '市场日采集' })
+    await panel.getByRole('button', { name: '立即采集', exact: true }).click()
+    await expect(panel.getByRole('button', { name: '采集中…', exact: true })).toBeDisabled()
+    await expect(panel.getByRole('alert')).toHaveCount(0)
+    await expect(panel).not.toContainText('重试将沿用同一请求')
+    await expect(panel.getByRole('button', { name: '重试同一采集请求', exact: true })).toHaveCount(
+      0,
+    )
+    await panel.getByText('日采集配置', { exact: true }).click()
+    await expect(panel.getByLabel('采集写入账号')).toBeDisabled()
+    state = { ...state, running: false, status: 'complete' }
+    await page.clock.fastForward(1600)
+    const start = panel.getByRole('button', { name: '立即采集', exact: true })
+    await expect(start).toBeEnabled()
+    await expect(panel).not.toContainText('已有采集正在运行')
+    await start.click()
+    await expect.poll(() => ids.length).toBe(2)
+    expect(ids[1]).not.toBe(ids[0])
+    await expect(panel.getByRole('button', { name: '采集中…', exact: true })).toBeDisabled()
+  })
+}
+
+for (const dayStatus of ['partial', 'blocked']) {
+  test(`the shared worker lock blocks starts even while the day remains ${dayStatus}`, async ({
+    page,
+  }) => {
+    let starts = 0
+    await page.route('**/api/v1/market-collection/status', (route) =>
+      route.fulfill({ json: { ...idle, status: dayStatus, running: true, run_id: 'shared-job' } }),
+    )
+    await page.route('**/api/v1/market-collection/run', (route) => {
+      starts++
+      return route.fulfill({ status: 202, json: {} })
+    })
+    await page.goto('/market-sentiment')
+    const panel = page.getByRole('region', { name: '市场日采集' })
+    const start = panel.getByRole('button', { name: '采集中…', exact: true })
+    await expect(start).toBeDisabled()
+    await start.evaluate((button: HTMLButtonElement) => {
+      button.click()
+      button.click()
+    })
+    expect(starts).toBe(0)
+    await expect(panel).toContainText('首轮失败项先跳过，完整采集一遍后仅重试失败项（最多3轮）')
+    await expect(panel.getByRole('button', { name: '重试未完成采集', exact: true })).toHaveCount(0)
+  })
+}
+
+test('an acknowledged run remains locked across stale or failed status reads', async ({ page }) => {
+  await page.clock.install()
+  const ids: string[] = []
+  let state = { ...idle }
+  let failStatus = false
+  let statusReads = 0
+  await page.route('**/api/v1/market-collection/status', (route) => {
+    statusReads++
+    return failStatus ? route.fulfill({ status: 503, json: {} }) : route.fulfill({ json: state })
+  })
+  await page.route('**/api/v1/market-collection/run', (route) => {
+    ids.push(route.request().postDataJSON().request_id)
+    return route.fulfill({ status: 202, json: { id: ids[0], status: 'queued' } })
+  })
+  await page.goto('/market-sentiment')
+  const panel = page.getByRole('region', { name: '市场日采集' })
+  await panel.getByRole('button', { name: '立即采集', exact: true }).click()
+  const confirming = panel.getByRole('button', { name: '采集中…', exact: true })
+  await expect(confirming).toBeDisabled()
+  await expect.poll(() => statusReads).toBeGreaterThanOrEqual(2)
+  await confirming.evaluate((button: HTMLButtonElement) => {
+    button.click()
+    button.click()
+  })
+  expect(ids).toHaveLength(1)
+  failStatus = true
+  await page.clock.fastForward(1600)
+  await expect(panel).toContainText('暂时无法读取采集状态')
+  await expect(confirming).toBeDisabled()
+  failStatus = false
+  state = { ...idle, status: 'running', run_id: ids[0] }
+  await panel.getByRole('button', { name: '重新读取状态', exact: true }).click()
+  await expect(panel.getByRole('button', { name: '采集中…', exact: true })).toBeDisabled()
+  expect(ids).toHaveLength(1)
+})
+
+test('a busy retry cannot discard an earlier uncertain id even after another job completes', async ({
+  page,
+}) => {
+  await page.clock.install()
+  const ids: string[] = []
+  let state = { ...idle }
+  await page.route('**/api/v1/market-collection/status', (route) => route.fulfill({ json: state }))
+  await page.route('**/api/v1/market-collection/run', (route) => {
+    ids.push(route.request().postDataJSON().request_id)
+    if (ids.length === 1) return route.abort()
+    if (ids.length === 2) {
+      state = { ...idle, status: 'running', run_id: 'shared-job' }
+      return route.fulfill({
+        status: 409,
+        json: {
+          detail: {
+            code: 'collection_busy',
+            message: '已有采集运行',
+            active_run: { id: 'shared-job', status: 'running' },
+          },
+        },
+      })
+    }
+    state = { ...idle, status: 'running', run_id: ids[0] }
+    return route.fulfill({ status: 202, json: { id: ids[0], status: 'queued' } })
+  })
+  await page.goto('/market-sentiment')
+  const panel = page.getByRole('region', { name: '市场日采集' })
+  await panel.getByRole('button', { name: '立即采集', exact: true }).click()
+  const retry = panel.getByRole('button', { name: '重试同一采集请求', exact: true })
+  await expect(retry).toBeEnabled()
+  await retry.click()
+  await expect(panel.getByRole('button', { name: '采集中…', exact: true })).toBeDisabled()
+  await expect(panel.getByRole('alert')).toHaveCount(0)
+  await expect(panel).not.toContainText('重试将沿用同一请求')
+  state = { ...state, status: 'complete' }
+  await page.clock.fastForward(1600)
+  await expect(retry).toBeEnabled()
+  await expect(panel).toContainText('上次请求的结果仍待确认')
+  await retry.click()
+  await expect.poll(() => ids.length).toBe(3)
+  expect(new Set(ids).size).toBe(1)
+  await expect(panel.getByRole('button', { name: '采集中…', exact: true })).toBeDisabled()
+})
+
+for (const firstResult of ['lost', 'malformed']) {
+  test(`a ${firstResult} response followed by completed replay preserves the id and never claims a new job`, async ({
+    page,
+  }) => {
+    const ids: string[] = []
+    let state = { ...idle }
+    await page.route('**/api/v1/market-collection/status', (route) =>
+      route.fulfill({ json: state }),
+    )
+    await page.route('**/api/v1/market-collection/run', (route) => {
+      ids.push(route.request().postDataJSON().request_id)
+      if (ids.length === 1)
+        return firstResult === 'lost' ? route.abort() : route.fulfill({ status: 202, body: '{' })
+      state = { ...idle, status: 'complete', run_id: ids[0] }
+      return route.fulfill({ status: 202, json: { id: ids[0], status: 'complete' } })
+    })
+    await page.goto('/market-sentiment')
+    const panel = page.getByRole('region', { name: '市场日采集' })
+    await panel.getByRole('button', { name: '立即采集', exact: true }).click()
+    await panel.getByRole('button', { name: '重试同一采集请求', exact: true }).click()
+    await expect(panel).toContainText('该采集请求已完成，未重复启动任务。')
+    await expect(panel).not.toContainText('采集请求已提交')
+    await expect(panel.getByRole('alert')).toHaveCount(0)
+    await expect(panel.getByRole('button', { name: '立即采集', exact: true })).toBeEnabled()
+    expect(ids).toHaveLength(2)
+    expect(ids[1]).toBe(ids[0])
+  })
+}
+
+test('polling finds a completed uncertain request in history even after a newer run', async ({
+  page,
+}) => {
+  await page.clock.install()
+  let id = ''
+  let resolved = false
+  await page.route('**/api/v1/market-collection/status', (route) =>
+    route.fulfill({
+      json: resolved
+        ? {
+            ...idle,
+            status: 'complete',
+            run_id: 'newer-job',
+            manual: { id: 'newer-job', status: 'complete' },
+            runs: [
+              { id: 'newer-job', status: 'complete' },
+              { id, status: 'complete' },
+            ],
+          }
+        : idle,
+    }),
+  )
+  await page.route('**/api/v1/market-collection/run', (route) => {
+    id = route.request().postDataJSON().request_id
+    return route.abort()
+  })
+  await page.goto('/market-sentiment')
+  const panel = page.getByRole('region', { name: '市场日采集' })
+  await panel.getByRole('button', { name: '立即采集', exact: true }).click()
+  await expect(panel.getByRole('button', { name: '重试同一采集请求', exact: true })).toBeEnabled()
+  resolved = true
+  await page.clock.fastForward(1600)
+  await expect(panel.getByRole('button', { name: '立即采集', exact: true })).toBeEnabled()
+  await expect(panel).toContainText('该采集请求已完成，未重复启动任务。')
+  await expect(panel.getByRole('alert')).toHaveCount(0)
+})
+
+for (const status of [409, 422]) {
+  test(`a definite HTTP ${status} rejection does not offer same-request recovery`, async ({
+    page,
+  }) => {
+    const ids: string[] = []
+    await page.route('**/api/v1/market-collection/run', (route) => {
+      ids.push(route.request().postDataJSON().request_id)
+      return route.fulfill({ status, json: { detail: '采集配置尚未就绪，请先保存数据库写入账号' } })
+    })
+    await page.goto('/market-sentiment')
+    const panel = page.getByRole('region', { name: '市场日采集' })
+    const start = panel.getByRole('button', { name: '立即采集', exact: true })
+    await start.click()
+    await expect(panel.getByRole('alert')).toContainText('采集配置尚未就绪')
+    await expect(panel).not.toContainText('重试将沿用同一请求')
+    await expect(panel.getByRole('button', { name: '重试同一采集请求', exact: true })).toHaveCount(
+      0,
+    )
+    await expect(start).toBeEnabled()
+    await start.click()
+    await expect.poll(() => ids.length).toBe(2)
+    expect(ids[1]).not.toBe(ids[0])
+  })
+}
+
+for (const result of ['complete', 'partial', 'paused']) {
+  test(`a replayed ${result} request unlocks even when it is no longer in recent status history`, async ({
+    page,
+  }) => {
+    await page.clock.install()
+    const ids: string[] = []
+    await page.route('**/api/v1/market-collection/status', (route) =>
+      route.fulfill({
+        json: {
+          ...idle,
+          run_id: 'newer-job',
+          manual: { id: 'newer-job', status: 'complete' },
+          runs: [{ id: 'newer-job', status: 'complete' }],
+        },
+      }),
+    )
+    await page.route('**/api/v1/market-collection/run', (route) => {
+      ids.push(route.request().postDataJSON().request_id)
+      if (ids.length === 1) return route.abort()
+      return route.fulfill({ status: 202, json: { id: ids[0], status: result } })
+    })
+    await page.goto('/market-sentiment')
+    const panel = page.getByRole('region', { name: '市场日采集' })
+    const start = panel.getByRole('button', { name: '立即采集', exact: true })
+    await start.click()
+    await panel.getByRole('button', { name: '重试同一采集请求', exact: true }).click()
+    await expect(start).toBeEnabled()
+    await expect(panel).toContainText('未重复启动任务')
+    await expect(panel.getByRole('button', { name: '正在确认采集状态…', exact: true })).toHaveCount(
+      0,
+    )
+    await page.clock.fastForward(60000)
+    await expect(start).toBeEnabled()
+    await expect(panel.getByRole('alert')).toHaveCount(0)
+    expect(ids).toHaveLength(2)
+    expect(ids[1]).toBe(ids[0])
+  })
+}

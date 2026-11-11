@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
-import { init, use } from 'echarts/core'
+import { graphic, init, use } from 'echarts/core'
 import type { EChartsType } from 'echarts/core'
 import { LineChart } from 'echarts/charts'
 import {
@@ -23,6 +23,7 @@ import {
   type GrowthDividendSelection,
 } from '../lib/growthDividend'
 import type { GrowthDividendPoint } from '../types/growthDividend'
+import { growthDividendBenchmarkLabels, growthDividendGrid } from '../lib/growthDividendLabels'
 
 use([
   LineChart,
@@ -46,6 +47,8 @@ export function GrowthDividendChart({
 }) {
   const element = useRef<HTMLDivElement>(null)
   const chart = useRef<EChartsType | null>(null)
+  const annotation = useRef<InstanceType<typeof graphic.Group> | null>(null)
+  const refreshAnnotation = useRef(() => {})
   const selectedSpan = useRef<DateSpan | null>(null)
   const previousSelection = useRef<GrowthDividendSelection | null>(null)
   const manualZoom = useRef(false)
@@ -59,14 +62,26 @@ export function GrowthDividendChart({
   // Zoom and legend changes never change the historical percentile sample.
   const benchmarks = useMemo(() => growthDividendBenchmarks(points), [points])
   const shownBenchmarks = benchmarks.filter((benchmark) => visible[benchmark.name])
+  refreshAnnotation.current = () => {
+    const instance = chart.current
+    if (!instance) return
+    const renderer = instance.getZr()
+    if (annotation.current) renderer.remove(annotation.current)
+    annotation.current = growthDividendBenchmarkLabels(instance, shownBenchmarks)
+    renderer.add(annotation.current)
+  }
 
   useEffect(() => {
     if (!element.current) return
     const instance = init(element.current)
     chart.current = instance
-    const observer = new ResizeObserver(() => instance.resize())
+    const observer = new ResizeObserver(() => {
+      instance.resize()
+      refreshAnnotation.current()
+    })
     observer.observe(element.current)
     const handleZoom = () => {
+      refreshAnnotation.current()
       const zoom = (
         instance.getOption().dataZoom as Array<{
           startValue: string | number
@@ -88,6 +103,7 @@ export function GrowthDividendChart({
       instance.off('datazoom', handleZoom)
       instance.dispose()
       chart.current = null
+      annotation.current = null
     }
   }, [])
 
@@ -115,9 +131,9 @@ export function GrowthDividendChart({
         aria: {
           enabled: true,
           description:
-            '创业板指、中证红利、科创50以不同颜色的实线显示在左轴；创红比、科创红利比以虚线显示在右轴。加粗水平实线为各比值完整历史的20%（P20）和80%（P80）分位基准，图中标注比值名称、分位和数值，缩放不改变基准。可切换图例及缩放日期。',
+            '创业板指、中证红利、科创50的实线使用左轴；两条比值虚线及历史分位细虚线均使用右轴。轴外半透明标签创和科分别指创红比与科创红利比，0.2和0.8指完整历史的20%和80%分位，不是比值数值。缩放不改变基准。可切换图例及缩放日期。',
         },
-        grid: { left: 10, right: 10, top: 40, bottom: 78, containLabel: true },
+        grid: { ...growthDividendGrid, containLabel: false },
         legend: {
           show: false,
           data: growthDividendLines.map((line) => line.name),
@@ -158,7 +174,7 @@ export function GrowthDividendChart({
             position: 'left',
             scale: true,
             nameTextStyle: { color: chartColors.muted, padding: [0, 0, 0, 30] },
-            axisLabel: { color: chartColors.muted, fontSize: 11 },
+            axisLabel: { color: chartColors.muted, fontSize: 11, lineHeight: 12, margin: 8 },
             splitLine: { lineStyle: { color: chartColors.grid } },
           },
           {
@@ -174,6 +190,8 @@ export function GrowthDividendChart({
             axisLabel: {
               color: chartColors.muted,
               fontSize: 11,
+              lineHeight: 12,
+              margin: 8,
               formatter: (value: number) => value.toFixed(2),
             },
             splitLine: { show: false },
@@ -208,6 +226,7 @@ export function GrowthDividendChart({
       },
       { notMerge: false, silent: true },
     )
+    refreshAnnotation.current()
     // Only a real datazoom event may clear unapplied date input. Re-rendering
     // after a legend toggle or history refresh simply reports the current view.
     if (span) rangeCallback.current(span, false)
@@ -238,27 +257,11 @@ export function GrowthDividendChart({
         ref={element}
         className="trend-chart growth-dividend-chart"
         role="img"
-        aria-label="创红比历史折线图：三条指数实线、两条比值虚线和历史20%与80%分位基准实线及标识，左轴指数点位，右轴比值，支持缩放"
+        aria-label="创红比历史折线图：三条指数实线、两条比值虚线和历史20%与80%分位细虚线，短标签在绘图区外两侧，左轴指数点位，两组基准均使用右轴比值，支持缩放"
       />
-      <div className="growth-dividend-benchmarks" aria-label="历史分位基准">
-        {shownBenchmarks.flatMap((benchmark) =>
-          benchmark.levels.map((level) => (
-            <span
-              className="growth-dividend-benchmark"
-              key={`${benchmark.key}-${level.percentile}`}
-              style={{ '--line-color': benchmark.color } as CSSProperties}
-            >
-              <span className="line-sample" aria-hidden="true" />
-              {benchmark.name} {level.percentile} {growthDividendValue(level.value, true)}
-            </span>
-          )),
-        )}
-      </div>
       <p className="growth-dividend-benchmark-note">
-        加粗水平实线为历史20%（P20）与80%（P80）分位，图中标注名称、分位及数值：创红比从2018-01-01起，科创红利比从首个有效数据日起。
-        按已加载完整历史计算，缩放不改变基准，新增或补齐数据后更新。
-        {shownBenchmarks.some((benchmark) => benchmark.levels.length === 1) &&
-          '相同分位值合并为一条基准线。'}
+        创 / 科：创红比 / 科创红利比；0.2 / 0.8：历史20% / 80%分位。两组细虚线均读右轴。
+        按完整历史计算，缩放不变，新增或补齐数据后更新。
       </p>
     </>
   )

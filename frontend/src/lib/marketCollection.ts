@@ -1,7 +1,40 @@
-import type { MarketCollectionStatus, MarketPointSource } from '../types/marketCollection'
+import { MarketCollectionRequestError } from '../api/marketCollection'
+import type {
+  MarketCollectionRun,
+  MarketCollectionStatus,
+  MarketPointSource,
+} from '../types/marketCollection'
 
 export const marketCollectionActive = (status: MarketCollectionStatus | null | undefined) =>
-  !status?.worker_disabled && ['queued', 'running'].includes(status?.status ?? '')
+  !status?.worker_disabled &&
+  (!!status?.running || ['queued', 'running'].includes(status?.status ?? ''))
+
+/** Classify this attempt without claiming to resolve any earlier lost response. */
+export function marketCollectionRunFailure(reason: unknown): 'busy' | 'rejected' | 'uncertain' {
+  if (!(reason instanceof MarketCollectionRequestError)) return 'uncertain'
+  if (
+    reason.status === 409 &&
+    (reason.code === 'collection_busy' || /已有采集.*(?:运行|排队)/.test(reason.message))
+  )
+    return 'busy'
+  // A timeout or server failure may happen after the request was persisted.
+  return reason.status >= 400 && reason.status < 500 && reason.status !== 408
+    ? 'rejected'
+    : 'uncertain'
+}
+
+export function marketCollectionFindRun(status: MarketCollectionStatus, id: string) {
+  return (
+    (status.manual?.id === id ? status.manual : status.runs?.find((run) => run.id === id)) ??
+    (status.run_id === id ? { id, status: status.status } : null)
+  )
+}
+
+export function marketCollectionRunMessage(run: MarketCollectionRun) {
+  if (['queued', 'running'].includes(run.status)) return '采集请求已确认，正在查看当前采集进度。'
+  if (run.status === 'complete') return '该采集请求已完成，未重复启动任务。'
+  return `该采集请求已结束（${marketCollectionLabels[run.status] ?? '请查看结果'}），未重复启动任务。可重新发起采集以继续未完成的数据。`
+}
 
 export function marketCollectionPublished(status: MarketCollectionStatus | null | undefined) {
   if (!status || marketCollectionActive(status) || status.cache_pending) return false
@@ -127,7 +160,12 @@ export const heatDenominator = (point?: MarketPointSource | null) =>
   point?.denominator ?? 'eligible'
 
 export function heatSourceLabel(point?: MarketPointSource | null) {
-  const source = point?.source === 'public_market' ? '公开行情' : point?.source === 'sina' ? '新浪接口' : '聚宽历史'
+  const source =
+    point?.source === 'public_market'
+      ? '公开行情'
+      : point?.source === 'sina'
+        ? '新浪接口'
+        : '聚宽历史'
   if (point?.source !== 'sina' && !point?.price_basis) return `${source} · 前复权MA20`
   return point.price_basis === 'qfq'
     ? `${source} · 前复权MA20`
@@ -137,8 +175,11 @@ export function heatSourceLabel(point?: MarketPointSource | null) {
 }
 
 export const crowdingSourceLabel = (point?: MarketPointSource | null) =>
-  point?.source === 'public_market' ? '通达信日包 · 沪深股票及CDR成交额' :
-    point?.source === 'sina' ? '新浪接口 · 全A成交额' : '聚宽历史 · 全A成交额'
+  point?.source === 'public_market'
+    ? '通达信日包 · 沪深股票及CDR成交额'
+    : point?.source === 'sina'
+      ? '新浪接口 · 全A成交额'
+      : '聚宽历史 · 全A成交额'
 
 /** Consecutive methods are independent lines; a provider change is not a price move. */
 export function marketSourceSegments<T extends MarketPointSource>(

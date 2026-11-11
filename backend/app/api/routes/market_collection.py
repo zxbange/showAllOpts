@@ -6,6 +6,7 @@ from starlette.concurrency import run_in_threadpool
 from app.api.routes.accounts import require_admin
 from app.services.accounts import AccountError
 from app.services.etf_configuration import ConfigurationFailure
+from app.services.market_collection import CollectionBusy
 
 
 router = APIRouter(prefix='/market-collection', tags=['市场数据自动采集'])
@@ -49,6 +50,8 @@ async def configuration_body(request):
 async def call(function, *args):
     try:
         return await run_in_threadpool(function, *args)
+    except CollectionBusy as error:
+        raise HTTPException(409, error.detail()) from None
     except ConfigurationFailure as error:
         raise HTTPException(409, str(error)) from None
     except Exception:

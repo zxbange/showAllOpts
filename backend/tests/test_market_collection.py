@@ -4,6 +4,8 @@ from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 import hashlib
 import json
+import subprocess
+import sys
 import threading
 
 import httpx
@@ -14,7 +16,7 @@ from app.core.config import Settings
 from app.services.etf_collection import WriterFailure
 from app.services.etf_configuration import ConfigurationFailure
 from app.services.market_collection import (
-    CHINA, CollectionInterrupted, MarketCollection, PacedHTTPClient,
+    CHINA, CollectionBusy, CollectionInterrupted, MarketCollection, PacedHTTPClient,
 )
 from app.services.market_sina import SinaDataError, SinaRateLimitError
 from app.services.market_methodology import JOINQUANT_HEAT_METHOD, LEGACY_SINA_HEAT_METHOD
@@ -255,9 +257,10 @@ def test_only_failed_stock_retried_and_universe_shared_with_both_metrics(tmp_pat
     assert all(call[1] is None for call in writer.calls)
     assert not collection.tick(clock.advance(minutes=4))
     provider.failures.clear()
+    collection.request_run('resume-failed-stock')
     assert collection.tick(clock.advance(minutes=1))
     assert len(provider.universe_calls) == 1
-    assert len(provider.quote_calls) == (N + 1)
+    assert len(provider.quote_calls) == (N + 4)
     assert provider.quote_calls[-1][0] == 'sh600003'
     assert writer.calls[0][3] == writer.calls[-1][3]
 
@@ -294,8 +297,9 @@ def test_unverified_freshness_blocks_both_writes_until_sample_recovers(tmp_path,
     assert collection.status()['crowding_status'] == 'pending'
     assert collection.status()['completed'] == (N - 1)
     provider.quote_override = None
+    collection.request_run('resume-failed-sample')
     assert collection.tick(clock.advance(minutes=5))
-    assert len(provider.universe_calls) == 1 and len(provider.quote_calls) == (N + 1)
+    assert len(provider.universe_calls) == 1 and len(provider.quote_calls) == (N + 4)
     assert collection.status()['crowding_status'] == collection.status()['heat_status'] == 'written'
 
 
@@ -305,7 +309,7 @@ def test_fresh_sample_with_unknown_ma_allows_crowding_but_not_heat(tmp_path):
     assert not collection.tick()
     assert collection.status()['crowding_status'] == 'written'
     assert collection.status()['heat_status'] == 'pending'
-    assert len(provider.quote_calls) == N  # Sample is not requested twice in this round.
+    assert len(provider.quote_calls) == N + 3  # Once per pass, never twice within a pass.
     assert len(writer.calls) == 1 and writer.calls[0][1] is None
 
 
@@ -314,12 +318,13 @@ def test_stale_unselected_stock_blocks_crowding_despite_three_current_samples(tm
     provider.quote_override = lambda quote: quote | {'status': 'stale', 'date': '2026-11-09'} if quote['symbol'] == 'sh600003' else quote
     assert not collection.tick()
     assert {call[0] for call in provider.quote_calls[:3]} == {'sh600009', 'sz600019', 'bj600119'}
-    assert len(provider.quote_calls) == N
+    assert len(provider.quote_calls) == N + 3
     assert not writer.calls
     assert collection.status()['crowding_status'] == 'pending'
     provider.quote_override = None
+    collection.request_run('resume-stale-stock')
     assert collection.tick(clock.advance(minutes=5))
-    assert len(provider.quote_calls) == (N + 1)
+    assert len(provider.quote_calls) == (N + 4)
     assert writer.calls[0][2]['price_verified_count'] == N
 
 
@@ -343,6 +348,7 @@ def test_saved_failed_day_recovers_exact_day_after_midnight_without_new_pool(tmp
     assert not collection.tick()
     provider.failures.clear()
     clock.value = EVENING + timedelta(days=1, hours=-8)  # Next day 10:00, only old snapshot.
+    collection.request_run('morning-resume-after-exhaustion')
     assert collection.tick()
     assert provider.universe_calls == [DAY]
     assert provider.quote_calls[-1] == ('sh600003', DAY, 41)
@@ -363,7 +369,7 @@ def test_empty_database_ignores_old_activation_date(tmp_path):
     assert {call[0] for call in writer.calls} == {DAY}
 
 
-def test_empty_database_obsolete_failed_bootstrap_is_not_reopened(tmp_path):
+def test_empty_database_failed_bootstrap_remains_a_tracked_gap(tmp_path):
     collection, provider, writer, clock = worker(tmp_path)
     provider.snapshot_override = snapshot(DAY)
     provider.snapshot_override['rows'].pop()
@@ -372,8 +378,9 @@ def test_empty_database_obsolete_failed_bootstrap_is_not_reopened(tmp_path):
     provider.snapshot_override = None
     clock.advance(days=1)
     assert collection.tick()
-    assert collection._day(DAY)['status'] == 'superseded'
-    assert collection._day(DAY)['error'] is None
+    assert collection._day(DAY)['status'] == 'blocked'
+    assert collection._day(DAY)['error'] == 'historical_snapshot_missing'
+    assert collection._meta('gap:heat:' + str(DAY))
     assert all(call[0] != DAY for call in writer.calls)
 
 
@@ -403,6 +410,7 @@ def test_incomplete_new_year_calendar_does_not_discard_saved_previous_day_repair
     assert not collection.tick()
     provider.failures.clear()
     clock.value = datetime(2027, 1, 1, 10, tzinfo=CHINA)
+    collection.request_run('repair-saved-day-after-exhaustion')
     assert collection.tick()
     assert provider.universe_calls == [date(2026, 12, 31)]
     assert provider.quote_calls[-1] == ('sh600003', date(2026, 12, 31), 41)
@@ -429,10 +437,27 @@ def test_initial_calendar_failure_does_not_expand_empty_table_backfill(tmp_path)
 def test_cross_process_lock_prevents_all_source_and_write_actions(tmp_path):
     collection, provider, writer, clock = worker(tmp_path)
     collection.root.mkdir(parents=True)
-    with portalocker.Lock(str(collection.root / 'collection.lock'), timeout=0):
+    program = '''
+import sys
+import portalocker
+with portalocker.Lock(sys.argv[1], timeout=0):
+    print('locked', flush=True)
+    sys.stdin.readline()
+'''
+    process = subprocess.Popen([sys.executable, '-c', program, str(collection.root / 'collection.lock')],
+                               stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    try:
+        assert process.stdout.readline().strip() == 'locked'
         assert not collection.tick()
-        with pytest.raises(ConfigurationFailure):
+        with pytest.raises(CollectionBusy):
             collection.request_run('blocked-request')
+    finally:
+        try:
+            process.communicate('\n', timeout=5)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.communicate()
+    assert process.returncode == 0
     assert not provider.universe_calls and not writer.calls
     assert collection.tick()
 
@@ -449,6 +474,185 @@ def test_request_id_is_durable_and_terminal_run_id_remains_visible(tmp_path):
     assert collection.request_run('same-request')['status'] == 'complete'
     assert not collection.tick(clock.advance(minutes=1))
     assert len(provider.quote_calls) == N
+
+
+def test_same_request_committed_between_lookup_and_lock_failure_is_replayed(tmp_path, monkeypatch):
+    first, provider, writer, _ = worker(tmp_path)
+    retry, retried_provider, retried_writer, _ = worker(tmp_path)
+    acquire = retry._acquire
+    held = []
+
+    def admit_before_lock_attempt():
+        # The retry has already observed no row. Another process now commits it
+        # and takes the execution lock before this retry attempts admission.
+        first.request_run('admission-race-request')
+        held.append(first._acquire())
+        assert held[-1] is not None
+        return acquire()
+
+    monkeypatch.setattr(retry, '_acquire', admit_before_lock_attempt)
+    try:
+        result = retry.request_run('admission-race-request')
+        assert result['id'] == 'admission-race-request'
+        assert result['status'] == 'queued'
+        with retry.connect() as db:
+            assert db.execute('SELECT COUNT(*) FROM manual_runs').fetchone()[0] == 1
+        assert not provider.universe_calls and not retried_provider.universe_calls
+        assert not writer.calls and not retried_writer.calls
+    finally:
+        for lock in held:
+            lock.release()
+
+
+@pytest.mark.parametrize('trigger', ['manual', 'scheduled'])
+def test_same_request_replays_while_another_worker_is_collecting(tmp_path, trigger):
+    first, provider, writer, _ = worker(tmp_path)
+    second, other_provider, other_writer, _ = worker(tmp_path)
+    if trigger == 'manual':
+        first.request_run('in-progress-request')
+    entered, release = threading.Event(), threading.Event()
+    results = []
+
+    def block_quote(symbol):
+        entered.set()
+        assert release.wait(5)
+
+    provider.on_quote = block_quote
+    thread = threading.Thread(target=lambda: results.append(first.tick()))
+    thread.start()
+    try:
+        assert entered.wait(5)
+        current = first.status()['manual']
+        assert current['trigger'] == trigger
+        result = second.request_run(current['id'])
+        assert result['id'] == current['id'] and result['status'] == 'running'
+        state = second.status()
+        assert state['running'] and state['status'] == state['manual']['status'] == 'running'
+        assert not second.tick()
+        with pytest.raises(CollectionBusy) as error:
+            second.request_run('different-request')
+        assert error.value.detail()['active_run']['id'] == current['id']
+        assert error.value.detail()['code'] == 'collection_busy'
+        with second.connect() as db:
+            assert db.execute('SELECT COUNT(*) FROM manual_runs').fetchone()[0] == 1
+        assert not other_provider.universe_calls and not other_writer.calls
+    finally:
+        release.set()
+        thread.join(timeout=5)
+    assert not thread.is_alive() and results == [True]
+    assert len(provider.quote_calls) == N and len(writer.calls) == 1
+
+
+def test_uncommitted_same_request_conflict_never_admits_a_second_run(tmp_path, monkeypatch):
+    first, _, _, _ = worker(tmp_path)
+    retry, provider, writer, _ = worker(tmp_path)
+    entered, release = threading.Event(), threading.Event()
+    migrate = first._migrate_heat_methodology
+    results = []
+
+    def block_before_insert():
+        entered.set()
+        assert release.wait(5)
+        migrate()
+
+    monkeypatch.setattr(first, '_migrate_heat_methodology', block_before_insert)
+    thread = threading.Thread(target=lambda: results.append(first.request_run('uncommitted-request')))
+    thread.start()
+    try:
+        assert entered.wait(5)
+        with pytest.raises(CollectionBusy) as error:
+            retry.request_run('uncommitted-request')
+        assert error.value.detail()['active_run'] is None
+    finally:
+        release.set()
+        thread.join(timeout=5)
+    assert not thread.is_alive() and len(results) == 1
+    assert retry.request_run('uncommitted-request')['id'] == results[0]['id']
+    with retry.connect() as db:
+        assert db.execute('SELECT COUNT(*) FROM manual_runs').fetchone()[0] == 1
+    assert not provider.universe_calls and not writer.calls
+
+
+def test_queued_conflict_reports_the_existing_request(tmp_path):
+    collection, _, _, _ = worker(tmp_path)
+    queued = collection.request_run('queued-request')
+    with pytest.raises(CollectionBusy) as error:
+        collection.request_run('different-request')
+    assert error.value.detail()['active_run'] == queued
+    assert '排队' in str(error.value) and '暂停' not in str(error.value)
+
+
+@pytest.mark.parametrize('cancelled', [False, True])
+def test_stale_running_status_and_replay_are_consistently_paused(tmp_path, cancelled):
+    collection, provider, writer, _ = worker(tmp_path)
+    collection.request_run('interrupted-request')
+    with collection.connect() as db:
+        db.execute("UPDATE manual_runs SET status='running',phase='calendar',cancel_requested=?",
+                   (int(cancelled),))
+    state = collection.status()
+    assert not state['running'] and state['status'] == 'paused'
+    assert state['manual']['status'] == state['runs'][0]['status'] == 'paused'
+    assert state['manual']['phase'] == 'paused' and state['progress'] is None
+    assert state['error'] == state['manual']['error'] == ('cancelled' if cancelled else 'service_interrupted')
+    replay = collection.request_run('interrupted-request')
+    assert replay['status'] == 'paused' and replay['phase'] == 'paused'
+    assert not provider.universe_calls and not writer.calls
+    # A new intentional request performs durable recovery under the lock.
+    assert collection.request_run('resume-request')['status'] == 'queued'
+    with collection.connect() as db:
+        previous = db.execute("SELECT * FROM manual_runs WHERE id='interrupted-request'").fetchone()
+    assert previous['status'] == 'paused' and previous['error'] == state['error']
+
+
+def test_run_finished_between_status_snapshot_and_lock_probe_is_not_interrupted(tmp_path, monkeypatch):
+    collection, _, _, clock = worker(tmp_path)
+    collection.request_run('finishing-request')
+    with collection.connect() as db:
+        db.execute("UPDATE manual_runs SET status='running',phase='writing'")
+        db.execute("INSERT INTO days (trade_date,status,created_at,updated_at) VALUES (?,'running',?,?)",
+                   (str(DAY), clock().isoformat(), clock().isoformat()))
+    acquire = collection._acquire
+
+    def finish_before_probe():
+        collection._finish_run('finishing-request', 'complete')
+        collection._update_day(DAY, status='complete', error=None)
+        return acquire()
+
+    monkeypatch.setattr(collection, '_acquire', finish_before_probe)
+    state = collection.status()
+    assert state['status'] == state['manual']['status'] == state['runs'][0]['status'] == 'complete'
+    assert not state['running'] and state['progress'] is None and state['error'] is None
+
+
+@pytest.mark.parametrize('state_exists', [False, True])
+def test_lock_only_preparation_is_busy_even_without_an_active_run(tmp_path, state_exists):
+    collection, _, _, _ = worker(tmp_path)
+    if state_exists:
+        with collection.connect():
+            pass
+    lock = collection._acquire()
+    assert lock is not None
+    try:
+        state = collection.status()
+        assert state['running'] and state['status'] == 'idle' and state['manual'] is None
+        with pytest.raises(CollectionBusy) as error:
+            collection.request_run('new-request')
+        assert error.value.detail()['active_run'] is None
+        assert '服务正忙' in str(error.value) and '暂停' not in str(error.value)
+    finally:
+        lock.release()
+
+
+def test_terminal_replay_does_not_require_new_admission_configuration(tmp_path):
+    collection, _, _, _ = worker(tmp_path)
+    collection.request_run('existing-request')
+    with collection.connect() as db:
+        db.execute("UPDATE manual_runs SET status='complete',phase='complete'")
+    collection.settings.market_collection_worker_enabled = False
+    collection.settings.market_collection_writer_url = ''
+    assert collection.request_run('existing-request')['status'] == 'complete'
+    with pytest.raises(ConfigurationFailure):
+        collection.request_run('new-request')
 
 
 def test_manual_pause_persists_then_new_request_resumes_only_pending(tmp_path):
@@ -481,10 +685,14 @@ def test_access_limit_stops_whole_round_without_host_switch_or_fast_retry(tmp_pa
     assert not collection.tick(clock.advance(hours=2))
     assert len(provider.quote_calls) == 2
     provider.exceptions.clear()
-    collection.request_run('manual-resume')
+    collection.request_run('manual-before-cooldown')
+    assert not collection.tick()
+    assert len(provider.quote_calls) == 2
+    clock.value = EVENING + timedelta(days=1)
+    collection.request_run('manual-after-cooldown')
     assert collection.tick()
-    assert len(provider.universe_calls) == 1
-    assert len(provider.quote_calls) == (N + 1)  # Only the interrupted stock was attempted twice.
+    assert provider.universe_calls == [DAY, DAY + timedelta(days=1)]
+    assert len([call for call in provider.quote_calls if call[1] == DAY]) == (N + 1)  # Only the interrupted stock was attempted twice.
 
 
 def test_automatic_retries_are_bounded_and_do_not_drop_successes(tmp_path):
@@ -494,7 +702,7 @@ def test_automatic_retries_are_bounded_and_do_not_drop_successes(tmp_path):
     assert not collection.tick(clock.advance(minutes=5))
     assert not collection.tick(clock.advance(minutes=30))
     count = len(provider.quote_calls)
-    assert count == (N + 2)
+    assert count == (N + 3)
     assert not collection.tick(clock.advance(hours=1))
     assert len(provider.quote_calls) == count
     assert collection.status()['completed'] == (N - 1)
@@ -555,8 +763,9 @@ def test_malformed_completed_quote_stays_pending_and_cannot_publish_heat(tmp_pat
     assert collection.status()['pending'] == 1
     assert not any(call[1] for call in writer.calls)
     provider.quote_override = None
+    collection.request_run('retry-corrected-quote')
     assert collection.tick(clock.advance(minutes=5))
-    assert len(provider.quote_calls) == (N + 1)
+    assert len(provider.quote_calls) == (N + 4)
 
 
 def test_source_exception_text_and_writer_secrets_are_not_exposed(tmp_path):
@@ -674,9 +883,10 @@ def test_hq_access_limit_preserves_previous_batches_and_pauses_round(tmp_path, h
     provider.hq_exception_at = None
     collection.request_run('resume-hq')
     assert not collection.tick()
-    assert len(provider.hq_calls) == 4
-    assert len(provider.hq_cached[-1]) == 40
-    assert collection.status()['crowding_status'] == 'written'
+    assert len(provider.hq_calls) == 2  # Manual requests cannot bypass source cooldown.
+    assert collection.status()['rawprogress']['dated_rows_saved'] == 40
+    assert collection.status()['crowding_status'] == 'pending'
+    assert collection.status()['runs'][0]['status'] == 'paused'
     assert not provider.quote_calls
 
 
@@ -722,6 +932,7 @@ def test_dated_snapshot_writer_retry_after_midnight_needs_no_source_requests(tmp
     assert collection._dated_snapshot(json.loads(collection._day(DAY)['snapshot_json']), str(DAY))
     writer.error = None
     clock.value = EVENING + timedelta(days=1, hours=-8)
+    collection.request_run('resume-saved-writer-input')
     assert not collection.tick()
     assert provider.universe_calls == [DAY] and len(provider.hq_calls) == 3
     assert not provider.quote_calls
@@ -794,8 +1005,11 @@ def test_methodology_migration_archives_bfq_and_preserves_row_ownership(tmp_path
     assert not collection.tick()
     assert len(provider.quote_calls) == old_quotes
     assert collection._day(DAY)['heat_hash'] == old_hash
-    # Confirmed historical rows are preserved, never silently recalculated.
-    assert collection.status()['heat_status'] == 'existing_preserved'
+    # Cooldown blocks source reconciliation too, without losing ownership.
+    assert collection.status()['heat_status'] == 'blocked'
+    clock.value = EVENING + timedelta(days=1)
+    collection.tick()
+    assert collection._day(DAY)['heat_status'] == 'existing_preserved'
     assert collection.status()['above_count'] == 0
 
 
@@ -825,17 +1039,19 @@ def test_same_day_node_hq_mismatch_refreshes_pool_only_on_bounded_next_retry(tmp
     provider.heat_verified = False
     provider.hq_exception_at = 2
     provider.hq_exception = SinaDataError('node price is stale', code='snapshot_quote_mismatch')
+    original = provider.fetch_dated_snapshot
+    old_hashes = []
+    def refresh_after_mismatch(*args, **kwargs):
+        try:
+            return original(*args, **kwargs)
+        except SinaDataError:
+            old_hashes.append(collection._day(DAY)['snapshot_hash'])
+            provider.snapshot_override = snapshot(DAY)
+            provider.snapshot_override['rows'][45]['close'] = '999'
+            raise
+    provider.fetch_dated_snapshot = refresh_after_mismatch
     assert not collection.tick()
-    old_hash = collection._day(DAY)['snapshot_hash']
-    assert collection.status()['error'] == 'snapshot_quote_mismatch'
-    assert collection.status()['rawprogress']['dated_rows_saved'] == 40
-    assert provider.universe_calls == [DAY]
-    assert not collection.tick(clock.advance(minutes=4))
-    assert provider.universe_calls == [DAY]
-    provider.snapshot_override = snapshot(DAY)
-    provider.snapshot_override['rows'][45]['close'] = '999'
-    provider.hq_exception_at = None
-    assert not collection.tick(clock.advance(minutes=1))
+    old_hash = old_hashes[0]
     assert provider.universe_calls == [DAY, DAY]
     assert provider.hq_cached[-1] == set()  # Prior batches belonged to the old capture.
     saved = json.loads(collection._day(DAY)['snapshot_json'])
@@ -914,7 +1130,7 @@ def test_manual_before_schedule_uses_latest_closed_session(tmp_path):
 def test_unavailable_history_keeps_existing_metric_and_partial_run(tmp_path):
     collection, provider, writer, clock = worker(tmp_path)
     writer.dates = {'heat': {'2026-11-06', '2026-11-09'}, 'crowding': {'2026-11-06'}}
-    assert not collection.tick()
+    assert collection.tick()  # A later date is not held behind the missing history.
     missing = collection._day('2026-11-09')
     assert missing['heat_status'] == 'existing_preserved'
     assert missing['crowding_status'] == 'blocked'
@@ -1171,7 +1387,7 @@ def test_one_empty_metric_only_bootstraps_target_while_other_backfills(tmp_path)
     assert collection._day('2026-11-10')['heat_status'] == 'outside_window'
 
 
-def test_failed_earlier_heat_does_not_advance_its_boundary_but_crowding_continues(tmp_path):
+def test_failed_earlier_heat_gap_survives_later_successes(tmp_path):
     collection, provider, writer, clock = worker(tmp_path, moment=EVENING.replace(day=13))
     historical_provider(provider)
     writer.dates = {'heat': {'2026-11-09'}, 'crowding': {'2026-11-09'}}
@@ -1182,10 +1398,11 @@ def test_failed_earlier_heat_does_not_advance_its_boundary_but_crowding_continue
             result.update(status='transient_failure', error='adjustment_unavailable')
         return result
     provider.fetch_quote = quote
-    assert not collection.tick()
-    assert writer.dates['heat'] == {'2026-11-09'}
+    assert collection.tick()
+    assert writer.dates['heat'] == {'2026-11-09', '2026-11-11', '2026-11-12', '2026-11-13'}
     assert writer.dates['crowding'] == {'2026-11-09', '2026-11-10', '2026-11-11', '2026-11-12', '2026-11-13'}
-    assert all(day == date(2026, 11, 10) for _, day, _ in provider.quote_calls)
+    assert sum(day == date(2026, 11, 10) and symbol == 'sh600003' for symbol, day, _ in provider.quote_calls) == 4
+    assert collection._meta('gap:heat:2026-11-10')
     provider.fetch_quote = original
     collection.request_run('resume-earliest-heat')
     assert collection.tick()

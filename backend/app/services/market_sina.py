@@ -52,6 +52,13 @@ class SinaDataError(ValueError):
         self.status_code = status_code
 
 
+class MarketDependencyError(SinaDataError):
+    """A shared input/connection failed; stop this execution before fan-out."""
+
+    def __init__(self, code):
+        super().__init__('公共采集依赖暂不可用。', code=code)
+
+
 class SinaRateLimitError(SinaDataError):
     """Access denied or rate limited: stop this batch without automatic retries."""
 
@@ -274,6 +281,8 @@ class SinaMarketProvider:
             if failure not in self._reported_http_failures:
                 self._reported_http_failures.add(failure)
                 LOG.warning('Market source request failed stage=get_text source=market_http %s', diagnostic_details(error))
+            if isinstance(error, (httpx.ConnectError, httpx.ConnectTimeout)):
+                raise MarketDependencyError('source_unavailable') from None
             raise SinaDataError('新浪行情网络请求失败。', code='network_error') from None
         raw_requests.append({'url': url, 'params': dict(params) if params is not None else None,
                              'status_code': response.status_code, 'text': response.text})
@@ -503,7 +512,7 @@ class SinaMarketProvider:
                 if selected['ma20'] is not None:
                     result['status'] = 'current'
                     return result
-        except SinaRateLimitError:
+        except (SinaRateLimitError, MarketDependencyError):
             raise
         except SinaDataError as exc:
             result['status'], result['error'] = 'transient_failure', exc.code

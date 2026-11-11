@@ -8,6 +8,8 @@ from account_helpers import install_accounts, sign_in, PASSWORD
 from app.api.routes.accounts import require_user
 from app.api.routes.market_collection import router
 from app.core.config import Settings
+from app.services.etf_configuration import ConfigurationFailure
+from app.services.market_collection import CollectionBusy
 
 
 @pytest.fixture
@@ -85,3 +87,31 @@ def test_authentication_and_csrf_are_required(api):
         client.cookies.clear()
         assert client.get('/api/v1/market-collection/status').status_code == 401
         assert not calls
+
+
+@pytest.mark.parametrize('active_run', [None, {'id': 'active-request-0001', 'status': 'running', 'trigger': 'scheduled'}])
+def test_run_busy_is_structured_and_does_not_offer_unavailable_pause(api, active_run):
+    app, _, _ = api
+
+    def busy(request_id):
+        raise CollectionBusy(active_run)
+
+    app.state.market_collection.request_run = busy
+    with TestClient(app, base_url='https://testserver') as client:
+        response = client.post('/api/v1/market-collection/run', json={'request_id': 'request-market-0001'})
+    assert response.status_code == 409
+    detail = response.json()['detail']
+    assert detail['code'] == 'collection_busy' and detail['active_run'] == active_run
+    assert '暂停' not in detail['message']
+
+
+def test_run_configuration_rejection_retains_string_detail(api):
+    app, _, _ = api
+
+    def unavailable(request_id):
+        raise ConfigurationFailure('采集配置尚未就绪，请先保存数据库写入账号')
+
+    app.state.market_collection.request_run = unavailable
+    with TestClient(app, base_url='https://testserver') as client:
+        response = client.post('/api/v1/market-collection/run', json={'request_id': 'request-market-0001'})
+    assert response.status_code == 409 and isinstance(response.json()['detail'], str)

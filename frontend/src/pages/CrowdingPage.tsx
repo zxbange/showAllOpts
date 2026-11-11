@@ -51,7 +51,6 @@ export function CrowdingPage() {
           </button>
         </div>
       </PageHeader>
-      <MarketCollectionPanel onCollected={reload} />
       {loading ? (
         <LoadingState />
       ) : error ? (
@@ -193,6 +192,7 @@ export function CrowdingPage() {
           </p>
         </div>
       </div>
+      <MarketCollectionPanel onCollected={reload} />
     </div>
   )
 }

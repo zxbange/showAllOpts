@@ -6,11 +6,22 @@ export interface MarketPointSource {
   denominator?: 'eligible' | 'universe'
 }
 
+export interface MarketCollectionRun {
+  id: string
+  status: string
+  error?: string | null
+  updated_at?: string | null
+}
+
 export interface MarketCollectionStatus {
   enabled: boolean
   configured: boolean
   ready?: boolean
   worker_disabled?: boolean
+  // The shared worker lock can be held before day-level progress is published.
+  running?: boolean
+  manual?: MarketCollectionRun | null
+  runs?: MarketCollectionRun[]
   status: string
   timezone: string
   schedule: string[]

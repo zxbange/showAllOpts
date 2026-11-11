@@ -1,5 +1,4 @@
 import type { GrowthDividendPoint } from '../types/growthDividend'
-import { chartColors } from './chartTheme'
 
 export type GrowthDividendYears = 0 | 1 | 3 | 5
 export interface DateSpan {
@@ -68,7 +67,7 @@ export function growthDividendBenchmarks(points: GrowthDividendPoint[]): GrowthD
   })
 }
 
-/** Keep full-history references and their labels inside the visible ratio axis. */
+/** Keep full-history references inside the visible ratio axis. */
 export function growthDividendRatioExtent(
   range: { min: number; max: number },
   referenceValues: number[],
@@ -77,8 +76,8 @@ export function growthDividendRatioExtent(
   if (!values.length) return undefined
   const min = Math.min(...values)
   const max = Math.max(...values)
-  // Room above/below the outer references for their two-line in-chart labels.
-  const padding = (max - min || Math.abs(max) || 1) * 0.25
+  // A little breathing room for the outer references; labels live outside the plot.
+  const padding = (max - min || Math.abs(max) || 1) * 0.08
   return { min: Math.max(0, min - padding), max: max + padding }
 }
 
@@ -140,40 +139,13 @@ export function growthDividendSeries(
           silent: true,
           animation: false,
           symbol: 'none',
-          z: 6,
-          label: {
-            show: true,
-            color: line.color,
-            backgroundColor: chartColors.background,
-            borderColor: line.color,
-            borderWidth: 1,
-            borderRadius: 3,
-            padding: [3, 4],
-            fontSize: 11,
-            fontWeight: 600,
-            lineHeight: 15,
-            distance: [6, 5],
-            opacity: 1,
-          },
-          lineStyle: { color: line.color, type: 'solid' as const, width: 2.4, opacity: 0.9 },
+          z: 2,
+          label: { show: false },
+          lineStyle: { color: line.color, type: 'dashed' as const, width: 1, opacity: 0.5 },
           data: (benchmarks.find((benchmark) => benchmark.key === line.key)?.levels ?? []).map(
             (level) => ({
-              name: `${line.name} ${level.percentile} ${growthDividendValue(level.value, true)}`,
+              name: `${line.name} ${level.percentile}`,
               yAxis: level.value,
-              label: {
-                // Separate ratio labels horizontally and the two percentile
-                // labels vertically, even when levels are very close together.
-                position:
-                  line.key === 'chinext_dividend_ratio'
-                    ? level.percentile === 'P20'
-                      ? ('insideStartBottom' as const)
-                      : ('insideStartTop' as const)
-                    : level.percentile === 'P20'
-                      ? ('insideEndBottom' as const)
-                      : ('insideEndTop' as const),
-                // Keep full names and values inside the plot on narrow screens.
-                formatter: `${line.name}\n${level.percentile}${level.percentile === 'P20/P80' ? '\n' : ' '}${growthDividendValue(level.value, true)}`,
-              },
             }),
           ),
         }

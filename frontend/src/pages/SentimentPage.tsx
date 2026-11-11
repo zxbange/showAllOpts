@@ -48,7 +48,6 @@ export function SentimentPage() {
           </button>
         </div>
       </PageHeader>
-      <MarketCollectionPanel onCollected={reload} />
       {error ? (
         <ErrorState message={error} retry={reload} />
       ) : (
@@ -185,6 +184,7 @@ export function SentimentPage() {
           </p>
         </div>
       </div>
+      <MarketCollectionPanel onCollected={reload} />
     </div>
   )
 }

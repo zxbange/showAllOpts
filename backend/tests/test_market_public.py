@@ -3,7 +3,7 @@ from types import SimpleNamespace
 from decimal import Decimal
 import httpx
 import pytest
-from app.services.market_public import PublicMarketProvider, parse_factors
+from app.services.market_public import MarketDependencyError, PublicMarketProvider, parse_factors
 from app.services.market_sina import SinaDataError, aggregate_heat
 
 DAYS = [date(2026, 10, 12) + timedelta(days=n) for n in range(26)
@@ -135,7 +135,9 @@ def test_unverified_corporate_source_cannot_certify_no_events():
     provider = make_provider()
     provider.actions.fetch = lambda: {'verified': False, 'coverage_through': str(DAY), 'rows': []}
     snapshot = provider.fetch_universe(DAY)
-    assert provider.fetch_quote('sh689123', DAY, snapshot=snapshot['rows'][0])['error'] == 'adjustment_unavailable'
+    with pytest.raises(MarketDependencyError) as error:
+        provider.fetch_quote('sh689123', DAY, snapshot=snapshot['rows'][0])
+    assert error.value.code == 'adjustment_unavailable'
 
 
 def test_real_suspension_adapter_contract_is_accepted():

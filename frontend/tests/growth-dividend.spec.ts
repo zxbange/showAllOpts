@@ -49,11 +49,18 @@ const history: GrowthDividendHistory = {
 }
 
 async function inspectChart(page: Page) {
+  await expect
+    .poll(() =>
+      page.evaluate(async () => {
+        const url = '/tests/chart-runtime.ts'
+        const { getInstanceByDom } = await import(url)
+        const element = document.querySelector('.growth-dividend-chart')
+        return element ? getInstanceByDom(element)?.getOption()?.series?.length : 0
+      }),
+    )
+    .toBe(5)
   return page.evaluate(async () => {
-    const url = performance
-      .getEntriesByType('resource')
-      .map((entry) => entry.name)
-      .find((value) => /\/echarts_core\.js\?/.test(value))!
+    const url = '/tests/chart-runtime.ts'
     const { getInstanceByDom } = await import(url)
     const instance = getInstanceByDom(document.querySelector('.growth-dividend-chart'))
     const option = instance.getOption()
@@ -61,7 +68,51 @@ async function inspectChart(page: Page) {
     const zoom = option.dataZoom[0]
     const dateAt = (value: number | string) =>
       typeof value === 'number' ? option.xAxis[0].data[value] : value
+    const texts = [
+      ...new Set(
+        instance
+          .getZr()
+          .storage.getDisplayList(true)
+          .map((element: { parent?: { type: string } }) => element.parent)
+          .filter((element: { type: string } | undefined) => element?.type === 'text'),
+      ),
+    ] as Array<{
+      style: { text: string; opacity: number }
+      getBoundingRect: () => {
+        clone: () => {
+          x: number
+          y: number
+          width: number
+          height: number
+          applyTransform: (transform: unknown) => void
+        }
+      }
+      getComputedTransform: () => unknown
+    }>
+    const textBounds = (text: (typeof texts)[number]) => {
+      const rect = text.getBoundingRect().clone()
+      const transform = text.getComputedTransform()
+      if (transform) rect.applyTransform(transform)
+      return { x: rect.x, y: rect.y, width: rect.width, height: rect.height }
+    }
     return {
+      benchmarkLabels: texts
+        .filter((text) => /^[创科] 0\.[28]$/.test(text.style.text))
+        .map((text) => ({
+          text: text.style.text,
+          opacity: text.style.opacity,
+          ...textBounds(text),
+        })),
+      tickBounds: texts
+        .filter((text) => /^[+-]?[\d,.]+(?:e[+-]?\d+)?$/i.test(String(text.style.text)))
+        .map(textBounds),
+      plot: {
+        left: option.grid[0].left,
+        right: instance.getWidth() - option.grid[0].right,
+        top: option.grid[0].top,
+        bottom: instance.getHeight() - option.grid[0].bottom,
+      },
+      width: instance.getWidth() as number,
       start: dateAt(zoom.startValue) as string,
       end: dateAt(zoom.endValue) as string,
       startPercent: zoom.start as number,
@@ -86,7 +137,6 @@ async function inspectChart(page: Page) {
               data: Array<{
                 name: string
                 yAxis: number
-                label: { formatter: string; position: string }
               }>
             }
           },
@@ -103,7 +153,6 @@ async function inspectChart(page: Page) {
           referenceWidth: line.markLine?.lineStyle.width,
           referenceOpacity: line.markLine?.lineStyle.opacity,
           referenceLabelsVisible: line.markLine?.label.show,
-          referenceLabels: (line.markLine?.data ?? []).map(({ label }) => label),
           // ECharts may add/remove empty internal label/emphasis defaults after
           // setOption. Compare the benchmark identity and value across updates.
           references: (line.markLine?.data ?? []).map(({ name, yAxis }) => ({ name, yAxis })),
@@ -111,6 +160,26 @@ async function inspectChart(page: Page) {
       ),
     }
   })
+}
+
+function assertLabelLayout(chart: Awaited<ReturnType<typeof inspectChart>>) {
+  const intersects = (a: { x: number; y: number; width: number; height: number }, b: typeof a) =>
+    a.x < b.x + b.width && a.x + a.width > b.x && a.y < b.y + b.height && a.y + a.height > b.y
+  for (const [index, label] of chart.benchmarkLabels.entries()) {
+    expect(label.opacity).toBe(0.65)
+    expect(label.x).toBeGreaterThanOrEqual(0)
+    expect(label.x + label.width).toBeLessThanOrEqual(chart.width)
+    expect(label.y).toBeGreaterThanOrEqual(chart.plot.top)
+    expect(label.y + label.height).toBeLessThanOrEqual(chart.plot.bottom)
+    expect(
+      label.text.startsWith('创')
+        ? label.x + label.width <= chart.plot.left
+        : label.x >= chart.plot.right,
+    ).toBe(true)
+    for (const other of [...chart.benchmarkLabels.slice(index + 1), ...chart.tickBounds]) {
+      expect(intersects(label, other)).toBe(false)
+    }
+  }
 }
 
 test('five-year default, all history, date entry and manual zoom survive refresh', async ({
@@ -155,31 +224,22 @@ test('five-year default, all history, date entry and manual zoom survive refresh
   expect(chart.series.every((line) => !line.connectNulls)).toBe(true)
   const references = chart.series.map((line) => line.references)
   expect(references.slice(0, 3)).toEqual([[], [], []])
-  expect(chart.series.slice(3).map((line) => line.referenceStyle)).toEqual(['solid', 'solid'])
+  expect(chart.series.slice(3).map((line) => line.referenceStyle)).toEqual(['dashed', 'dashed'])
   // These are calculated from all ten historical dates, including observations
   // outside the five-year view; the early STAR nulls are not zero samples.
   expect(references[3][0].yAxis).toBeCloseTo(0.5105071448585038, 12)
   expect(references[3][1].yAxis).toBeCloseTo(0.5354150799695354, 12)
   expect(references[4][0].yAxis).toBeCloseTo(0.2236100533130236, 12)
   expect(references[4][1].yAxis).toBeCloseTo(0.2368775872264932, 12)
-  expect(chart.series.slice(3).every((line) => line.referenceWidth >= 2)).toBe(true)
-  expect(chart.series.slice(3).every((line) => line.referenceOpacity >= 0.85)).toBe(true)
-  expect(chart.series.slice(3).every((line) => line.referenceLabelsVisible)).toBe(true)
-  expect(chart.series[3].referenceLabels).toMatchObject([
-    { position: 'insideStartBottom', formatter: '创红比\nP20 0.5105' },
-    { position: 'insideStartTop', formatter: '创红比\nP80 0.5354' },
-  ])
-  expect(chart.series[4].referenceLabels).toMatchObject([
-    { position: 'insideEndBottom', formatter: '科创红利比\nP20 0.2236' },
-    { position: 'insideEndTop', formatter: '科创红利比\nP80 0.2369' },
-  ])
-  const benchmarkLabels = page.locator('.growth-dividend-benchmark')
-  await expect(benchmarkLabels).toHaveText([
-    '创红比 P20 0.5105',
-    '创红比 P80 0.5354',
-    '科创红利比 P20 0.2236',
-    '科创红利比 P80 0.2369',
-  ])
+  expect(chart.series.slice(3).every((line) => line.referenceWidth === 1)).toBe(true)
+  expect(chart.series.slice(3).every((line) => line.referenceOpacity === 0.5)).toBe(true)
+  expect(chart.series.slice(3).every((line) => !line.referenceLabelsVisible)).toBe(true)
+  const labelTexts = async () =>
+    (await inspectChart(page)).benchmarkLabels.map((label) => label.text).sort()
+  await expect.poll(labelTexts).toEqual(['创 0.2', '创 0.8', '科 0.2', '科 0.8'])
+  assertLabelLayout(chart)
+  await expect(page.locator('.growth-dividend-benchmarks')).toHaveCount(0)
+  await expect(page.locator('.growth-dividend-benchmark-note')).toContainText('两组细虚线均读右轴')
   await expect(page.getByText('每个交易日北京时间 18:00 更新')).toBeVisible()
   await page.getByRole('button', { name: '全部', exact: true }).click()
   await expect
@@ -204,20 +264,17 @@ test('five-year default, all history, date entry and manual zoom survive refresh
   expect(custom.rightExtent[1]).toBeGreaterThan(references[3][1].yAxis)
   expect(custom.leftExtent[1]).toBeLessThan(points.at(-1)!.dividend!)
   await page.getByRole('button', { name: '隐藏创红比', exact: true }).click()
-  await expect(benchmarkLabels).toHaveText(['科创红利比 P20 0.2236', '科创红利比 P80 0.2369'])
+  await expect.poll(labelTexts).toEqual(['科 0.2', '科 0.8'])
   await expect.poll(async () => (await inspectChart(page)).series[3].visible).toBe(false)
   expect((await inspectChart(page)).rightExtent[1]).toBeLessThan(references[3][0].yAxis)
   await page.getByRole('button', { name: '隐藏科创红利比', exact: true }).click()
-  await expect(benchmarkLabels).toHaveCount(0)
+  await expect.poll(labelTexts).toEqual([])
   await expect.poll(async () => (await inspectChart(page)).series[4].visible).toBe(false)
   await page.getByRole('button', { name: '显示创红比', exact: true }).click()
   await page.getByRole('button', { name: '显示科创红利比', exact: true }).click()
-  await expect(benchmarkLabels).toHaveCount(4)
+  await expect.poll(labelTexts).toEqual(['创 0.2', '创 0.8', '科 0.2', '科 0.8'])
   await page.evaluate(async () => {
-    const url = performance
-      .getEntriesByType('resource')
-      .map((entry) => entry.name)
-      .find((value) => /\/echarts_core\.js\?/.test(value))!
+    const url = '/tests/chart-runtime.ts'
     const { getInstanceByDom } = await import(url)
     getInstanceByDom(document.querySelector('.growth-dividend-chart')).dispatchAction({
       type: 'dataZoom',
@@ -226,6 +283,7 @@ test('five-year default, all history, date entry and manual zoom survive refresh
     })
   })
   const manual = await inspectChart(page)
+  assertLabelLayout(manual)
   expect(manual.series.map((line) => line.references)).toEqual(references)
   await expect(page.getByRole('button', { name: '近5年', exact: true })).toHaveAttribute(
     'aria-pressed',
@@ -255,6 +313,7 @@ test('five-year default, all history, date entry and manual zoom survive refresh
     })
   await expect(draftStart).toHaveValue('2020-01-01')
   const updated = await inspectChart(page)
+  assertLabelLayout(updated)
   expect(updated.series[3].references[0].yAxis).toBeCloseTo(2200 / 4300, 12)
   expect(updated.series[3].references[1].yAxis).toBeCloseTo(2800 / 5200, 12)
   expect(updated.series[4].references[0].yAxis).toBeCloseTo(0.22156721782890007, 12)
@@ -433,3 +492,43 @@ test('duplicate clicks send one command and a failed update remains visible afte
   await expect(page.getByRole('alert')).toHaveCount(0)
   expect(posts).toBe(2)
 })
+
+for (const delta of [0, 0.00000001]) {
+  test(`axis labels stay outside the plot after resizing with ${delta ? 'nearby' : 'equal'} thresholds`, async ({
+    page,
+  }, info) => {
+    const sample = points.map((point, index) => ({
+      ...point,
+      chinext_dividend_ratio: 0.3 + (index % 2) * delta,
+      star50_dividend_ratio: 0.3 + (index % 2) * delta,
+    }))
+    await page.route('**/api/v1/growth-dividend/**', (route) =>
+      route.fulfill({
+        json: route.request().url().endsWith('/status')
+          ? status
+          : { ...history, points: sample, latest: sample.at(-1) },
+      }),
+    )
+    await page.goto('/growth-dividend')
+    await expect(page.locator('.growth-dividend-chart canvas')).toBeVisible()
+    const original = (await inspectChart(page)).series.map((line) => line.references)
+    for (const width of [320, 960, 280]) {
+      await page.locator('.growth-dividend-chart').evaluate((element, size) => {
+        element.style.width = `${size}px`
+      }, width)
+      await expect.poll(async () => (await inspectChart(page)).width).toBe(width)
+      const resized = await inspectChart(page)
+      expect(resized.benchmarkLabels.map((label) => label.text).sort()).toEqual([
+        '创 0.2',
+        '创 0.8',
+        '科 0.2',
+        '科 0.8',
+      ])
+      expect(resized.series.map((line) => line.references)).toEqual(original)
+      assertLabelLayout(resized)
+    }
+    await page
+      .locator('.growth-dividend-chart')
+      .screenshot({ path: info.outputPath('axis-labels-narrow.png') })
+  })
+}

@@ -4,6 +4,10 @@
   font-size: 13px;
   line-height: 1.65;
 }
+.crowding-page > .method-card + .market-collection-panel,
+.sentiment-page > .method-card + .market-collection-panel {
+  margin-top: 24px;
+}
 .market-collection-panel h2 {
   display: flex;
   align-items: center;

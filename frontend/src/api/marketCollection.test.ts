@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { setCsrf } from './http'
 import {
+  MarketCollectionRequestError,
   getMarketCollectionConfiguration,
   getMarketCollectionStatus,
   runMarketCollection,
@@ -49,7 +50,10 @@ it('sends only the fixed-target configuration fields and preserves an omitted pa
 })
 
 it('passes an explicit replacement password and stable run id without inferring returned state', async () => {
-  const fetcher = vi.fn().mockResolvedValue({ ok: true, json: async () => ({ status: 'queued' }) })
+  const fetcher = vi.fn().mockImplementation(async (_url, options) => ({
+    ok: true,
+    json: async () => ({ id: JSON.parse(options.body).request_id, status: 'queued' }),
+  }))
   vi.stubGlobal('fetch', fetcher)
   await saveMarketCollectionConfiguration({
     revision: 1,
@@ -87,4 +91,67 @@ it('keeps safe backend errors and uses a generic message for non-JSON failures',
   vi.stubGlobal('fetch', fetcher)
   await expect(runMarketCollection('same-id')).rejects.toThrow('配置已变更，请重新读取')
   await expect(getMarketCollectionStatus()).rejects.toThrow('操作未完成（503），请重试。')
+})
+
+it('retains structured busy details and legacy HTTP status for retry classification', async () => {
+  const active = { id: 'scheduled-job', status: 'running', updated_at: '2026-11-11T10:30:00Z' }
+  const fetcher = vi.fn().mockResolvedValue({
+    ok: false,
+    status: 409,
+    json: async () => ({
+      detail: { code: 'collection_busy', message: '已有采集运行', active_run: active },
+    }),
+  })
+  vi.stubGlobal('fetch', fetcher)
+  const error = await runMarketCollection('same-id').catch((reason: unknown) => reason)
+  expect(error).toBeInstanceOf(MarketCollectionRequestError)
+  expect(error).toMatchObject({
+    status: 409,
+    code: 'collection_busy',
+    message: '已有采集运行',
+    activeRun: active,
+  })
+  fetcher.mockResolvedValue({
+    ok: false,
+    status: 422,
+    json: async () => ({ detail: '请求格式无效' }),
+  })
+  await expect(runMarketCollection('same-id')).rejects.toMatchObject({
+    status: 422,
+    message: '请求格式无效',
+  })
+})
+
+it('returns an idempotent completed response without treating it as a new queued job', async () => {
+  const result = { id: 'same-id', status: 'complete', error: null }
+  vi.stubGlobal(
+    'fetch',
+    vi.fn().mockResolvedValue({ ok: true, status: 202, json: async () => result }),
+  )
+  await expect(runMarketCollection('same-id')).resolves.toEqual(result)
+})
+
+it.each([null, {}, { id: 'other-id', status: 'queued' }, { id: 'same-id', status: 'unknown' }])(
+  'keeps malformed or mismatched successful acknowledgments uncertain: %j',
+  async (result) => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue({ ok: true, status: 202, json: async () => result }),
+    )
+    await expect(runMarketCollection('same-id')).rejects.toThrow('无法确认采集请求是否已接收')
+  },
+)
+
+it('does not accept a successful response whose JSON body is lost', async () => {
+  vi.stubGlobal(
+    'fetch',
+    vi.fn().mockResolvedValue({
+      ok: true,
+      status: 202,
+      json: async () => {
+        throw new SyntaxError('truncated')
+      },
+    }),
+  )
+  await expect(runMarketCollection('same-id')).rejects.toThrow('无法确认采集请求是否已接收')
 })
