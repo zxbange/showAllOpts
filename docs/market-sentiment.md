@@ -74,3 +74,7 @@ STRATEGY_CONFIG['市场情绪跟踪'] = {
 本次已核查无需聚宽的独立公开 API 方案，接口地址、口径差异和实测结果见[市场热度公开 API 调研](market-heat-public-api.md)。当前数据源尚未切换，实际运行仍使用上述聚宽全市场 MA20 采集与同步口径。
 
 完整历史恢复参见[聚宽市场情绪与估值历史补采](joinquant-market-valuation-history.md)。网页日常采集来源及失败恢复参见[市场日采集](market-daily-collection.md)。
+
+## 可选 AShareHub 原始行情
+
+两项市场指标可共用 AShareHub 单日日行情；只替换未复权收盘、成交量和成交额，不使用厂商 MA20 替代原公式。启用、安全核验和精度差异见 [AShareHub 市场数据](asharehub-market-data.md)。

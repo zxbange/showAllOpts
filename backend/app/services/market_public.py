@@ -2,7 +2,7 @@
 
 Complete dated reports propose membership; independent trade/pause and official
 category counts audit each date. Public
-TDX daily archives supply prices and turnover. Corporate-action records select
+TDX daily archives or configured AShareHub daily data supply prices and turnover. Corporate-action records select
 windows requiring Sina adjustment factors. Missing bars require affirmative
 full-session suspension evidence; they are never inferred from absence.
 """
@@ -76,14 +76,18 @@ class PublicMarketProvider(SinaMarketProvider):
     source_id = SOURCE_ID
 
     def __init__(self, client=None, *, cache_root=None, master=None, archives=None,
-                 actions=None, suspensions=None, calendar_loader=None, factor_url=FACTOR_URL, tencent_qfq_url=TENCENT_QFQ_URL, counts=None, listing_metadata=None):
+                 actions=None, suspensions=None, calendar_loader=None, factor_url=FACTOR_URL, tencent_qfq_url=TENCENT_QFQ_URL, counts=None, listing_metadata=None, asharehub_api_key=None):
         super().__init__(client)
         if master is None:
             from app.services.market_eastmoney_universe import EastmoneyDatedUniverse
             master = EastmoneyDatedUniverse(self.client, cache_root=cache_root)
         if archives is None:
-            from app.services.market_bulk import TdxDailyArchives
-            archives = TdxDailyArchives(self.client, cache_root=cache_root)
+            if asharehub_api_key is not None and asharehub_api_key.get_secret_value().strip():
+                from app.services.market_asharehub import AShareHubDailyArchives
+                archives = AShareHubDailyArchives(self.client, asharehub_api_key, cache_root=cache_root)
+            else:
+                from app.services.market_bulk import TdxDailyArchives
+                archives = TdxDailyArchives(self.client, cache_root=cache_root)
         if suspensions is None:
             from app.services.market_suspensions import PublicSuspensions
             suspensions = PublicSuspensions(self.client)
@@ -92,7 +96,10 @@ class PublicMarketProvider(SinaMarketProvider):
             counts = ExchangeDailyCounts(self.client)
         self.counts = counts
         self._dated_master = getattr(master, 'dated_report', False) is True
-        self._audit_cache = Path(cache_root) / 'eastmoney-audited-v1' if cache_root is not None and self._dated_master else None
+        self.price_source_id = getattr(archives, 'source_id', 'tdx_daily_archive')
+        audit_namespace = ('eastmoney-audited-asharehub-v1' if self.price_source_id == 'asharehub_technical_factors_pro'
+                           else 'eastmoney-audited-v1')
+        self._audit_cache = Path(cache_root) / audit_namespace if cache_root is not None and self._dated_master else None
         self._membership_windows, self._listing_outcomes = {}, {}
         self._listing_transport_error = None
         if listing_metadata is None and self._dated_master:
@@ -166,7 +173,8 @@ class PublicMarketProvider(SinaMarketProvider):
             return True
         try:
             evidence = snapshot['universe_evidence']
-            return (snapshot['source'] == SOURCE_ID and evidence['source_id'] == DATED_SOURCE
+            archive_source = evidence.get('source_archive_evidence', {}).get('source_id', 'tdx_daily_archive')
+            return (archive_source == self.price_source_id) and (snapshot['source'] == SOURCE_ID and evidence['source_id'] == DATED_SOURCE
                     and type(evidence['evidence_version']) is int and evidence['evidence_version'] == DATED_EVIDENCE_VERSION
                     and evidence['membership_basis'] == DATED_MEMBERSHIP_BASIS
                     and evidence['historical_reconstruction_verified'] is True
@@ -416,15 +424,18 @@ class PublicMarketProvider(SinaMarketProvider):
                 raise MarketDependencyError('snapshot_invalid')
             rows = data['rows']
             rows = list(rows.values()) if isinstance(rows, dict) else rows
-            by_symbol = {row['symbol']: row for row in rows}
+            by_symbol = {row['symbol']: {**row,
+                'source_url': row.get('source_url', data.get('source_url')),
+                'source_digest': row.get('source_digest', data.get('source_digest'))} for row in rows}
             if len(by_symbol) != len(rows) or any(row.get('date') != str(day) for row in rows):
                 raise MarketDependencyError('snapshot_invalid')
             self._archive_evidence[day] = {'date': str(day), 'sha256': data.get('source_digest'),
-                                           'source_url': data.get('source_url'), 'parsed_records': len(by_symbol)}
+                                           'source_url': data.get('source_url'), 'source_id': self.price_source_id,
+                                           'parsed_records': len(by_symbol)}
             self._raw_equities[day] = {symbol: row for symbol, row in by_symbol.items()
                                        if equity_namespace(symbol) or (self._wanted_symbols is not None and symbol in self._wanted_symbols)}
-            LOG.info('Market source archive date=%s source=tdx records=%d selected=%d',
-                     day, len(by_symbol), len(set(by_symbol) & self._wanted_symbols) if self._wanted_symbols is not None else len(by_symbol))
+            LOG.info('Market source archive date=%s source=%s records=%d selected=%d',
+                     day, self.price_source_id, len(by_symbol), len(set(by_symbol) & self._wanted_symbols) if self._wanted_symbols is not None else len(by_symbol))
             self._daily[day] = {symbol: row for symbol, row in by_symbol.items()
                                 if self._dated_master or self._wanted_symbols is None or symbol in self._wanted_symbols}
         return self._daily[day]
@@ -657,7 +668,7 @@ class PublicMarketProvider(SinaMarketProvider):
             evidence = {'calendar_verified': True, 'listing_verified': not self._dated_master,
                         'paused_verified': True, 'prices_verified': True, 'universe_verified': True,
                         'price_basis': 'qfq', 'adjustment_basis': 'excluded without MA20',
-                        'sources': [DATED_SOURCE if self._dated_master else 'exchange_master', 'tdx_daily', 'public_suspension_intervals'],
+                        'sources': [DATED_SOURCE if self._dated_master else 'exchange_master', self.price_source_id, 'public_suspension_intervals'],
                         'universe_basis': snapshot.get('universe_evidence', {}).get('membership_basis', 'verified_snapshot')}
             if membership_window is not None:
                 evidence.update(dated_membership_verified=True, membership_window=membership_window)

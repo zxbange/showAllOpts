@@ -16,7 +16,7 @@ _SOURCES = frozenset({
     'eastmoney_dated_universe', 'eastmoney_listing_metadata',
     'exchange_master', 'sse_current', 'sse_delisted', 'szse_current', 'szse_cdr',
     'szse_delisted', 'szse_listing_suspended',
-    'tdx_daily_archive',
+    'tdx_daily_archive', 'asharehub_technical_factors_pro',
 })
 _STAGES = frozenset({
     'cache_read', 'cache_write', 'window_validation',
@@ -33,7 +33,7 @@ _CODES = frozenset({
     'invalid_name', 'invalid_page', 'invalid_symbol', 'invalid_type',
     'invalid_universe', 'invalid_workbook', 'missing_market', 'network_error',
     'rate_limited', 'request_deadline', 'catalogue_deadline', 'response_too_large',
-    'invalid_tdx_archive',
+    'invalid_tdx_archive', 'snapshot_invalid',
 })
 _TRANSPORT_TYPES = (
     (httpx.ConnectTimeout, 'connect_timeout'),

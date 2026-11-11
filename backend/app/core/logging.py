@@ -99,6 +99,7 @@ def logging_config(settings: Settings):
     # Do not pass a database URL into logs. Also redact known values in driver errors.
     secrets = [settings.db_password.get_secret_value()]
     secrets.append(settings.social_browser_login_key.get_secret_value())
+    secrets.append(settings.asharehub_api_key.get_secret_value())
     secrets.extend([settings.validation_admin_key.get_secret_value(), settings.validation_encryption_key.get_secret_value()])
     for field in ('market_collection_writer_url', 'etf_collection_writer_url'):
         raw = getattr(settings, field).get_secret_value()

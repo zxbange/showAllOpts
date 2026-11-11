@@ -208,7 +208,9 @@ class MarketCollection:
         self.clock = clock or (lambda: datetime.now(CHINA))
         self.client_factory = client_factory or (lambda: httpx.Client(
             timeout=httpx.Timeout(20, connect=8), trust_env=False, follow_redirects=False))
-        self.provider_factory = provider_factory or (lambda client: PublicMarketProvider(client, cache_root=self.root / 'source-cache'))
+        self.provider_factory = provider_factory or (lambda client: PublicMarketProvider(
+            client, cache_root=self.root / 'source-cache',
+            asharehub_api_key=getattr(settings, 'asharehub_api_key', None)))
         self.calendar_loader = calendar_loader or fetch_calendar
         self.writer = writer or write_market_results
         self.source_dates_loader = source_dates_loader or read_market_dates
@@ -425,7 +427,10 @@ class MarketCollection:
                      status='configuration_error' if issue else 'worker_disabled' if worker_disabled else 'idle' if config['enabled'] else 'disabled',
                      disabled_reason=issue or ('worker_disabled' if worker_disabled else None),
                      worker_disabled=worker_disabled, timezone='Asia/Shanghai', schedule=list(SCHEDULE),
-                     provider='public_market', trade_date=None, total=0, completed=0, pending=0,
+                     provider='public_market', raw_price_source=(
+                         'asharehub_technical_factors_pro' if getattr(self.settings, 'asharehub_api_key', None)
+                         and self.settings.asharehub_api_key.get_secret_value().strip() else 'tdx_daily_archive'),
+                     trade_date=None, total=0, completed=0, pending=0,
                      heat_methodology=JOINQUANT_HEAT_METHOD, price_basis='qfq', denominator='eligible',
                      heat_pending_count=0,
                      above_count=0, valid_count=0, no_trade_count=0, insufficient_history_count=0,
