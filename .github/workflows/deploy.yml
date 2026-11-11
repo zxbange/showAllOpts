@@ -75,6 +75,21 @@ jobs:
       - run: npm run build
       - run: npx --no-install playwright install --with-deps chromium
       - run: npm run test:e2e
+        id: frontend_e2e
+      - name: Retain synthetic browser failure evidence
+        if: failure() && steps.frontend_e2e.conclusion == 'failure'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: frontend-e2e-failure-${{ github.run_id }}-${{ github.run_attempt }}
+          # CI runs mocked browser tests only; live.spec.ts requires E2E_REAL_DATA=1.
+          # Never include runtime folders, environment files, configs or credentials.
+          path: |
+            frontend/test-results/**/*.png
+            frontend/test-results/**/trace.zip
+            frontend/test-results/**/error-context.md
+          retention-days: 3
+          include-hidden-files: false
+          if-no-files-found: warn
 
   deploy:
     needs: [backend, frontend]

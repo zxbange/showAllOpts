@@ -117,13 +117,35 @@ test.beforeEach(async ({ page }) => {
   )
 })
 
+// The dev server resolves this test-only module through the same Vite import
+// graph as the components. Do not discover it from Resource Timing: fake clocks
+// and timing-buffer eviction can remove those entries despite a live chart.
+async function waitForChart(page: Page, selector: string) {
+  await expect
+    .poll(async () =>
+      page.evaluate(async (css) => {
+        const runtimePath = '/tests/chart-runtime.ts'
+        const { getInstanceByDom } = await import(runtimePath)
+        const element = document.querySelector(css)
+        const chart = element && getInstanceByDom(element)
+        const option = chart?.getOption()
+        return !!(
+          chart &&
+          !chart.isDisposed() &&
+          option?.dataZoom?.length &&
+          option?.series?.length &&
+          typeof option?.tooltip?.[0]?.formatter === 'function'
+        )
+      }, selector),
+    )
+    .toBe(true)
+}
+
 async function inspectChart(page: Page, selector: string) {
+  await waitForChart(page, selector)
   return page.evaluate(async (css) => {
-    const url = performance
-      .getEntriesByType('resource')
-      .map((entry) => entry.name)
-      .find((value) => /\/echarts_core\.js\?/.test(value))!
-    const { getInstanceByDom } = await import(url)
+    const runtimePath = '/tests/chart-runtime.ts'
+    const { getInstanceByDom } = await import(runtimePath)
     const chart = getInstanceByDom(document.querySelector(css))
     const option = chart.getOption()
     return {
@@ -412,7 +434,7 @@ for (const scenario of [
     await page.goto('/market-sentiment')
     const panel = page.getByRole('region', { name: '市场日采集' })
     await expect(panel).toContainText('以聚宽原脚本为目标口径')
-    await expect(panel).toContainText('各指标通过核验后分别入库发布')
+    await expect(panel).toContainText('各指标核验后分别发布，证据不足的缺口保留。')
     await expect(panel).toContainText('市场热度 · 未通过校验，未发布')
     await expect(panel).toContainText(`抱团拥挤度 · ${scenario.crowdingLabel}`)
     await expect(panel).toContainText(scenario.explanation)
@@ -555,12 +577,10 @@ test('progress polls preserve chart zoom and reload only once after published ca
   await page.goto('/market-sentiment')
   await expect(page.locator('.sentiment-chart canvas')).toBeVisible()
   await expect(page.getByRole('button', { name: '采集中…', exact: true })).toBeDisabled()
+  await waitForChart(page, '.sentiment-chart')
   await page.evaluate(async () => {
-    const url = performance
-      .getEntriesByType('resource')
-      .map((entry) => entry.name)
-      .find((value) => /\/echarts_core\.js\?/.test(value))!
-    const { getInstanceByDom } = await import(url)
+    const runtimePath = '/tests/chart-runtime.ts'
+    const { getInstanceByDom } = await import(runtimePath)
     getInstanceByDom(document.querySelector('.sentiment-chart')).dispatchAction({
       type: 'dataZoom',
       start: 25,
