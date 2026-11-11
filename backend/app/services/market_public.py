@@ -12,6 +12,7 @@ import re
 import logging
 
 from app.services.growth_dividend_source import fetch_calendar
+from app.services.market_diagnostics import copy_source_failure
 from app.services.market_methodology import JOINQUANT_HEAT_METHOD
 from app.services.market_history import audit_historical_membership, equity_namespace
 from app.services.market_sina import (
@@ -105,11 +106,11 @@ class PublicMarketProvider(SinaMarketProvider):
             if getattr(error, 'stop_collection', False):
                 raise
             if getattr(error, 'status_code', None) in (403, 429):
-                raise SinaRateLimitError(error.status_code) from None
+                raise copy_source_failure(error, SinaRateLimitError(error.status_code)) from None
             original = getattr(error, 'code', None)
             if original in ('invalid_tdx_archive', 'snapshot_invalid'):
                 code = original
-            raise MarketDependencyError(code) from None
+            raise copy_source_failure(error, MarketDependencyError(code)) from None
 
     @staticmethod
     def heat_capability():

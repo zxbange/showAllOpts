@@ -22,6 +22,7 @@ import portalocker
 from sqlalchemy import create_engine
 
 from app.core.diagnostics import diagnostic_details
+from app.services.market_diagnostics import copy_source_failure, source_failure_details
 from app.services.etf_configuration import ConfigurationFailure
 from app.services.growth_dividend_source import fetch_calendar
 from app.services.market_configuration import MarketConfiguration
@@ -923,12 +924,13 @@ class MarketCollection:
                                 raise
                             except Exception as error:
                                 if getattr(error, 'status_code', None) in (403, 429):
-                                    raise SinaRateLimitError(error.status_code) from None
+                                    raise copy_source_failure(error, SinaRateLimitError(error.status_code)) from None
                                 code = getattr(error, 'code', None)
                                 code = code if isinstance(code, str) and code in SAFE_ERRORS else 'quote_unavailable'
                                 self._defer_day(active_day, code, moment)
-                                LOG.warning('Market snapshot failed date=%s reason=%s source_reason=%s %s',
-                                            active_day, code, self._safe_source_reason(error), diagnostic_details(error))
+                                LOG.warning('Market snapshot failed date=%s reason=%s source_reason=%s %s %s',
+                                            active_day, code, self._safe_source_reason(error),
+                                            source_failure_details(error), diagnostic_details(error))
                             if self._retryable_day(active_day):
                                 remaining.append(active_day)
                         # Retry only after every candidate had its first chance.
@@ -949,6 +951,8 @@ class MarketCollection:
             return completed
         except SinaRateLimitError as error:
             code = 'source_forbidden' if getattr(error, 'status_code', None) == 403 else 'source_rate_limited'
+            LOG.warning('Market collection access stopped date=%s reason=%s %s %s',
+                        active_day or '-', code, source_failure_details(error), diagnostic_details(error))
             pause = datetime.combine(moment.date() + timedelta(days=1), time(18, 30), CHINA)
             self._put_meta(source_paused_until=_stamp(pause), last_error=code)
             if active_day:
@@ -973,7 +977,8 @@ class MarketCollection:
                 self._defer_day(active_day, code, moment)
             if run_id:
                 self._finish_run(run_id, 'failed', code)
-            LOG.warning('Market collection failed date=%s reason=%s %s', active_day or '-', code, diagnostic_details(error))
+            LOG.warning('Market collection failed date=%s reason=%s %s %s', active_day or '-', code,
+                        source_failure_details(error), diagnostic_details(error))
             return False
         finally:
             lock.release()

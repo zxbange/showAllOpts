@@ -137,6 +137,9 @@ describe('recorded market methodology', () => {
 })
 
 it('explains missing MA20 and throttling without exposing unknown technical errors', () => {
+  expect(marketCollectionErrorMessage('universe_incomplete')).toBe(
+    '交易所证券主表获取或校验未通过，暂不发布结果。',
+  )
   expect(marketCollectionErrorMessage('unknown_missing_ma')).toContain('暂不发布当日比例')
   expect(marketCollectionErrorMessage('source_rate_limited')).toContain('已保留进度')
   expect(marketCollectionErrorMessage('password=private-value')).not.toContain('private-value')

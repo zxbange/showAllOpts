@@ -317,6 +317,46 @@ def test_rejected_archive_is_invalidated_at_its_own_date():
     assert invalidated == [PUBLIC_DAY]
 
 
+def morning_gap_worker(tmp_path):
+    collection, provider, writer, clock = worker(tmp_path, moment=EVENING.replace(day=11, hour=13))
+    historical_provider(provider)
+    # The source boundary must be within calendar coverage, not before it.
+    collection.calendar_loader = lambda client: [date(2026, 11, day) for day in (5, 6, 9, 10, 11)]
+    writer.dates = {'heat': {'2026-11-05'}, 'crowding': {'2026-11-05'}}
+    collection.request_run('morning-gap-repair')
+    return collection, provider, writer, clock
+
+
+def test_nov11_before_1830_repairs_6_9_10_but_never_today(tmp_path):
+    collection, provider, writer, _ = morning_gap_worker(tmp_path)
+    assert collection.tick()
+    expected = [date(2026, 11, day) for day in (6, 9, 10)]
+    assert provider.universe_calls == expected
+    assert {day for day, heat, _, _ in writer.calls if heat} == set(expected)
+    assert {day for day, _, crowding, _ in writer.calls if crowding} == set(expected)
+    assert all(collection._day(day)['status'] == 'complete' for day in expected)
+    assert collection._day('2026-11-11') is None
+
+
+def test_shared_master_failure_at_9_preserves_6_and_leaves_10_unattempted(tmp_path):
+    collection, provider, writer, _ = morning_gap_worker(tmp_path)
+    original, attempted = provider.fetch_universe, []
+    def universe(day):
+        attempted.append(day)
+        if day == date(2026, 11, 9):
+            raise MarketDependencyError('universe_incomplete')
+        return original(day)
+    provider.fetch_universe = universe
+    assert not collection.tick()
+    assert attempted == [date(2026, 11, day) for day in (6, 9)]
+    assert writer.dates == {kind: {'2026-11-05', '2026-11-06'} for kind in ('heat', 'crowding')}
+    assert collection._day('2026-11-06')['status'] == 'complete'
+    assert collection._day('2026-11-09')['error'] == 'universe_incomplete'
+    assert collection._day('2026-11-10')['attempts'] == 0
+    assert collection._day('2026-11-11') is None
+    assert collection.status()['runs'][0]['error'] == 'universe_incomplete'
+
+
 def test_cached_calendar_fallback_still_uses_shared_dependency_budget(tmp_path):
     collection, provider, writer, clock = worker(tmp_path)
     assert collection.tick()

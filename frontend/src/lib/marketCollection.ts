@@ -127,7 +127,7 @@ export function marketCollectionErrorMessage(value: string): string {
       '新浪市场热度尚未通过聚宽原脚本口径核验，暂不发布；抱团拥挤度按自身校验结果单独处理。',
     heat_methodology_mismatch: '已取得均线记录未通过聚宽口径核验，不作为新热度使用。',
     universe_coverage_unverified: '缺少目标日完整证券主表证据，暂不补写该日结果。',
-    universe_incomplete: '交易所证券主表不完整，暂不发布结果。',
+    universe_incomplete: '交易所证券主表获取或校验未通过，暂不发布结果。',
     historical_count_unavailable: '目标日官方分类数量未完整取得，暂不补写该日。',
     historical_count_mismatch: '历史候选池与目标日官方分类数量不符，保留待核验。',
     historical_identity_conflict: '历史证券身份、上市区间或目标日交易/停牌记录存在冲突，暂不补写。',

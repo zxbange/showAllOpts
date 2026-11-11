@@ -20,6 +20,8 @@ from zoneinfo import ZoneInfo
 import httpx
 from openpyxl import load_workbook
 
+from app.services.market_diagnostics import source_failure_context
+
 
 SSE_MASTER_URL = 'https://query.sse.com.cn/sseQuery/commonQuery.do'
 SSE_DELIST_URL = 'https://query.sse.com.cn/commonQuery.do'
@@ -130,6 +132,7 @@ class ExchangeSecurityMaster:
         if self._owns_client:
             self.client.close()
 
+    @source_failure_context(stage='request')
     def _request(self, url, params, requests):
         headers = {'User-Agent': 'Mozilla/5.0'}
         if 'sse.com.cn' in url:
@@ -151,6 +154,7 @@ class ExchangeSecurityMaster:
                                     code='http_error', status_code=response.status_code)
         return response
 
+    @source_failure_context(stage='json_parse')
     def _json(self, url, params, requests):
         response = self._request(url, params, requests)
         try:
@@ -158,6 +162,7 @@ class ExchangeSecurityMaster:
         except ValueError:
             raise UniverseDataError('交易所股票名单不是有效 JSON。', code='invalid_json') from None
 
+    @source_failure_context(stage='rows_validation')
     def _sse(self, *, delisted, requests):
         url = SSE_DELIST_URL if delisted else SSE_MASTER_URL
         params = {'STOCK_TYPE': '1,8', 'sqlId': SSE_SQL_ID,
@@ -169,15 +174,16 @@ class ExchangeSecurityMaster:
         while count is None or len(raw_rows) < count:
             params['pageHelp.pageNo'] = str(page)
             payload = self._json(url, params, requests)
-            if not isinstance(payload, dict) or not isinstance(payload.get('pageHelp'), dict):
-                raise UniverseDataError('上交所分页元数据缺失。', code='invalid_page')
-            total = _count(payload['pageHelp'].get('total'), zero=delisted)
-            if count is not None and count != total:
-                raise UniverseDataError('上交所名单采集期间总数变化。', code='count_changed')
-            count = total
-            rows = payload.get('result')
-            if not isinstance(rows, list) or len(rows) != min(_SSE_PAGE_SIZE, count - len(raw_rows)):
-                raise UniverseDataError('上交所名单分页不完整。', code='incomplete_page')
+            with source_failure_context(stage='page_validation'):
+                if not isinstance(payload, dict) or not isinstance(payload.get('pageHelp'), dict):
+                    raise UniverseDataError('上交所分页元数据缺失。', code='invalid_page')
+                total = _count(payload['pageHelp'].get('total'), zero=delisted)
+                if count is not None and count != total:
+                    raise UniverseDataError('上交所名单采集期间总数变化。', code='count_changed')
+                count = total
+                rows = payload.get('result')
+                if not isinstance(rows, list) or len(rows) != min(_SSE_PAGE_SIZE, count - len(raw_rows)):
+                    raise UniverseDataError('上交所名单分页不完整。', code='incomplete_page')
             raw_rows.extend(rows)
             page += 1
         result = []
@@ -208,6 +214,7 @@ class ExchangeSecurityMaster:
         if len(set(symbols)) != len(symbols):
             raise UniverseDataError(f'{source_id} 名单包含重复代码。', code='duplicate_symbol')
 
+    @source_failure_context(stage='metadata_validation')
     def _sz_metadata(self, catalog, tab, requests):
         payload = self._json(SZSE_METADATA_URL,
                              {'CATALOGID': catalog, 'TABKEY': tab, 'PAGENO': '1'}, requests)
@@ -229,6 +236,7 @@ class ExchangeSecurityMaster:
             raise UniverseDataError('深交所名单分页统计不完整。', code='incomplete_page')
         return meta
 
+    @source_failure_context(stage='rows_validation')
     def _sz(self, catalog, tab, source_id, requests):
         before = self._sz_metadata(catalog, tab, requests)
         count = _count(before['recordcount'])
@@ -236,34 +244,35 @@ class ExchangeSecurityMaster:
         if count:
             response = self._request(SZSE_DOWNLOAD_URL,
                                      {'SHOWTYPE': 'xlsx', 'CATALOGID': catalog, 'TABKEY': tab}, requests)
-            if len(response.content) > _MAX_WORKBOOK_BYTES:
-                raise UniverseDataError('深交所工作簿超出大小限制。', code='invalid_workbook')
-            try:
-                workbook = load_workbook(BytesIO(response.content), read_only=True, data_only=True)
+            with source_failure_context(stage='workbook_parse'):
+                if len(response.content) > _MAX_WORKBOOK_BYTES:
+                    raise UniverseDataError('深交所工作簿超出大小限制。', code='invalid_workbook')
                 try:
-                    sheet = workbook.active
-                    # Official exports currently declare A1:A1 even for >2900
-                    # rows. Trust parsed row records, not the stale dimension.
-                    sheet.reset_dimensions()
-                    iterator = iter(sheet.values)
-                    headers = [_header(value) for value in next(iterator)]
-                    if not headers or len(set(headers)) != len(headers):
-                        raise UniverseDataError('深交所工作簿表头无效。', code='invalid_workbook')
-                    for values in iterator:
-                        if all(value in ('', None) for value in values):
-                            continue
-                        if len(raw_rows) >= count or len(values) != len(headers):
-                            raise UniverseDataError('深交所工作簿记录数量不符。', code='incomplete_page')
-                        raw_rows.append(dict(zip(headers, [
-                            _day(value, source=True).isoformat()
-                            if isinstance(value, (datetime, date)) else value for value in values
-                        ])))
-                finally:
-                    workbook.close()
-            except (BadZipFile, KeyError, OSError, StopIteration, ValueError) as exc:
-                if isinstance(exc, UniverseDataError):
-                    raise
-                raise UniverseDataError('深交所工作簿无法解析。', code='invalid_workbook') from None
+                    workbook = load_workbook(BytesIO(response.content), read_only=True, data_only=True)
+                    try:
+                        sheet = workbook.active
+                        # Official exports currently declare A1:A1 even for >2900
+                        # rows. Trust parsed row records, not the stale dimension.
+                        sheet.reset_dimensions()
+                        iterator = iter(sheet.values)
+                        headers = [_header(value) for value in next(iterator)]
+                        if not headers or len(set(headers)) != len(headers):
+                            raise UniverseDataError('深交所工作簿表头无效。', code='invalid_workbook')
+                        for values in iterator:
+                            if all(value in ('', None) for value in values):
+                                continue
+                            if len(raw_rows) >= count or len(values) != len(headers):
+                                raise UniverseDataError('深交所工作簿记录数量不符。', code='incomplete_page')
+                            raw_rows.append(dict(zip(headers, [
+                                _day(value, source=True).isoformat()
+                                if isinstance(value, (datetime, date)) else value for value in values
+                            ])))
+                    finally:
+                        workbook.close()
+                except (BadZipFile, KeyError, OSError, StopIteration, ValueError) as exc:
+                    if isinstance(exc, UniverseDataError):
+                        raise
+                    raise UniverseDataError('深交所工作簿无法解析。', code='invalid_workbook') from None
         after = self._sz_metadata(catalog, tab, requests)
         if (_count(after['recordcount']) != count or len(raw_rows) != count
                 or before.get('cols') != after.get('cols')):
@@ -296,6 +305,7 @@ class ExchangeSecurityMaster:
                         'included_count': len(result), 'metadata_before': before,
                         'metadata_after': after, 'raw_rows': raw_rows}
 
+    @source_failure_context(source_id='exchange_master', stage='catalogue_validation')
     def fetch(self, day):
         requested = _day(day)
         captured = self._now()
@@ -306,14 +316,16 @@ class ExchangeSecurityMaster:
             raise UniverseDataError('当前证券主表不能确认未来股票池。', code='future_universe')
         requests, sources, all_rows = [], [], []
         for delisted in (False, True):
-            rows, source = self._sse(delisted=delisted, requests=requests)
+            with source_failure_context(source_id='sse_delisted' if delisted else 'sse_current'):
+                rows, source = self._sse(delisted=delisted, requests=requests)
             all_rows.extend(rows)
             sources.append(source)
         for catalog, tab, name in [('1110', 'tab1', 'szse_current'),
                                    ('1110', 'tab3', 'szse_cdr'),
                                    ('1793_ssgs', 'tab2', 'szse_delisted'),
                                    ('1793_ssgs', 'tab1', 'szse_listing_suspended')]:
-            rows, source = self._sz(catalog, tab, name, requests)
+            with source_failure_context(source_id=name):
+                rows, source = self._sz(catalog, tab, name, requests)
             all_rows.extend(rows)
             sources.append(source)
         intervals = defaultdict(list)
