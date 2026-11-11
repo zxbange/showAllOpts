@@ -464,3 +464,78 @@ def test_driver_timeout_streaming_cleanup_reproduction_and_buffered_close():
         result.connection = None
         streaming.connection = None
         connection._result = None
+
+
+@pytest.mark.parametrize('failure', ['timeout', 'reset', 'eof'])
+def test_initialization_disconnect_logs_original_chain_and_retries(monitor, monkeypatch, caplog, failure):
+    """Use the real dialect/driver: failed SELECT VERSION then dead rollback."""
+    from io import BytesIO
+    import pymysql
+
+    job, source, now, config, counts, closed = monitor
+    job.set_enabled(True)
+    assert tick(monitor, [row()])
+    original_build = job.sources.build_engine
+    job.close_source()
+
+    class Reader:
+        def __init__(self):
+            # One OK response for the dialect's SET NAMES, then lose the socket
+            # during SELECT VERSION(), before the holdings query can execute.
+            self.buffer = BytesIO(b'\x07\x00\x00\x01\x00\x00\x00\x02\x00\x00\x00')
+
+        def read(self, size):
+            data = self.buffer.read(size)
+            if data:
+                return data
+            if failure == 'timeout':
+                raise TimeoutError('private-timeout-message')
+            if failure == 'reset':
+                raise ConnectionResetError(104, 'private-reset-message')
+            return b''
+
+        def close(self):
+            pass
+
+    class Socket:
+        def __init__(self):
+            self.queries = []
+
+        def settimeout(self, value):
+            pass
+
+        def sendall(self, data):
+            self.queries.append(data[5:].decode())
+
+        def close(self):
+            pass
+
+    sock = Socket()
+    driver = pymysql.Connection(defer_connect=True, read_timeout=20, write_timeout=20)
+    driver._sock, driver._rfile, driver._current_timeout = sock, Reader(), 20
+    monkeypatch.setattr(job.sources, 'build_engine', lambda config: create_engine(
+        'mysql+pymysql://', creator=lambda: driver, pool_pre_ping=True,
+        pool_size=1, max_overflow=0, hide_parameters=True))
+
+    assert not tick(monitor, [row(amt='120')])
+    assert sock.queries == ['SET NAMES utf8mb4', 'SELECT VERSION()']
+    assert 'stage=source_connect type=InterfaceError driver_type=InterfaceError mysql_errno=0' in caplog.text
+    assert 'context_type=OperationalError mysql_errno=2013' in caplog.text
+    assert 'rollback' in caplog.text and '_read_bytes' in caplog.text
+    if failure == 'timeout':
+        assert 'context_type=TimeoutError reason=os_timeout' in caplog.text
+    if failure == 'reset':
+        assert 'context_type=ConnectionResetError os_errno=104' in caplog.text
+    assert all(value not in caplog.text for value in (
+        'private-', config['password'], config['host'], 'SELECT VERSION', 'SET NAMES', 'positions'))
+    assert job.status()['rows'][0]['amt'] == '100'
+    assert not job.history('2026-11-02')['events']
+    assert job.connection is None and job.engine is None
+    assert not job.poll()
+
+    monkeypatch.setattr(job.sources, 'build_engine', original_build)
+    assert tick(monitor)
+    assert len(counts) == 2
+    assert job.history('2026-11-02')['events'][0]['kind'] == 'add'
+    assert tick(monitor) and len(counts) == 2
+    assert len(job.history('2026-11-02')['events']) == 1

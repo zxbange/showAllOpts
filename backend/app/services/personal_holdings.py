@@ -308,8 +308,11 @@ class PersonalHoldings:
             return True
         except Exception as error:
             # Record the original failure before cleanup; never log SQL/messages.
-            LOG.warning('Personal holdings poll failed stage=%s type=%s driver_type=%s mysql_errno=%s',
-                        stage, *failure_details(error))
+            # SQLAlchemy's initial-connection rollback can raise InterfaceError(0)
+            # after the driver already closed a failed socket. Keep the safe
+            # cause/context chain so that the original timeout/reset is visible.
+            LOG.warning('Personal holdings poll failed stage=%s type=%s driver_type=%s mysql_errno=%s %s',
+                        stage, *failure_details(error), diagnostic_details(error))
             self.close_source()
             with self.db() as db:
                 db.execute('BEGIN IMMEDIATE')

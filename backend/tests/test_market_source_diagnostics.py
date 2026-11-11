@@ -1,12 +1,14 @@
 """Offline source diagnostics must not weaken validation or expose inputs."""
 import json
 import logging
+import socket
+import ssl
 
 import httpx
 import pytest
 
 from app.services.market_collection import CollectionCancelled, PacedHTTPClient
-from app.services.market_diagnostics import source_failure_context, source_failure_details
+from app.services.market_diagnostics import record_transport_failure, source_failure_context, source_failure_details
 from app.services.market_public import MarketDependencyError, PublicMarketProvider
 from app.services.market_sina import SinaRateLimitError
 from app.services.market_universe import ExchangeSecurityMaster, UniverseDataError
@@ -137,7 +139,8 @@ def test_cancellation_is_not_annotated_or_wrapped():
 @pytest.mark.parametrize('unsafe', [SECRET, {'private': SECRET}, ['request'], True])
 def test_injected_attributes_cannot_escape_allowlists(unsafe):
     error = UniverseDataError(SECRET, code=unsafe, status_code=unsafe)
-    error.source_diagnostics = {key: unsafe for key in ('source_id', 'stage', 'code', 'status_code')}
+    error.source_diagnostics = {key: unsafe for key in (
+        'source_id', 'stage', 'code', 'status_code', 'transport_category', 'underlying_kind', 'underlying_errno')}
     def fail():
         with source_failure_context(source_id='szse_current', stage='rows_validation'):
             raise error
@@ -182,3 +185,141 @@ def test_public_wrapper_retains_original_validation_code():
     assert caught.value.source_diagnostics == {
         'source_id': 'szse_current', 'stage': 'metadata_validation', 'code': 'invalid_page', 'status_code': None,
     }
+
+
+@pytest.mark.parametrize('kind,category', [
+    (httpx.ConnectTimeout, 'connect_timeout'), (httpx.ReadTimeout, 'read_timeout'),
+    (httpx.WriteTimeout, 'write_timeout'), (httpx.PoolTimeout, 'pool_timeout'),
+    (httpx.ConnectError, 'connect_error'), (httpx.ProxyError, 'proxy_error'),
+    (httpx.LocalProtocolError, 'protocol_error'), (httpx.RemoteProtocolError, 'protocol_error'),
+    (httpx.ReadError, 'read_error'), (httpx.WriteError, 'write_error'),
+    (httpx.DecodingError, 'decoding_error'), (httpx.HTTPError, 'other_httpx'),
+])
+def test_transport_category_survives_wrapping_without_retry_or_raw_message(kind, category):
+    provider, calls, invalidated = make_provider(), [], []
+    provider.archives.invalidate = invalidated.append
+    def response(request):
+        calls.append(request)
+        raise kind(SECRET)
+    with httpx.Client(transport=httpx.MockTransport(response)) as client:
+        provider.master = ExchangeSecurityMaster(client, now=lambda: NOW)
+        with pytest.raises(MarketDependencyError) as caught:
+            provider.fetch_universe(DAY)
+    assert caught.value.code == 'universe_incomplete'
+    assert caught.value.source_diagnostics == {
+        'source_id': 'sse_current', 'stage': 'request', 'code': 'network_error', 'status_code': None,
+        'transport_category': category,
+    }
+    assert len(calls) == 1 and invalidated == []
+    assert f'transport_category={category}' in source_failure_details(caught.value)
+    assert all(secret not in source_failure_details(caught.value)
+               for secret in ('never-log-me', 'FORGED LOG', 'private.invalid'))
+
+
+@pytest.mark.parametrize('kind,underlying,number', [
+    (ssl.SSLCertVerificationError, 'ssl_certificate_verification', 1),
+    (socket.gaierror, 'dns_error', -2),
+])
+@pytest.mark.parametrize('link', ['__cause__', '__context__'])
+def test_canonical_tls_or_dns_chain_retains_only_type_category_and_errno(kind, underlying, number, link):
+    low_level, middle = kind(number, SECRET), RuntimeError(SECRET)
+    setattr(middle, link, low_level)
+    transport = httpx.ConnectError(SECRET)
+    setattr(transport, link, middle)
+    def response(request):
+        raise transport
+    with httpx.Client(transport=httpx.MockTransport(response)) as client:
+        with pytest.raises(MarketDependencyError) as caught:
+            PublicMarketProvider._dependency_call('universe_incomplete',
+                ExchangeSecurityMaster(client, now=lambda: NOW).fetch, DAY)
+    assert caught.value.source_diagnostics == {
+        'source_id': 'sse_current', 'stage': 'request', 'code': 'network_error', 'status_code': None,
+        'transport_category': 'connect_error', 'underlying_kind': underlying, 'underlying_errno': number,
+    }
+    details = source_failure_details(caught.value)
+    assert f'underlying_kind={underlying} underlying_errno={number}' in details
+    assert all(secret not in details for secret in ('never-log-me', 'FORGED LOG', 'private.invalid'))
+
+
+def test_transport_text_and_impostor_class_names_are_not_cause_evidence():
+    impostor = type('SSLCertVerificationError', (Exception,), {})(SECRET)
+    transport = httpx.ConnectError('certificate verify failed DNS socket.gaierror ' + SECRET)
+    transport.__cause__ = impostor
+    wrapped = record_transport_failure(transport, UniverseDataError('safe', code='network_error'))
+    assert wrapped.source_diagnostics['transport_category'] == 'connect_error'
+    assert 'underlying_kind' not in wrapped.source_diagnostics
+    assert 'never-log-me' not in source_failure_details(wrapped)
+
+
+@pytest.mark.parametrize('unsafe', [SECRET, True, 2**80, {'private': SECRET}])
+def test_underlying_errno_is_bounded_integer_not_arbitrary_data(unsafe):
+    cause = socket.gaierror(-2, SECRET)
+    cause.errno = unsafe
+    transport = httpx.ConnectError(SECRET)
+    transport.__cause__ = cause
+    wrapped = record_transport_failure(transport, UniverseDataError('safe', code='network_error'))
+    assert wrapped.source_diagnostics['underlying_kind'] == 'dns_error'
+    assert 'underlying_errno' not in wrapped.source_diagnostics
+    assert 'never-log-me' not in source_failure_details(wrapped)
+
+
+@pytest.mark.parametrize('mode', ['suppressed', 'cycle', 'deep', 'explicit_cause'])
+def test_transport_cause_scan_is_bounded_and_honors_explicit_cause(mode):
+    transport = httpx.ConnectError(SECRET)
+    if mode == 'suppressed':
+        transport.__context__ = socket.gaierror(-2, SECRET)
+        transport.__suppress_context__ = True
+    elif mode == 'cycle':
+        transport.__cause__ = RuntimeError(SECRET)
+        transport.__cause__.__cause__ = transport
+    elif mode == 'deep':
+        current = transport
+        for _ in range(12):
+            current.__cause__ = RuntimeError(SECRET)
+            current = current.__cause__
+        current.__cause__ = socket.gaierror(-2, SECRET)
+    else:
+        transport.__context__ = socket.gaierror(-2, SECRET)
+        transport.__cause__ = RuntimeError(SECRET)
+    wrapped = record_transport_failure(transport, UniverseDataError('safe', code='network_error'))
+    assert wrapped.source_diagnostics['transport_category'] == 'connect_error'
+    assert 'underlying_kind' not in wrapped.source_diagnostics
+
+
+@pytest.mark.parametrize('context', [
+    {'transport_category': SECRET, 'underlying_kind': 'dns_error', 'underlying_errno': -2},
+    {'transport_category': 'connect_error', 'underlying_kind': SECRET, 'underlying_errno': -2},
+    {'transport_category': 'connect_error', 'underlying_kind': 'dns_error', 'underlying_errno': SECRET},
+])
+def test_transport_fields_are_revalidated_when_rendered(context):
+    error = UniverseDataError(SECRET)
+    error.source_diagnostics = context
+    details = source_failure_details(error)
+    assert all(secret not in details for secret in ('never-log-me', 'FORGED LOG', 'private.invalid'))
+    if context['transport_category'] == SECRET:
+        assert 'transport_category=' not in details and 'underlying_' not in details
+    elif context['underlying_kind'] == SECRET:
+        assert 'underlying_' not in details
+    else:
+        assert 'underlying_kind=dns_error' in details and 'underlying_errno=' not in details
+
+
+def test_collection_transport_log_reaches_operator_without_leaking_cause_text(tmp_path, caplog):
+    collection, provider, writer, _ = worker(tmp_path)
+    calls = []
+    def response(request):
+        calls.append(request)
+        error = httpx.ConnectError(SECRET, request=request)
+        error.__cause__ = ssl.SSLCertVerificationError(1, SECRET)
+        raise error
+    with httpx.Client(transport=httpx.MockTransport(response)) as client:
+        master = ExchangeSecurityMaster(client, now=lambda: NOW)
+        provider.fetch_universe = lambda day: PublicMarketProvider._dependency_call('universe_incomplete', master.fetch, day)
+        with caplog.at_level(logging.WARNING, logger='app.services.market_collection'):
+            assert not collection.tick()
+    assert len(calls) == 1 and writer.calls == []
+    assert collection.status()['runs'][0]['error'] == 'universe_incomplete'
+    assert 'source_id=sse_current source_stage=request source_code=network_error http_status=-' in caplog.text
+    assert 'transport_category=connect_error underlying_kind=ssl_certificate_verification underlying_errno=1' in caplog.text
+    exposed = caplog.text + json.dumps(collection.status())
+    assert all(secret not in exposed for secret in ('never-log-me', 'FORGED LOG', 'private.invalid'))
