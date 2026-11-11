@@ -73,7 +73,11 @@ jobs:
       - run: npm ci --no-audit --no-fund
       - run: npm test
       - run: npm run build
-      - run: npx --no-install playwright install --with-deps chromium
+      - name: Use direct official Ubuntu archives for browser dependencies
+        run: sudo -n env GITHUB_ACTIONS="$GITHUB_ACTIONS" RUNNER_ENVIRONMENT="$RUNNER_ENVIRONMENT" python3 -I ../scripts/ci_ubuntu_apt.py
+      - name: Install the locked Chromium browser and system dependencies
+        timeout-minutes: 8
+        run: npx --no-install playwright install --with-deps chromium
       - run: npm run test:e2e
         id: frontend_e2e
       - name: Retain synthetic browser failure evidence

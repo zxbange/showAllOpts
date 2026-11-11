@@ -1,5 +1,15 @@
 # main 自动部署：一次配置，之后 push 自动发布
 
+## CI 浏览器依赖下载
+
+GitHub 托管 Ubuntu 24.04 x64 runner 的 Ubuntu 软件源通过 `mirror+file` 优先访问 Azure 镜像。2026-11-11 两次发布检查因 `azure.archive.ubuntu.com` DNS 解析失败，浏览器依赖安装被阻塞，端到端未启动、部署安全跳过。
+
+前端 CI 现在先运行 `scripts/ci_ubuntu_apt.py`，仅在一次性的 GitHub 托管 Ubuntu 24.04 x64 runner 上把已识别的 Ubuntu deb822 URI 改为官方 `https://archive.ubuntu.com/ubuntu/`，独立 security 段使用 `https://security.ubuntu.com/ubuntu/`。保留原 suites、components、Ubuntu 签名密钥与认证规则，不改 DNS、不增加第三方镜像，不修改生产服务器。
+
+APT 下载最多重试2次，每次 HTTP/HTTPS 等待20秒；索引更新有任何错误即失败，不用陈旧索引伪装成功。浏览器与系统依赖安装步骤总限时8分钟。`npm ci`、单测、构建、锁定版本的 Chromium、全部 Playwright 测试及部署依赖门槛不变，失败仍阻止部署。
+
+依据：[GitHub runner 镜像源配置](https://github.com/actions/runner-images/blob/main/images/ubuntu/scripts/build/configure-apt-sources.sh)、[Ubuntu APT 配置](https://manpages.ubuntu.com/manpages/noble/man5/apt.conf.5.html)。
+
 固定目标：`ubuntu@119.28.106.127:22`，项目 `/home/ubuntu/showAllOpts`，网站 `http://119.28.106.127:8081`。以下材料尚未执行；代码审核发布后填写真实提交号。
 
 ## 用户只做三步
