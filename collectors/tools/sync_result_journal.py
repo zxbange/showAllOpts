@@ -4,7 +4,9 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 START, END = '# BEGIN SHARED RESULT JOURNAL', '# END SHARED RESULT JOURNAL'
 TARGETS = ['collectors/市场情绪跟踪_数据库版.py', 'collectors/微盘温度计_数据库版.py',
-           'collectors/ETF动量热度_数据库版.py', 'collectors/策略批量采集_数据库版.py']
+           'collectors/ETF动量热度_数据库版.py', 'collectors/策略批量采集_数据库版.py',
+           'collectors/市场情绪历史补采_聚宽研究版.py', 'collectors/估值标尺历史补采_聚宽研究版.py',
+           'collectors/行业动量计算_数据库版.py', 'collectors/微盘新高新低数量统计_数据库版.py']
 
 
 def sync(check=False):

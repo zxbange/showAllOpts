@@ -138,7 +138,7 @@ describe('recorded market methodology', () => {
 
 it('explains missing MA20 and throttling without exposing unknown technical errors', () => {
   expect(marketCollectionErrorMessage('universe_incomplete')).toBe(
-    '交易所证券主表获取或校验未通过，暂不发布结果。',
+    '目标日股票名单获取或校验未通过，暂不发布结果。',
   )
   expect(marketCollectionErrorMessage('unknown_missing_ma')).toContain('暂不发布当日比例')
   expect(marketCollectionErrorMessage('source_rate_limited')).toContain('已保留进度')
@@ -242,4 +242,13 @@ describe('collection request acknowledgment', () => {
     )
     expect(marketCollectionRunMessage({ id: 'one', status: 'queued' })).toContain('请求已确认')
   })
+})
+
+it('explains dated report and independently blocked heat validation', () => {
+  expect(marketCollectionErrorMessage('dated_report_invalid')).toContain('东方财富')
+  expect(marketCollectionErrorMessage('dated_report_cache_invalid')).toContain('下次受控重试')
+  expect(marketCollectionErrorMessage('dated_membership_window_unverified')).toContain(
+    '拥挤度可独立发布',
+  )
+  expect(marketCollectionErrorMessage('dated_membership_gap')).toContain('换码')
 })

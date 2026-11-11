@@ -133,11 +133,13 @@ export function Layout() {
               ? new URLSearchParams(location.search).get('instrument') === 'cci'
                 ? 'coalindex.com（非官方）'
                 : '长江有色金属网（CCMN）'
-              : location.pathname === '/margin-guarantee'
-                ? '东方财富'
-                : ['/market-sentiment', '/market-crowding'].includes(location.pathname)
-                  ? '新浪日采集 / 聚宽历史（按记录标注）'
-                  : '聚宽采集'}{' '}
+              : location.pathname === '/valuation-ruler'
+                ? '聚宽历史 / 中证成分 / 东方财富日采集（按记录标注）'
+                : location.pathname === '/margin-guarantee'
+                  ? '东方财富'
+                  : ['/market-sentiment', '/market-crowding'].includes(location.pathname)
+                    ? '东方财富主表 / 公开日行情 / 聚宽历史（按记录标注）'
+                    : '聚宽采集'}{' '}
             <ArrowUpRight size={12} />
           </span>
         </footer>

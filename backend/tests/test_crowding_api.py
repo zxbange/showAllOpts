@@ -23,7 +23,7 @@ def test_empty_and_module_catalog(client):
     assert data['latest'] is None and data['points'] == []
     assert data['summary']['observed_days'] == 0
     assert [module['id'] for module in client.get('/api/v1/modules').json()['modules']] == [
-        'industry-momentum', 'market-crowding', 'market-sentiment', 'margin-guarantee', 'growth-dividend', 'microcap-temperature', 'earnings-gap', 'etf-shares', 'commodities', 'microcap-breadth', 'dividend-selection', 'cash-cow', 'high-growth', 'etf-momentum', 'institution-ownership', 'social-monitor']
+        'industry-momentum', 'market-crowding', 'market-sentiment', 'margin-guarantee', 'growth-dividend', 'valuation-ruler', 'microcap-temperature', 'earnings-gap', 'etf-shares', 'commodities', 'microcap-breadth', 'dividend-selection', 'cash-cow', 'high-growth', 'etf-momentum', 'institution-ownership', 'social-monitor']
 
 
 def test_scope_order_statistics_and_percentage_points(client, session):
@@ -37,14 +37,14 @@ def test_scope_order_statistics_and_percentage_points(client, session):
     response = client.get('/api/v1/market-crowding/history?days=0')
     assert response.status_code == 200
     data = response.json()
-    assert [p['ratio'] for p in data['points']] == [.2, .4]
+    assert [p['ratio'] for p in data['points']] == [.9, .2, .4]
     assert data['latest']['ratio'] == .4
     assert data['latest']['top_stock_count'] == 250
-    assert data['summary']['change_pp'] == pytest.approx(20)
-    assert data['summary']['average_ratio'] == pytest.approx(.3)
-    assert data['summary']['peak_ratio'] == .4
+    assert data['summary']['change_pp'] == pytest.approx(-50)
+    assert data['summary']['average_ratio'] == pytest.approx(.5)
+    assert data['summary']['peak_ratio'] == .9
     assert data['summary']['low_ratio'] == .2
-    assert data['points'][1]['smoothed_ratio'] == pytest.approx((.4 + .2 * 9/11) / (1 + 9/11))
+    assert data['points'][2]['smoothed_ratio'] == pytest.approx((.4 + .2 * 9/11 + .9 * (9/11)**2) / (1 + 9/11 + (9/11)**2))
 
 
 def test_window_boundary_and_smoothing_are_stable(client, session):

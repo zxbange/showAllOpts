@@ -39,7 +39,7 @@ class CrowdingService:
                 ))
         values = [point.ratio for point in points]
         return CrowdingHistory(
-            start_date=max(start, date(2020, 1, 1)), end_date=latest.trade_date,
+            start_date=start, end_date=latest.trade_date,
             latest=CrowdingLatest(
                 date=latest.trade_date, ratio=float(latest.ratio),
                 stock_count=latest.stock_count, top_stock_count=latest.top_stock_count,

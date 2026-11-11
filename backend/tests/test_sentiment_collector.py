@@ -84,7 +84,7 @@ def test_above_ma20_scope_pause_new_listings_delist_and_equal(collector):
         strategy.batch_counts(pd.concat([frame,frame.iloc[:1]]),codes,days,metadata)
 
 
-def test_backfill_incremental_gaps_retention_and_no_overwrite(collector):
+def test_backfill_incremental_gaps_preserves_early_history_and_no_overwrite(collector):
     module, engine = collector
     platform = Platform()
     strategy = module._sentiment_strategy(platform.apis(), {})
@@ -109,7 +109,8 @@ def test_backfill_incremental_gaps_retention_and_no_overwrite(collector):
     gap = strategy.run(start_date='2026-10-01')
     assert list(gap.trade_date) == [date(2026,10,6)]
     with Session(engine) as session:
-        assert session.get(Model,date(2023,10,22)) is None
+        assert float(session.get(Model,date(2023,10,22)).ratio) == 0.5
+        assert session.get(Model,date(2023,10,22)).updated_at == datetime(2023,10,22,18)
         assert session.get(Model,date(2026,10,1)).updated_at == stamp
     with pytest.raises(ValueError,match='仅新增'):
         strategy.run(skip_existing=False)

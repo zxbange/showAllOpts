@@ -44,7 +44,7 @@ test('sentiment navigation, three-year default, chart and range changes', async 
   const tabs = page.getByRole('navigation', { name: '市场情绪模块切换' })
   await tabs.getByRole('link', { name: '市场热度', exact: true }).click()
   await expect(page.getByRole('heading', { level: 1 })).toContainText('市场情绪')
-  await expect(page.getByRole('button', { name: '近3年', exact: true })).toHaveAttribute(
+  await expect(page.getByRole('button', { name: '全部', exact: true })).toHaveAttribute(
     'aria-pressed',
     'true',
   )
@@ -89,7 +89,7 @@ test('sentiment failure retry and empty state preserve module tabs', async ({ pa
   await expect(page.getByRole('alert')).toContainText('情绪数据暂不可用')
   await expect(
     page.getByRole('navigation', { name: '市场情绪模块切换' }).getByRole('link'),
-  ).toHaveCount(5)
+  ).toHaveCount(6)
   failed = false
   await page.getByRole('button', { name: '重新加载' }).click()
   await expect(page.getByRole('heading', { name: '暂无市场热度数据' })).toBeVisible()

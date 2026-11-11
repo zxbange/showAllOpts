@@ -8,6 +8,22 @@ export interface GrowthDividendPoint {
 }
 
 export interface GrowthDividendStatus {
+  comparison_conflicts?: number
+  recent_conflicts?: {
+    code: string
+    trade_date: string
+    published_close: number
+    candidate_close: number
+    checked_at: string
+  }[]
+  sync_summary?: {
+    inserted: number
+    existing: number
+    conflicts: number
+    first_day: string
+    last_day: string
+    coverage: string
+  } | null
   running: boolean
   cancelling?: boolean
   stage: string

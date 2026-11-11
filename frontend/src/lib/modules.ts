@@ -37,6 +37,17 @@ export interface ResearchModule {
 
 export const individualModules: ResearchModule[] = [
   {
+    id: 'valuation-ruler',
+    name: '估值标尺',
+    path: '/valuation-ruler',
+    category: '市场情绪',
+    description: '沪深300指数与正PE-TTM成分股等权平均估值及历史分位。',
+    tags: ['沪深300', 'PE-TTM', '历史分位'],
+    icon: ChartNoAxesCombined,
+    tone: 'jade',
+    illustration: 'temperature',
+  },
+  {
     id: 'commodities',
     name: '大宗商品',
     path: '/commodities',
@@ -235,8 +246,9 @@ export const moduleGroups = [
       'market-crowding',
       'market-sentiment',
       'margin-guarantee',
+      'valuation-ruler',
     ],
-    labels: ['国家队动态', '创红比', '抱团拥挤度', '市场热度', '两融担保比例'],
+    labels: ['国家队动态', '创红比', '抱团拥挤度', '市场热度', '两融担保比例', '估值标尺'],
   },
   {
     name: '动量观察',

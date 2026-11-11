@@ -14,7 +14,7 @@ def row(day, above, eligible=100):
                            eligible_count=eligible,universe_count=eligible+5,updated_at=datetime(2026,10,23,18))
 
 
-def test_empty_and_strict_thresholds_and_three_year_limit(client,session):
+def test_empty_strict_thresholds_and_preserved_old_history(client,session):
     assert client.get('/api/v1/market-sentiment/history').json()['latest'] is None
     end=china_today()
     values=[19,20,80,81]
@@ -22,11 +22,11 @@ def test_empty_and_strict_thresholds_and_three_year_limit(client,session):
     session.add_all([row(three_years_ago(end)-timedelta(days=1),50),row(end+timedelta(days=1),99)])
     session.commit()
     data=client.get('/api/v1/market-sentiment/history').json()
-    assert [p['state'] for p in data['points']]==['cold','normal','normal','hot']
+    assert [p['state'] for p in data['points']]==['normal','cold','normal','normal','hot']
     assert data['latest']['ratio']==.81
-    assert data['summary']['observed_days']==4
+    assert data['summary']['observed_days']==5
     assert data['summary']['cold_days']==data['summary']['hot_days']==1
-    assert data['summary']['change_pp']==pytest.approx(62)
+    assert data['summary']['change_pp']==pytest.approx(31)
 
 
 def test_display_range_includes_boundary(client,session):

@@ -16,7 +16,7 @@ import uuid
 import portalocker
 
 from app.core.cache_schedule import CacheSchedule
-from sqlalchemy import create_engine, text
+from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
 from sqlalchemy.pool import NullPool
 
@@ -283,6 +283,11 @@ class SnapshotCache:
             from app.core.etf_snapshot import validate_etf_snapshot
             validate_etf_snapshot(target)
 
+    def index_module(self, module, target):
+        if module == 'industry-momentum':
+            target.exec_driver_sql('CREATE INDEX IF NOT EXISTS ix_local_momentum_type_date ON industry_momentum (industry_type, trade_date)')
+            target.exec_driver_sql('CREATE INDEX IF NOT EXISTS ix_local_momentum_history ON industry_momentum (industry_type, industry_code, trade_date)')
+
     def copy_module(self, module, full=False):
         if module in JOURNAL_MODULES:
             result = copy_results(self, module, full)
@@ -339,9 +344,11 @@ class SnapshotCache:
                     self.validate_module(module, target)
                     if module in JOURNAL_MODULES:
                         target.exec_driver_sql('DROP TABLE IF EXISTS result_sync_cursor_v1')
-                    if module == 'industry-momentum':
-                        target.execute(text('CREATE INDEX IF NOT EXISTS ix_local_momentum_type_date ON industry_momentum (industry_type, trade_date)'))
-                        target.execute(text('CREATE INDEX IF NOT EXISTS ix_local_momentum_history ON industry_momentum (industry_type, industry_code, trade_date)'))
+                        # Legacy files may carry the retired MIN/MAX certificate.
+                        # A full key manifest, not those bounds, now certifies them.
+                        target.exec_driver_sql('DROP TABLE IF EXISTS append_cache_cursor_v1')
+                        target.exec_driver_sql('DROP TABLE IF EXISTS append_cache_version')
+                    self.index_module(module, target)
             report('校验本地快照', percent=95)
             with destination.connect() as connection:
                 if connection.exec_driver_sql('PRAGMA quick_check').scalar() != 'ok':

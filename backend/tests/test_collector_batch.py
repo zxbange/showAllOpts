@@ -114,7 +114,10 @@ def test_calculation_and_model_definitions_keep_original_rules(batch):
             compared += 1
     assert compared >= 35
     imports = [n for n in ast.walk(tree) if isinstance(n, (ast.Import, ast.ImportFrom))]
-    assert all(n in tree.body for n in imports)
+    # Self-contained factories may lazily import stable platform/standard dependencies.
+    # No strategy/project-file imports are permitted (also checked for every entrypoint).
+    assert all(n in tree.body or (isinstance(n, ast.ImportFrom) and n.module in
+        {'contextlib', 'sqlalchemy', 'sqlalchemy.dialects.mysql'}) for n in imports)
     from mysql_connector import get_database_config
     assert batch.DB_CONFIG == get_database_config()
 
@@ -219,7 +222,7 @@ def test_failure_continues_and_marks_partial_completion(batch, monkeypatch, caps
     assert result[1]['status'] == 'FAILED' and result[1]['rows'] is None
     assert result[-1]['status'] == 'SUCCESS'
     output = capsys.readouterr().out
-    assert '成功 {}，失败 1'.format(len(batch.STRATEGY_ORDER)-1) in output and '未完成' in output and 'synthetic failure' in output
+    assert '完成 {}，待续跑 0，失败或存在缺口 1'.format(len(batch.STRATEGY_ORDER)-1) in output and '未完成' in output and 'synthetic failure' in output
 
 
 def test_strategy_initialization_failure_does_not_stop_later_strategy(batch, monkeypatch, capsys):
@@ -673,3 +676,27 @@ def test_interface_collectors_are_not_registered_in_joinquant_batch(batch, monke
         with pytest.raises(ValueError):
             batch.run_all([name], db_config=CONFIG)
     assert not hasattr(batch, '_etf_strategy')
+
+
+@pytest.mark.parametrize('remaining,gaps,status', [(0, [], 'SUCCESS'), (3, [], 'PENDING'), (3, [{'date': '2026-01-05'}], 'PARTIAL')])
+def test_archive_summary_is_not_counted_as_latest_selection(batch, monkeypatch, capsys, remaining, gaps, status):
+    report = dict(added=2, skipped=4, remaining=remaining, gaps=gaps, source_kind='revised_asof')
+    monkeypatch.setattr(batch, '_load_strategy', lambda *args: lambda **kwargs: report)
+    rows = batch.run_all(['高股息选股'], options={'高股息选股': {'history_mode': True}},
+                         db_config=CONFIG, raise_on_failure=False)
+    assert rows[0]['rows'] == 2 and rows[0]['status'] == status
+    output = capsys.readouterr().out
+    assert '未覆盖最新选股' in output and '当前选股结果' not in output.split('采集结果汇总')[0]
+
+
+def test_archive_report_invalid_counts_are_not_success(batch, monkeypatch):
+    monkeypatch.setattr(batch, '_load_strategy', lambda *args: lambda **kwargs: {'added': True, 'skipped': 0, 'remaining': 0, 'gaps': []})
+    result = batch.run_all(['高增长'], db_config=CONFIG, raise_on_failure=False)
+    assert result[0]['status'] == 'FAILED' and result[0]['rows'] is None
+
+
+def test_archive_prior_unresolved_gaps_cannot_report_complete(batch, monkeypatch):
+    report = dict(added=0, skipped=4, remaining=0, gaps=[], unresolved_gaps=1)
+    monkeypatch.setattr(batch, '_load_strategy', lambda *args: lambda **kwargs: report)
+    rows = batch.run_all(['高增长'], db_config=CONFIG, raise_on_failure=False)
+    assert rows[0]['status'] == 'PARTIAL' and rows[0]['gaps'] == 1

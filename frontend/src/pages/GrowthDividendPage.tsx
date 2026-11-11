@@ -46,6 +46,7 @@ export function GrowthDividendPage() {
   const [error, setError] = useState<string | null>(null)
   const [actionError, setActionError] = useState<string | null>(null)
   const [pollError, setPollError] = useState<string | null>(null)
+  const [uncertain, setUncertain] = useState(false)
   const [busy, setBusy] = useState(false)
   const [stopping, setStopping] = useState(false)
   const [revision, setRevision] = useState(0)
@@ -83,6 +84,7 @@ export function GrowthDividendPage() {
       if (controller.signal.aborted) return
       setData(result)
       setStatus(result.status)
+      setUncertain(false)
       previous = result.status
       historyAt = Date.now()
       historyProgress = result.status.processed
@@ -129,8 +131,8 @@ export function GrowthDividendPage() {
     }
   }, [revision])
 
-  async function act(action: 'refresh' | 'cancel') {
-    if (operation.current || !admin) return
+  async function act(action: 'refresh' | 'cancel' | 'sync-joinquant') {
+    if (operation.current || !admin || uncertain || (status?.running && action !== 'cancel')) return
     const controller = new AbortController()
     operation.current = controller
     setBusy(true)
@@ -143,7 +145,10 @@ export function GrowthDividendPage() {
       if (action === 'cancel' && result.cancelled) setStopping(true)
       reload()
     } catch (reason) {
-      if (!controller.signal.aborted) setActionError(message(reason))
+      if (!controller.signal.aborted) {
+        setUncertain(true)
+        setActionError(message(reason) + ' 操作结果待确认，请重新加载后再操作。')
+      }
     } finally {
       if (operation.current === controller) operation.current = null
       if (!controller.signal.aborted) setBusy(false)
@@ -333,11 +338,20 @@ export function GrowthDividendPage() {
             </strong>
             <p>补齐当天与此前未成功更新的数据，历史记录从2018年起保留。</p>
           </div>
+          {admin && (
+            <button
+              className="button button-quiet"
+              onClick={() => void act('sync-joinquant')}
+              disabled={busy || loading || running || uncertain}
+            >
+              同步聚宽历史
+            </button>
+          )}
           {running ? (
             <button
               className="button button-quiet"
               onClick={() => void act('cancel')}
-              disabled={busy || stopping || status?.cancelling || !admin}
+              disabled={busy || stopping || status?.cancelling || !admin || uncertain}
             >
               <Square size={15} />
               {stopping || status?.cancelling ? '正在停止…' : '停止更新'}
@@ -346,7 +360,7 @@ export function GrowthDividendPage() {
             <button
               className="button button-primary"
               onClick={() => void act('refresh')}
-              disabled={busy || loading || !admin}
+              disabled={busy || loading || !admin || uncertain}
             >
               <Download size={16} />
               {busy ? '正在启动…' : '更新数据'}
@@ -375,6 +389,26 @@ export function GrowthDividendPage() {
             )}
           </div>
         </div>
+        {status?.sync_summary && (
+          <p role="status">
+            聚宽同步：新增 {status.sync_summary.inserted} 条， 已存在 {status.sync_summary.existing}{' '}
+            条，冲突保留原值 {status.sync_summary.conflicts} 条。
+            {status.sync_summary.coverage}
+          </p>
+        )}
+        {!!status?.comparison_conflicts && (
+          <details>
+            <summary>公开源对照有 {status.comparison_conflicts} 条差异，已保留原值</summary>
+            <ul>
+              {status.recent_conflicts?.map((item) => (
+                <li key={`${item.code}-${item.trade_date}-${item.candidate_close}`}>
+                  {item.trade_date} · {item.code}：已保存 {item.published_close}，公开源候选{' '}
+                  {item.candidate_close}（未覆盖）
+                </li>
+              ))}
+            </ul>
+          </details>
+        )}
         {shownError && (
           <div className="growth-dividend-error" role="alert">
             <span>

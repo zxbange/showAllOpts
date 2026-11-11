@@ -76,12 +76,24 @@ const EarningsDetailPage = lazy(() =>
   import('./pages/EarningsDetailPage').then((m) => ({ default: m.EarningsDetailPage })),
 )
 
+const ValuationRulerPage = lazy(() =>
+  import('./pages/ValuationRulerPage').then((m) => ({ default: m.ValuationRulerPage })),
+)
+
 export default function App() {
   return (
     <AccountAccess>
       <BrowserRouter>
         <Routes>
           <Route element={<Layout />}>
+            <Route
+              path="valuation-ruler"
+              element={
+                <Suspense fallback={<LoadingState />}>
+                  <ValuationRulerPage />
+                </Suspense>
+              }
+            />
             <Route path="account" element={<UsersPage />} />
             <Route index element={<HomePage />} />
             <Route

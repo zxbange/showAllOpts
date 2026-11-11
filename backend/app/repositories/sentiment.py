@@ -17,6 +17,5 @@ class SentimentRepository:
 
     def history(self, end: date) -> list[MarketSentiment]:
         return list(self.session.scalars(select(MarketSentiment).where(
-            MarketSentiment.trade_date >= three_years_ago(end),
             MarketSentiment.trade_date <= end,
         ).order_by(MarketSentiment.trade_date)))

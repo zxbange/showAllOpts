@@ -115,7 +115,7 @@ export function SentimentPage() {
             <p>
               {data?.start_date
                 ? `${data.start_date} — ${data.end_date}`
-                : '按交易日记录 · 保留最近3年'}
+                : '按交易日记录 · 保留全部已采集历史'}
             </p>
           </div>
           <div className="range-switch" aria-label="市场热度历史范围">
@@ -124,7 +124,7 @@ export function SentimentPage() {
               { days: 90, label: '近3月' },
               { days: 180, label: '近半年' },
               { days: 365, label: '近1年' },
-              { days: 0, label: '近3年' },
+              { days: 0, label: '全部' },
             ].map((range) => (
               <button
                 key={range.days}

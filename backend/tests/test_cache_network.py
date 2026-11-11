@@ -35,8 +35,8 @@ def test_reads_use_bounded_buffered_pages_across_composite_key_boundaries(cached
     session.commit()
     statements=[]
     def capture(conn, cursor, sql, params, context, many):
-        if 'GROUP BY' in sql:
-            statements.append(sql)
+        if sql.startswith(('PRAGMA main.table_info(', 'PRAGMA temp.table_info(')):
+            # Optional journal detection is read-only and has no result history.
             return
         assert context.execution_options.get('stream_results') is False
         assert 'ORDER BY' in sql and 'LIMIT' in sql
@@ -45,12 +45,14 @@ def test_reads_use_bounded_buffered_pages_across_composite_key_boundaries(cached
     event.listen(engine, 'before_cursor_execute', capture)
     try:
         cache.refresh('industry-momentum', background=False)
-        assert len(statements)==5  # Bounds + 1 sw_l1 page + 3 sw_l2 pages.
-        assert 'GROUP BY' in statements[0] and all('WHERE' in sql for sql in statements[1:])
+        assert len(statements)==4  # Six result rows, then the terminal empty page.
+        assert 'WHERE' not in statements[0] and all('WHERE' in sql for sql in statements[1:])
+        assert not any('GROUP BY' in sql for sql in statements)
         statements.clear()
         cache.refresh('industry-momentum', background=False)
-        assert len(statements)==1
-        assert 'GROUP BY' in statements[0]
+        assert len(statements)==4  # Legacy fallback scans every key, even on no-op.
+        assert all('industry_momentum.updated_at' in sql for sql in statements)
+        assert all('industry_momentum.momentum,' not in sql for sql in statements)
     finally:
         event.remove(engine, 'before_cursor_execute', capture)
     assert_matches(cache, session, 'industry-momentum')

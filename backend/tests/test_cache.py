@@ -111,9 +111,9 @@ def test_refresh_selects_only_source_columns_and_does_not_write_source(cached, e
     try: cache.refresh(background=False)
     finally: event.remove(engine,'before_cursor_execute',record)
     selects = [s for s in statements if s.lstrip().startswith('SELECT')]
-    # Append modules use bounds plus payload only for nonempty partitions.
-    # ETF uses value reconciliation now, rather than append-only date bounds.
-    assert sum('GROUP BY' in sql for sql in selects) == 4  # Includes earnings completeness counts.
+    # Only crowding uses append bounds. Momentum/breadth without journals use
+    # complete manifests so newly restored dates cannot hide within old bounds.
+    assert sum('GROUP BY' in sql for sql in selects) == 2  # Includes earnings completeness counts.
     assert any('FROM etf_price_daily' in sql for sql in selects)
     for _, models in MODULES.values():
         for model in models:
@@ -157,7 +157,7 @@ def test_daily_schedule_and_restart_do_not_duplicate_completed_slot(cached, engi
     monkeypatch.setattr('app.core.cache.now', lambda: evening)
     cache.tick(evening)
     second = cache.read_state()['modules']['industry-momentum']['file']
-    assert second == first  # Scheduled no-op reuses the immutable snapshot.
+    assert second != first  # No journal: the scheduled refresh reconciles all keys.
     assert cache.read_state()['scheduled_slot'] == latest_slot(evening, '07:00').isoformat()
     cache.tick(evening+timedelta(seconds=30))
     assert cache.read_state()['modules']['industry-momentum']['file'] == second

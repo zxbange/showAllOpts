@@ -66,7 +66,7 @@ def test_history_incremental_backfill_corrections_deletions_and_no_change(cached
     assert_matches(cache, session, module)
 
 
-def test_many_new_rows_use_one_date_range_without_duplicate_rows(cached, session, engine):
+def test_many_new_rows_use_complete_manifest_and_bounded_key_batches(cached, session, engine):
     _, cache = cached
     cache.refresh('industry-momentum', background=False)
     session.add_all([momentum_row(date(2026, 1, 7), str(i), i) for i in range(501)])
@@ -77,9 +77,11 @@ def test_many_new_rows_use_one_date_range_without_duplicate_rows(cached, session
     event.listen(engine, 'before_cursor_execute', capture)
     try: cache.refresh('industry-momentum', background=False)
     finally: event.remove(engine, 'before_cursor_execute', capture)
-    assert len(statements) == 2  # Bounds plus one payload page.
-    assert 'GROUP BY' in statements[0][0]
-    assert 'trade_date >' in statements[1][0]
+    assert len(statements) == 4  # Full key manifest plus 250 + 250 + 1 changed keys.
+    assert 'industry_momentum.updated_at' in statements[0][0]
+    assert 'GROUP BY' not in statements[0][0]
+    assert all(' IN (' in sql and 'trade_date >' not in sql for sql, _ in statements[1:])
+    assert sorted(len(params[:-2]) for _, params in statements[1:]) == [3, 750, 750]
     assert_matches(cache, session, 'industry-momentum')
 
 

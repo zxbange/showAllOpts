@@ -12,14 +12,18 @@ import httpx
 
 
 _SOURCES = frozenset({
+    'eastmoney_dated_universe', 'eastmoney_listing_metadata',
     'exchange_master', 'sse_current', 'sse_delisted', 'szse_current', 'szse_cdr',
     'szse_delisted', 'szse_listing_suspended',
 })
 _STAGES = frozenset({
+    'cache_read', 'cache_write', 'window_validation',
     'catalogue_validation', 'request', 'json_parse', 'page_validation',
     'metadata_validation', 'workbook_parse', 'rows_validation',
 })
 _CODES = frozenset({
+    'dated_report_invalid', 'dated_report_cache_invalid', 'dated_membership_window_unverified',
+    'dated_membership_gap', 'cache_corrupt', 'invalid_numeric',
     'ambiguous_listing_intervals', 'capture_date_changed', 'count_changed', 'duplicate_symbol',
     'empty_universe', 'future_universe', 'http_error', 'incomplete_page',
     'invalid_count', 'invalid_date', 'invalid_interval', 'invalid_json',

@@ -41,6 +41,8 @@ class MicrocapSummary(BaseModel):
 
 
 class MicrocapHistory(BaseModel):
+    series_id: str | None = None
+    reconstruction: str | None = None
     start_date: date | None = None
     end_date: date | None = None
     latest: MicrocapLatest | None = None

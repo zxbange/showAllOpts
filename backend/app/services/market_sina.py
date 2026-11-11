@@ -543,7 +543,10 @@ def _require_heat_evidence(evidence):
     unknown Sina fields into verified data. The live adapter cannot supply them.
     """
     if (not isinstance(evidence, dict)
-            or any(evidence.get(key) is not True for key in _HEAT_EVIDENCE)
+            or any(evidence.get(key) is not True for key in _HEAT_EVIDENCE if key != 'listing_verified')
+            or not (evidence.get('listing_verified') is True or
+                    (evidence.get('dated_membership_verified') is True
+                     and isinstance(evidence.get('membership_window'), dict)))
             or evidence.get('price_basis') != 'qfq'
             or not isinstance(evidence.get('adjustment_basis'), str)
             or not evidence['adjustment_basis'].strip()):
@@ -557,8 +560,44 @@ def _above_joinquant(close, mean):
     return (close - mean) > max(abs(close), abs(mean)) * 1e-12
 
 
-def calculate_joinquant_quote(symbol, day, *, calendar, rows, listed_from,
-                             listed_until, evidence, snapshot):
+def verified_membership_sessions(symbol, day, sessions, window):
+    """Independent 20-day audit mask, never IPO/relisting inferred from absence."""
+    from app.services.market_history import DATED_SOURCE, DATED_EVIDENCE_VERSION
+    if (not isinstance(window, dict) or window.get('symbol') != symbol
+            or window.get('source_id') != DATED_SOURCE
+            or type(window.get('evidence_version')) is not int or window['evidence_version'] != DATED_EVIDENCE_VERSION
+            or window.get('target_date') != str(day)):
+        raise SinaDataError('逐日证券范围证据不完整。', code='dated_membership_window_unverified')
+    records = window.get('sessions')
+    if (not isinstance(records, list) or len(records) != 20
+            or [item.get('date') if isinstance(item, dict) else None for item in records] != [str(d) for d in sessions]
+            or any(item.get('audited') is not True or type(item.get('present')) is not bool
+                   or not re.fullmatch(r'[0-9a-f]{64}', str(item.get('report_digest', '')))
+                   or not re.fullmatch(r'[0-9a-f]{64}', str(item.get('audit_digest', ''))) for item in records)):
+        raise SinaDataError('完整二十日证券范围尚未核实。', code='dated_membership_window_unverified')
+    present = [item['present'] for item in records]
+    if all(present):
+        if window.get('ipo_evidence') is not None:
+            raise SinaDataError('完整窗口不应混入其他上市范围证明。', code='dated_membership_window_unverified')
+        return set(sessions)
+    if not present[-1] or True not in present:
+        raise SinaDataError('目标日证券身份缺失。', code='dated_membership_gap')
+    first = present.index(True)
+    if not all(present[first:]):
+        raise SinaDataError('证券存在中间缺口或重新进入。', code='dated_membership_gap')
+    from app.services.market_eastmoney_listing import validate_listing_evidence
+    ipo = window.get('ipo_evidence')
+    try:
+        validate_listing_evidence(ipo, symbol, day)
+    except ValueError:
+        raise SinaDataError('上市日期原始证明不完整或身份冲突。', code='dated_membership_gap') from None
+    if ipo.get('ipo_date') != str(sessions[first]):
+        raise SinaDataError('显式上市日期与逐日证券范围不吻合。', code='dated_membership_gap')
+    return set(sessions[first:])
+
+
+def calculate_joinquant_quote(symbol, day, *, calendar, rows, listed_from=None,
+                             listed_until=None, evidence, snapshot, membership_window=None):
     """Apply the original script to one stock's verified 20-session window.
 
     This pure function makes no API calls. The caller must already have verified
@@ -578,9 +617,18 @@ def calculate_joinquant_quote(symbol, day, *, calendar, rows, listed_from,
     sessions = [_day(value) for value in calendar]
     if (len(sessions) != 20 or sessions != sorted(set(sessions)) or sessions[-1] != day):
         raise SinaDataError('必须提供截至目标日期的连续 20 个市场交易日。', code='invalid_calendar')
-    start, end = _day(listed_from), _day(listed_until)
-    if not start <= day <= end:
-        raise SinaDataError('目标日期不在已验证的上市区间内。', code='listing_date_mismatch')
+    start = end = None
+    if membership_window is not None:
+        if listed_from is not None or listed_until is not None or evidence.get('dated_membership_verified') is not True:
+            raise SinaDataError('逐日证券证据与上市区间不可混用。', code='dated_membership_window_unverified')
+        expected = verified_membership_sessions(symbol, day, sessions, membership_window)
+        if evidence.get('membership_window') != membership_window:
+            raise SinaDataError('逐日证券证据来源不一致。', code='dated_membership_window_unverified')
+    else:
+        start, end = _day(listed_from), _day(listed_until)
+        if not start <= day <= end:
+            raise SinaDataError('目标日期不在已验证的上市区间内。', code='listing_date_mismatch')
+        expected = {current for current in sessions if start <= current <= end}
     if not isinstance(rows, (list, tuple)):
         raise SinaDataError('复权日线结构无效。', code='invalid_observations')
     by_day = {}
@@ -588,10 +636,9 @@ def calculate_joinquant_quote(symbol, day, *, calendar, rows, listed_from,
         if not isinstance(row, dict):
             raise SinaDataError('复权日线结构无效。', code='invalid_observation')
         current = _day(row.get('date'))
-        if current in by_day or current not in sessions or not start <= current <= end:
+        if current in by_day or current not in sessions or current not in expected:
             raise SinaDataError('复权日线日期重复或超出有效区间。', code='invalid_observation_date')
         by_day[current] = row
-    expected = {current for current in sessions if start <= current <= end}
     if set(by_day) != expected:
         raise SinaDataError('已上市交易日的停牌或复权行情缺失。', code='incomplete_heat_window')
     values, previous, filled = [], None, []
@@ -638,7 +685,8 @@ def calculate_joinquant_quote(symbol, day, *, calendar, rows, listed_from,
         'price_basis': 'qfq', 'denominator': 'eligible', 'adjustment': 'qfq',
         'source': SOURCE, 'evidence': deepcopy(evidence),
         'raw': {'calendar': [str(value) for value in sessions],
-                'listing': {'start': str(start), 'end': str(end)},
+                'listing': {'start': str(start), 'end': str(end)} if start is not None else None,
+                'membership_window': deepcopy(membership_window),
                 'rows': deepcopy(rows), 'filled_paused_dates': filled},
     }
 
@@ -679,6 +727,18 @@ def aggregate_heat(universe, observations):
                 raise SinaDataError('均线记录不是已验证的聚宽口径。')
             _require_heat_evidence(observation.get('evidence'))
             expected_day = target or _day(observation.get('day'))
+            membership_expected = None
+            if observation['evidence'].get('dated_membership_verified') is True:
+                window = observation['evidence']['membership_window']
+                sessions = [_day(item['date']) for item in window.get('sessions', [])]
+                if len(sessions) != 20 or sessions != sorted(set(sessions)) or sessions[-1] != expected_day:
+                    raise SinaDataError('逐日证券窗口日期无效。', code='dated_membership_window_unverified')
+                membership_expected = verified_membership_sessions(symbol, expected_day, sessions, window)
+                bound = row.get('universe_evidence', {})
+                if (bound.get('source_id') != window['source_id']
+                        or bound.get('audit_digest') != window['sessions'][-1]['audit_digest']
+                        or bound.get('report_digest') != window['sessions'][-1]['report_digest']):
+                    raise SinaDataError('热度窗口与目标日股票池来源不一致。', code='dated_membership_window_unverified')
             if (_day(observation.get('day')) != expected_day
                     or _day(observation.get('date')) != expected_day
                     or not _snapshot_matches(row, symbol, observation)):
@@ -686,6 +746,8 @@ def aggregate_heat(universe, observations):
             status = observation.get('status')
             count = observation.get('history_count')
             paused = observation.get('paused')
+            if membership_expected is not None and count != len(membership_expected):
+                raise SinaDataError('历史长度与逐日上市证明不一致。', code='dated_membership_gap')
             if (isinstance(count, bool) or not isinstance(count, int) or not 0 < count <= 20
                     or isinstance(paused, bool) or not isinstance(paused, int) or paused not in (0, 1)):
                 raise SinaDataError('交易日窗口或停牌状态不完整。')

@@ -21,6 +21,7 @@ from sqlalchemy.orm import sessionmaker
 START_DATE = '2021-01-01'
 END_DATE = None  # 每次运行时取北京时间当天。
 MICRO_NUM = 1000
+ARCHIVE_HISTORY = True  # Notebook 入口额外重建独立历史序列，不替换2021默认。
 SAMPLE_STEP = 1  # 每个交易日采集；从 START_DATE 检查并补齐历史缺口。
 BATCH_SIZE = 1000
 RAW_FIELDS = ('micro_median', 'relative_ratio', 'crowding_ratio', 'amount_crowding_ratio')
@@ -329,7 +330,7 @@ def price_rows(codes, start, end, field):
     return result
 
 
-def eligible_codes(day):
+def eligible_codes(day, minimum=0):
     securities = get_all_securities(types=['stock'], date=day.isoformat())
     if securities is None or securities.empty or 'start_date' not in securities.columns:
         raise ValueError('股票列表或上市日期缺失。')
@@ -340,6 +341,8 @@ def eligible_codes(day):
             continue
         if (day - as_date(info['start_date'])).days >= 250:
             codes.append(code)
+    if len(codes) < minimum:
+        return codes  # 上市期过滤后的上界已不足，无需请求更早且可能未覆盖的ST。
     eligible = []
     for batch in chunks(codes):
         frame = get_extras('is_st', batch, start_date=day.isoformat(), end_date=day.isoformat())
@@ -578,11 +581,11 @@ def repair_daily_derived(Session, record, old, invalidate_next=None):
         session.close()
 
 
-def collect_daily(Session, start, end, micro_num):
+def collect_daily(Session, start, end, micro_num, archive=False):
     days = calendar(start, end)
     if not days:
         return pd.DataFrame(columns=RESULT_COLUMNS)
-    series_id = series_key(start, micro_num, 1)
+    series_id = series_key(start, micro_num, 1) + ('_archive' if archive else '')
     legacy_id = series_key(start, micro_num, 5)
     all_saved = load_daily_history(Session, series_id, china_now().date())
     saved = {day: row for day, row in all_saved.items() if day <= end}
@@ -599,7 +602,7 @@ def collect_daily(Session, start, end, micro_num):
         return pd.DataFrame(columns=RESULT_COLUMNS)
     histories = {field: sorted(Decimal(saved[day][field]) for day in days[:first]) for field in RAW_FIELDS}
     previous = stored_period(Session, series_id, days[first-1]) if first else None
-    legacy = load_daily_history(Session, legacy_id, end)
+    legacy = {} if archive else load_daily_history(Session, legacy_id, end)
     records = []
     reused = 0
     for day in days[first:]:
@@ -630,7 +633,93 @@ def collect_daily(Session, start, end, micro_num):
     return pd.DataFrame(records, columns=RESULT_COLUMNS)
 
 
-def run(start_date=START_DATE, end_date=END_DATE, micro_num=MICRO_NUM, sample_step=SAMPLE_STEP, skip_existing=True):
+
+class MicrocapArchiveCoverage(Base):
+    __tablename__ = 'microcap_archive_coverage'
+    __table_args__ = {'mysql_engine': 'InnoDB', 'mysql_charset': 'utf8mb4'}
+    micro_num = Column(Integer, primary_key=True)
+    trade_date = Column(Date, primary_key=True)
+    status = Column(String(40), nullable=False)
+    eligible_count = Column(Integer, nullable=True)
+    updated_at = Column(DateTime, nullable=False)
+
+
+def collect_archive(Session, end, micro_num):
+    """Current-visible reconstruction, not an unrevised point-in-time archive.
+
+    Persist the tested prefix separately. Unknown source coverage is never a
+    zero observation or a claim that the indicator could not exist that day.
+    Once an archive has an anchor, never prepend/rebase it silently.
+    """
+    raw = get_all_trade_days()
+    full = _checked_trade_days(raw)
+    if not full:
+        raise ValueError('无法验证完整历史交易日历。')
+    days = [day for day in full if day <= end]
+    if not days:
+        return pd.DataFrame(columns=RESULT_COLUMNS)
+    if calendar(days[0], days[-1]) != days:
+        raise ValueError('完整历史日历与区间日历不一致。')
+    session = Session()
+    try:
+        anchors = session.query(MicrocapTemperature.series_id).filter(
+            MicrocapTemperature.series_id.like('micro{}_1d_%_v1_archive'.format(micro_num))).distinct().all()
+        if len(anchors) > 1:
+            raise ValueError('存在多个历史归档基点，必须明确选择，不能拼接。')
+        if anchors:
+            key = anchors[0][0]
+            first = datetime.datetime.strptime(key.split('_')[2], '%Y%m%d').date()
+            return collect_daily(Session, first, end, micro_num, archive=True)
+    finally:
+        session.close()
+    first = None
+    unknown = 0
+    for index, day in enumerate(days):
+        count = None
+        if index < 4:
+            status = 'insufficient_calendar_warmup'
+        else:
+            codes = eligible_codes(day, minimum=micro_num)
+            count = len(codes)
+            if count < micro_num:
+                status = 'insufficient_eligible_securities'
+            else:
+                rows = fundamental_rows(codes, valuation,
+                    ('market_cap', 'turnover_ratio', 'pe_ratio', 'pb_ratio'), day)
+                if not rows:
+                    status = 'unknown_valuation_coverage'
+                    unknown += 1
+                else:
+                    # Validation errors, missing endpoint prices and permission
+                    # errors must stop, never convert them into non-computable days.
+                    calculate_period(day, None, micro_num)
+                    status = 'verified_anchor_current_visible'
+                    first = day
+        session = Session()
+        try:
+            old = session.query(MicrocapArchiveCoverage).filter_by(micro_num=micro_num, trade_date=day).first()
+            if old is None:
+                session.add(MicrocapArchiveCoverage(micro_num=micro_num, trade_date=day,
+                    status=status, eligible_count=count, updated_at=china_now()))
+            else:
+                old.status, old.eligible_count, old.updated_at = status, count, china_now()
+            session.commit()
+        except BaseException:
+            session.rollback()
+            raise
+        finally:
+            session.close()
+        if first is not None:
+            break
+    print('历史归档：首个已验证基点 {}；此前估值覆盖未知 {} 日。不是未修订PIT，也不承诺平台最早完整覆盖。'.format(first, unknown))
+    if first is None:
+        return pd.DataFrame(columns=RESULT_COLUMNS)
+    return collect_daily(Session, first, end, micro_num, archive=True)
+
+
+def run(start_date=START_DATE, end_date=END_DATE, micro_num=MICRO_NUM, sample_step=SAMPLE_STEP, skip_existing=True, archive_history=False):
+    if not isinstance(archive_history, builtins.bool):
+        raise ValueError('archive_history 必须是布尔值。')
     start = as_date(start_date)
     now = china_now()
     today = now.date()
@@ -651,7 +740,10 @@ def run(start_date=START_DATE, end_date=END_DATE, micro_num=MICRO_NUM, sample_st
         Session = sessionmaker(bind=engine)
         _install_result_journal(Session, (MicrocapTemperature,), 'microcap-temperature')
         if sample_step == 1:
-            return collect_daily(Session, start, end, micro_num)
+            current = collect_daily(Session, start, end, micro_num)
+            if archive_history:
+                collect_archive(Session, end, micro_num)
+            return current
         last, previous, histories = load_resume(Session, series_id, include_latest=skip_existing)
         if last is not None and last > today:
             raise ValueError('最新入库日期晚于今天，请检查已有数据。')
@@ -690,6 +782,6 @@ def run(start_date=START_DATE, end_date=END_DATE, micro_num=MICRO_NUM, sample_st
 
 
 if __name__ == '__main__':
-    temperature_df = run()
+    temperature_df = run(archive_history=ARCHIVE_HISTORY)
     print('本次完成 {} 期微盘温度计入库。'.format(len(temperature_df)))
     print(temperature_df.tail(10).to_string(index=False))

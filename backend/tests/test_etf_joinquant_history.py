@@ -29,6 +29,11 @@ def backfill(tmp_path):
     spec = importlib.util.spec_from_file_location('joinquant_history_offline', SCRIPT)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
+    module.historical_run = module.run
+    def bounded_run(*args, **kwargs):
+        kwargs.setdefault('start_date', '2024-01-01')
+        return module.historical_run(*args, **kwargs)
+    module.run = bounded_run
     module.china_now = lambda: dt.datetime(2024, 1, 7, 8)  # Sunday; yesterday is Saturday.
     engine = create_engine('sqlite:///' + str(tmp_path / 'history.sqlite'))
     module.Base.metadata.create_all(engine)
@@ -90,7 +95,7 @@ def test_defaults_catalog_and_exact_three_table_schema(backfill):
     spec = importlib.util.spec_from_file_location('original_history', SCRIPT)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
-    assert module.START_DATE == '2024-01-01' and module.END_DATE is None
+    assert module.START_DATE is None and module.END_DATE is None
     assert module.ETF_GROUPS == ETF_GROUPS
     assert sum(map(len, module.ETF_GROUPS.values())) == 18
     for actual, expected in zip(module.MODELS, (ETFShare, ETFPrice, ETFTradingDay)):
@@ -106,7 +111,7 @@ def test_notebook_entry_creates_empty_tables_writes_and_is_repeatable(backfill):
         model.__table__.drop(c.engine)
     assert c.module.WRITE_DATABASE is True
     assert c.module.CREATE_TABLES is True
-    assert c.module.ALLOW_PARTIAL is False
+    assert c.module.ALLOW_PARTIAL is None
     # Execute the actual notebook entry with offline APIs and an empty target DB.
     tree = ast.parse(SCRIPT.read_text(encoding='utf-8'))
     entry = compile(ast.Module(body=[tree.body[-1]], type_ignores=[]), str(SCRIPT), 'exec')
@@ -162,17 +167,17 @@ def test_pasted_notebook_with_numpy_names_previews_writes_and_repeats(backfill, 
                 namespace[name] = None
                 monkeypatch.setattr(namespace['_builtins'], name, getattr(c.jq, name), raising=False)
     # Exercise the real API resolver too: it also used an unqualified any(generator).
-    preview = namespace['run'](write=False)
+    preview = namespace['run'](start_date='2024-01-01', write=False)
     assert preview['source_complete'] is True and preview['written'] is False
     assert not c.connections
-    written = namespace['run'](write=True)
+    written = namespace['run'](start_date='2024-01-01', write=True)
     assert written['written'] is True
     assert all(count['inserted'] == 4 for count in written['counts'].values())
-    repeated = namespace['run'](write=True)
+    repeated = namespace['run'](start_date='2024-01-01', write=True)
     assert all(count['inserted'] == 0 and count['different_preserved'] == 0
                for count in repeated['counts'].values())
     del c.prices[CODE, DATES[3]]
-    incomplete = namespace['run'](write=True)
+    incomplete = namespace['run'](start_date='2024-01-01', write=True)
     assert incomplete['source_complete'] is False and incomplete['written'] is False
     assert len(c.connections) == 2
     for key in ('write', 'allow_partial', 'create_tables'):
@@ -422,3 +427,73 @@ def test_in_range_split_matches_web_protection_and_raw_values_retained(backfill,
     assert by_day[DATES[3]].market_value is None
     assert by_day[DATES[3]].excluded_funds == [CODE]
     assert by_day[DATES[-1]].market_value == '200.00000000'
+
+
+def test_auto_history_lists_earliest_and_persists_source_gaps(backfill):
+    c = backfill
+    c.info[CODE].start_date = DATES[2]
+    del c.shares[(CODE, DATES[2])]
+    first = c.module.historical_run(write=True)
+    assert first['start_date'] == DATES[2]
+    assert first['written'] and not first['source_complete']
+    assert first['completion_status'] == 'partial_unknown' and first['coverage_persisted']
+    assert first['source_coverage'][CODE]['shares']['first_observed'] == DATES[3]
+    with sessionmaker(bind=c.engine)() as session:
+        status = session.query(c.module.ETFHistoryCoverage).filter_by(fund_code=CODE, trade_date=DATES[2]).one()
+        assert status.share_status == 'source_missing_unknown' and status.price_status == 'observed'
+    c.shares[(CODE, DATES[2])] = 100
+    second = c.module.historical_run(write=True)
+    assert second['source_complete']
+    assert second['counts']['etf_share_daily']['inserted'] == 1
+    with sessionmaker(bind=c.engine)() as session:
+        assert session.query(c.module.ETFHistoryCoverage).filter_by(trade_date=DATES[2]).one().share_status == 'observed'
+    assert all(row.trade_date >= DATES[2] for row in get_rows(c, c.module.ETFShare))
+
+
+def test_calendar_detects_interior_omission(backfill):
+    c = backfill
+    real = c.jq.get_trade_days
+    def broken(**kwargs):
+        result = real(**kwargs)
+        return [day for day in result if day != DATES[3]] if kwargs.get('start_date') else result
+    c.jq.get_trade_days = broken
+    with pytest.raises(c.module.HistoryError):
+        c.module.run(write=True)
+    assert not c.connections
+
+
+def test_auto_history_window_commits_resume_without_overwrite(backfill, monkeypatch):
+    c = backfill
+    c.info[CODE].start_date = DATES[2]
+    c.module.WINDOW_SIZE = 2
+    real = c.module.save_records
+    calls = []
+    def fail_second(*args, **kwargs):
+        calls.append(True)
+        if len(calls) == 2:
+            raise c.module.HistoryError('interrupted')
+        return real(*args, **kwargs)
+    monkeypatch.setattr(c.module, 'save_records', fail_second)
+    with pytest.raises(c.module.HistoryError):
+        c.module.historical_run(write=True)
+    assert len(get_rows(c, c.module.ETFShare)) == 2
+    monkeypatch.setattr(c.module, 'save_records', real)
+    result = c.module.historical_run(write=True)
+    assert result['counts']['etf_share_daily']['inserted'] == 2
+    assert result['counts']['etf_share_daily']['preserved'] == 2
+
+
+def test_auto_history_coverage_and_data_rollback_together(backfill):
+    c = backfill
+    c.info[CODE].start_date = DATES[2]
+    def fail_coverage(conn, cursor, statement, parameters, context, executemany):
+        if statement.startswith('INSERT INTO etf_history_coverage'):
+            raise RuntimeError('injected')
+    event.listen(c.engine, 'before_cursor_execute', fail_coverage)
+    try:
+        with pytest.raises(c.module.HistoryError, match='回滚'):
+            c.module.historical_run(write=True)
+    finally:
+        event.remove(c.engine, 'before_cursor_execute', fail_coverage)
+    for model in c.module.MODELS + (c.module.ETFHistoryCoverage,):
+        assert not get_rows(c, model)

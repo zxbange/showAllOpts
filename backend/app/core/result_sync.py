@@ -17,7 +17,7 @@ from app.core.etf_snapshot import ETFMembersMissing, validate_etf_snapshot
 from app.core.cache_sync import chunks, key_filter, read_batches, transfer
 from app.core.sync_progress import report
 
-MODULE_IDS = {'market-sentiment', 'microcap-temperature', 'etf-momentum'}
+MODULE_IDS = {'market-sentiment', 'microcap-temperature', 'etf-momentum', 'industry-momentum', 'microcap-breadth'}
 LOG = logging.getLogger(__name__)
 META = MetaData()
 HEAD = Table('result_sync_head', META,
@@ -134,6 +134,7 @@ def copy_results(cache, module, full=False):
                         report('建立结果同步基线', percent=10)
                         for table in tables:
                             transfer(source, target, table)
+                    cache.index_module(module, target)
                     try:
                         cache.validate_module(module, target)
                     except ETFMembersMissing as missing:

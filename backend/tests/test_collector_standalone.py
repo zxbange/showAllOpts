@@ -15,7 +15,9 @@ def test_joinquant_entry_only_uses_shared_database_configuration(path):
     forbidden_modules = {'collectors', 'collector_rules', 'scripts', 'app', 'importlib', 'runpy'}
     sibling_modules = {p.stem for p in ENTRY_POINTS}
     if path.name != 'ETF分类去重_研究版.py':
-        assert any(isinstance(n, ast.ImportFrom) and n.module == 'mysql_connector' for n in tree.body)
+        assert any((isinstance(n, ast.ImportFrom) and n.module == 'mysql_connector')
+                   or (isinstance(n, ast.Import) and any(a.name == 'mysql_connector' for a in n.names))
+                   for n in ast.walk(tree)), 'Database configuration must use the shared connector, including lazy preview-safe imports'
         for node in ast.walk(tree):
             if isinstance(node, ast.Assign):
                 names = {n.id for n in node.targets if isinstance(n, ast.Name)}

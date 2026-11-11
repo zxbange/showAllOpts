@@ -37,7 +37,7 @@ DB_OPTIONS = get_database_options()
 # 连接参数只配置一次；重试仅针对连接，不重放写入事务。
 
 # end_date=None：每次运行取北京时间当天。下列参数按策略分组配置。
-STRATEGY_CONFIG = {'ETF动量热度': {'end_date': None, 'initial_trade_days': 180, 'retention_trade_days': 180, 'min_size_yi': 30}}
+STRATEGY_CONFIG = {'ETF动量热度': {'end_date': None, 'initial_trade_days': 180, 'retention_trade_days': 180, 'min_size_yi': 30, 'history_mode': False, 'start_date': None, 'from_platform_earliest': False, 'include_lof': True}}
 
 STRATEGY_ORDER = ['ETF动量热度']
 STRATEGY_OPTIONS = {}  # 原六策略固定只新增；高股息选股和高增长每次重算并替换最新快照。
@@ -47,7 +47,7 @@ PROGRESS_INTERVAL_SECONDS = 5.0  # 最多每隔多少秒刷新；等待接口/�
 # ==================== 公共能力 ====================
 # Notebook 重复粘贴时沿用当前内核的锁；不创建锁文件。
 _RUN_LOCK = globals().get('_RUN_LOCK') or threading.Lock()
-_API_NAMES = ('get_all_securities', 'get_trade_days', 'get_price', 'get_extras',
+_API_NAMES = ('get_all_trade_days', 'get_all_securities', 'get_trade_days', 'get_price', 'get_extras',
               'get_industries', 'get_industry_stocks', 'get_industry', 'get_fundamentals',
               'query', 'valuation', 'indicator', 'income', 'finance', 'jy')
 _PREVIEW_COLUMNS = {'ETF动量热度': ('trade_date', 'code', 'name', 'score', 'annual_return', 'r2')}
@@ -1013,8 +1013,191 @@ def _etf_heat_strategy(_apis, _config):
             settings['retention_trade_days'], retention_start, deleted))
         return deleted
 
-    def run(end_date=None, skip_existing=True, repair_missing=False):
+    # Separate tables: ETF-only history must never enter the mixed ETF/LOF chart.
+    HistoryBase = declarative_base()
+
+    class HistoryHeat(HistoryBase):
+        __tablename__ = 'etf_momentum_heat_etf_history'
+        trade_date = Column(Date, primary_key=True)
+        code = Column(String(16), primary_key=True)
+        name = Column(String(128), nullable=False)
+        score = Column(Numeric(28, 10))
+        close = Column(Numeric(24, 8))
+        annual_return = Column(Numeric(28, 10))
+        r2 = Column(Numeric(24, 10))
+        reference_pass = Column(Integer)
+        details = Column(JSON, nullable=False)
+        updated_at = Column(DateTime, nullable=False)
+
+    class HistoryPool(HistoryBase):
+        __tablename__ = 'etf_momentum_pool_etf_history'
+        trade_date = Column(Date, primary_key=True)
+        rule_version = Column(String(48), nullable=False)
+        members = Column(JSON, nullable=False)
+        updated_at = Column(DateTime, nullable=False)
+
+    def historical_pool(day):
+        days = _checked_trade_days(api('get_trade_days')(end_date=day, count=LOOKBACK_DAYS), end=day)
+        if not days or days[-1] != day:
+            raise ValueError('{} 规模交易日历缺失'.format(day))
+        universe = api('get_all_securities')(types=['etf'], date=day)
+        if universe is None or universe.index.has_duplicates:
+            raise ValueError('{} ETF历史列表缺失或重复'.format(day))
+        if universe.empty:
+            return []
+        table = finance.FUND_INVEST_TARGET
+        frame = read_pages(table, (table.pub_date <= day, table.start_date <= day))
+        required = {'code', 'pub_date', 'start_date', 'end_date', 'traced_index_code', 'traced_index_name'}
+        if not required.issubset(frame.columns):
+            raise ValueError('{} 历史跟踪标的字段或数据缺失'.format(day))
+        targets = {}
+        for row in frame.to_dict('records'):
+            if not text(row['pub_date']) or not text(row['start_date']):
+                raise ValueError('{} 跟踪标的缺少生效/发布日期'.format(day))
+            if as_date(row['pub_date']) > day or as_date(row['start_date']) > day:
+                raise ValueError('{} 跟踪标的含未来记录'.format(day))
+            if text(row['end_date']) and as_date(row['end_date']) < day:
+                continue
+            if row['code'] in universe.index:
+                targets.setdefault(row['code'], set()).add((text(row['traced_index_code']), text(row['traced_index_name'])))
+        historical = universe.copy()
+        for code in historical.index:
+            pairs = targets.get(code, set())
+            if len(pairs) != 1 or not next(iter(pairs))[1]:
+                raise ValueError('{} {} 历史跟踪标的不唯一或缺失，不能重建完整ETF候选排名'.format(day, code))
+            # Names returned by the listing API need not be historically versioned.
+            historical.loc[code, 'display_name'] = next(iter(pairs))[1]
+        records = target_catalog(historical, day)
+        for row in records:
+            if row['category'] not in CATEGORIES:
+                raise ValueError('{} {} 历史分类无法核实'.format(day, row['code']))
+        sizes = load_sizes([row['code'] for row in records], days)
+        groups = {}
+        for row in records:
+            groups.setdefault(row['group'], []).append(row)
+        for members in groups.values():
+            common = set(days)
+            for member in members:
+                common.intersection_update(sizes.get(member['code'], {}))
+            if not common or len(days)-1-days.index(builtins.max(common)) > MAX_STALE_TRADE_DAYS:
+                raise ValueError('{} 候选组历史规模不完整：{}'.format(day, ','.join(r['code'] for r in members)))
+            if len({r['category'] for r in members}) != 1:
+                raise ValueError('{} 候选组分类冲突'.format(day))
+        return select_largest(records, sizes, days)
+
+    def history_record(member, day):
+        code = member['code']
+        warm = _checked_trade_days(api('get_trade_days')(end_date=day, count=26), end=day)
+        if not warm or warm[-1] != day:
+            raise ValueError('{} 行情预热交易日历缺失'.format(day))
+        frames = []
+        for fields, adjustment in [(['close', 'paused'], None), (['close'], 'post')]:
+            frame = api('get_price')(code, start_date=warm[0], end_date=day, frequency='daily', fields=fields, skip_paused=False, fq=adjustment)
+            if frame is None or frame.empty or not set(fields).issubset(frame.columns):
+                raise ValueError('{} {} 历史行情缺失'.format(day, code))
+            frame = frame.copy()
+            frame.index = pd.Index(pd.to_datetime(frame.index).date)
+            if frame.index.has_duplicates or not frame.index.is_monotonic_increasing or not set(frame.index).issubset(warm):
+                raise ValueError('{} {} 历史行情日期异常'.format(day, code))
+            frames.append(frame)
+        raw, adjusted = frames
+        listed = as_date(member['listed_date']) if member.get('listed_date') else warm[0]
+        for date in warm:
+            if date < listed:
+                continue
+            if date not in raw.index or date not in adjusted.index:
+                raise ValueError('{} {} 历史行情缺口'.format(date, code))
+            paused = raw.loc[date, 'paused']
+            if pd.isna(paused) or paused not in (0, 1):
+                raise ValueError('{} {} 停牌状态无效'.format(date, code))
+            if not paused and (positive(raw.loc[date, 'close']) is None or positive(adjusted.loc[date, 'close']) is None):
+                raise ValueError('{} {} 历史价格无效'.format(date, code))
+        values = metrics([positive(adjusted.loc[d, 'close']) if d in adjusted.index else None for d in warm], bool(raw.loc[day, 'paused']))
+        values['details'].update(selection_scope='etf_only_point_in_time', selection_date=str(day), display_name_source='published_tracking_target', rule_version=RULE_VERSION)
+        return dict(trade_date=day, code=code, name=member['name'], close=price_value(raw.loc[day, 'close']), updated_at=china_now(), **values)
+
+    def run_history(start_date=None, end_date=None, from_platform_earliest=False, include_lof=True, repair_missing=False):
+        if include_lof is not False:
+            raise ValueError('无法核实 FUND_MAIN_INFO 的历史LOF分类；混合候选池历史恢复已跳过。显式 include_lof=False 仅恢复独立ETF历史表，不写原混合图表。')
+        if not isinstance(from_platform_earliest, bool) or not isinstance(repair_missing, bool):
+            raise ValueError('历史开关必须为布尔值')
+        if from_platform_earliest and start_date is not None:
+            raise ValueError('start_date 与 from_platform_earliest 不能同时指定')
+        if not from_platform_earliest and start_date is None:
+            raise ValueError('历史恢复须指定 start_date 或 from_platform_earliest=True')
+        now = china_now()
+        end = as_date(end_date) if end_date is not None else now.date()
+        if end > now.date():
+            raise ValueError('结束日期不能晚于今天')
+        end = _closed_day(end, now)
+        if from_platform_earliest:
+            all_days = _checked_trade_days(api('get_all_trade_days')())
+            if not all_days:
+                raise ValueError('平台完整交易日历为空')
+            days = [day for day in all_days if day <= end]
+        else:
+            start = as_date(start_date)
+            if start > end:
+                raise ValueError('开始日期晚于结束日期')
+            days = _checked_trade_days(api('get_trade_days')(start_date=start, end_date=end), start=start, end=end)
+        if not days:
+            raise ValueError('请求范围无交易日')
+        report = []
+        with database_scope(HistoryBase, _config) as Session:
+            for day in _progress_items(days, 'ETF独立历史恢复', str):
+                try:
+                    members = historical_pool(day)
+                    encoded = json.loads(json.dumps(members, default=str, ensure_ascii=False, allow_nan=False))
+                    with session_scope(Session) as session:
+                        existing = {row.code: row for row in session.query(HistoryHeat).filter_by(trade_date=day).all()}
+                        head = session.query(HistoryPool).filter_by(trade_date=day).first()
+                        if head and (head.rule_version != RULE_VERSION or head.members != encoded):
+                            raise ValueError('历史候选池与已存快照不一致，拒绝覆盖')
+                        if set(existing) - {m['code'] for m in members}:
+                            raise ValueError('已有历史结果不属于当日候选池，拒绝混用')
+                        added = 0
+                        for member in members:
+                            old = existing.get(member['code'])
+                            if old is not None and (old.score is not None or not repair_missing):
+                                continue
+                            row = history_record(member, day)
+                            if old is None:
+                                session.add(HistoryHeat(**row))
+                                added += 1
+                            elif row['score'] is not None:
+                                for key, value in row.items():
+                                    setattr(old, key, value)
+                                added += 1
+                        if head is None:
+                            session.add(HistoryPool(trade_date=day, rule_version=RULE_VERSION, members=encoded, updated_at=china_now()))
+                        session.commit()
+                    report.append(dict(trade_date=day, status='COMPLETE', members=len(members), written=added, error=''))
+                except Exception as exc:
+                    report.append(dict(trade_date=day, status='FAILED', members=None, written=0, error=_safe_error(exc, _config)))
+                    _progress_note('{} 历史恢复失败：{}'.format(day, report[-1]['error']))
+        result = pd.DataFrame(report)
+        if builtins.any(row['status'] == 'FAILED' for row in report):
+            error = ValueError('ETF独立历史恢复存在失败日期；详见异常 report，重跑会补全部缺口')
+            error.report = result
+            raise error
+        return result
+
+    def run(end_date=None, skip_existing=True, repair_missing=False, history_mode=None,
+            start_date=None, from_platform_earliest=None, include_lof=None):
         nonlocal AS_OF_DATE
+        history = settings.get('history_mode', False) if history_mode is None else history_mode
+        if not isinstance(history, bool):
+            raise ValueError('history_mode 必须为布尔值')
+        if history:
+            if skip_existing is not True:
+                raise ValueError('历史恢复不覆盖已有有效记录')
+            return run_history(start_date=start_date if start_date is not None else settings.get('start_date'),
+                               end_date=end_date or settings['end_date'],
+                               from_platform_earliest=settings.get('from_platform_earliest', False) if from_platform_earliest is None else from_platform_earliest,
+                               include_lof=settings.get('include_lof', True) if include_lof is None else include_lof,
+                               repair_missing=repair_missing)
+        if start_date is not None or from_platform_earliest is not None or include_lof is not None:
+            raise ValueError('历史参数需要 history_mode=True')
         if not isinstance(repair_missing, bool):
             raise ValueError('repair_missing 须为 True 或 False')
         if skip_existing is not True:
@@ -1033,7 +1216,7 @@ def _etf_heat_strategy(_apis, _config):
         output = []
         with database_scope(Base, _config) as Session:
             _install_result_journal(Session, (Heat, Pool), 'etf-momentum')
-            cleanup_old_data(Session, retention_start)
+            # Keep confirmed history, including funds no longer in the current pool.
             if not days:
                 return pd.DataFrame(output)
             AS_OF_DATE = str(days[-1])
@@ -1063,8 +1246,9 @@ def _etf_heat_strategy(_apis, _config):
                     empty_dates = {r[0] for r in saved if r[1] is None} if repair else set()
                 if existing and builtins.max(existing) > days[-1]:
                     raise ValueError('已有更新日期的基金结果，拒绝回退')
-                first = builtins.max(retention_start, builtins.min(
-                    [days[0]] + ([builtins.max(existing)] if existing else []) + list(empty_dates)))
+                # Examine every gap in the live request window; old saved rows do
+                # not extend this request or get pruned as a side effect.
+                first = days[0]
                 calendar = [as_date(d) for d in api('get_trade_days')(start_date=first, end_date=days[-1])]
                 if not calendar or calendar != sorted(set(calendar)) or calendar[0] < first or calendar[-1] != days[-1]:
                     raise ValueError('增量交易日历无效')

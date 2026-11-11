@@ -38,7 +38,7 @@ const timestamp = (value: string | null | undefined) => {
 }
 const phases: Record<string, string> = {
   calendar: '确认交易日',
-  universe: '读取全A股票名单',
+  universe: '读取目标日股票名单',
   snapshot: '读取当日成交数据',
   verifying_snapshot: '核对当日快照',
   fetching: '逐股核对行情与均线',
@@ -284,7 +284,7 @@ export function MarketCollectionPanel({ onCollected }: { onCollected: () => void
             <Database size={17} /> 市场日采集
           </h2>
           <p>
-            日采集使用交易所证券主表及公开行情，以聚宽原脚本为目标口径；各指标核验后分别发布，证据不足的缺口保留。
+            日采集使用东方财富目标日报表及公开行情，并核对官方分类数量；以聚宽原脚本为目标口径，热度与拥挤度分别核验发布，证据不足的缺口保留。
           </p>
         </div>
         <span className="market-collection-schedule">

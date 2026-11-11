@@ -61,6 +61,8 @@ SAFE_ERRORS = {
     'heat_methodology_unverified', 'heat_methodology_mismatch',
     'historical_snapshot_unverified', 'writer_methodology_mismatch',
     'snapshot_quote_mismatch',
+    'dated_report_invalid', 'dated_report_cache_invalid',
+    'dated_membership_window_unverified', 'dated_membership_gap',
 }
 
 
@@ -1294,6 +1296,11 @@ class MarketCollection:
             # A saved legacy pool cannot acquire the new provider's scope or
             # evidence. A successful replacement archives the old raw snapshot.
             snapshot = None
+        compatible = getattr(provider, 'snapshot_compatible', None)
+        if snapshot is not None and callable(compatible) and compatible(snapshot) is not True:
+            # Evidence/source-version migration replaces unresolved input only.
+            # _store_snapshot archives observations and preserves published metrics.
+            snapshot = None
         refresh_node = (day == str(self.clock().astimezone(CHINA).date())
                         and self._meta('snapshot-refresh:' + day) == row['snapshot_hash']
                         and row['snapshot_hash'] is not None)
@@ -1413,7 +1420,9 @@ class MarketCollection:
         else:
             reasons = {quote.get('error') for quote in quotes if isinstance(quote, dict)
                        and isinstance(quote.get('error'), str) and quote.get('error') in SAFE_ERRORS}
-            reason = next((code for code in ('adjustment_unavailable', 'adjustment_precision_unverified', 'paused_unknown') if code in reasons), 'source_partial')
+            reason = next((code for code in ('dated_membership_window_unverified', 'dated_membership_gap', 'dated_report_invalid',
+                                             'dated_report_cache_invalid', 'adjustment_unavailable',
+                                             'adjustment_precision_unverified', 'paused_unknown') if code in reasons), 'source_partial')
             self._defer_day(day, crowding_write_error or reason, moment)
         return complete
 

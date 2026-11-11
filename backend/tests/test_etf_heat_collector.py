@@ -97,7 +97,7 @@ def test_full_run_repeat_and_partial_latest_preserve_head(mod, monkeypatch, tmp_
     strategy=mod._etf_heat_strategy(apis,mod.DB_CONFIG)
     strategy.Base.metadata.create_all(database)
     with sessionmaker(bind=database)() as s:
-        # Expired NULLs must be deleted, never reintroduced by upgrade repair.
+        # Old rows are preserved; the rolling live window must not repair outside its range.
         s.add_all(strategy.Heat(trade_date=dt.date(2025,1,1),code=code,name=code,score=None,
                   details={},updated_at=dt.datetime(2025,1,1)) for code in ['518880.XSHG','RETIRED'])
         s.add(strategy.Pool(id=1,as_of_date=dt.date(2026,10,20),rule_version='etf_close_momentum_v2' if legacy_empty else 'etf_raw_market_v1',
@@ -115,12 +115,12 @@ def test_full_run_repeat_and_partial_latest_preserve_head(mod, monkeypatch, tmp_
     assert set(inspect(database).get_table_names())=={'etf_momentum_heat','etf_momentum_pool','result_sync_head','result_sync_change'}
     with sessionmaker(bind=database)() as s:
         assert s.query(strategy.Pool).one().rule_version=='etf_close_momentum_v3'
-        assert all(r.score is not None for r in s.query(strategy.Heat))
+        assert all(r.score is not None for r in s.query(strategy.Heat).filter(strategy.Heat.trade_date >= dt.date(2026,1,1)))
     assert len(strategy.run())==0
     assert len(price_calls)==2
     with sessionmaker(bind=database)() as s:
         before=s.query(strategy.Pool).one().updated_at
-        assert s.query(strategy.Heat).count()==3
+        assert s.query(strategy.Heat).count()==5
     now[0]=dt.datetime(2026,10,21,17);partial[0]=True
     with pytest.raises(ValueError,match='行情缺失'): strategy.run()
     with sessionmaker(bind=database)() as s:
@@ -129,8 +129,8 @@ def test_full_run_repeat_and_partial_latest_preserve_head(mod, monkeypatch, tmp_
     partial[0]=False
     assert len(strategy.run())==1
     with sessionmaker(bind=database)() as s:
-        assert s.query(strategy.Heat).count()==min(4,retention)
-        assert min(r.trade_date for r in s.query(strategy.Heat)) >= pd.bdate_range(end=now[0].date(),periods=retention).date[0]
+        assert s.query(strategy.Heat).count()==6
+        assert min(r.trade_date for r in s.query(strategy.Heat)) == dt.date(2025,1,1)
     with sessionmaker(bind=database)() as s:
         s.query(strategy.Heat).filter(strategy.Heat.trade_date==dt.date(2026,10,20)).update({'score':None})
         s.commit()
@@ -244,7 +244,7 @@ def test_retention_bad_calendar_never_opens_database(mod, monkeypatch, case):
 
 
 @pytest.mark.parametrize('historical', [True, False])
-def test_retention_cleanup_precedes_selection_and_prevents_expired_backfill(mod,monkeypatch,tmp_path,historical):
+def test_live_window_preserves_history_even_when_selection_fails(mod,monkeypatch,tmp_path,historical):
     now=dt.datetime(2026,10,20,17)
     monkeypatch.setattr(mod,'china_now',lambda:now)
     calendar=lambda end_date,count=None,start_date=None:pd.bdate_range(start=start_date,end=end_date,periods=count).date
@@ -271,8 +271,8 @@ def test_retention_cleanup_precedes_selection_and_prevents_expired_backfill(mod,
         assert calls==['selection']
     with Session() as s:
         assert {(r.trade_date,r.code) for r in s.query(strategy.Heat)}=={
-            (day,code) for day in [cutoff,now.date()] for code in ['CURRENT','RETIRED']}
-    assert strategy.cleanup_old_data(Session,cutoff)==0
+            (day,code) for day in [cutoff-dt.timedelta(days=1),cutoff,now.date()] for code in ['CURRENT','RETIRED']}
+    assert strategy.cleanup_old_data(Session,cutoff)==2  # Explicit maintenance only, never run automatically.
     engine.dispose()
 
 

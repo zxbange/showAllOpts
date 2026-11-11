@@ -13,6 +13,9 @@ import re
 from app.services.market_sina import SinaDataError, _day, _number, _symbol
 
 CATEGORIES = ('sse_main_a', 'sse_star', 'szse_main_a', 'szse_chinext')
+DATED_SOURCE = 'eastmoney_dated_universe'
+DATED_EVIDENCE_VERSION = 1
+DATED_MEMBERSHIP_BASIS = 'dated_report_trade_or_confirmed_pause_and_official_category_counts'
 
 
 def equity_namespace(symbol):
@@ -27,6 +30,14 @@ def equity_namespace(symbol):
 
 def category(member):
     symbol = _symbol(member['symbol'])
+    if member.get('evidence', {}).get('source_id') == DATED_SOURCE:
+        # Namespace classifies already-selected identities; never filters the
+        # report. Vendor names/risk-warning/industry labels are not board proof.
+        for prefixes, label in ((('sh60',), 'sse_main_a'), (('sh688', 'sh689'), 'sse_star'),
+                                (('sz00',), 'szse_main_a'), (('sz30',), 'szse_chinext')):
+            if symbol.startswith(prefixes):
+                return label
+        raise SinaDataError('证券代码所属板块无法核实。', code='historical_category_unknown')
     if symbol.startswith('sh'):
         board = str(member.get('board', ''))
         if board in ('1', '8'):
@@ -61,7 +72,15 @@ def affirmative_pause(interval, day):
 def audit_historical_membership(master, snapshot_rows, raw_equities, suspensions, official):
     day = _day(master['date'])
     evidence = master.get('evidence', {})
-    if (any(evidence.get(key) is not True for key in
+    dated = evidence.get('source_id') == DATED_SOURCE
+    if dated:
+        if (type(evidence.get('evidence_version')) is not int or evidence['evidence_version'] != DATED_EVIDENCE_VERSION
+                or evidence.get('target_date') != str(day)
+                or any(evidence.get(key) is not True for key in
+                       ('source_counts_verified', 'report_date_verified', 'report_pages_complete'))
+                or not re.fullmatch(r'[0-9a-f]{64}', str(evidence.get('report_digest', '')))):
+            raise SinaDataError('逐日证券报告缺少完整日期和分页证据。', code='universe_coverage_unverified')
+    elif (any(evidence.get(key) is not True for key in
             ('source_counts_verified', 'listing_dates_verified', 'current_catalogue_verified'))
             or _day(evidence['snapshot_date']) < day):
         raise SinaDataError('历史重建缺少完整交易所证券区间。', code='universe_coverage_unverified')
@@ -84,12 +103,18 @@ def audit_historical_membership(master, snapshot_rows, raw_equities, suspensions
     for member in members:
         symbol = _symbol(member['symbol'])
         row = by_symbol[symbol]
-        start = _day(member['listed_from'])
-        end = _day(member['listed_until']) if member.get('listed_until') else None
-        if end is not None and member.get('listed_until_exclusive') is True:
-            end -= timedelta(days=1)
-        if (not start <= day or (end is not None and day > end) or row.get('date') != str(day)):
-            raise SinaDataError('证券上市区间或目标行情日期冲突。', code='historical_identity_conflict')
+        if dated:
+            source = member.get('evidence', {})
+            if (member.get('date') != str(day) or source.get('source_id') != DATED_SOURCE
+                    or source.get('report_date') != str(day) or row.get('date') != str(day)):
+                raise SinaDataError('逐日证券报告与目标行情身份冲突。', code='historical_identity_conflict')
+        else:
+            start = _day(member['listed_from'])
+            end = _day(member['listed_until']) if member.get('listed_until') else None
+            if end is not None and member.get('listed_until_exclusive') is True:
+                end -= timedelta(days=1)
+            if (not start <= day or (end is not None and day > end) or row.get('date') != str(day)):
+                raise SinaDataError('证券上市区间或目标行情日期冲突。', code='historical_identity_conflict')
         volume, amount = _number(row['volume']), _number(row['amount'])
         _number(row['close'], positive=True)
         if row.get('paused') == 0 and volume > 0 and amount > 0:
@@ -122,11 +147,14 @@ def audit_historical_membership(master, snapshot_rows, raw_equities, suspensions
         raise SinaDataError('历史候选池与官方逐板块证券数量不符。', code='historical_count_mismatch')
     return {**evidence, 'membership_verified': True, 'universe_verified': True,
             'historical_membership_verified': False, 'historical_reconstruction_verified': True,
-            'membership_basis': 'dated_trade_or_confirmed_pause_plus_exchange_intervals_and_category_counts',
+            'membership_basis': DATED_MEMBERSHIP_BASIS if dated else
+                'dated_trade_or_confirmed_pause_plus_exchange_intervals_and_category_counts',
             'target_date': str(day), 'traded_identity_count': traded, 'paused_identity_count': paused,
             'official_counts': actual, 'count_evidence': official.get('evidence', {}),
-            'category_basis': {'sse': 'exchange_stock_type',
-                               'szse': 'derived_from_security_code_category_for_catalogue_members'},
+            'category_basis': ({'sse': 'selected_report_identity_namespace_60_main_688_689_star',
+                                'szse': 'selected_report_identity_namespace_00_main_30_chinext'} if dated else
+                               {'sse': 'exchange_stock_type',
+                                'szse': 'derived_from_security_code_category_for_catalogue_members'}),
             'source_archive_evidence': archive_evidence, 'suspension_scan_evidence': suspensions,
             'joinquant_universe_directly_verified': False,
             'limitations': ['逐日多源交叉核验的历史重建，不是聚宽历史证券清单的直接证明。']}

@@ -23,7 +23,7 @@ def site(engine, tmp_path):
 
 
 @pytest.mark.parametrize('path', ['/api/v1/modules', '/api/v1/cache/status',
-    '/api/v1/social-monitor/status',
+    '/api/v1/social-monitor/status', '/api/v1/valuation-ruler/history', '/api/v1/valuation-ruler/status',
     '/api/v1/social-monitor/browser/weibo/status'])
 def test_anonymous_and_old_keys_cannot_access_any_data(site, path):
     _, client, _, _ = site
@@ -57,11 +57,14 @@ def test_viewer_reads_but_cannot_operate_or_see_admin_secrets(site):
     _, client, _, _ = site
     sign_in(client, 'reader')
     assert client.get('/api/v1/social-monitor/status').status_code == 200
+    assert client.get('/api/v1/valuation-ruler/history').status_code == 200
+    assert client.get('/api/v1/valuation-ruler/status').status_code == 200
     for path in ['/api/auth/users', '/api/v1/personal-holdings/status',
                  '/api/v1/social-monitor/browser/weibo/status']:
         assert client.get(path).status_code == 403
     for path in ['/api/auth/users', '/api/v1/cache/refresh', '/api/v1/social-monitor/config',
-                 '/api/v1/personal-holdings/sync']:
+                 '/api/v1/personal-holdings/sync', '/api/v1/valuation-ruler/refresh',
+                 '/api/v1/valuation-ruler/sync-joinquant', '/api/v1/valuation-ruler/cancel']:
         assert client.post(path, json={}).status_code == 403
 
 
@@ -89,6 +92,8 @@ def test_login_csrf_and_mutation_csrf_origin(site):
                     {'Sec-Fetch-Site': 'cross-site'}, {'X-App-Client': ''}):
         assert client.post('/api/auth/logout', headers=headers).status_code == 403
         assert client.post('/api/v1/social-monitor/config', json={'enabled': False}, headers=headers).status_code == 403
+        for path in ('refresh', 'cancel', 'sync-joinquant'):
+            assert client.post('/api/v1/valuation-ruler/'+path, headers=headers).status_code == 403
     assert client.post('/api/auth/logout').status_code == 200
     assert client.get('/api/v1/cache/status').status_code == 401
 

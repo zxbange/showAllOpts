@@ -59,3 +59,10 @@ def direct_database_for_existing_tests(monkeypatch):
     # opt in explicitly and install their own provider fixtures before starting it.
     monkeypatch.setenv('GROWTH_DIVIDEND_WORKER_ENABLED', 'false')
     monkeypatch.setenv('MARKET_COLLECTION_WORKER_ENABLED', 'false')
+
+
+@pytest.fixture(autouse=True)
+def valuation_worker_offline(monkeypatch):
+    # Production worker is tested explicitly with a stub source; never call HTTP
+    # from unrelated app/lifespan suites.
+    monkeypatch.setenv('VALUATION_RULER_WORKER_ENABLED', 'false')

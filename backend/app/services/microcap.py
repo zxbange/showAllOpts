@@ -14,8 +14,8 @@ class MicrocapService:
     def __init__(self, repository: MicrocapRepository):
         self.repository = repository
 
-    def history(self, days: int, end: date) -> MicrocapHistory:
-        rows = self.repository.history(end)
+    def history(self, days: int, end: date, series_id: str | None = None) -> MicrocapHistory:
+        rows = self.repository.history(end, series_id) if series_id else self.repository.history(end)
         if not rows:
             return MicrocapHistory(summary=MicrocapSummary(), points=[])
         latest = rows[-1]
@@ -29,7 +29,8 @@ class MicrocapService:
         scores = [item.score for item in points]
         first_index = points[0].micro_index
         return MicrocapHistory(
-            start_date=max(start, date(2021, 1, 1)), end_date=latest.trade_date,
+            series_id=latest.series_id, reconstruction='current_visible_history' if latest.series_id.endswith('_archive') else None,
+            start_date=max(start, rows[0].trade_date) if latest.series_id.endswith('_archive') else max(start, date(2021, 1, 1)), end_date=latest.trade_date,
             latest=MicrocapLatest(
                 **point(latest).model_dump(), micro_num=latest.micro_num,
                 sample_step=latest.sample_step, sample_count=latest.sample_count,

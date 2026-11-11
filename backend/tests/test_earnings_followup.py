@@ -60,7 +60,7 @@ def test_suspension_shows_actual_price_date_and_missing_signal_preserves_old(c):
     assert rows(c) == old
 
 
-def test_five_year_pruning_keeps_boundary_and_sync_removes_expired_prices(c, tmp_path):
+def test_history_retention_preserves_old_quarters_and_sync_prices(c, tmp_path):
     cutoff = dt.date(2021, 9, 30)
     for period in (dt.date(2021, 6, 30), cutoff, dt.date(2026, 6, 30)):
         save(c, period, dt.date(2026, 9, 29))
@@ -75,15 +75,15 @@ def test_five_year_pruning_keeps_boundary_and_sync_removes_expired_prices(c, tmp
             db.query(c.env['EarningsRun']).update({'as_of_date': dt.date(2026, 9, 30)})
             db.commit()
         prune = c.env['_prune_earnings_history']
-        assert prune(c.Session, c.env['EarningsStock'], c.env['EarningsRun'], dt.date(2026, 9, 30)) == 1
+        assert prune(c.Session, c.env['EarningsStock'], c.env['EarningsRun'], dt.date(2026, 9, 30)) == 0
         assert prune(c.Session, c.env['EarningsStock'], c.env['EarningsRun'], dt.date(2026, 9, 30)) == 0
         with c.engine.connect() as source, target.begin() as local:
             sync_performance(source, local)
-            assert [r[0] for r in local.execute(select(EarningsPerformance.report_period).order_by(EarningsPerformance.report_period))] == [cutoff, dt.date(2026, 6, 30)]
+            assert [r[0] for r in local.execute(select(EarningsPerformance.report_period).order_by(EarningsPerformance.report_period))] == [dt.date(2021, 6, 30), cutoff, dt.date(2026, 6, 30)]
         with c.Session() as db:
-            assert db.query(c.env['EarningsStock']).count() == 2
-            assert db.query(c.env['EarningsRun']).count() == 2
-            assert {r[0] for r in db.execute(c.env['_earnings_version_table']().select())} == {cutoff, dt.date(2026, 6, 30)}
+            assert db.query(c.env['EarningsStock']).count() == 3
+            assert db.query(c.env['EarningsRun']).count() == 3
+            assert {r[0] for r in db.execute(c.env['_earnings_version_table']().select())} == {dt.date(2021, 6, 30), cutoff, dt.date(2026, 6, 30)}
     finally:
         target.dispose()
 

@@ -21,7 +21,30 @@ def sync_block(source_name, START, END, check):
             path.write_text(result, encoding='utf-8')
 
 
+def sync_history(check=False):
+    start, end = '# BEGIN SHARED EARNINGS HISTORY', '# END SHARED EARNINGS HISTORY'
+    source = (ROOT/'collectors/rules/earnings_history.py').read_text(encoding='utf-8').strip()
+    for name in ('净利润断层_数据库版.py', '策略批量采集_数据库版.py'):
+        path = ROOT/'collectors'/name
+        text = path.read_text(encoding='utf-8')
+        indent = '    ' if name.startswith('策略') else ''
+        block = '\n'.join(indent + line if line else '' for line in source.splitlines())
+        if start in text:
+            a = text.rfind('\n', 0, text.index(start)) + 1
+            b = text.index(end) + len(end)
+        else:
+            a = text.index('    def run(end_date=END_DATE', text.index('def _earnings_strategy('))
+            b = a
+            block += '\n\n'
+        result = text[:a] + block + text[b:]
+        if check:
+            assert result == text, name
+        else:
+            path.write_text(result, encoding='utf-8')
+
+
 def sync(check=False):
+    sync_history(check)
     sync_block('earnings_version.py', START, END, check)
     sync_block('earnings_followup.py', '# BEGIN SHARED EARNINGS FOLLOWUP', '# END SHARED EARNINGS FOLLOWUP', check)
 

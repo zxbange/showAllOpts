@@ -67,6 +67,61 @@ def test_incremental_only_requests_today_and_never_reloads_completed_years(monit
     assert calls == []
 
 
+@pytest.mark.parametrize('original_source', ['聚宽（当前平台可见历史）', 'fixture'])
+def test_public_today_comparison_never_overwrites_confirmed_history(monitor, monkeypatch, original_source):
+    provider(monkeypatch)
+    day = MOMENT.date()
+    saved = ('399006', str(day), 2345.123456789, original_source,
+             'https://example.test/original', '2026-11-10T10:00:00+00:00')
+    with monitor.db() as db:
+        db.execute('INSERT INTO points VALUES (?,?,?,?,?,?)', saved)
+    monitor.refresh(background=False, moment=MOMENT)
+    with monitor.db() as db:
+        assert tuple(db.execute("SELECT * FROM points WHERE code='399006' AND trade_date=?",
+                                (str(day),)).fetchone()) == saved
+    status = monitor.status(MOMENT)
+    assert status['comparison_conflicts'] == 1
+    assert status['recent_conflicts'][0]['published_close'] == saved[2]
+    assert status['recent_conflicts'][0]['candidate_close'] == 2500
+    assert status['error'] and '未覆盖' in status['error']
+    assert status['last_success_at'] is None
+    # Repeated candidates are not duplicated, and the audit survives a new service.
+    monitor.refresh(background=False, moment=MOMENT)
+    replacement = m.GrowthDividend(monitor.settings, client_factory=lambda: nullcontext(object()))
+    assert replacement.status(MOMENT)['comparison_conflicts'] == 1
+    replacement.stop()
+
+
+def test_equal_public_today_does_not_replace_joinquant_provenance(monitor, monkeypatch):
+    provider(monkeypatch)
+    saved = ('399006', str(MOMENT.date()), 2500.0, '聚宽（当前平台可见历史）',
+             'https://example.test/original', '2026-11-10T10:00:00+00:00')
+    with monitor.db() as db:
+        db.execute('INSERT INTO points VALUES (?,?,?,?,?,?)', saved)
+    monitor.refresh(background=False, moment=MOMENT)
+    with monitor.db() as db:
+        assert tuple(db.execute("SELECT * FROM points WHERE code='399006' AND trade_date=?",
+                                (str(MOMENT.date()),)).fetchone()) == saved
+    assert monitor.status(MOMENT)['comparison_conflicts'] == 0
+    assert monitor.status(MOMENT)['error'] is None
+
+
+def test_interior_calendar_omission_cannot_hide_a_known_missing_session(monitor, monkeypatch):
+    missing = date(2020, 1, 2)
+    provider(monkeypatch, failures={(index.code, missing) for index in m.INDEXES})
+    monitor.refresh(background=False, moment=MOMENT)
+    assert monitor.status(MOMENT)['pending_dates'] == 1
+    # The new response has the same end date but silently omits an interior session.
+    provider(monkeypatch, days=[day for day in DAYS if day != missing])
+    monitor.refresh(background=False, moment=MOMENT)
+    with monitor.db() as db:
+        assert db.execute('SELECT 1 FROM calendar WHERE trade_date=?', (str(missing),)).fetchone()
+    status = monitor.status(MOMENT)
+    assert status['pending_dates'] == 1
+    assert status['calendar_error'] and '已确认交易日' in status['calendar_error']
+    assert status['last_success_at'] is None
+
+
 def test_all_three_indices_missing_same_interior_day_are_retried_after_restart(monitor, monkeypatch):
     missing = date(2020, 1, 2)
     failures = {(index.code, missing) for index in m.INDEXES}

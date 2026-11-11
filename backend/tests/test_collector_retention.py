@@ -114,17 +114,17 @@ def test_cleanup_commit_failure_rolls_back(collector):
     assert len(saved(c)) == 2
 
 
-def test_run_cleans_before_calculation_and_keeps_last_day_refresh(collector):
+def test_run_preserves_all_old_data_and_keeps_last_day_refresh(collector):
     c = collector
     seed(c, c.days, ('sw_l1', 'sw_l2'))
     original = c.env['calculate_momentum']
     def calculate(day, kind):
-        assert all(saved_day >= c.cutoff for saved_day, _ in saved(c))
+        assert min(saved_day for saved_day, _ in saved(c)) == c.days[0]
         return original(day, kind)
     c.env['calculate_momentum'] = calculate
     c.env['run'](skip_existing=False)
     assert c.calculated == [c.days[-1]]
-    assert len(saved(c)) == 360
+    assert len(saved(c)) == 410
 
 
 @pytest.mark.parametrize('old_records', [True, False])
@@ -134,9 +134,10 @@ def test_empty_or_long_stale_database_never_backfills_expired_days(collector, ol
         seed(c, c.days[:5])
     c.env['run'](skip_existing=False)
     assert c.calculated == c.days[-180:]
-    assert len(saved(c)) == 180
+    expected = 185 if old_records else 180
+    assert len(saved(c)) == expected
     c.env['run'](skip_existing=False)
-    assert len(saved(c)) == 180
+    assert len(saved(c)) == expected
 
 
 def test_explicit_start_within_window_is_honored(collector):
@@ -145,22 +146,21 @@ def test_explicit_start_within_window_is_honored(collector):
     assert c.calculated == c.days[-3:]
 
 
-def test_historical_end_does_not_shift_retention_or_restore_old_data(collector):
+def test_historical_end_does_not_delete_existing_old_data(collector):
     c = collector
     seed(c, c.days, ('sw_l1', 'sw_l2'))
     c.env['run'](end_date=c.days[0], skip_existing=False)
     assert not c.calculated
-    assert len(saved(c)) == 360
+    assert len(saved(c)) == 410
 
 
-def test_cleanup_failure_stops_run(collector):
+def test_run_never_calls_automatic_cleanup(collector):
     c = collector
     def fail(*args):
         raise RuntimeError('Injected cleanup failure')
     c.env['cleanup_old_data'] = fail
-    with pytest.raises(RuntimeError):
-        c.env['run'](skip_existing=False)
-    assert not c.calculated
+    c.env['run'](skip_existing=False)
+    assert c.calculated == c.days[-180:]
 
 
 def test_bad_backfill_calendar_cannot_reinsert_expired_data(collector):

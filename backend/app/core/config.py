@@ -74,6 +74,7 @@ class Settings(BaseSettings):
     social_worker_enabled: bool = True
     margin_worker_enabled: bool = True
     growth_dividend_worker_enabled: bool = True
+    valuation_ruler_worker_enabled: bool = True
     cash_cow_worker_enabled: bool = True
     social_browser_login_key: SecretStr = SecretStr('')
     social_browser_channel: str = ''

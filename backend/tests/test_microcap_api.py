@@ -120,3 +120,25 @@ def test_unfinished_daily_repair_uses_only_consistent_prefix_or_legacy(client,se
     session.commit()
     data=client.get('/api/v1/microcap-temperature/history').json()
     assert [p['date'] for p in data['points']]==['2026-01-05']
+
+
+def test_archive_explicit_series_never_rebases_default(client, session):
+    archive = 'micro1000_1d_20050104_v1_archive'
+    session.add_all([row(date(2005, 1, 4), .2, series=archive), row(date(2026, 1, 6), .7)])
+    session.commit()
+    assert client.get('/api/v1/microcap-temperature/series').json() == sorted([archive, DEFAULT_SERIES])
+    default = client.get('/api/v1/microcap-temperature/history?days=0').json()
+    assert default['series_id'] == DEFAULT_SERIES and len(default['points']) == 1
+    data = client.get('/api/v1/microcap-temperature/history', params={'days': 0, 'series_id': archive}).json()
+    assert data['series_id'] == archive and data['start_date'] == '2005-01-04'
+    assert data['reconstruction'] == 'current_visible_history' and len(data['points']) == 1
+    for key in ['other-series', 'micro1000_1d_20059999_v1_archive']:
+        assert client.get('/api/v1/microcap-temperature/history', params={'series_id': key}).status_code == 422
+
+
+def test_archive_series_and_history_require_authenticated_session(client):
+    # Existing fixture logs in a genuine administrator; then remove that session.
+    assert client.get('/api/v1/microcap-temperature/series').status_code == 200
+    client.cookies.clear()
+    for route in ('series', 'history?series_id=micro1000_1d_20050104_v1_archive'):
+        assert client.get('/api/v1/microcap-temperature/' + route).status_code == 401

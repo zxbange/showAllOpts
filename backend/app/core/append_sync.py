@@ -2,7 +2,9 @@
 
 The cursor lives in the published SQLite snapshot, never in independent state.json.
 Legacy snapshots are rebuilt once: a local MAX alone cannot certify completeness.
-Historical corrections/deletions inside the retained range require full=True.
+Market crowding still requires full=True for historical corrections/deletions
+inside the retained range. Journal-backed modules must not use these bounds:
+industry momentum and microcap breadth can restore holes without changing them.
 """
 import logging
 import shutil
@@ -15,9 +17,7 @@ from app.core.sync_progress import report
 
 logger = logging.getLogger(__name__)
 APPEND_PARTITIONS = {
-    'industry-momentum': 'industry_type',
     'market-crowding': 'top_pct',
-    'microcap-breadth': 'series_id',
 }
 _metadata = MetaData()
 _cursor = Table('append_cache_cursor_v1', _metadata,
@@ -101,9 +101,6 @@ def copy_append(cache, module, path, previous, full=False):
                         target.execute(_cursor.insert(), [dict(partition=key, first_date=first, successful_date=last)
                                                         for key, (first, last) in current.items()])
                     target.execute(_marker.delete())
-                    if module == 'industry-momentum':
-                        target.exec_driver_sql('CREATE INDEX IF NOT EXISTS ix_local_momentum_type_date ON industry_momentum (industry_type, trade_date)')
-                        target.exec_driver_sql('CREATE INDEX IF NOT EXISTS ix_local_momentum_history ON industry_momentum (industry_type, industry_code, trade_date)')
                     count = target.scalar(select(func.count()).select_from(table))
                     target.execute(_marker.insert().values(version=1, total_rows=count))
                 report('校验本地快照', percent=95)

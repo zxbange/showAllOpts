@@ -32,7 +32,7 @@ DB_OPTIONS = get_database_options()
 # 连接参数只配置一次；重试仅针对连接，不重放写入事务。
 
 # end_date=None：每次运行取北京时间当天。下列参数按策略分组配置。
-STRATEGY_CONFIG = {'个股机构持仓': {'end_date': None, 'history_years': 5, 'refresh_quarters': 4, 'page_size': 1000, 'stock_batch_size': 50}}
+STRATEGY_CONFIG = {'个股机构持仓': {'end_date': None, 'history_mode': 'recent', 'history_years': 5, 'refresh_quarters': 4, 'page_size': 1000, 'stock_batch_size': 50}}
 PROGRESS_ENABLED = True
 PROGRESS_INTERVAL_SECONDS = 5.0
 _API_NAMES = ('finance', 'query', 'get_all_securities', 'get_industry')
@@ -659,7 +659,7 @@ def _ownership_strategy(_apis, _config):
         return {code:list(ranks.values()) for code,(_,ranks) in latest.items()}
 
     def save_report_batch(session, codes, period, as_of, fund_map, selected, changed,
-                          fund_codes=None, float_codes=None):
+                          fund_codes=None, float_codes=None, preserve_followers=False):
         fund_codes = set(codes) if fund_codes is None else set(codes).intersection(fund_codes)
         float_codes = set(codes) if float_codes is None else set(codes).intersection(float_codes)
         fund_groups = batch_funds(sorted(fund_codes),period,as_of,fund_map,selected) if fund_codes else {}
@@ -695,7 +695,7 @@ def _ownership_strategy(_apis, _config):
                 changed.add(('持仓',code,period))
         next_quarter = period+datetime.timedelta(days=95)
         next_period = previous_quarter(datetime.date(next_quarter.year,next_quarter.month,1))
-        if changed_float_codes:
+        if changed_float_codes and not preserve_followers:
             followers = session.query(OwnershipReport).filter(OwnershipReport.report_date == next_period,
                 OwnershipReport.code.in_(changed_float_codes)).all()
             for follower in followers:
@@ -1036,7 +1036,96 @@ def _ownership_strategy(_apis, _config):
             row.updated_at = china_now()
         return True
 
-    def run(end_date=None, full_refresh=False, skip_existing=True):
+    def historical_index(as_of):
+        result, status = {}, {}
+        for name, table, period_name, code_name in (
+                ('fund', finance.FUND_PORTFOLIO_STOCK, 'period_end', 'symbol'),
+                ('float', finance.STK_SHAREHOLDER_FLOATING_TOP10, 'end_date', 'code'),
+                ('holders', finance.STK_HOLDER_NUM, 'end_date', 'code')):
+            period, identity = getattr(table, period_name), getattr(table, code_name)
+            conditions = [period <= as_of, or_(table.pub_date == None, table.pub_date <= as_of)]
+            if name != 'holders':
+                conditions.append(table.pub_date != None)
+            if name == 'float':
+                conditions.extend([table.change_reason_id == 306019, table.sharesnature_id == 308007])
+            index = {}
+            for row in grouped_pages(table, [period, identity], *conditions, label='历史索引 ' + name):
+                date, code = day(row[period_name]), text_value(row[code_name])
+                if date and code:
+                    index.setdefault(date, set()).add(code)
+            result[name] = index
+            dates = sorted(index)
+            status[name] = {'status': 'observed' if dates else 'verified_empty_visible_scope',
+                            'first_visible_period': str(dates[0]) if dates else None,
+                            'last_visible_period': str(dates[-1]) if dates else None,
+                            'as_of': str(as_of), 'provider_earliest_verified': False}
+        return result, status
+
+    def recover_history(as_of):
+        indexes, status = historical_index(as_of)
+        identities = set(c for name in ('float', 'holders') for scope in indexes[name].values()
+                         for c in scope if c.endswith(('.XSHG', '.XSHE')))
+        fund_map = load_fund_map() if indexes['fund'] else {}
+        changed = set()
+        with database_scope(Base, _config) as Session:
+            install_change_tracking(Session)
+            for period in _progress_items(sorted(set(indexes['fund']) | set(indexes['float'])), '历史报告期', str):
+                securities = _apis['get_all_securities'](types=['stock'], date=period)
+                if securities is None:
+                    raise ValueError('历史股票清单查询失败：' + str(period))
+                identities.update(str(c) for c in securities.index)
+                mapping = {c.split('.')[0]: c for c in identities}
+                fund_codes, unresolved = set(), set()
+                for symbol in indexes['fund'].get(period, set()):
+                    code = symbol if symbol in identities else mapping.get(symbol) if '.' not in symbol else None
+                    if code:
+                        fund_codes.add(code)
+                    else:
+                        unresolved.add(symbol)
+                float_codes = indexes['float'].get(period, set()).intersection(identities)
+                with session_scope(Session) as session:
+                    session.query(SyncHead).filter_by(id='main').with_for_update().one()
+                    present = {r[0] for r in session.query(OwnershipReport.code).filter_by(report_date=period)}
+                    missing = sorted((fund_codes | float_codes) - present)
+                    selected = select_documents(period, as_of, fund_map, missing) if set(missing) & fund_codes else {}
+                    for batch in batches(missing):
+                        for code in batch:
+                            if session.query(OwnershipStock).filter_by(code=code).first() is None:
+                                session.add(OwnershipStock(code=code, name=code, industry=None, updated_at=china_now()))
+                        save_report_batch(session, batch, period, as_of, fund_map, selected, changed,
+                                          fund_codes=fund_codes, float_codes=float_codes, preserve_followers=True)
+                    key = 'history:' + str(period)
+                    state = session.query(Checkpoint).get(key)
+                    if state is None:
+                        session.add(Checkpoint(key=key, as_of=as_of))
+                    else:
+                        state.as_of = builtins.max(state.as_of, as_of)
+                    session.commit()
+                if unresolved:
+                    _progress_message('{}：{} 个基金持仓代码无法由历史 A 股身份确认，未猜测交易所。'.format(period, len(unresolved)))
+                    status['fund'].setdefault('unresolved_symbols', {})[str(period)] = sorted(unresolved)
+            t = finance.STK_HOLDER_NUM
+            for period, source_codes in sorted(indexes['holders'].items()):
+                with session_scope(Session) as session:
+                    session.query(SyncHead).filter_by(id='main').with_for_update().one()
+                    present = {r[0] for r in session.query(OwnershipHolders.code).filter_by(end_date=period)}
+                    for batch in batches(sorted(source_codes.intersection(identities) - present)):
+                        for code in batch:
+                            if session.query(OwnershipStock).filter_by(code=code).first() is None:
+                                session.add(OwnershipStock(code=code, name=code, industry=None, updated_at=china_now()))
+                        save_holder_batch(session, batch,
+                            [t.end_date == period, or_(t.pub_date == None, t.pub_date <= as_of)], period, changed)
+                    session.commit()
+            with session_scope(Session) as session:
+                state = session.query(DisclosureProbe).filter_by(key='history-scope').first()
+                if state is None:
+                    session.add(DisclosureProbe(key='history-scope', as_of=as_of, payload=status))
+                else:
+                    state.as_of, state.payload = as_of, status
+                session.commit()
+        return pd.DataFrame(sorted(changed), columns=['kind', 'code', 'date'])
+
+    def run(end_date=None, full_refresh=False, skip_existing=True, history_mode=None):
         as_of = as_date(end_date or settings.get('end_date') or china_now().date())
         if as_of > china_now().date():
             raise ValueError('结束日期不能晚于今天')
@@ -1045,6 +1134,11 @@ def _ownership_strategy(_apis, _config):
                 raise ValueError(option+' 必须为正整数')
         if settings['stock_batch_size'] > 300:
             raise ValueError('stock_batch_size 最大为 300，防止研究环境内存溢出')
+        mode = history_mode or settings.get('history_mode', 'recent')
+        if mode not in ('recent', 'all'):
+            raise ValueError('history_mode 必须为 recent 或 all')
+        if mode == 'all':
+            return recover_history(as_of)
         years = settings['history_years']
         if not isinstance(years,int) or years < 1 or years > 20:
             raise ValueError('history_years 必须在 1 到 20 之间')

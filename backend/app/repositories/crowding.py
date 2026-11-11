@@ -15,7 +15,6 @@ class CrowdingRepository:
         # One indexed round trip even when the database is reached over the Internet.
         statement = select(MarketCrowding).where(
             MarketCrowding.top_pct == Decimal('0.05'),
-            MarketCrowding.trade_date >= date(2020, 1, 1),
             MarketCrowding.trade_date <= end,
         ).order_by(MarketCrowding.trade_date)
         return list(self.session.scalars(statement))

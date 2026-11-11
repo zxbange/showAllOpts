@@ -45,6 +45,7 @@ def test_removed_options_cannot_silently_change_collection(batch, monkeypatch, n
 
 @pytest.fixture
 def daily_batch(batch, micro_source, monkeypatch):
+    batch.STRATEGY_CONFIG['微盘温度计']['archive_history'] = False
     c = strategy_env(batch, '微盘温度计', micro_source, monkeypatch)
     c.env['calculate_period'] = micro_source.env['calculate_period']
     micro.daily_index(c)

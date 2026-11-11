@@ -20,12 +20,12 @@ from sqlalchemy.engine.url import URL
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
 
-START_DATE = '2024-01-01'
+START_DATE = None  # 自动从所选跟踪基金最早上市日扫描；不猜测份额源起点。
 END_DATE = None  # 北京时间昨日；当天无论是否收盘均留给交易所日更。
 WINDOW_SIZE = 120  # 单只基金、每次最多 120 个交易日，远低于 finance 查询上限。
 WRITE_DATABASE = True  # 整段执行即入库；False 为仅预览、不连接数据库。
 CREATE_TABLES = True  # 自动创建缺少的三张表；数据库本身需提前创建，账号须有相应权限。
-ALLOW_PARTIAL = False  # 源数据缺失时停止入库；确认接受缺失后改 True，只保存有效记录。
+ALLOW_PARTIAL = None  # None：自动全历史允许部分有效记录并持久记录缺口；显式日期仍严格。
 from mysql_connector import get_database_config, get_database_options, mysql_drivername, engine_options
 DB_CONFIG = get_database_config()
 DB_OPTIONS = get_database_options()
@@ -79,6 +79,16 @@ class ETFTradingDay(Base):
     previous_trade_date = Column(Date, nullable=True)
     source = Column(String(48), nullable=False)
     updated_at = Column(DateTime, nullable=False)
+
+
+class ETFHistoryCoverage(Base):
+    __tablename__ = 'etf_history_coverage'
+    __table_args__ = {'mysql_engine': 'InnoDB', 'mysql_charset': 'utf8mb4'}
+    fund_code = Column(String(16), primary_key=True)
+    trade_date = Column(Date, primary_key=True)
+    share_status = Column(String(32), nullable=False)
+    price_status = Column(String(32), nullable=False)
+    checked_at = Column(DateTime, nullable=False)
 
 
 MODELS = (ETFShare, ETFPrice, ETFTradingDay)
@@ -140,6 +150,10 @@ def calendar(jq, start, end):
     days = checked_days(jq.get_trade_days(start_date=start, end_date=end), start, end)
     if not days:
         raise HistoryError('指定范围没有返回交易日，请核对日期或数据权限。')
+    cross = checked_days(jq.get_trade_days(end_date=days[-1], count=len(days)),
+                         start, days[-1], count=len(days))
+    if cross != days:
+        raise HistoryError('交易日历区间与倒序计数交叉校验不一致。')
     # 额外取首日前两日：一日用于基线数据，一日确定基线的真实前日。
     prior = checked_days(jq.get_trade_days(end_date=days[0], count=3),
                          dt.date(1900, 1, 1), days[0], count=3)
@@ -278,11 +292,11 @@ def connect_database(config):
         raise HistoryError('MySQL {}失败（{}）；{}'.format(stage, type(exc).__name__, hint)) from None
 
 
-def check_schema(engine, create_tables=False):
+def check_schema(engine, create_tables=False, models=MODELS):
     inspector = inspect(engine)
     missing = []
     table_names = set(inspector.get_table_names())  # 兼容聚宽较旧的 SQLAlchemy 1.3。
-    for model in MODELS:
+    for model in models:
         table = model.__table__
         if table.name not in table_names:
             missing.append(table)
@@ -303,7 +317,7 @@ def check_schema(engine, create_tables=False):
         table.create(engine, checkfirst=True)
 
 
-def save_records(engine, shares, prices, sessions, create_tables=False):
+def save_records(engine, shares, prices, sessions, create_tables=False, coverage=None):
     """只 INSERT 缺失主键，无 UPDATE/DELETE/REPLACE；全批事务失败则回滚。
 
     并发采集抢先插入同一主键时，整个事务失败后由用户重新运行，不覆盖对方数据。
@@ -311,6 +325,8 @@ def save_records(engine, shares, prices, sessions, create_tables=False):
     session = None
     try:
         check_schema(engine, create_tables=create_tables)
+        if coverage is not None:
+            check_schema(engine, create_tables=create_tables, models=(ETFHistoryCoverage,))
         session = sessionmaker(bind=engine)()
         counts = {}
         for model, records in zip(MODELS, (shares, prices, sessions)):
@@ -348,6 +364,14 @@ def save_records(engine, shares, prices, sessions, create_tables=False):
             for offset in range(0, len(pending), 200):
                 session.execute(model.__table__.insert(), pending[offset:offset + 200])
             counts[name]['inserted'] = len(pending)
+        for record in coverage or []:
+            row = session.query(ETFHistoryCoverage).filter_by(
+                fund_code=record['fund_code'], trade_date=record['trade_date']).first()
+            if row is None:
+                session.add(ETFHistoryCoverage(**record))
+            else:
+                row.share_status, row.price_status, row.checked_at = (
+                    record['share_status'], record['price_status'], record['checked_at'])
         session.commit()
         return counts
     except Exception as exc:
@@ -371,15 +395,18 @@ def save_records(engine, shares, prices, sessions, create_tables=False):
 def run(start_date=START_DATE, end_date=END_DATE, groups=None, write=WRITE_DATABASE,
         allow_partial=ALLOW_PARTIAL, create_tables=CREATE_TABLES, db_config=None):
     """采集并按顶部配置入库，返回记录、源缺失、拆并风险及计数；write=False 仅预览。"""
+    automatic_history = start_date is None
+    if allow_partial is None:
+        allow_partial = automatic_history
     if _builtins.any(not isinstance(value, _builtins.bool) for value in (write, allow_partial, create_tables)):
         raise HistoryError('write/allow_partial/create_tables 必须是布尔值。')
     if (isinstance(WINDOW_SIZE, _builtins.bool) or not isinstance(WINDOW_SIZE, _builtins.int)
             or not 1 <= WINDOW_SIZE <= 120):
         raise HistoryError('WINDOW_SIZE 必须是1至120的整数。')
-    start = as_date(start_date)
+    start = None if start_date is None else as_date(start_date)
     yesterday = china_now().date() - dt.timedelta(days=1)
     end = yesterday if end_date is None else as_date(end_date)
-    if start > end or end > yesterday:
+    if (start is not None and start > end) or end > yesterday:
         raise HistoryError('开始日期不能晚于结束日期；历史补采截止日期最多为北京时间昨日。')
     selected = list(ETF_GROUPS) if groups is None else list(groups)
     if (not selected or len(selected) != len(set(selected))
@@ -389,13 +416,21 @@ def run(start_date=START_DATE, end_date=END_DATE, groups=None, write=WRITE_DATAB
     shares, prices = [], []
     try:
         jq = load_api()
+        infos = {code: jq.get_security_info(code) for code in funds}
+        if _builtins.any(info is None or getattr(info, 'start_date', None) is None
+                         or getattr(info, 'end_date', None) is None for info in infos.values()):
+            raise HistoryError('无法核实基金上市/退市日期，停止采集。')
+        if start is None:
+            start = _builtins.min(as_date(info.start_date) for info in infos.values())
+        if start > end:
+            raise HistoryError('所选基金均未在结束日前上市。')
         days, before = calendar(jq, start, end)
         end = days[-1]  # 昨日为周末/节假日时，实际终点取已发生的最近交易日。
         stamp = china_now()
         expected, reference_expected, listing_ranges = set(), set(), {}
         print('范围 {} 至 {}；前日 {} 仅作内存参考、不入库；{} 只ETF。'.format(start, end, days[0], len(funds)))
         for number, (code, name) in enumerate(funds.items(), 1):
-            info = jq.get_security_info(code)
+            info = infos[code]
             if info is None or getattr(info, 'start_date', None) is None or getattr(info, 'end_date', None) is None:
                 raise HistoryError('无法核实基金上市/退市日期，停止采集。')
             if getattr(info, 'code', code) != code:
@@ -448,12 +483,23 @@ def run(start_date=START_DATE, end_date=END_DATE, groups=None, write=WRITE_DATAB
     write_prices = [row for row in prices if (row['fund_code'], row['trade_date']) not in quarantined]
     sessions = [dict(trade_date=day, previous_trade_date=before[day],
                      source=CALENDAR_SOURCE, updated_at=stamp) for day in days if day >= start]
-    result = dict(start_date=start, end_date=end, reference_date=days[0], shares=shares, prices=prices,
+    coverage = {}
+    for code in funds:
+        coverage[code] = {}
+        for kind, keys in (('shares', share_keys), ('prices', price_keys)):
+            observed = sorted(day for fund, day in keys if fund == code and day >= start)
+            absent = [day for fund, day in missing[kind] if fund == code]
+            coverage[code][kind] = dict(first_observed=observed[0] if observed else None,
+                last_observed=observed[-1] if observed else None, missing_count=len(absent),
+                coverage_status='complete_requested_listing_range' if not absent and observed else 'unknown_or_partial')
+        print('{} 分源覆盖：{}'.format(code, coverage[code]))
+    result = dict(source_coverage=coverage, start_date=start, end_date=end, reference_date=days[0], shares=shares, prices=prices,
                   trading_days=sessions, missing=missing, reference_missing=reference_missing,
                   listing_ranges=listing_ranges, quality_warnings=warnings,
                   quarantined_prices=sorted(quarantined),
                   source_complete=not _builtins.any(missing.values()) and not _builtins.any(reference_missing.values()),
-                  written=False, counts={})
+                  written=False, counts={}, coverage_persisted=False,
+                  completion_status='complete' if not _builtins.any(missing.values()) and not _builtins.any(reference_missing.values()) and not quarantined else 'partial_unknown')
     print('源数据缺失：份额 {}，价格 {}。份额按“份”，价格按“元/份”，不补零或前向填充。'.format(
         len(missing['shares']), len(missing['prices'])))
     for kind in ('shares', 'prices'):
@@ -474,14 +520,35 @@ def run(start_date=START_DATE, end_date=END_DATE, groups=None, write=WRITE_DATAB
         return result
     engine = connect_database(DB_CONFIG if db_config is None else db_config)
     try:
-        result['counts'] = save_records(engine, shares, write_prices, sessions, create_tables=create_tables)
+        if automatic_history:
+            coverage_rows = [dict(fund_code=code, trade_date=day,
+                share_status='observed' if (code, day) in share_keys else 'source_missing_unknown',
+                price_status=('quarantined' if (code, day) in quarantined else
+                    'observed' if (code, day) in price_keys else 'source_missing_unknown'),
+                checked_at=stamp) for code, day in sorted(expected)]
+            for offset in range(0, len(sessions), WINDOW_SIZE):
+                batch = sessions[offset:offset + WINDOW_SIZE]
+                dates = {row['trade_date'] for row in batch}
+                counts = save_records(engine,
+                    [row for row in shares if row['trade_date'] in dates],
+                    [row for row in write_prices if row['trade_date'] in dates], batch,
+                    create_tables=create_tables,
+                    coverage=[row for row in coverage_rows if row['trade_date'] in dates])
+                for table, values in counts.items():
+                    total = result['counts'].setdefault(table, dict.fromkeys(values, 0))
+                    for key, value in values.items():
+                        total[key] += value
+        else:
+            result['counts'] = save_records(engine, shares, write_prices, sessions, create_tables=create_tables)
         result['written'] = True
+        result['coverage_persisted'] = automatic_history
     finally:
         engine.dispose()
     for table, counts in result['counts'].items():
         print('{}：新增 {}，保留已有 {}，其中值不同但仍保留 {}。'.format(
             table, counts['inserted'], counts['preserved'], counts['different_preserved']))
-    print('入库完成。已有记录、来源及更新时间均未覆盖；请在项目中手动同步 ETF 本地数据。')
+    print('有效记录入库完成；覆盖状态：{}。未知缺口不等于零或全历史完成。'.format(result['completion_status']))
+    print('已有记录、来源及更新时间均未覆盖；请在项目中手动同步 ETF 本地数据。')
     return result
 
 

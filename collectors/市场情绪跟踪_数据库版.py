@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""聚宽研究环境：全市场站上 MA20 股票占比，保留近三年，重复运行只补缺口。"""
+"""聚宽研究环境：全市场站上 MA20 股票占比，保留完整历史，重复运行只补缺口。"""
 import builtins
 import datetime
 import re
@@ -548,12 +548,12 @@ def _sentiment_strategy(_apis, _config):
         with database_scope(Base, _config) as Session:
             _install_result_journal(Session, (MarketSentiment,), 'market-sentiment')
             with session_scope(Session) as session:
-                removed = _result_bulk(session.query(MarketSentiment).filter(MarketSentiment.trade_date < cutoff))
-                session.commit()
+                # 历史补采结果永久保留；日更不得自动删除。
+                removed = 0
                 existing = {as_date(row[0]) for row in session.query(MarketSentiment.trade_date).filter(
                     MarketSentiment.trade_date >= start, MarketSentiment.trade_date <= end).all()}
             pending = set(days) - existing
-            _progress_message('市场情绪：近三年缺失 {} 个交易日；已清理过期 {} 行。'.format(len(pending), removed))
+            _progress_message('市场情绪：日常窗口缺失 {} 个交易日；历史记录保留（删除 {} 行）。'.format(len(pending), removed))
             if not pending:
                 _progress_note('已有日期完整，跳过股票资料和行情查询')
                 return pd.DataFrame(columns=RESULT_COLUMNS)

@@ -215,7 +215,7 @@ def test_listing_date_st_and_new_bse_prefix_filter(collector):
 
 def test_calculation_adapters_five_day_turnover_and_nullable_profit(collector):
     c = collector
-    c.env['eligible_codes'] = lambda day: ['A', 'B']
+    c.env['eligible_codes'] = lambda day, minimum=0: ['A', 'B']
     valuation, indicator = object(), object()
     c.env['valuation'], c.env['indicator'] = valuation, indicator
     calls = []
@@ -497,3 +497,82 @@ def test_daily_hole_insert_and_pending_marker_rollback_together(collector):
         c.env['save_period'](sessionmaker(bind=c.engine,class_=FailCommit),before[5],
                              skip_existing=True,invalidate_next=c.days[6])
     assert daily_rows(c)==before[:5]+before[6:]
+
+
+def setup_archive(c):
+    c.env['get_all_trade_days'] = lambda: c.days
+    c.env['eligible_codes'] = lambda day, minimum=0: ['A'] if day == c.days[4] else ['A', 'B']
+    c.env['valuation'] = object()
+    c.env['fundamental_rows'] = lambda codes, table, fields, day: {} if day == c.days[5] else {'A': {}, 'B': {}}
+
+
+def test_archive_known_shortfall_unknown_prefix_separate_and_resume(collector):
+    c = collector
+    setup_archive(c)
+    c.env['run'](micro_num=2)
+    original = saved(c)
+    c.env['collect_archive'](c.Session, c.days[-1], 2)
+    rows = saved(c)
+    assert [r for r in rows if not r['series_id'].endswith('_archive')] == original
+    archive = [r for r in rows if r['series_id'].endswith('_archive')]
+    assert archive[0]['trade_date'] == c.days[6] and archive[0]['micro_index'] == 1000
+    with c.Session() as session:
+        coverage = {r.trade_date: r.status for r in session.query(c.env['MicrocapArchiveCoverage'])}
+    assert coverage[c.days[4]] == 'insufficient_eligible_securities'
+    assert coverage[c.days[5]] == 'unknown_valuation_coverage'
+    c.calculated.clear()
+    c.env['collect_archive'](c.Session, c.days[-1], 2)
+    assert c.calculated == [] and saved(c) == rows
+
+
+def test_archive_api_failure_never_becomes_unavailable_or_zero(collector):
+    c = collector
+    setup_archive(c)
+    def denied(*args, **kwargs):
+        raise RuntimeError('quota')
+    c.env['fundamental_rows'] = denied
+    with pytest.raises(RuntimeError, match='quota'):
+        c.env['collect_archive'](c.Session, c.days[-1], 2)
+    assert not saved(c)
+    with c.Session() as session:
+        assert session.query(c.env['MicrocapArchiveCoverage']).count() == 5
+
+
+def test_archive_interior_calendar_gap_rejected(collector):
+    c = collector
+    setup_archive(c)
+    c.env['get_all_trade_days'] = lambda: c.days[:5] + c.days[6:]
+    with pytest.raises(ValueError, match='日历'):
+        c.env['collect_archive'](c.Session, c.days[-1], 2)
+    assert not saved(c)
+
+
+def test_archive_interrupted_snapshot_resume_retains_anchor_and_prefix(collector):
+    c = collector
+    setup_archive(c)
+    real = c.env['calculate_period']
+    def fail(day, previous, micro_num):
+        if day == c.days[8]:
+            raise ValueError('missing endpoint')
+        return real(day, previous, micro_num)
+    c.env['calculate_period'] = fail
+    with pytest.raises(ValueError, match='missing endpoint'):
+        c.env['collect_archive'](c.Session, c.days[-1], 2)
+    prefix = saved(c)
+    assert len(prefix) == 2 and prefix[0]['micro_index'] == 1000
+    c.env['calculate_period'] = real
+    c.calculated.clear()
+    c.env['collect_archive'](c.Session, c.days[-1], 2)
+    assert saved(c)[:2] == prefix
+    assert c.calculated == c.days[8:]
+
+
+def test_archive_missing_valuation_fields_fail_not_noncomputable(collector):
+    c = collector
+    setup_archive(c)
+    def invalid(*args, **kwargs):
+        raise ValueError('财务数据缺少请求字段。')
+    c.env['fundamental_rows'] = invalid
+    with pytest.raises(ValueError, match='字段'):
+        c.env['collect_archive'](c.Session, c.days[-1], 2)
+    assert not saved(c)

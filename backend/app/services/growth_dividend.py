@@ -75,6 +75,11 @@ class GrowthDividend:
                     close REAL NOT NULL CHECK(close>0), source TEXT NOT NULL,
                     source_url TEXT NOT NULL, updated_at TEXT NOT NULL,
                     PRIMARY KEY(code, trade_date));
+                CREATE TABLE IF NOT EXISTS comparisons (
+                    code TEXT NOT NULL, trade_date TEXT NOT NULL,
+                    published_close REAL NOT NULL, candidate_close REAL NOT NULL,
+                    checked_at TEXT NOT NULL,
+                    PRIMARY KEY(code, trade_date, candidate_close));
                 CREATE TABLE IF NOT EXISTS state (
                     id INTEGER PRIMARY KEY CHECK(id=1), payload TEXT NOT NULL);
                 INSERT OR IGNORE INTO state VALUES (1, '{}');
@@ -148,6 +153,10 @@ class GrowthDividend:
             pending = self.pending(db, cutoff)
             future = db.execute('SELECT trade_date FROM calendar WHERE trade_date>=? '
                                 'ORDER BY trade_date LIMIT 20', (str(local.date()),)).fetchall()
+            comparison_conflicts = db.execute('SELECT count(*) FROM comparisons').fetchone()[0]
+            recent_conflicts = [dict(row) for row in db.execute(
+                'SELECT code,trade_date,published_close,candidate_close,checked_at '
+                'FROM comparisons ORDER BY checked_at DESC,trade_date DESC,code LIMIT 10')]
         next_run = next((slot_for(date.fromisoformat(row[0])) for row in future
                          if datetime.fromisoformat(slot_for(date.fromisoformat(row[0]))) > local), None)
         running = self.running()
@@ -156,7 +165,7 @@ class GrowthDividend:
             stage = '上次更新中断，将从已保存的进度继续补齐'
         ready = state.get('calendar_through', '') >= str(cutoff)
         return dict(
-            running=running, stage=stage, processed=state.get('processed', 0),
+            running=running, stage=stage, sync_summary=state.get('sync_summary'), processed=state.get('processed', 0),
             total=state.get('total'), percent=state.get('percent'),
             cancelling=bool(running and state.get('run_id') and
                             (self.root / ('cancel-' + state['run_id'])).exists()),
@@ -166,6 +175,7 @@ class GrowthDividend:
             calendar_ready=ready, calendar_through=state.get('calendar_through'),
             calendar_error=state.get('calendar_error'), target_date=str(cutoff),
             recent_failures=state.get('recent_failures', []),
+            comparison_conflicts=comparison_conflicts, recent_conflicts=recent_conflicts,
             daily_time=DAILY_TIME, timezone='Asia/Shanghai',
             automatic=self.settings.growth_dividend_worker_enabled,
             next_run_at=next_run if self.settings.growth_dividend_worker_enabled else None,
@@ -181,18 +191,21 @@ class GrowthDividend:
                      'WHERE trade_date>=? AND trade_date<=? ORDER BY trade_date',
                      (str(START), str(cutoff)))]
         by_date = {}
+        provenance = {}
         code_keys = {index.code: index.key for index in INDEXES}
         updated = None
         for row in rows:
-            if row['code'] not in code_keys:
+            if row['code'] not in code_keys or (row['code'] == '000688' and row['trade_date'] < '2020-01-02'):
                 continue
             by_date.setdefault(row['trade_date'], {})[code_keys[row['code']]] = row['close']
+            provenance.setdefault(row['trade_date'], {})[code_keys[row['code']]] = row['source']
             updated = max(updated or row['updated_at'], row['updated_at'])
         points = []
         if by_date:
             for day in sorted(set(dates) | set(by_date)):
                 values = by_date.get(day, {})
-                point = dict(date=day, **{index.key: values.get(index.key) for index in INDEXES})
+                point = dict(date=day, sources_by_index=provenance.get(day, {}),
+                             **{index.key: values.get(index.key) for index in INDEXES})
                 dividend = point['dividend']
                 point['chinext_dividend_ratio'] = (round(point['chinext'] / dividend, 8)
                     if dividend and point['chinext'] is not None else None)
@@ -206,7 +219,7 @@ class GrowthDividend:
                     updated_at=updated, status=self.status(moment),
                     indices=[dict(key=index.key, code=index.code, name=index.name,
                                   first_date=str(index.first_date)) for index in INDEXES],
-                    sources=['腾讯财经', '东方财富（备用）'], calendar_source=CALENDAR_URL,
+                    sources=['腾讯财经', '东方财富（备用）', '聚宽（仅已同步记录）'], calendar_source=CALENDAR_URL,
                     star50_base_date='2019-12-31', history_start=str(START))
 
     def refresh(self, background=True, *, moment=None, slot=None, trigger='manual'):
@@ -224,7 +237,8 @@ class GrowthDividend:
                 return False
             state.update(run_id=uuid.uuid4().hex, active=True, stage='核对交易日历',
                          error=None, calendar_error=None, processed=0, total=None, percent=None,
-                         last_attempt_at=moment.isoformat(), trigger=trigger, recent_failures=[])
+                         last_attempt_at=moment.isoformat(), trigger=trigger, recent_failures=[],
+                         conflict_points=0)
             if slot:
                 state['scheduled_slot'] = slot
             self.write_state(state)
@@ -274,8 +288,11 @@ class GrowthDividend:
                     if through < state.get('calendar_through', ''):
                         raise IndexSourceError('公开交易日历范围回退，保留已有日历并等待重试。')
                     with self.db() as db:
-                        db.execute('DELETE FROM calendar')
-                        db.executemany('INSERT INTO calendar VALUES (?)',
+                        known_days = {row[0] for row in db.execute(
+                            'SELECT trade_date FROM calendar WHERE trade_date>=?', (str(START),))}
+                        if not known_days.issubset({str(day) for day in days}):
+                            raise IndexSourceError('公开交易日历缺少已确认交易日，保留原日历并等待重试。')
+                        db.executemany('INSERT OR IGNORE INTO calendar VALUES (?)',
                                        [(str(day),) for day in days if day >= START])
                         state.update(calendar_through=through, calendar_checked_at=moment.isoformat())
                         self.write_state(state, db)
@@ -336,10 +353,18 @@ class GrowthDividend:
                             accepted.append((index.code, str(day), quote.close, quote.source,
                                              quote.source_url, moment.isoformat()))
                         with self.db() as db:
-                            db.executemany('INSERT INTO points VALUES (?,?,?,?,?,?) '
-                                'ON CONFLICT(code,trade_date) DO UPDATE SET '
-                                'close=excluded.close,source=excluded.source,source_url=excluded.source_url,'
-                                'updated_at=excluded.updated_at', accepted)
+                            db.execute('BEGIN IMMEDIATE')
+                            for row in accepted:
+                                old = db.execute('SELECT close FROM points WHERE code=? AND trade_date=?',
+                                                 row[:2]).fetchone()
+                                if old is None:
+                                    db.execute('INSERT INTO points VALUES (?,?,?,?,?,?)', row)
+                                elif old['close'] != row[2]:
+                                    # Today's recheck must not overwrite a confirmed public or JQ row.
+                                    # Persist only validated market values, never upstream responses/errors.
+                                    db.execute('INSERT OR IGNORE INTO comparisons VALUES (?,?,?,?,?)',
+                                               (*row[:2], old['close'], row[2], moment.isoformat()))
+                                    state['conflict_points'] += 1
                             state['processed'] += len(accepted)
                             state['percent'] = round(100 * state['processed'] / state['total'], 1) if state['total'] else 100
                             self.write_state(state, db)
@@ -361,14 +386,16 @@ class GrowthDividend:
                             break
                 with self.db() as db:
                     pending = self.pending(db, cutoff)
-                if pending or not calendar_ok or not expected_days or state['recent_failures']:
+                if pending or not calendar_ok or not expected_days or state['recent_failures'] or state['conflict_points']:
                     outcome = 'partial'
                     count = len({row['trade_date'] for row in pending})
                     state['error'] = '；'.join(part for part in [state.get('calendar_error'),
                         f'{count} 个交易日、{len(pending)} 条指数数据待补齐。' if pending else None,
                         '部分行情请求未成功，已保存数据保留，稍后会重试。' if state['recent_failures'] and not pending else None,
+                        f"{state['conflict_points']} 条公开行情与已保存记录不同；已保留原值，未覆盖。" if state['conflict_points'] else None,
                         '尚未取得有效交易日历。' if not expected_days else None] if part)
-                    state['stage'] = '本次更新结束，未完成数据将继续补齐'
+                    state['stage'] = ('本次更新结束，来源差异已记录，原值未覆盖' if state['conflict_points']
+                                      else '本次更新结束，未完成数据将继续补齐')
                 else:
                     outcome = 'success'
                     state.update(stage='已更新至 ' + str(expected_days[-1]), error=None,

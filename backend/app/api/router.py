@@ -3,6 +3,7 @@ from app.api.routes.commodities import router as commodities_router
 from app.api.routes.sentiment import router as sentiment_router
 from app.api.routes.margin_guarantee import router as margin_guarantee_router
 from app.api.routes.growth_dividend import router as growth_dividend_router
+from app.api.routes.valuation_ruler import router as valuation_ruler_router
 from app.api.routes.social import router as social_router
 from app.api.routes.social_browser import router as social_browser_router
 from app.api.routes.ownership import router as ownership_router
@@ -34,6 +35,7 @@ router.include_router(sentiment_router)
 router.include_router(market_collection_router)
 router.include_router(margin_guarantee_router)
 router.include_router(growth_dividend_router)
+router.include_router(valuation_ruler_router)
 router.include_router(microcap_router)
 router.include_router(etf_router)
 router.include_router(earnings_router)
@@ -52,7 +54,7 @@ def modules():
         'path': '/industry-momentum', 'status': 'available',
     }, {
         'id': 'market-crowding', 'name': '市场情绪',
-        'description': '抱团拥挤度、全市场站上 MA20 比例、两融担保比例与创红比。',
+        'description': '抱团拥挤度、全市场站上 MA20 比例、两融担保比例、创红比与估值标尺。',
         'path': '/market-crowding', 'status': 'available',
     }, {
         'id': 'market-sentiment', 'name': '市场热度',
@@ -66,6 +68,10 @@ def modules():
         'id': 'growth-dividend', 'name': '创红比',
         'description': '创业板指、中证红利、科创50点位及创红比、科创红利比。',
         'path': '/growth-dividend', 'status': 'available',
+    }, {
+        'id': 'valuation-ruler', 'name': '估值标尺',
+        'description': '沪深300点位、正PE成分股等权平均PE-TTM及2010年以来历史分位。',
+        'path': '/valuation-ruler', 'status': 'available',
     }, {
         'id': 'microcap-temperature', 'name': '微盘温度计',
         'description': '从估值与交易拥挤度，观察微盘 1000 的温度与等权指数。',

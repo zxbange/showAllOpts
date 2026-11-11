@@ -30,7 +30,7 @@ class PollingAccessFilter(logging.Filter):
     """Omit only successful GET polling; keep failures and unexpected formats."""
 
     paths = frozenset({'/api/v1/etf-shares/collection-status', '/api/v1/cache/status',
-                       '/api/v1/market-collection/status'})
+                       '/api/v1/market-collection/status', '/api/v1/valuation-ruler/status'})
 
     def filter(self, record):
         if record.name != 'uvicorn.access' or record.levelno >= logging.WARNING:

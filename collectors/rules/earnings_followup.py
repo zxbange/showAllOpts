@@ -98,31 +98,17 @@ def _refresh_earnings_followup(Session, Stock, as_of, get_price, progress=None):
 
 
 def _prune_earnings_history(Session, Stock, Run, as_of):
-    """按报告期保留滚动五年，连同季度版本、迁移标记和跟踪价格一起清理。"""
+    """保留全部历史报告期；只清理显式重建后的孤立跟踪数据。"""
     performance = _earnings_followup_table()
     performance.create(Session.kw['bind'], checkfirst=True)
     session = Session()
     try:
-        # 补跑较早日期不能让保留边界倒退。
-        reference = _ef_b.max(day for day in (as_of, session.query(_ef_func.max(Run.as_of_date)).scalar(),
-                          session.execute(_ef_func.max(performance.c.as_of_date).select()).scalar()) if day is not None)
-        try:
-            cutoff = reference.replace(year=reference.year - 5)
-        except ValueError:
-            cutoff = reference.replace(year=reference.year - 5, day=28)
-        periods = [row[0] for row in session.query(Run.report_period).filter(Run.report_period < cutoff).all()]
-        for period in sorted(periods):
-            _lock_earnings_version(session, period)
-            session.query(Stock).filter(Stock.report_period == period).delete(synchronize_session=False)
-            session.query(Run).filter(Run.report_period == period).delete(synchronize_session=False)
-            for table in (_earnings_version_table(), _earnings_migration_table()):
-                session.execute(table.delete().where(table.c.report_period == period))
         # 清除被季度重建移除的股票跟踪记录，包括没有剩余季度头的历史数据。
         live = session.query(Stock.code).filter(Stock.report_period == performance.c.report_period,
                                               Stock.code == performance.c.code).exists()
         session.execute(performance.delete().where(~live))
         session.commit()
-        return len(periods)
+        return 0
     except Exception:
         session.rollback()
         raise
