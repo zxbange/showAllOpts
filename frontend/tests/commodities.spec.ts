@@ -49,7 +49,7 @@ test('A00 ranges and missing evidence, navigation and responsive table', async (
     page.getByRole('navigation', { name: '主导航' }).getByRole('link', { name: '大宗商品' }),
   ).toHaveAttribute('aria-current', 'page')
   await expect(page.locator('.commodity-chart canvas')).toBeVisible()
-  await expect(page.getByText('每天 11:00、18:00 自动采集 · 北京时间')).toBeVisible()
+  await expect(page.getByText('每天 11:00、18:00 自动采集 · 北京时间')).toHaveCount(0)
   await expect(page.getByRole('cell', { name: '未核验', exact: true })).toHaveCount(2)
   await expect(page.getByText('现货报价，不是开高低收K线', { exact: true })).toBeVisible()
   await expect(page.getByText('目标日报价读取失败', { exact: true })).toBeVisible()

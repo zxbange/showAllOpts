@@ -1,6 +1,6 @@
 import { apiFetch } from './http'
 import type { ValuationHistory, ValuationStatus } from '../types/valuationRuler'
-export type ValuationAction = 'refresh' | 'sync-joinquant' | 'cancel'
+export type ValuationAction = 'refresh' | 'cancel'
 async function request<T>(path: string, method: 'GET' | 'POST', signal?: AbortSignal): Promise<T> {
   const response = await apiFetch('/api/v1/valuation-ruler/' + path, {
     method,

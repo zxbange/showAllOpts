@@ -184,7 +184,8 @@ test('manage cube monitoring and inspect rebalances within the configured time w
   await expect(firstCube.getByText('主理人：火蚁投资', { exact: true })).toBeVisible()
   await expect(firstCube.getByText('备注：火种测试组合', { exact: true })).toBeVisible()
   await expect(panel.getByLabel('组合链接或代码')).toHaveValue('')
-  await page.getByRole('button', { name: '启动监控', exact: true }).click()
+  status.enabled = true
+  await page.getByRole('button', { name: '刷新列表' }).click()
   await expect(page.getByText('组合休息中', { exact: true })).toBeVisible()
   await expect(panel.locator('.social-cube-card')).toContainText('非监控时段')
   await expectCounts('1 / 1')

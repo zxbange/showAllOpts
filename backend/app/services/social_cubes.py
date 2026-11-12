@@ -123,7 +123,7 @@ class CubeMonitorMixin:
         with self.db() as db:
             db.execute('BEGIN IMMEDIATE')
             active = self.active_cube(db, cube)
-            if not active or not cube_monitoring_time(moment):
+            if not active or not self.cube_monitoring_time(moment):
                 raise MonitoringDeferred('组合已暂停、删除或不在监控时段')
             name = plain_text(metadata.get('cube_name'))[:100] or active['cube_name']
             owner_id = str(metadata.get('owner_id') or '')
@@ -140,7 +140,7 @@ class CubeMonitorMixin:
         with self.db() as db:
             db.execute('BEGIN IMMEDIATE')
             active = self.active_cube(db, cube)
-            if not active or not cube_monitoring_time(moment):
+            if not active or not self.cube_monitoring_time(moment):
                 raise MonitoringDeferred('组合已暂停、删除或不在监控时段')
             config = self.config(db)
             tracking = max(filter(None, (event_time(active['added_at']),
@@ -196,7 +196,7 @@ class CubeMonitorMixin:
                                                   "AND status IN ('pending','waiting','processing')", (cube['id'],))}
 
         def should_stop():
-            if self.stop_event.is_set() or not cube_monitoring_time(self.current_moment()):
+            if self.stop_event.is_set() or not self.cube_monitoring_time(self.current_moment()):
                 return True
             if getattr(self, 'browser_login', None) and self.browser_login.active('xueqiu'):
                 return True
@@ -208,7 +208,7 @@ class CubeMonitorMixin:
             self.collect_cube(cube, events, initial=not cube['initialized'])
             with self.db() as db:
                 db.execute('BEGIN IMMEDIATE')
-                if not self.active_cube(db, cube) or not cube_monitoring_time(self.current_moment()):
+                if not self.active_cube(db, cube) or not self.cube_monitoring_time(self.current_moment()):
                     raise MonitoringDeferred('组合已暂停、删除或不在监控时段')
                 db.execute('UPDATE cubes SET scan_page=? WHERE id=?', (next_page, cube['id']))
 
@@ -226,7 +226,7 @@ class CubeMonitorMixin:
         self.collect_cube(cube, result, initial=not cube['initialized'])
         with self.db() as db:
             db.execute('BEGIN IMMEDIATE')
-            if not self.active_cube(db, cube) or not cube_monitoring_time(self.current_moment()):
+            if not self.active_cube(db, cube) or not self.cube_monitoring_time(self.current_moment()):
                 raise MonitoringDeferred('组合已暂停、删除或不在监控时段')
             db.execute('UPDATE cubes SET last_check=?,last_error=NULL WHERE id=?',
                        (self.current_moment().isoformat(timespec='seconds'), cube['id']))
@@ -235,7 +235,7 @@ class CubeMonitorMixin:
                            (started, cube['id']))
 
     def deliver_cubes(self, config, identifier=None, blocked=None):
-        if not cube_monitoring_time(self.current_moment()):
+        if not self.cube_monitoring_time(self.current_moment()):
             return
         blocked = set() if blocked is None else blocked
         with self.db() as db:
@@ -265,7 +265,7 @@ class CubeMonitorMixin:
                 exists = db.execute('SELECT 1 FROM cube_rebalances r JOIN cubes c ON c.id=r.cube_id '
                                     "WHERE r.id=? AND c.symbol=? AND c.enabled=1 AND r.notify_status='pending'",
                                     (row['id'], row['symbol'])).fetchone()
-                return (exists and cube_monitoring_time(self.current_moment())
+                return (exists and self.cube_monitoring_time(self.current_moment())
                         and not current.get('platforms', {}).get('xueqiu', {}).get('paused'))
             errors.extend(self.deliver_message('cube_rebalances', 'notify_status', row, parts, active, blocked))
         if errors:

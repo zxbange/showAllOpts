@@ -1,4 +1,7 @@
+from app.services.system_configuration import task_config
 """CCI has its own model, history and daily 21:00 scheduling ledger."""
+from app.services.system_runtime import source_client
+from app.services.collection_notifications import notify_collection
 from datetime import date, datetime, timedelta
 from pathlib import Path
 import json
@@ -20,6 +23,7 @@ def latest_slot(moment):
 
 
 class CCICoal(Commodities):
+    task_key = 'cci'
     tracks_failed_targets = False
     schedule_label = '每天 21:00 · 北京时间，未完整取得时当日最多重试3次'
     retry_delay = timedelta(minutes=30)
@@ -32,6 +36,8 @@ class CCICoal(Commodities):
     slot_for = staticmethod(latest_slot)
 
     def __init__(self, settings):
+        self.settings = settings
+        self.settings = settings
         self.root = settings.log_path / 'market-data' / 'cci-coal'
         self.root.mkdir(parents=True, exist_ok=True)
         self.thread = self.scheduler = None
@@ -99,7 +105,8 @@ class CCICoal(Commodities):
                     # existing 18:00 result with a misleading skipped state.
                     return False
                 if slot.date() == current.date():
-                    primary = current.replace(hour=21, minute=0, second=0, microsecond=0)
+                    hour, minute = map(int, task_config(self.settings, 'cci')['times'][0].split(':'))
+                    primary = current.replace(hour=hour, minute=minute, second=0, microsecond=0)
                     if current < primary:
                         return False
                     if any(result == 'completed' for result, _ in runs):
@@ -195,6 +202,7 @@ class CCICoal(Commodities):
                         deferredCount=len(missing), requestCount=0)
         return windows, missing, recovery
 
+    @notify_collection('cci')
     def collect(self, lock, slot=None):
         began = monotonic()
         today = now().astimezone(CHINA).date()
@@ -293,7 +301,7 @@ class CCICoal(Commodities):
             checked, unavailable = set(), set()
             self.state(stage='正在更新数据并补齐缺失报价', **context, outcome='running', error=None,
                        recovery=recovery)
-            with httpx.Client(timeout=httpx.Timeout(25, connect=10), trust_env=False, follow_redirects=False) as client:
+            with source_client(self.settings, factory=httpx.Client, timeout=httpx.Timeout(25, connect=10), trust_env=False, follow_redirects=False) as client:
                 # Always prioritize today's three grades and preserve the daily
                 # retry semantics. Historical windows have a separate durable ledger.
                 if not should_stop():

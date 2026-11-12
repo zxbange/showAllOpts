@@ -2,7 +2,7 @@ import os
 from pathlib import Path
 from typing import Literal
 
-from pydantic import Field, SecretStr
+from pydantic import Field, SecretStr, PrivateAttr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from sqlalchemy import URL
 
@@ -39,6 +39,12 @@ def resolve_env_file() -> Path:
 
 
 class Settings(BaseSettings):
+    _resolved_env_file: Path | None = PrivateAttr(default=None)
+
+    @property
+    def resolved_env_file(self):
+        return self._resolved_env_file
+
     model_config = SettingsConfigDict(
         env_file=DEFAULT_ENV_FILE,
         env_file_encoding='utf-8',
@@ -52,6 +58,8 @@ class Settings(BaseSettings):
             values['_env_file'] = resolve_env_file()
         try:
             super().__init__(**values)
+            selected = values.get('_env_file')
+            self._resolved_env_file = Path(selected).expanduser().resolve() if selected is not None else None
         except (OSError, UnicodeError):
             raise ConfigurationError('Cannot read the selected configuration file. Check permissions and UTF-8 encoding.') from None
 
@@ -70,6 +78,8 @@ class Settings(BaseSettings):
     market_collection_writer_url: SecretStr = SecretStr('')
     # Optional server-side raw daily source; never returned by configuration APIs.
     asharehub_api_key: SecretStr = SecretStr('')
+    telegram_bot_token: SecretStr = SecretStr('')
+    telegram_chat_id: SecretStr = SecretStr('')
     etf_collection_writer_url: SecretStr = SecretStr('')
     etf_collection_lookback_days: int = Field(default=300, ge=1, le=1500)
     etf_collection_batch_days: int = Field(default=5, ge=1, le=20)

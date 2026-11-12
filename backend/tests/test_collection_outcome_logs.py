@@ -1,5 +1,6 @@
 """Collection diagnostics describe actual outcomes without upstream secrets."""
 import logging
+from datetime import date
 
 import pytest
 
@@ -68,11 +69,15 @@ def test_margin_outcome(margin_monitor, monkeypatch, caplog, outcome):
     assert_finished(caplog, 'Margin guarantee', outcome)
 
 
-def test_growth_market_closed_outcome(growth_monitor, monkeypatch, caplog):
+def test_growth_empty_calendar_coverage_is_not_success(growth_monitor, monkeypatch, caplog):
     caplog.set_level(logging.INFO)
     growth_provider(monkeypatch, days=[])
     growth_monitor.refresh(background=False, moment=GROWTH_MOMENT, slot='test-closed')
-    assert_finished(caplog, 'Growth/dividend', 'market_closed')
+    assert_finished(caplog, 'Growth/dividend', 'partial')
+    state = growth_monitor.read_state()
+    assert state['calendar_checked_at'] == GROWTH_MOMENT.isoformat()
+    assert state['processed'] == 0
+    assert growth_monitor.history(GROWTH_MOMENT)['points'] == []
 
 
 def test_growth_finalize_failure_does_not_claim_success(growth_monitor, monkeypatch, caplog):
@@ -88,3 +93,19 @@ def test_growth_finalize_failure_does_not_claim_success(growth_monitor, monkeypa
         growth_monitor.refresh(background=False, moment=GROWTH_MOMENT)
     assert_finished(caplog, 'Growth/dividend', 'failed')
     assert not growth_monitor.running()
+
+
+def test_growth_weekend_checks_calendar_and_keeps_friday_result(growth_monitor,monkeypatch,caplog):
+    caplog.set_level(logging.INFO)
+    calls=growth_provider(monkeypatch,days=[date(2018,1,2),date(2020,1,2),date(2026,11,6)])
+    friday=GROWTH_MOMENT.replace(day=6)
+    growth_monitor.refresh(background=False,moment=friday)
+    before=growth_monitor.history(friday)['points']
+    calls.clear();caplog.clear()
+    sunday=GROWTH_MOMENT.replace(day=8)
+    growth_monitor.refresh(background=False,moment=sunday,slot='test-weekend',trigger='scheduled')
+    assert_finished(caplog,'Growth/dividend','success')
+    state=growth_monitor.read_state()
+    assert state['calendar_checked_at']==sunday.isoformat() and state['processed']==0
+    assert growth_monitor.history(sunday)['points']==before
+    assert not calls

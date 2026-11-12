@@ -5,6 +5,7 @@ import { HomePage } from './pages/HomePage'
 import { MomentumPage } from './pages/MomentumPage'
 import { LoadingState } from './components/States'
 import { AccountAccess } from './components/AccountAccess'
+import { SystemConfigurationPage } from './pages/SystemConfigurationPage'
 import { UsersPage } from './pages/UsersPage'
 import { PersonalHoldingsPage } from './pages/PersonalHoldingsPage'
 
@@ -94,6 +95,7 @@ export default function App() {
                 </Suspense>
               }
             />
+            <Route path="system-configuration" element={<SystemConfigurationPage />} />
             <Route path="account" element={<UsersPage />} />
             <Route index element={<HomePage />} />
             <Route

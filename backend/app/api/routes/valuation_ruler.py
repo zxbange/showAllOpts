@@ -27,9 +27,3 @@ def refresh(monitor=Depends(service)):
 @router.post('/cancel',status_code=202)
 def cancel(monitor=Depends(service)):
     return {'cancelled':monitor.cancel()}
-
-
-@router.post('/sync-joinquant',status_code=202)
-def sync_joinquant(monitor=Depends(service)):
-    from app.services.valuation_ruler_import import start_import
-    return {'started':start_import(monitor)}

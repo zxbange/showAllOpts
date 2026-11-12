@@ -29,7 +29,7 @@ test('CCI peer module, gaps, grade selection, schedule, responsive navigation', 
     'page',
   )
   await expect(page.locator('.commodity-chart canvas')).toBeVisible()
-  await expect(page.getByText(/每天 21:00 自动采集/)).toBeVisible()
+  await expect(page.getByText(/每天 21:00 自动采集/)).toHaveCount(0)
   await expect(page.getByText('三档人民币报价 · 元/吨 · 自2026-01-01')).toHaveCount(0)
   await expect(page.locator('.commodity-source-note')).toHaveCount(0)
   await expect(page.getByRole('link', { name: 'coalindex.com 网络汇集（非官方）' })).toHaveCount(0)
@@ -53,7 +53,7 @@ test('CCI peer module, gaps, grade selection, schedule, responsive navigation', 
   await page.screenshot({ path: info.outputPath('cci.png'), fullPage: true })
   await page.getByRole('link', { name: 'A00铝', exact: true }).click()
   await expect(page.getByRole('heading', { name: 'A00铝', exact: true })).toBeVisible()
-  await expect(page.getByText(/每天 11:00、18:00/)).toBeVisible()
+  await expect(page.getByText(/每天 11:00、18:00/)).toHaveCount(0)
   await page.goBack()
   await expect(page.getByRole('heading', { name: 'CCI动力煤', exact: true })).toBeVisible()
   await page.reload()

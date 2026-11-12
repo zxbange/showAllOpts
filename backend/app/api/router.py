@@ -1,3 +1,4 @@
+from app.api.routes.system_configuration import router as system_configuration_router
 from app.api.routes.cash_cow import router as cash_cow_router
 from app.api.routes.commodities import router as commodities_router
 from app.api.routes.sentiment import router as sentiment_router
@@ -23,6 +24,7 @@ from app.api.routes.microcap import router as microcap_router
 from app.api.routes.momentum import router as momentum_router
 
 router = APIRouter(prefix='/api/v1')
+router.include_router(system_configuration_router)
 router.include_router(commodities_router)
 router.include_router(cash_cow_router)
 router.include_router(personal_holdings_router)

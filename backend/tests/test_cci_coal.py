@@ -28,7 +28,7 @@ def test_seed_provenance_gaps_and_restart(tmp_path):
     assert all(r['official'] is False and r['evidence'] == 'public_query' for r in data['rows'])
     assert not {'open','close','high','low','volume'} & data['rows'][0].keys()
     assert CCICoal(Settings(_env_file=None,log_dir=tmp_path)).history()['rows'] == data['rows']
-    assert data['status']['schedule'] == '每天 21:00 · 北京时间，未完整取得时当日最多重试3次'
+    assert data['status']['schedule'] == '21:00'
     assert not (store.root / '../commodities/history.sqlite3').exists()
 
 

@@ -49,8 +49,6 @@ class ScheduleRequest(BaseModel):
 
 @router.post('/schedule')
 def save_schedule(body: ScheduleRequest, request: Request, response: Response):
-    cache = request.app.state.cache
-    if not cache.settings.cache_enabled:
-        raise HTTPException(status_code=409, detail='当前未启用本地缓存。')
-    response.headers['Cache-Control'] = 'no-store'
-    return cache.save_schedule(body.daily_time)
+    from app.api.routes.accounts import require_admin
+    require_admin(request)
+    raise HTTPException(status_code=409, detail='请在系统配置页面修改自动同步时间')

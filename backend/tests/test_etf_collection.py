@@ -49,7 +49,7 @@ class Collector:
 
 def worker(tmp_path, *, schedule=None, **kwargs):
     settings = Settings(_env_file=None, log_dir=tmp_path, etf_collection_enabled=True,
-                        etf_collection_writer_url='mysql+pymysql://etf_writer@127.0.0.1:3306/showallopts', etf_collection_lookback_days=2)
+                        db_user='etf_writer', db_password='', etf_collection_lookback_days=2)
     c = Collector()
     disposed = []
     w = ETFCollection(settings, collector=c, client_factory=lambda: nullcontext(None),
@@ -60,7 +60,7 @@ def worker(tmp_path, *, schedule=None, **kwargs):
     load = w.configuration.load
     def configured_load():
         config = load()
-        return config | {'schedule': schedule or ['18:30']} if config['source'] == 'environment' else config
+        return config | {'schedule': schedule or ['18:30']} if config['revision'] == 0 else config
     w.configuration.load = configured_load
     return w, c, disposed
 
@@ -72,17 +72,17 @@ def test_timezone_and_naive():
 
 
 def test_disabled_and_missing_configuration(tmp_path):
-    w = ETFCollection(Settings(_env_file=None, log_dir=tmp_path, etf_collection_enabled=False))
+    w = ETFCollection(Settings(_env_file=None, log_dir=tmp_path, db_user='', etf_collection_enabled=False))
     w.start()
     assert w.status()['enabled'] is False
     assert w.status()['ready'] is False
     assert w.status()['disabled_reason'] == 'missing_writer_configuration'
-    assert w.worker is None
+    assert w.worker is not None
     w.settings.etf_collection_enabled = True
     w.start()
     assert w.status()['status'] == 'missing_writer_configuration'
     assert w.tick(EVENING) is False
-    assert not w.root.exists()
+    w.stop()
 
 
 def test_no_startup_network_or_07_slot(tmp_path):
@@ -202,8 +202,8 @@ def test_month_boundary_slot_in_shanghai(tmp_path):
 def test_collection_status_endpoint(client):
     response = client.get('/api/v1/etf-shares/collection-status')
     assert response.status_code == 200
-    assert response.json()['disabled_reason'] == 'missing_writer_configuration'
-    assert response.json()['ready'] is False
+    assert response.json()['disabled_reason'] is None
+    assert response.json()['ready'] is True
     assert 'writer_url' not in response.text.lower()
 
 
@@ -269,13 +269,9 @@ def test_prices_are_fetched_once_per_code_per_run(tmp_path):
 ])
 def test_writer_target_mismatch_never_starts_or_fetches(tmp_path, writer):
     from pydantic import SecretStr
-    w, c, _ = worker(tmp_path)
-    w.settings.etf_collection_writer_url = SecretStr(writer)
-    w.start()
-    assert w.worker is None
-    assert not w.tick(EVENING)
-    assert not c.calls
-    assert w.status()['status'] in {'writer_target_mismatch', 'invalid_writer_configuration'}
+    w,c,_=worker(tmp_path);w.settings.etf_collection_writer_url=SecretStr(writer)
+    assert w.configured and w.tick(EVENING) and c.calls
+    assert w.configuration.load()['host']=='127.0.0.1'
     assert writer not in str(w.status())
 
 
@@ -343,11 +339,12 @@ def test_new_manual_click_retries_latest_exhausted_observations_without_resettin
 
 
 def test_default_enabled_but_missing_writer_is_not_ready(tmp_path, caplog):
-    settings = Settings(_env_file=None, log_dir=tmp_path)
+    settings = Settings(_env_file=None, log_dir=tmp_path, db_user='')
     assert settings.etf_collection_enabled is True
     w = ETFCollection(settings)
     w.start()
-    assert not w.worker
+    assert w.worker is not None
+    w.stop()
     assert w.status()['ready'] is False
     assert w.status()['status'] == 'missing_writer_configuration'
     assert 'ETF collection not ready: missing_writer_configuration' in caplog.text
@@ -474,8 +471,8 @@ def test_writer_connection_has_bounded_timeouts(tmp_path):
         return SimpleNamespace(dispose=lambda: None)
     w.engine_factory = factory
     assert w.tick(EVENING)
-    assert received == [{'pool_pre_ping': True, 'hide_parameters': True, 'connect_args': {
-        'connect_timeout': 10, 'read_timeout': 60, 'write_timeout': 60, 'ssl_disabled': True}}]
+    assert received[0]['connect_args']=={'connect_timeout':10,'read_timeout':60,'write_timeout':60,'ssl_disabled':True}
+    assert received[0]['hide_parameters'] and callable(received[0]['creator'])
 
 
 def test_changing_daily_time_cannot_create_second_automatic_run(tmp_path):

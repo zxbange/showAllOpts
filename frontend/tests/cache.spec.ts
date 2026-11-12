@@ -63,7 +63,7 @@ test('cache panel shows old snapshot and allows module synchronization without c
   await page.getByRole('button', { name: '数据同步状态', exact: true }).click()
   const panel = page.getByRole('dialog')
   await expect(panel).toBeVisible()
-  await expect(panel).toContainText('每天北京时间 07:00 自动同步')
+  await expect(panel).not.toContainText('每天北京时间 07:00 自动同步')
   await expect(panel.getByText('保留旧快照', { exact: true })).toBeVisible()
   await expect(panel.locator('.cache-row')).toHaveCount(8)
   await page.getByLabel('同步范围', { exact: true }).selectOption('dividend-selection')

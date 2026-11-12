@@ -195,6 +195,7 @@ test('five-year default, all history, date entry and manual zoom survive refresh
     return route.fulfill({ json: route.request().url().endsWith('/status') ? status : snapshot })
   })
   await page.goto('/growth-dividend')
+  await expect(page.getByRole('button', { name: '同步聚宽历史', exact: true })).toHaveCount(0)
   await expect(page.locator('.growth-dividend-chart canvas')).toBeVisible()
   await expect(page.getByRole('button', { name: '近5年', exact: true })).toHaveAttribute(
     'aria-pressed',
@@ -241,7 +242,7 @@ test('five-year default, all history, date entry and manual zoom survive refresh
   assertLabelLayout(chart)
   await expect(page.locator('.growth-dividend-benchmarks')).toHaveCount(0)
   await expect(page.locator('.growth-dividend-benchmark-note')).toContainText('两组细虚线均读右轴')
-  await expect(page.getByText('每个交易日北京时间 18:00 更新')).toBeVisible()
+  await expect(page.getByText('每个交易日北京时间 18:00 更新')).toHaveCount(0)
   await page.getByRole('button', { name: '全部', exact: true }).click()
   await expect
     .poll(() => inspectChart(page))
@@ -399,6 +400,7 @@ test('initial backfill, update progress and failed gaps retain existing curves',
     return route.fulfill({ json: action === 'status' ? current : { ...snapshot, status: current } })
   })
   await page.goto('/growth-dividend')
+  await expect(page.getByRole('button', { name: '同步聚宽历史', exact: true })).toHaveCount(0)
   await expect(
     page.getByRole('heading', { name: '正在补齐指数历史数据', exact: true }),
   ).toBeVisible()
@@ -477,6 +479,7 @@ test('duplicate clicks send one command and a failed update remains visible afte
     return route.fulfill({ json: route.request().url().endsWith('/status') ? status : history })
   })
   await page.goto('/growth-dividend')
+  await expect(page.getByRole('button', { name: '同步聚宽历史', exact: true })).toHaveCount(0)
   const update = page.getByRole('button', { name: '更新数据', exact: true })
   await expect(update).toBeEnabled()
   await update.evaluate((element: HTMLButtonElement) => {
@@ -512,6 +515,7 @@ for (const delta of [0, 0.00000001]) {
       }),
     )
     await page.goto('/growth-dividend')
+    await expect(page.getByRole('button', { name: '同步聚宽历史', exact: true })).toHaveCount(0)
     await expect(page.locator('.growth-dividend-chart canvas')).toBeVisible()
     const original = (await inspectChart(page)).series.map((line) => line.references)
     for (const width of [320, 960, 280]) {
@@ -534,3 +538,21 @@ for (const delta of [0, 0.00000001]) {
       .screenshot({ path: info.outputPath('axis-labels-narrow.png') })
   })
 }
+
+test('database sync uses the global cancellation entry, not public collection', async ({
+  page,
+}) => {
+  const syncing = { ...status, running: false, database_syncing: true }
+  let mutations = 0
+  await page.route('**/api/v1/growth-dividend/**', async (route) => {
+    if (route.request().method() === 'POST') mutations++
+    await route.fulfill({
+      json: route.request().url().endsWith('/status') ? syncing : { ...history, status: syncing },
+    })
+  })
+  await page.goto('/growth-dividend')
+  await expect(page.getByRole('button', { name: '数据库同步中', exact: true })).toBeDisabled()
+  await expect(page.getByRole('button', { name: '停止更新', exact: true })).toHaveCount(0)
+  await expect(page.getByText('数据库同步中，请到顶部“数据同步”查看或取消。')).toBeVisible()
+  expect(mutations).toBe(0)
+})

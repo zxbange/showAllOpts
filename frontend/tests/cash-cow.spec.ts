@@ -228,7 +228,7 @@ test('period selector follows URL and shows matching annual rows and definitions
       el.open = true
     })
     await expect(page.locator('.cash-cow-rules')).toContainText(`${years} 个完整年度`)
-    await expect(page.locator('.cash-cow-rules')).toContainText(
+    await expect(page.locator('.cash-cow-rules')).not.toContainText(
       '每月最后一天 21:00 更新（北京时间）',
     )
   }

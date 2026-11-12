@@ -64,8 +64,9 @@ def test_viewer_reads_but_cannot_operate_or_see_admin_secrets(site):
         assert client.get(path).status_code == 403
     for path in ['/api/auth/users', '/api/v1/cache/refresh', '/api/v1/social-monitor/config',
                  '/api/v1/personal-holdings/sync', '/api/v1/valuation-ruler/refresh',
-                 '/api/v1/valuation-ruler/sync-joinquant', '/api/v1/valuation-ruler/cancel']:
+                 '/api/v1/valuation-ruler/cancel']:
         assert client.post(path, json={}).status_code == 403
+    assert client.post('/api/v1/valuation-ruler/sync-joinquant').status_code == 404
 
 
 def test_http_fails_closed_and_forwarded_headers_do_not_bypass(site):
@@ -91,8 +92,10 @@ def test_login_csrf_and_mutation_csrf_origin(site):
     for headers in ({'X-CSRF-Token': ''}, {'Origin': 'https://evil.example'},
                     {'Sec-Fetch-Site': 'cross-site'}, {'X-App-Client': ''}):
         assert client.post('/api/auth/logout', headers=headers).status_code == 403
+        assert client.post('/api/v1/cache/refresh', json={}, headers=headers).status_code == 403
+        assert client.post('/api/v1/valuation-ruler/sync-joinquant', headers=headers).status_code == 404
         assert client.post('/api/v1/social-monitor/config', json={'enabled': False}, headers=headers).status_code == 403
-        for path in ('refresh', 'cancel', 'sync-joinquant'):
+        for path in ('refresh', 'cancel'):
             assert client.post('/api/v1/valuation-ruler/'+path, headers=headers).status_code == 403
     assert client.post('/api/auth/logout').status_code == 200
     assert client.get('/api/v1/cache/status').status_code == 401

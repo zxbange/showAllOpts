@@ -3,6 +3,26 @@ import { expect, test } from './fixtures'
 test('initial loading failures can be retried without a login page', async ({ page }) => {
   let ready = false
   await page.route('**/api/v1/**', (route) => {
+    if (route.request().url().includes('/system-configuration'))
+      return route.fulfill({
+        json: {
+          revision: 1,
+          database_revision: 1,
+          timezone: 'Asia/Shanghai',
+          integrations: {
+            asharehub: { token_set: false },
+            telegram: { token_set: true, chat_id_set: true },
+          },
+          database: {
+            host: 'db.example',
+            port: 3306,
+            database: 'stocks',
+            username: 'collector',
+            password_set: true,
+          },
+          schedules: {},
+        },
+      })
     const path = new URL(route.request().url()).pathname
     if (!path.includes('/social-monitor') || !ready)
       return route.fulfill({ status: 503, json: { detail: '加载失败测试' } })
@@ -73,6 +93,26 @@ test('open the monitor directly, configure users, notifications and inspect post
   let postRequests = 0
   const configPayloads: Record<string, unknown>[] = []
   await page.route('**/api/v1/**', async (route) => {
+    if (route.request().url().includes('/system-configuration'))
+      return route.fulfill({
+        json: {
+          revision: 1,
+          database_revision: 1,
+          timezone: 'Asia/Shanghai',
+          integrations: {
+            asharehub: { token_set: false },
+            telegram: { token_set: true, chat_id_set: true },
+          },
+          database: {
+            host: 'db.example',
+            port: 3306,
+            database: 'stocks',
+            username: 'collector',
+            password_set: true,
+          },
+          schedules: {},
+        },
+      })
     const request = route.request()
     const path = new URL(request.url()).pathname
     if (!path.includes('/social-monitor'))
@@ -189,46 +229,8 @@ test('open the monitor directly, configure users, notifications and inspect post
   await page.getByRole('button', { name: '添加用户' }).click()
   await expect(page.locator('.social-author strong[title]')).toHaveText('测试博主')
   await expect(page.getByText('UID 3962719063')).toHaveCount(0)
-  await page.getByRole('tab', { name: '通知设置' }).click()
-  await page.getByLabel('机器人密钥').fill('fake-token')
-  await page.getByLabel('接收会话编号').fill('123')
-  await expect(page.getByLabel('微博登录凭据', { exact: true })).toHaveCount(0)
-  await expect(page.getByLabel('雪球登录凭据', { exact: true })).toHaveCount(0)
-  await expect(page.getByRole('button', { name: /清空已保存的.*登录凭据/ })).toHaveCount(0)
-  await page.getByRole('button', { name: '保存配置' }).click()
-  await expect(page.getByRole('status')).toContainText('配置已保存')
-  await expect(page.getByLabel('机器人密钥', { exact: true })).toHaveCount(0)
-  await expect(page.getByLabel('接收会话编号', { exact: true })).toHaveCount(0)
-  await expect(page.getByRole('group', { name: '机器人密钥已配置' })).toContainText('***')
-  await expect(page.getByRole('group', { name: '接收会话编号已配置' })).toContainText('***')
-  await expect(page.getByRole('button', { name: '保存配置' })).toHaveCount(0)
-  expect(configPayloads).toEqual([{ token: 'fake-token', chat_id: '123' }])
-  expect(await page.content()).not.toContain('fake-token')
-  await page.getByRole('button', { name: '修改机器人密钥' }).click()
-  await expect(page.getByLabel('机器人密钥', { exact: true })).toHaveValue('')
-  await expect(page.getByRole('button', { name: '保存机器人密钥' })).toBeDisabled()
-  await page.getByLabel('机器人密钥', { exact: true }).fill('cancelled-token')
-  await page.getByRole('button', { name: '取消修改机器人密钥' }).click()
-  await expect(page.getByLabel('机器人密钥', { exact: true })).toHaveCount(0)
-  expect(configPayloads).toHaveLength(1)
-  expect(await page.content()).not.toContain('cancelled-token')
-  await page.getByRole('button', { name: '修改机器人密钥' }).click()
-  await expect(page.getByLabel('机器人密钥', { exact: true })).toHaveValue('')
-  await page.getByLabel('机器人密钥', { exact: true }).fill('updated-token')
-  await page.getByRole('button', { name: '保存机器人密钥' }).click()
-  await expect(page.getByLabel('机器人密钥', { exact: true })).toHaveCount(0)
-  expect(configPayloads.at(-1)).toEqual({ token: 'updated-token' })
-  expect(await page.content()).not.toContain('updated-token')
-  await page.getByRole('button', { name: '修改接收会话编号' }).click()
-  await expect(page.getByLabel('接收会话编号', { exact: true })).toHaveValue('')
-  await page.getByLabel('接收会话编号', { exact: true }).fill('456')
-  await page.getByLabel('接收会话编号', { exact: true }).press('Enter')
-  await expect(page.getByLabel('接收会话编号', { exact: true })).toHaveCount(0)
-  expect(configPayloads.at(-1)).toEqual({ chat_id: '456' })
-  await page.getByRole('button', { name: '发送测试消息' }).click()
-  await expect(page.getByRole('status')).toContainText('测试消息已发送')
-  await page.getByRole('button', { name: '启动监控', exact: true }).click()
-  await expect(page.getByText('后台监控中', { exact: true })).toBeVisible()
+  status.enabled = true
+  await page.getByRole('button', { name: '刷新列表' }).click()
   await expect(page.getByText('10–16', { exact: false }).first()).toBeVisible()
   await page.getByRole('tab', { name: /监控博主/ }).click()
   await page.locator('.social-author').getByRole('button', { name: '暂停', exact: true }).click()
@@ -272,8 +274,8 @@ test('open the monitor directly, configure users, notifications and inspect post
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
   await page.getByRole('tab', { name: '最新动态' }).focus()
   await page.keyboard.press('End')
-  await expect(page.getByRole('tab', { name: '通知设置' })).toBeFocused()
-  await expect(page.getByRole('group', { name: '机器人密钥已配置' })).toBeVisible()
+  await expect(page.getByRole('tab', { name: '平台登录' })).toBeFocused()
+  await expect(page.getByRole('group', { name: '机器人密钥已配置' })).toHaveCount(0)
   await page.screenshot({ path: testInfo.outputPath('social-settings.png'), fullPage: true })
   await page.getByRole('tab', { name: /监控博主/ }).click()
   await expect(page.locator('.social-author strong[title]')).toBeVisible()

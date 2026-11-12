@@ -262,7 +262,7 @@ test('uses the original methodology with Sina data, preserves older metadata and
   expect(chart.firstTooltip).toContain('有效股票 100 只')
   expect(chart.lastTooltip).toContain('新浪接口 · 前复权MA20')
   expect(chart.lastTooltip).toContain('有效股票 100 只')
-  await expect(page.getByRole('region', { name: '市场日采集' })).toContainText('18:30')
+  await expect(page.getByRole('region', { name: '市场日采集' })).not.toContainText('每天 18:30')
   const previousMethod = {
     ...heatPoints[2],
     price_basis: 'bfq',
@@ -311,85 +311,6 @@ test('uses the original methodology with Sina data, preserves older metadata and
     ),
   ).toHaveLength(0)
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
-})
-
-test('saves one fixed-target account, keeps omitted passwords, tests read-only and fits narrow screens', async ({
-  page,
-}) => {
-  await page.setViewportSize({ width: 320, height: 740 })
-  const bodies: Record<string, unknown>[] = []
-  let saved = { ...configuration }
-  await page.route('**/api/v1/market-collection/configuration', (route) => {
-    if (route.request().method() === 'POST') {
-      const body = route.request().postDataJSON()
-      bodies.push(body)
-      expect(route.request().headers()['x-csrf-token']).toBe('test-csrf')
-      saved = {
-        ...saved,
-        revision: body.revision + 1,
-        username: body.username,
-        enabled: body.enabled,
-      }
-    }
-    return route.fulfill({ json: saved })
-  })
-  await page.route('**/api/v1/market-collection/test', (route) =>
-    route.fulfill({
-      json: { ok: true, permissions_verified: false, message: '连接与表读取通过。' },
-    }),
-  )
-  await page.goto('/market-sentiment')
-  await page.getByText('日采集配置', { exact: true }).click()
-  const panel = page.getByRole('region', { name: '市场日采集' })
-  await expect(panel).toContainText('db.example:3306 / market')
-  await expect(panel).toContainText('已使用现有 ETF 采集写入账户')
-  await expect(panel.locator('input[type="time"]')).toHaveCount(0)
-  await expect(page.getByLabel('数据库主机', { exact: true })).toHaveCount(0)
-  await page.getByLabel('启用市场自动采集').uncheck()
-  await page.getByRole('button', { name: '保存日采集配置', exact: true }).click()
-  await expect(panel).toContainText('日采集配置已保存')
-  expect(bodies[0]).toEqual({ revision: 1, username: 'writer', enabled: false })
-  await page.getByRole('button', { name: '测试数据库连接（只读）' }).click()
-  await expect(panel).toContainText('实际写入结果以采集任务为准')
-  await page.getByLabel('采集写入账号', { exact: true }).fill('replacement')
-  await expect(page.getByRole('button', { name: '保存日采集配置', exact: true })).toBeDisabled()
-  await page.getByLabel('数据库密码', { exact: true }).fill('fixture-only-password')
-  await page.getByRole('button', { name: '保存日采集配置', exact: true }).click()
-  await expect(page.getByLabel('数据库密码', { exact: true })).toHaveValue('')
-  expect(bodies[1]).toEqual({
-    revision: 2,
-    username: 'replacement',
-    enabled: false,
-    password: 'fixture-only-password',
-  })
-  expect(await panel.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true)
-  for (const input of await panel.locator('.market-collection-fields input').all()) {
-    const box = await input.boundingBox()
-    expect(box!.x).toBeGreaterThanOrEqual(0)
-    expect(box!.x + box!.width).toBeLessThanOrEqual(320)
-  }
-})
-
-test('blocks HTTP credential changes and requires a fresh password for a changed target', async ({
-  page,
-}) => {
-  let response = { ...configuration, transport_secure: false, target_changed: false }
-  await page.route('**/api/v1/market-collection/configuration', (route) =>
-    route.fulfill({ json: response }),
-  )
-  await page.goto('/market-crowding')
-  await page.getByText('日采集配置', { exact: true }).click()
-  await expect(page.getByText('请通过 HTTPS 访问后保存或测试数据库凭据。')).toBeVisible()
-  await expect(page.getByLabel('数据库密码', { exact: true })).toBeDisabled()
-  await expect(page.getByRole('button', { name: '保存日采集配置', exact: true })).toBeDisabled()
-  await expect(page.getByRole('button', { name: '测试数据库连接（只读）' })).toBeDisabled()
-  response = { ...configuration, transport_secure: true, target_changed: true }
-  await page.reload()
-  await page.getByText('日采集配置', { exact: true }).click()
-  await expect(page.getByText('数据库目标已变更，请输入当前目标的写入密码后保存。')).toBeVisible()
-  await expect(page.getByRole('button', { name: '保存日采集配置', exact: true })).toBeDisabled()
-  await page.getByLabel('数据库密码', { exact: true }).fill('fixture-new-target')
-  await expect(page.getByRole('button', { name: '保存日采集配置', exact: true })).toBeEnabled()
 })
 
 test('viewers see automatic collection progress without reading configuration or mutation controls', async ({
@@ -719,10 +640,6 @@ test('shows independent source dates and missing-day details with the manual cut
   await expect(panel).toContainText('仍失败的缺口保留到下次采集继续处理，成功记录不重复发布')
   await expect(panel).toContainText('并继续处理已登记的失败缺口')
   await expect(panel).toContainText('未登记的更早历史缺口不自动补采')
-  await panel.getByText('日采集配置', { exact: true }).click()
-  await expect(panel).toContainText('同一采集请求或同一计划内重复检查、服务重启均不重置次数')
-  await expect(panel).toContainText('新的手动采集请求或下一轮18:30计划会重新开始计次')
-  await expect(panel).toContainText('已登记的失败缺口持续保留，不因后续日期采集成功而丢弃')
   await expect(panel).toContainText('热度截至 2026-11-10')
   await expect(panel).toContainText('拥挤度截至 2026-11-06')
   await panel.getByText('待补齐交易日（最近 1 条）').click()
@@ -769,8 +686,6 @@ for (const legacy of [false, true]) {
     await expect(panel.getByRole('button', { name: '重试同一采集请求', exact: true })).toHaveCount(
       0,
     )
-    await panel.getByText('日采集配置', { exact: true }).click()
-    await expect(panel.getByLabel('采集写入账号')).toBeDisabled()
     state = { ...state, running: false, status: 'complete' }
     await page.clock.fastForward(1600)
     const start = panel.getByRole('button', { name: '立即采集', exact: true })

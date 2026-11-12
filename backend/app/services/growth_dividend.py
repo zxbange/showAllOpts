@@ -1,4 +1,8 @@
+from app.core.history_sync import mark_sync_owner, clear_sync_owner, database_syncing, SYNC_MESSAGE
 """Restartable public index history, with Shanghai 18:00 trading-day updates."""
+from app.services.system_runtime import source_client
+from app.services.system_configuration import task_config
+from app.services.collection_notifications import notify_collection
 from contextlib import contextmanager
 from datetime import date, datetime, time, timedelta, timezone
 import json
@@ -34,8 +38,11 @@ def close_cutoff(moment):
     return local.date() if local.hour >= 18 else local.date() - timedelta(days=1)
 
 
-def slot_for(day):
-    return datetime.combine(day, time(18), CHINA).isoformat()
+def slot_for(day, settings=None):
+    from app.services.system_configuration import task_config
+    hhmm = task_config(settings, 'growth_dividend')['times'][0] if settings is not None else DAILY_TIME
+    hour, minute = map(int, hhmm.split(':'))
+    return datetime.combine(day, time(hour, minute), CHINA).isoformat()
 
 
 class CollectionCancelled(Exception):
@@ -58,7 +65,7 @@ class GrowthDividend:
         self.settings = settings
         self.root = settings.log_path / 'market-data' / 'growth-dividend'
         self.root.mkdir(parents=True, exist_ok=True)
-        self.client_factory = client_factory or (lambda: httpx.Client(
+        self.client_factory = client_factory or (lambda: source_client(self.settings, factory=httpx.Client,
             timeout=httpx.Timeout(20, connect=8), trust_env=False, follow_redirects=False,
             headers={'User-Agent': 'Mozilla/5.0 ShowAllOpts/1.0',
                      'Referer': 'https://gu.qq.com/'}))
@@ -111,14 +118,19 @@ class GrowthDividend:
             return
         db.execute('UPDATE state SET payload=? WHERE id=1', (json.dumps(state, ensure_ascii=False),))
 
-    def acquire(self):
+    def acquire(self, *, for_history=False):
         lock = portalocker.Lock(str(self.root / 'collection.lock'), timeout=0,
                                 flags=portalocker.LOCK_EX | portalocker.LOCK_NB)
         try:
             lock.acquire()
-            return lock
         except portalocker.exceptions.LockException:
             return None
+        try:
+            (mark_sync_owner if for_history else clear_sync_owner)(self)
+        except BaseException:
+            lock.release()
+            raise
+        return lock
 
     def running(self):
         lock = self.acquire()
@@ -128,9 +140,13 @@ class GrowthDividend:
         return False
 
     def cancel(self):
-        if not self.running():
+        busy = self.running()
+        if not busy or database_syncing(self, busy):
             return False
-        identifier = self.read_state().get('run_id', '')
+        state = self.read_state()
+        if not state.get('active'):
+            return False
+        identifier = state.get('run_id', '')
         if len(identifier) != 32 or any(c not in '0123456789abcdef' for c in identifier):
             return False
         (self.root / ('cancel-' + identifier)).touch()
@@ -157,15 +173,20 @@ class GrowthDividend:
             recent_conflicts = [dict(row) for row in db.execute(
                 'SELECT code,trade_date,published_close,candidate_close,checked_at '
                 'FROM comparisons ORDER BY checked_at DESC,trade_date DESC,code LIMIT 10')]
-        next_run = next((slot_for(date.fromisoformat(row[0])) for row in future
-                         if datetime.fromisoformat(slot_for(date.fromisoformat(row[0]))) > local), None)
-        running = self.running()
+        plan = task_config(self.settings, 'growth_dividend')
+        next_slot = datetime.fromisoformat(slot_for(local.date(), self.settings))
+        if next_slot <= local:
+            next_slot += timedelta(days=1)
+        next_run = next_slot.isoformat()
+        busy = self.running()
+        syncing = database_syncing(self, busy)
+        running = bool(busy and not syncing and state.get('active'))
         stage = state.get('stage', '等待首次补齐历史数据')
         if not running and state.get('active'):
             stage = '上次更新中断，将从已保存的进度继续补齐'
         ready = state.get('calendar_through', '') >= str(cutoff)
         return dict(
-            running=running, stage=stage, sync_summary=state.get('sync_summary'), processed=state.get('processed', 0),
+            running=running, database_syncing=syncing, sync_message=SYNC_MESSAGE if syncing else None, stage=stage, sync_summary=state.get('sync_summary'), processed=state.get('processed', 0),
             total=state.get('total'), percent=state.get('percent'),
             cancelling=bool(running and state.get('run_id') and
                             (self.root / ('cancel-' + state['run_id'])).exists()),
@@ -176,9 +197,9 @@ class GrowthDividend:
             calendar_error=state.get('calendar_error'), target_date=str(cutoff),
             recent_failures=state.get('recent_failures', []),
             comparison_conflicts=comparison_conflicts, recent_conflicts=recent_conflicts,
-            daily_time=DAILY_TIME, timezone='Asia/Shanghai',
-            automatic=self.settings.growth_dividend_worker_enabled,
-            next_run_at=next_run if self.settings.growth_dividend_worker_enabled else None,
+            daily_time=plan['times'][0], timezone='Asia/Shanghai',
+            automatic=plan['enabled'],
+            next_run_at=next_run if plan['enabled'] else None,
         )
 
     def history(self, moment=None):
@@ -259,6 +280,7 @@ class GrowthDividend:
             raise
         return True
 
+    @notify_collection('growth_dividend')
     def collect(self, lock, state, moment, slot=None):
         marker = self.root / ('cancel-' + state['run_id'])
         cutoff = close_cutoff(moment)
@@ -313,12 +335,8 @@ class GrowthDividend:
                     today_trades = db.execute('SELECT 1 FROM calendar WHERE trade_date=?',
                                               (str(local.date()),)).fetchone() is not None
                     missing = self.pending(db, cutoff)
-                if slot and calendar_ok and not today_trades:
-                    outcome = 'market_closed'
-                    state.update(stage='今日休市，等待下个交易日 18:00', total=0, percent=100)
-                    return
                 if state['trigger'] == 'startup' and local.hour >= 18 and today_trades:
-                    state['scheduled_slot'] = slot_for(local.date())
+                    state['scheduled_slot'] = slot_for(local.date(), self.settings)
                 needed = {index.code: set() for index in INDEXES}
                 for row in missing:
                     needed[row['code']].add(date.fromisoformat(row['trade_date']))
@@ -429,6 +447,10 @@ class GrowthDividend:
                              outcome, state.get('processed', 0), state.get('total'), failed_windows, monotonic() - started)
 
     def tick(self, moment=None):
+        from app.services.system_configuration import task_config
+        plan = task_config(self.settings, 'growth_dividend')
+        if not plan['enabled']:
+            return
         moment = moment or now()
         local = moment.astimezone(CHINA)
         if not self.startup_checked:
@@ -439,19 +461,12 @@ class GrowthDividend:
                     status['pending_points'] or not status['calendar_ready']):
                 self.refresh(background=False, moment=moment, trigger='startup')
                 return
-        if local.hour < 18 or local.weekday() >= 5:
+        if local < datetime.fromisoformat(slot_for(local.date(), self.settings)):
             return
-        with self.db() as db:
-            state = self.read_state(db)
-            known = state.get('calendar_through', '') >= str(local.date())
-            open_day = db.execute('SELECT 1 FROM calendar WHERE trade_date=?',
-                                  (str(local.date()),)).fetchone() is not None
-        if known and not open_day:
-            return
-        self.refresh(background=False, moment=moment, slot=slot_for(local.date()), trigger='scheduled')
+        self.refresh(background=False, moment=moment, slot=slot_for(local.date(), self.settings), trigger='scheduled')
 
     def start(self):
-        if not self.settings.growth_dividend_worker_enabled or (self.scheduler and self.scheduler.is_alive()):
+        if self.scheduler and self.scheduler.is_alive():
             return
 
         def loop():

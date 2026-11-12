@@ -89,6 +89,8 @@ def test_cache_ignores_old_raw_tables_and_preserves_source_scores(engine, sessio
     from sqlalchemy import event, text
     from app.core.cache import SnapshotCache
     from app.core.config import Settings
+    from history_sync_helpers import seed_history_sources
+    seed_history_sources(engine)
     seed(session)
     with engine.begin() as c:
         c.execute(text('CREATE TABLE etf_momentum_bar (ignored TEXT)'))

@@ -1,5 +1,5 @@
 """Read-only validated JoinQuant snapshot, append-only local publication."""
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from decimal import Decimal
 import math
 import threading
@@ -100,7 +100,10 @@ def publish(monitor, days, points, check):
             old = db.execute('SELECT close FROM points WHERE code=? AND trade_date=?', row[:2]).fetchone()
             if old:
                 existing += 1
-                conflicts += old[0] != row[2]
+                if old[0] != row[2]:
+                    conflicts += 1
+                    db.execute('INSERT OR IGNORE INTO comparisons VALUES (?,?,?,?,?)',
+                               (*row[:2], old[0], row[2], datetime.now(timezone.utc).isoformat()))
             else:
                 db.execute('INSERT INTO points VALUES (?,?,?,?,?,?)', row)
                 inserted += 1

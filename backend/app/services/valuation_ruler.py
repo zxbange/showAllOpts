@@ -1,4 +1,8 @@
+from app.core.history_sync import mark_sync_owner, clear_sync_owner, database_syncing, SYNC_MESSAGE
+from app.services.system_configuration import task_config, latest_task_slot
 """Append-only valuation history, durable recovery and an independent 20:00 schedule."""
+from app.services.system_runtime import source_client
+from app.services.collection_notifications import notify_collection
 from contextlib import contextmanager
 from datetime import date, datetime, time, timedelta, timezone
 from decimal import Decimal, localcontext
@@ -71,7 +75,7 @@ class ValuationRuler:
         self.settings=settings
         self.root=settings.log_path/'market-data'/'valuation-ruler'
         self.root.mkdir(parents=True,exist_ok=True)
-        self.client_factory=client_factory or (lambda:httpx.Client(
+        self.client_factory=client_factory or (lambda:source_client(self.settings, factory=httpx.Client,
             timeout=httpx.Timeout(20,connect=8),trust_env=False,follow_redirects=False,
             headers={'User-Agent':'ShowAllOpts/1.0'}))
         self.source_factory=source_factory or PublicSource
@@ -119,11 +123,16 @@ class ValuationRuler:
             (json.dumps(state,ensure_ascii=False),state.get('run_id')))
         if changed.rowcount!=1:raise ValuationError('任务标识已变化，拒绝过期状态写入。')
 
-    def acquire(self):
+    def acquire(self, *, for_history=False):
         lock=portalocker.Lock(str(self.root/'collection.lock'),timeout=0,
             flags=portalocker.LOCK_EX|portalocker.LOCK_NB)
-        try:lock.acquire();return lock
+        try:lock.acquire()
         except portalocker.exceptions.LockException:return None
+        try:(mark_sync_owner if for_history else clear_sync_owner)(self)
+        except BaseException:
+            lock.release()
+            raise
+        return lock
 
     def running(self):
         lock=self.acquire()
@@ -131,8 +140,11 @@ class ValuationRuler:
         lock.release();return False
 
     def cancel(self):
-        if not self.running():return False
-        identifier=self.read_state().get('run_id','')
+        busy=self.running()
+        if not busy or database_syncing(self,busy):return False
+        state=self.read_state()
+        if not state.get('active'):return False
+        identifier=state.get('run_id','')
         if len(identifier)!=32 or any(c not in '0123456789abcdef' for c in identifier):return False
         (self.root/('cancel-'+identifier)).touch()
         return True
@@ -228,19 +240,22 @@ class ValuationRuler:
             failed=db.execute('SELECT count(*) FROM failures').fetchone()[0]
             failures=[dict(r) for r in db.execute('SELECT * FROM failures ORDER BY trade_date DESC LIMIT 10')]
             audit=db.execute('SELECT payload FROM comparisons ORDER BY id DESC LIMIT 1').fetchone()
-        running=self.running();interrupted=bool(state.get('active') and not running)
+        busy=self.running();syncing=database_syncing(self,busy)
+        running=bool(busy and not syncing and state.get('active'));interrupted=bool(state.get('active') and not running)
         comparison=json.loads(audit[0]) if audit else None
         if comparison:comparison={key:value for key,value in comparison.items() if key not in ('changed_members','candidate_members','candidate_proof')}
-        return dict(status='running' if running else 'failed' if state.get('error') or interrupted else 'idle',
+        return dict(database_syncing=syncing,sync_message=SYNC_MESSAGE if syncing else None,status='running' if running else 'failed' if state.get('error') or interrupted else 'idle',
             phase='interrupted' if interrupted else state.get('phase'),target_date=state.get('target_date'),
             updated_at=state.get('updated_at'),
             error='上次任务中断，已保存的数据保留，可继续补采。' if interrupted else state.get('error'),
             completed_days=state.get('completed_days',0),failed_days=failed,schedule='20:00 Asia/Shanghai',
-            source_configured=True,automatic=self.settings.valuation_ruler_worker_enabled,recent_failures=failures,
+            source_configured=True,automatic=task_config(self.settings, 'valuation_ruler')['enabled'],recent_failures=failures,
             cancelled=state.get('phase')=='cancelled',comparison=comparison,
             comparison_status='compared' if comparison else 'not_compared',comparison_error=state.get('comparison_error'),
-            comparison_attempted_date=state.get('comparison_attempted_date'),joinquant_imported=state.get('imported_days'),
-            joinquant_conflicts=state.get('conflict_days',0),last_success_at=state.get('last_success_at'))
+            comparison_attempted_date=state.get('comparison_attempted_date'),joinquant_imported=state.get('joinquant_imported'),
+            joinquant_conflicts=state.get('joinquant_conflicts',0),joinquant_import_at=state.get('joinquant_import_at'),
+            joinquant_missing_days=state.get('joinquant_missing_days'),joinquant_import_warning=state.get('joinquant_import_warning'),
+            last_success_at=state.get('last_success_at'))
 
     def history(self,moment=None):
         cutoff=close_cutoff(moment or now())
@@ -295,6 +310,7 @@ class ValuationRuler:
             raise
         return True
 
+    @notify_collection('valuation_ruler')
     def _execute(self,runner,lock,state,moment,slot):
         marker=self.root/('cancel-'+state['run_id']);started=monotonic()
         def check_cancel():
@@ -374,10 +390,12 @@ class ValuationRuler:
 
     def tick(self,moment=None,*,background=True):
         moment=moment or now()
-        return self.refresh(background=background,moment=moment,slot=slot_for(schedule_cutoff(moment)),cutoff=schedule_cutoff(moment))
+        if not task_config(self.settings, 'valuation_ruler')['enabled']:return
+        slot=latest_task_slot(self.settings, 'valuation_ruler', moment)
+        return self.refresh(background=background,moment=moment,slot=slot.isoformat(),cutoff=min(slot.date(),close_cutoff(moment)))
 
     def start(self):
-        if not self.settings.valuation_ruler_worker_enabled or (self.scheduler and self.scheduler.is_alive()):return
+        if self.scheduler and self.scheduler.is_alive():return
         self.stop_event.clear()
         def schedule():
             while not self.stop_event.is_set():

@@ -8,7 +8,8 @@ from sqlalchemy import create_engine, select
 from sqlalchemy.orm import Session
 
 from app.core.cache import CacheUnavailable
-from app.core.database import get_session
+from app.core.database import get_session,VersionedDatabase
+from app.services.system_configuration import SystemConfigurationError
 from app.models.etf import ETFShare, ETFPrice, ETFTradingDay
 from app.services.etf_configuration import ConfigurationFailure
 from test_cache import cached
@@ -33,15 +34,26 @@ def targets(cached, tmp_path, monkeypatch):
         broken = False
         def reader_configuration(self):
             if self.broken:
-                raise ConfigurationFailure('unreadable configuration')
+                raise SystemConfigurationError('unreadable configuration')
             return dict(self.config) if self.config is not None else None
         def engine(self, config):
             return create_engine(urls[config['database']])
         def choose(self, name, revision=1):
             self.config = dict(host='example.invalid', port=3306, database=name, username='writer',
                                password='never-in-a-snapshot', revision=revision)
-    configuration = Configuration()
-    monkeypatch.setattr(cache, 'etf_configuration', lambda: configuration)
+    configuration=Configuration()
+    from app.core import database
+    from app.services import system_configuration
+    original_source=cache.source
+    def current_config(settings):
+        return configuration.reader_configuration() or dict(host='default.example',port=3306,database='default',username='default',password='',revision=0)
+    def engine(settings,**kwargs):
+        config=kwargs['configuration']
+        return original_source if config['database']=='default' else configuration.engine(config)
+    monkeypatch.setattr(system_configuration,'database_config',current_config)
+    monkeypatch.setattr(database,'build_engine',engine)
+    cache.source=VersionedDatabase(cache.settings);cache.unified_source=True
+
     return cache, configuration
 
 
@@ -148,7 +160,7 @@ def test_direct_reads_use_custom_target_and_other_routes_keep_factory(targets):
     assert response.headers['Cache-Control'] == 'no-store'
     request.url.path = '/api/v1/industry-momentum/latest'
     generator = get_session(request, Response())
-    assert next(generator).bind is cache.source
+    assert next(generator).bind is cache.source.current()
     generator.close()
 
 
@@ -160,7 +172,7 @@ def test_legacy_default_snapshot_not_accepted_for_custom_source(targets):
     path = cache.root / entry['file']
     with sqlite3.connect(path) as connection:
         connection.execute('DROP TABLE etf_cache_source_v1')
-    assert cache.snapshot_path('etf-shares', entry) == path
+    assert cache.snapshot_path('etf-shares', entry) is None
     config.choose('a')
     assert cache.snapshot_path('etf-shares', entry) is None
 
@@ -193,6 +205,9 @@ def test_lazy_connection_failure_is_safe_and_disposes(targets, monkeypatch):
     engine = SimpleNamespace(dispose=lambda: disposed.append(True))
     monkeypatch.setattr(config, 'engine', lambda _: engine)
     with pytest.raises(CacheUnavailable, match='不会读取旧数据源'):
-        with cache.etf_source():
+        with cache.etf_source() as shared:
+            shared.current()
             raise ConfigurationFailure('connection failed')
+    assert disposed==[]
+    cache.source.dispose()
     assert disposed == [True]

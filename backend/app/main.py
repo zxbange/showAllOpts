@@ -17,7 +17,7 @@ from app.api.router import router
 from app.core.cache import CacheUnavailable, SnapshotCache
 from app.core.config import Settings
 from app.core.cache_schedule import CacheScheduleError
-from app.core.database import build_engine
+from app.core.database import build_engine, VersionedDatabase
 from app.core.logging import ensure_logging, PollingAccessFilter
 from app.core.diagnostics import diagnostic_details
 from app.services.social import SocialMonitor
@@ -50,7 +50,7 @@ def request_route(request):
 
 def create_app(settings: Settings | None = None, engine: Engine | None = None) -> FastAPI:
     settings = settings or Settings()
-    database = engine if engine is not None else build_engine(settings, for_cache=settings.cache_enabled)
+    database = engine if engine is not None else VersionedDatabase(settings, for_cache=settings.cache_enabled)
 
     cache = SnapshotCache(settings, database)
 
@@ -96,6 +96,8 @@ def create_app(settings: Settings | None = None, engine: Engine | None = None) -
             valuation_ruler = ValuationRuler(settings)
             cleanup.push_async_callback(stop_worker, 'valuation_ruler', valuation_ruler)
             application.state.valuation_ruler = valuation_ruler
+            cache.history_services.update({
+                'growth-dividend': growth_dividend, 'valuation-ruler': valuation_ruler})
             commodities = Commodities(settings)
             cleanup.push_async_callback(stop_worker, 'commodities', commodities)
             application.state.commodities = commodities
@@ -120,8 +122,7 @@ def create_app(settings: Settings | None = None, engine: Engine | None = None) -
             market_collection.shared_configuration = etf_collection.configuration
             cleanup.push_async_callback(stop_worker, 'market_collection', market_collection)
             application.state.market_collection = market_collection
-            if settings.market_collection_worker_enabled:
-                start_worker('market_collection', market_collection)
+            start_worker('market_collection', market_collection)
             start_worker('holdings', holdings)
             start_worker('cache', cache)
             start_worker('social', social)
@@ -130,8 +131,13 @@ def create_app(settings: Settings | None = None, engine: Engine | None = None) -
             start_worker('valuation_ruler', valuation_ruler)
             start_worker('commodities', commodities)
             start_worker('cci_coal', cci_coal)
-            if settings.cash_cow_worker_enabled:
-                start_worker('cash_cow_schedule', cash_cow_schedule)
+            start_worker('cash_cow_schedule', cash_cow_schedule)
+            from app.services.collection_notifications import start_notifications, stop_notifications
+            start_notifications(settings)
+            from app.services.system_runtime import start_runtime, stop_runtime
+            start_runtime(settings)
+            cleanup.push_async_callback(asyncio.to_thread, stop_runtime, settings)
+            cleanup.push_async_callback(asyncio.to_thread, stop_notifications, settings)
             logger.info('Application ready cache_enabled=%s', settings.cache_enabled)
             yield
         logger.info('Application shutdown complete')
@@ -140,9 +146,9 @@ def create_app(settings: Settings | None = None, engine: Engine | None = None) -
                           docs_url=None, redoc_url=None, openapi_url=None)
     application.state.cache = cache
     application.state.accounts = Accounts(settings)
-    application.state.session_factory = sessionmaker(bind=database, autoflush=False)
+    application.state.session_factory = sessionmaker(bind=database.current() if isinstance(database, VersionedDatabase) else database, autoflush=False)
     application.add_middleware(CORSMiddleware, allow_origins=settings.cors_origins,
-                               allow_methods=['GET', 'POST'], allow_headers=['Content-Type', 'X-CSRF-Token', 'X-App-Client'])
+                               allow_methods=['GET', 'POST', 'PUT'], allow_headers=['Content-Type', 'X-CSRF-Token', 'X-App-Client'])
 
     @application.middleware('http')
     async def private_responses(request: Request, call_next):

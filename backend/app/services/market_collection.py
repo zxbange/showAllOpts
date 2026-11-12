@@ -4,6 +4,9 @@ One process owns collection.lock for a run. SQLite commits the universe before
 the first per-stock request, and each observation before the next request. A
 restart therefore resumes pending stocks without rebuilding a historical pool.
 """
+from app.services.system_runtime import source_client
+from app.services.system_configuration import task_config, pin_configuration, SystemConfiguration
+from app.services.collection_notifications import emit_collection_result
 from contextlib import contextmanager
 from datetime import date, datetime, time, timedelta, timezone
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
@@ -23,7 +26,7 @@ from sqlalchemy import create_engine
 
 from app.core.diagnostics import diagnostic_details
 from app.services.market_diagnostics import copy_source_failure, source_failure_details
-from app.services.etf_configuration import ConfigurationFailure
+from app.services.etf_configuration import ConfigurationFailure, reconcile_system_ledger
 from app.services.growth_dividend_source import fetch_calendar
 from app.services.market_configuration import MarketConfiguration
 from app.services.market_methodology import JOINQUANT_HEAT_METHOD, LEGACY_SINA_HEAT_METHOD
@@ -36,7 +39,7 @@ from app.services.market_writer import read_market_dates, write_market_results
 
 LOG = logging.getLogger(__name__)
 CHINA = ZoneInfo('Asia/Shanghai')
-SCHEDULE = ['18:30']
+SCHEDULE = ['00:01']
 DATED_PRICE_METHOD = 'sina_dated_raw_snapshot_v1'
 RESOLVED = ('current', 'insufficient_history', 'paused')
 PUBLISHED = ('written', 'existing_preserved')
@@ -199,6 +202,12 @@ class CheckedStreamResponse:
         return self._iterate(iter(self.response.iter_text(*args, **kwargs)))
 
 
+def configured_asharehub_key(settings):
+    from pydantic import SecretStr
+    from app.services.system_integrations import integrations_config
+    return SecretStr(integrations_config(settings)['asharehub']['token'])
+
+
 class MarketCollection:
     def __init__(self, settings, refresh=None, *, provider_factory=None, writer=None,
                  clock=None, client_factory=None, calendar_loader=None,
@@ -206,11 +215,11 @@ class MarketCollection:
         self.settings, self.refresh = settings, refresh
         self.root = settings.log_path / 'market-data' / 'market-collection'
         self.clock = clock or (lambda: datetime.now(CHINA))
-        self.client_factory = client_factory or (lambda: httpx.Client(
+        self.client_factory = client_factory or (lambda: source_client(self.settings, factory=httpx.Client,
             timeout=httpx.Timeout(20, connect=8), trust_env=False, follow_redirects=False))
         self.provider_factory = provider_factory or (lambda client: PublicMarketProvider(
             client, cache_root=self.root / 'source-cache',
-            asharehub_api_key=getattr(settings, 'asharehub_api_key', None)))
+            asharehub_api_key=configured_asharehub_key(settings)))
         self.calendar_loader = calendar_loader or fetch_calendar
         self.writer = writer or write_market_results
         self.source_dates_loader = source_dates_loader or read_market_dates
@@ -418,7 +427,7 @@ class MarketCollection:
 
     def status(self):
         issue = self.configuration_issue
-        worker_disabled = not getattr(self.settings, 'market_collection_worker_enabled', True)
+        worker_disabled = self._worker_disabled()
         try:
             config = self.configuration.load()
         except Exception:
@@ -426,10 +435,10 @@ class MarketCollection:
         state = dict(enabled=config['enabled'], configured=issue is None, ready=issue is None and not worker_disabled,
                      status='configuration_error' if issue else 'worker_disabled' if worker_disabled else 'idle' if config['enabled'] else 'disabled',
                      disabled_reason=issue or ('worker_disabled' if worker_disabled else None),
-                     worker_disabled=worker_disabled, timezone='Asia/Shanghai', schedule=list(SCHEDULE),
+                     worker_disabled=worker_disabled, timezone='Asia/Shanghai', schedule=list(task_config(self.settings, 'market')['times']),
                      provider='public_market', raw_price_source=(
-                         'asharehub_daily' if getattr(self.settings, 'asharehub_api_key', None)
-                         and self.settings.asharehub_api_key.get_secret_value().strip() else 'tdx_daily_archive'),
+                         'asharehub_daily' if configured_asharehub_key(self.settings)
+                         and configured_asharehub_key(self.settings).get_secret_value().strip() else 'tdx_daily_archive'),
                      trade_date=None, total=0, completed=0, pending=0,
                      heat_methodology=JOINQUANT_HEAT_METHOD, price_basis='qfq', denominator='eligible',
                      heat_pending_count=0,
@@ -438,6 +447,11 @@ class MarketCollection:
                      updated_at=None, error=issue, progress=None, rawprogress=None,
                      manual=None, runs=[], gaps=[], next_run_at=None,
                      worker_running=bool(self.worker and self.worker.is_alive()), running=False)
+        now = self.clock().astimezone(CHINA)
+        slot = datetime.combine(now.date(), self._auto_time(), CHINA)
+        if slot <= now:
+            slot += timedelta(days=1)
+        state['next_run_at'] = slot.isoformat() if config['enabled'] else None
         if not (self.root / 'state.sqlite').exists():
             # The first owner can take the lock before creating its state DB.
             if (self.root / 'collection.lock').exists():
@@ -486,11 +500,10 @@ class MarketCollection:
                 if selected['crowding_json']:
                     state['rawprogress']['price_verified_count'] = json.loads(selected['crowding_json']).get('price_verified_count', dated_rows)
             now = self.clock().astimezone(CHINA)
-            for row in db.execute('SELECT day FROM calendar WHERE day>=? ORDER BY day LIMIT 20', (str(now.date()),)):
-                slot = datetime.combine(date.fromisoformat(row[0]), time(18, 30), CHINA)
-                if slot > now:
-                    state['next_run_at'] = slot.isoformat() if config['enabled'] else None
-                    break
+            slot = datetime.combine(now.date(), self._auto_time(), CHINA)
+            if slot <= now:
+                slot += timedelta(days=1)
+            state['next_run_at'] = slot.isoformat() if config['enabled'] else None
         lock = self._acquire()
         state['running'] = lock is None
         try:
@@ -563,7 +576,7 @@ class MarketCollection:
             row = db.execute('SELECT * FROM manual_runs WHERE id=?', (request_id,)).fetchone()
         if row:
             return self._replay_run(row)
-        if not getattr(self.settings, 'market_collection_worker_enabled', True):
+        if self._worker_disabled():
             raise ConfigurationFailure('当前进程已停用市场采集后台任务，请先启用服务配置')
         if self.configuration_issue:
             raise ConfigurationFailure('采集配置尚未就绪，请先保存数据库写入账号')
@@ -579,6 +592,9 @@ class MarketCollection:
                 active = db.execute("SELECT * FROM manual_runs WHERE status IN ('queued','running') ORDER BY rowid LIMIT 1").fetchone()
             raise CollectionBusy(active)
         try:
+            with self.connect() as db:
+                reconcile_system_ledger(self.configuration, db,
+                    ('days', 'observations', 'metadata', 'hq_checkpoints'), self.clock().isoformat())
             self._migrate_heat_methodology()
             self._recover()
             stamp = _stamp(self.clock())
@@ -641,13 +657,21 @@ class MarketCollection:
             if day:
                 db.execute("INSERT OR REPLACE INTO metadata VALUES ('active_day',?)", (str(day),))
 
+    def _worker_disabled(self):
+        return not SystemConfiguration(self.settings).load().get('revision') and not getattr(self.settings, 'market_collection_worker_enabled', True)
+
+    def _auto_time(self):
+        return time.fromisoformat(task_config(self.settings, 'market')['times'][0])
+
+    def _data_cutoff(self, moment, manual):
+        if manual:
+            return moment.date() if moment.time() >= time(18, 30) else moment.date() - timedelta(days=1)
+        slot = moment.date() if moment.time() >= self._auto_time() else moment.date() - timedelta(days=1)
+        return slot - timedelta(days=1)
+
     def start(self):
         with self.thread_lock:
-            if not getattr(self.settings, 'market_collection_worker_enabled', True):
-                return
             if self.worker and self.worker.is_alive():
-                return
-            if not self.configured:
                 return
             self.stop_event.clear()
             self.worker = threading.Thread(target=self._loop, name='market-collection', daemon=True)
@@ -688,7 +712,7 @@ class MarketCollection:
         if days[-1] < moment.date():
             raise SourceFailure('calendar_incomplete')
 
-    def _ensure_days(self, moment):
+    def _ensure_days(self, moment, *, manual=True):
         """Plan after each source MAX, retaining only explicitly planned gaps.
 
         Old untracked holes stay outside the window. A planned metric/date is
@@ -696,7 +720,7 @@ class MarketCollection:
         earlier failure when the authoritative MAX advances.
         """
         today = moment.date()
-        cutoff = today if moment.time() >= time(18, 30) else today - timedelta(days=1)
+        cutoff = self._data_cutoff(moment, manual)
         source = self.source_dates_loader(self)
         existing = {kind: {str(day) for day in source[kind]} for kind in ('heat', 'crowding')}
         stamp = _stamp(moment)
@@ -752,9 +776,8 @@ class MarketCollection:
                             None if complete or reset else row['next_attempt_at'],
                             stamp if complete or reset else row['updated_at'], day))
 
-    @staticmethod
-    def _scheduled_scope(moment):
-        slot = moment.date() if moment.time() >= time(18, 30) else moment.date() - timedelta(days=1)
+    def _scheduled_scope(self, moment):
+        slot = moment.date() if moment.time() >= self._auto_time() else moment.date() - timedelta(days=1)
         return 'scheduled:' + str(slot)
 
     def _pass_count(self, scope, day):
@@ -805,7 +828,7 @@ class MarketCollection:
         with self.connect() as db:
             rows = [dict(row) for row in db.execute("SELECT * FROM days WHERE status NOT IN ('complete','superseded') ORDER BY trade_date")]
         targets = []
-        cutoff = moment.date() if moment.time() >= time(18, 30) else moment.date() - timedelta(days=1)
+        cutoff = self._data_cutoff(moment, manual)
         for row in rows:
             if row['trade_date'] > str(cutoff):
                 continue
@@ -826,10 +849,14 @@ class MarketCollection:
         return targets
 
     def tick(self, moment=None):
+        with pin_configuration(self.settings):
+            return self._tick(moment)
+
+    def _tick(self, moment=None):
         moment = (moment or self.clock())
         _stamp(moment)
         moment = moment.astimezone(CHINA)
-        if self.stop_event.is_set() or not self.configured or not getattr(self.settings, 'market_collection_worker_enabled', True):
+        if self.stop_event.is_set() or not self.configured or self._worker_disabled():
             return False
         lock = self._acquire()
         if lock is None:
@@ -837,7 +864,12 @@ class MarketCollection:
         run_id, active_day, manual = None, None, False
         scope = self._scheduled_scope(moment)
         self._blocked_writers = {}
+        self._notification_changes = 0
+        self._notification_summary = []
         try:
+            with self.connect() as db:
+                reconcile_system_ledger(self.configuration, db,
+                    ('days', 'observations', 'metadata', 'hq_checkpoints'), self.clock().isoformat())
             self._migrate_heat_methodology()
             self._recover()
             self._refresh_pending()
@@ -852,7 +884,7 @@ class MarketCollection:
             # this legacy marker, determine the current backfill window.
             with self.connect() as db:
                 db.execute("INSERT OR IGNORE INTO metadata VALUES ('activation_date',?)", (str(moment.date()),))
-            if not manual and moment.time() < time(18, 30) and not pending_exists:
+            if not manual and moment.time() < self._auto_time() and not pending_exists:
                 return False
             paused_until = self._meta('source_paused_until')
             next_check = self._meta('scheduler_next_attempt_at')
@@ -898,7 +930,7 @@ class MarketCollection:
                     if not saved_gaps and self._meta('calendar_through', '') < str(moment.date()):
                         raise SourceFailure(calendar_error) from None
                     self._record_dependency_failure(scope, moment)
-                self._ensure_days(moment)
+                self._ensure_days(moment, manual=manual)
                 self._put_meta(last_error=calendar_error or '',
                                scheduler_next_attempt_at=_stamp(moment + timedelta(minutes=30)) if calendar_error else '')
                 if not calendar_error:
@@ -944,7 +976,7 @@ class MarketCollection:
                         targets = remaining
                         if not targets:
                             break
-                cutoff = moment.date() if moment.time() >= time(18, 30) else moment.date() - timedelta(days=1)
+                cutoff = self._data_cutoff(moment, manual)
                 with self.connect() as db:
                     unfinished = db.execute("SELECT 1 FROM days WHERE trade_date<=? AND status NOT IN ('complete','superseded') LIMIT 1",
                                             (str(cutoff),)).fetchone() is not None
@@ -960,7 +992,7 @@ class MarketCollection:
             code = 'source_forbidden' if getattr(error, 'status_code', None) == 403 else 'source_rate_limited'
             LOG.warning('Market collection access stopped date=%s reason=%s %s %s',
                         active_day or '-', code, source_failure_details(error), diagnostic_details(error))
-            pause = datetime.combine(moment.date() + timedelta(days=1), time(18, 30), CHINA)
+            pause = datetime.combine(moment.date() + timedelta(days=1), self._auto_time(), CHINA)
             self._put_meta(source_paused_until=_stamp(pause), last_error=code)
             if active_day:
                 self._update_day(active_day, status='paused', error=code, next_attempt_at=_stamp(pause))
@@ -988,7 +1020,17 @@ class MarketCollection:
                         source_failure_details(error), diagnostic_details(error))
             return False
         finally:
-            lock.release()
+            try:
+                if run_id and not manual and self._notification_changes:
+                    with self.connect() as db:
+                        terminal = db.execute('SELECT status FROM manual_runs WHERE id=?', (run_id,)).fetchone()
+                    emit_collection_result(self.settings, 'market', scheduled=True, run_key=run_id,
+                        outcome=terminal[0] if terminal else 'failed', changed_count=self._notification_changes,
+                        summary=self._notification_summary[-10:])
+            except Exception as exc:
+                LOG.warning('Market notification enqueue failed type=%s', type(exc).__name__)
+            finally:
+                lock.release()
 
     @staticmethod
     def _safe_source_reason(error):
@@ -1454,6 +1496,16 @@ class MarketCollection:
             return blocked_error is None
         try:
             result = self.writer(self, date.fromisoformat(day), heat, crowding, snapshot)
+            changed = result.get('changed_count', 0)
+            if type(changed) is int and changed > 0:
+                self._notification_changes = getattr(self, '_notification_changes', 0) + changed
+                details = []
+                for metric in result.get('changed_metrics', []):
+                    values = heat if metric == 'heat' else crowding
+                    label = '市场热度' if metric == 'heat' else '抱团拥挤度'
+                    ratio = values.get('ratio') if values else None
+                    details.append(label + (f' {float(ratio):.2%}' if ratio is not None else ''))
+                self._notification_summary = getattr(self, '_notification_summary', []) + [str(day) + ': ' + ', '.join(details)]
             updates = {}
             for kind, supplied in (('heat', heat), ('crowding', crowding)):
                 if supplied is None:

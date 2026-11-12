@@ -62,7 +62,7 @@ async def configuration(monitor=Depends(service)):
 
 @router.post('/configuration')
 async def save(request: Request, monitor=Depends(service)):
-    return await safe_call(monitor.configure, await configuration_body(request))
+    raise HTTPException(409, '请在系统配置页面统一配置数据库')
 
 
 @router.post('/test')

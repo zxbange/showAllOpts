@@ -22,7 +22,5 @@ export const getGrowthDividendHistory = (signal?: AbortSignal) =>
   request<GrowthDividendHistory>('history', signal)
 export const getGrowthDividendStatus = (signal?: AbortSignal) =>
   request<GrowthDividendStatus>('status', signal)
-export const updateGrowthDividend = (
-  action: 'refresh' | 'cancel' | 'sync-joinquant',
-  signal?: AbortSignal,
-) => request<{ started?: boolean; cancelled?: boolean }>(action, signal, 'POST')
+export const updateGrowthDividend = (action: 'refresh' | 'cancel', signal?: AbortSignal) =>
+  request<{ started?: boolean; cancelled?: boolean }>(action, signal, 'POST')

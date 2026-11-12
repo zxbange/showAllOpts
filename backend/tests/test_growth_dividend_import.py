@@ -87,23 +87,8 @@ def test_collector_preview_full_calendar_no_config(monkeypatch):
     assert '000922.XSHG' in calls and '000015.XSHG' not in calls
     assert result['indices']['000688.XSHG']['observed_first_day']=='2010-01-04'
 
-def test_sync_api_admin_csrf_and_busy(client, monkeypatch):
-    called=[]
-    monkeypatch.setattr(imp,'start_import',lambda m: called.append(1) or False)
-    response=client.post('/api/v1/growth-dividend/sync-joinquant')
-    assert response.status_code==202 and response.json()=={'started':False}
-    csrf=client.headers.pop('X-CSRF-Token')
-    assert client.post('/api/v1/growth-dividend/sync-joinquant').status_code==403
-    client.headers['X-CSRF-Token']=csrf
-    from account_helpers import PASSWORD, sign_in
-    account=client.app.state.accounts
-    admin=account.list()[0]['id']
-    account.create('viewer',PASSWORD,actor=admin)
-    sign_in(client,'viewer')
-    assert client.post('/api/v1/growth-dividend/sync-joinquant').status_code==403
-    client.cookies.clear()
-    assert client.post('/api/v1/growth-dividend/sync-joinquant').status_code==401
-    assert len(called)==1
+def test_separate_sync_api_removed(client):
+    assert client.post('/api/v1/growth-dividend/sync-joinquant').status_code == 404
 
 def test_archive_survives_public_calendar_refresh(source, monitor, monkeypatch):
     from app.services import growth_dividend as service

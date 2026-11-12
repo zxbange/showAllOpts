@@ -1,0 +1,170 @@
+.system-settings {
+  max-width: 1150px;
+  margin: 0 auto;
+}
+.system-settings h1 {
+  margin: 6px 0 24px;
+}
+.system-settings fieldset {
+  border: 0;
+  padding: 0;
+  min-width: 0;
+}
+.system-settings-section {
+  padding: 20px;
+  margin-bottom: 18px;
+}
+.system-settings-section h2 {
+  margin: 0 0 16px;
+  font-size: 17px;
+}
+.system-settings-section h2 small {
+  font-size: 12px;
+  font-weight: 400;
+  opacity: 0.55;
+  margin-left: 8px;
+}
+.system-task {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  padding: 14px 0;
+  border-top: 1px solid rgba(128, 128, 128, 0.13);
+}
+.system-task-toggle {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  min-width: 185px;
+  font-size: 14px;
+}
+.system-task-inputs,
+.system-database-fields {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.system-task-inputs label,
+.system-database-fields label {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+.system-task-inputs input,
+.system-database-fields input {
+  border: 1px solid rgba(128, 128, 128, 0.3);
+  border-radius: 7px;
+  padding: 8px 9px;
+  background: transparent;
+  color: inherit;
+  max-width: 160px;
+  min-width: 85px;
+}
+.system-database-fields label {
+  flex: 1;
+  min-width: 140px;
+}
+.system-database-fields input {
+  max-width: none;
+  width: 100%;
+  box-sizing: border-box;
+}
+.system-settings-muted {
+  font-size: 12px;
+  opacity: 0.6;
+}
+.system-settings-error {
+  color: #c34b51;
+}
+.system-settings-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 12px;
+  margin: 18px 0;
+}
+.system-task-inputs small {
+  align-self: center;
+}
+@media (max-width: 700px) {
+  .system-task {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 10px;
+  }
+  .system-task-inputs {
+    padding-left: 24px;
+  }
+  .system-settings-section {
+    padding: 16px;
+  }
+  .system-task-inputs input {
+    max-width: 125px;
+  }
+}
+
+.system-runtime-groups {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 24px;
+  margin-bottom: 20px;
+}
+.system-runtime-groups h3,
+.system-settings-section > h3 {
+  font-size: 14px;
+  margin: 12px 0;
+}
+.system-database-fields select {
+  border: 1px solid rgba(128, 128, 128, 0.3);
+  border-radius: 7px;
+  padding: 8px 9px;
+  background: transparent;
+  color: inherit;
+}
+.system-source-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+}
+.system-source-card {
+  padding: 12px;
+  border: 1px solid rgba(128, 128, 128, 0.15);
+  border-radius: 8px;
+}
+.system-source-card label {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 13px;
+}
+.system-source-card input {
+  width: 74px;
+  min-width: 0;
+  border: 1px solid rgba(128, 128, 128, 0.3);
+  border-radius: 5px;
+  padding: 6px;
+  background: transparent;
+  color: inherit;
+}
+.system-source-card small {
+  display: block;
+  opacity: 0.6;
+  margin-top: 8px;
+  font-size: 11px;
+}
+@media (max-width: 700px) {
+  .system-runtime-groups {
+    grid-template-columns: 1fr;
+    gap: 10px;
+  }
+  .system-source-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .system-source-card label {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+}

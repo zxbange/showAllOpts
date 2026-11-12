@@ -1,3 +1,4 @@
+from app.core.database import VersionedDatabase, database_identity
 """Shared persistent SQLite snapshots. Only refresh jobs read the source database."""
 from contextlib import closing, contextmanager
 from datetime import datetime, timedelta, timezone
@@ -15,6 +16,7 @@ import uuid
 
 import portalocker
 
+from app.core.history_sync import MODULES as HISTORY_MODULES
 from app.core.cache_schedule import CacheSchedule
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
@@ -53,6 +55,7 @@ MODULES = {
     'high-growth': ('高增长', (GrowthSnapshot, GrowthStock)),
     'etf-momentum': ('ETF动量热度', (Pool, Heat)),
     'institution-ownership': ('个股机构持仓', (OwnershipStock, OwnershipReport, OwnershipHolders)),
+    **HISTORY_MODULES,
 }
 
 
@@ -80,13 +83,41 @@ class SnapshotCache:
     def __init__(self, settings, source):
         self.settings = settings
         self.source = source
+        self.unified_source = isinstance(source, VersionedDatabase)
+        initial = settings.database_url
+        self.legacy_target_identity = database_identity(dict(host=initial.host, port=initial.port or 3306, database=initial.database))
         schema = [(key, [(m.__tablename__, [(c.name, str(c.type)) for c in m.__table__.columns])
-                         for m in models]) for key, (_, models) in MODULES.items() if key != 'market-sentiment']
+                         for m in models]) for key, (_, models) in MODULES.items() if key != 'market-sentiment' and key not in HISTORY_MODULES]
         # Preserve the pre-existing cache namespace and ownership resume checkpoint.
         # Sentiment owns separate files; removing retired modules must not reset other snapshots.
-        identity = [source.url.drivername, source.url.host, source.url.port, source.url.database,
-                    source.url.username, schema, 'provider-results-v2']
+        source_url = settings.database_url if self.unified_source else source.url
+        identity = [source_url.drivername, source_url.host, source_url.port, source_url.database,
+                    source_url.username, schema, 'provider-results-v2']
         key = hashlib.sha256(json.dumps(identity, ensure_ascii=True).encode()).hexdigest()[:20]
+        if self.unified_source:
+            # The source file may change between worker restarts. All workers
+            # must keep the same lock/snapshot namespace and legacy provenance.
+            marker_root = settings.log_path / 'system-configuration'
+            marker_root.mkdir(parents=True, exist_ok=True, mode=0o700)
+            marker = marker_root / 'cache-namespace.json'
+            with portalocker.Lock(str(marker_root / 'cache-namespace.lock'), timeout=10):
+                if marker.exists():
+                    try:
+                        saved = json.loads(marker.read_text())
+                        key = saved['key']
+                        if len(key) != 20 or any(c not in '0123456789abcdef' for c in key):
+                            raise ValueError()
+                        self.legacy_target_identity = saved['legacy_target']
+                    except Exception:
+                        raise CacheUnavailable('缓存来源标识损坏，请恢复配置；不会猜测旧快照来源') from None
+                else:
+                    temporary = marker.with_name('cache-namespace-' + uuid.uuid4().hex + '.tmp')
+                    fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+                    with os.fdopen(fd, 'w') as stream:
+                        json.dump(dict(key=key, legacy_target=self.legacy_target_identity), stream)
+                        stream.flush()
+                        os.fsync(stream.fileno())
+                    os.replace(temporary, marker)
         self.root = settings.cache_path / key
         self.state_file = self.root / 'state.json'
         self.stop_event = threading.Event()
@@ -96,6 +127,10 @@ class SnapshotCache:
         self.schedule_revision = None
         self.schedule = CacheSchedule(settings)
         self.sync_notes = {}
+        self.history_services = {}
+
+    def target_identity(self):
+        return self.source.target_identity() if self.unified_source else None
 
     def read_state(self):
         try:
@@ -169,18 +204,22 @@ class SnapshotCache:
     @contextmanager
     def etf_source(self, target=None):
         from app.services.etf_configuration import ConfigurationFailure
+        from app.services.system_configuration import SystemConfigurationError
+        from app.services.database_sources import SourceError
+        if not self.unified_source:
+            yield self.source
+            return
         try:
             configuration, config, _, _ = target or self.etf_reader_target()
-            engine = self.source if config is None else configuration.engine(config)
-        except ConfigurationFailure:
+            engine = self.source
+        except (ConfigurationFailure, SystemConfigurationError, SourceError):
             raise CacheUnavailable('ETF 数据库配置不可用，请检查或恢复配置；不会读取旧数据源。') from None
         try:
             yield engine
-        except ConfigurationFailure:
+        except (ConfigurationFailure, SystemConfigurationError, SourceError):
             raise CacheUnavailable('ETF 数据库连接不可用，请检查配置、网络与账号权限；不会读取旧数据源。') from None
         finally:
-            if config is not None:
-                engine.dispose()
+            pass
 
     def etf_snapshot_matches(self, path, identity):
         try:
@@ -195,12 +234,25 @@ class SnapshotCache:
             return False
 
     def snapshot_path(self, module, entry):
+        if self.unified_source:
+            from app.services.system_configuration import SystemConfigurationError
+            try:
+                if entry.get('database_target', self.legacy_target_identity) != self.target_identity():
+                    return None
+            except SystemConfigurationError:
+                return None
         name = entry.get('file', '')
         if not name or Path(name).name != name or not name.startswith(module + '-') or not name.endswith('.sqlite'):
             return None
         path = self.root / name
         if not path.is_file():
             return None
+        if module in HISTORY_MODULES:
+            from app.core.history_sync import snapshot_matches, source_identity
+            identity = source_identity(self.source)
+            published = self.settings.log_path / 'market-data' / module / 'history.sqlite3'
+            if not snapshot_matches(path, identity) or not snapshot_matches(published, identity):
+                return None
         if module == 'etf-shares':
             from app.services.etf_configuration import ConfigurationFailure
             try:
@@ -229,7 +281,7 @@ class SnapshotCache:
         while slot.date().isoformat() <= attempted[:10]:
             slot += timedelta(days=1)
         return {'daily_time': plan['daily_time'], 'timezone': 'Asia/Shanghai',
-                'next_refresh_at': slot.isoformat() if self.settings.cache_enabled and self.settings.cache_auto_refresh else None}
+                'next_refresh_at': slot.isoformat() if self.settings.cache_enabled and plan.get('enabled', self.settings.cache_auto_refresh) else None}
 
     def save_schedule(self, daily_time):
         self.schedule.save(daily_time, now)
@@ -262,7 +314,7 @@ class SnapshotCache:
                 'cancelling': bool(running and state.get('run_id') and (self.root / ('cancel-' + state['run_id'])).exists()),
                 'manual_enabled': True,
                 **schedule,
-                'auto_refresh': self.settings.cache_auto_refresh, 'modules': items}
+                'auto_refresh': self.schedule.read().get('enabled', self.settings.cache_auto_refresh), 'modules': items}
 
     @contextmanager
     def session(self, module):
@@ -289,6 +341,9 @@ class SnapshotCache:
             target.exec_driver_sql('CREATE INDEX IF NOT EXISTS ix_local_momentum_history ON industry_momentum (industry_type, industry_code, trade_date)')
 
     def copy_module(self, module, full=False):
+        if module in HISTORY_MODULES:
+            from app.core.history_sync import copy_history
+            return copy_history(self, module, full)
         if module in JOURNAL_MODULES:
             result = copy_results(self, module, full)
             if result is not None:
@@ -362,7 +417,9 @@ class SnapshotCache:
             destination.dispose()
 
     def copy_with_retry(self, module, full=False):
-        for attempt in range(1, self.settings.cache_sync_attempts + 1):
+        from app.services.system_runtime import runtime_config
+        attempts = runtime_config(self.settings)['database_sync']['attempts']
+        for attempt in range(1, attempts + 1):
             if self.stop_event.is_set():
                 return None
             try:
@@ -370,13 +427,13 @@ class SnapshotCache:
             except Exception as exc:
                 if self.stop_event.is_set():
                     return None
-                if not retryable_source_error(exc) or attempt == self.settings.cache_sync_attempts:
+                if not retryable_source_error(exc) or attempt == attempts:
                     raise
-                report('网络重试 {}/{}'.format(attempt + 1, self.settings.cache_sync_attempts))
+                report('网络重试 {}/{}'.format(attempt + 1, attempts))
                 delay = min(2 ** attempt, 16)
                 code, _, _ = failure_details(exc)
                 logger.warning('Cache refresh retry module=%s attempt=%s/%s code=%s delay_seconds=%s',
-                               module, attempt, self.settings.cache_sync_attempts, code, delay)
+                               module, attempt, attempts, code, delay)
                 # A failed copy was removed; retry opens a new source transaction and fresh local copy.
                 if self.stop_event.wait(delay):
                     return None
@@ -440,19 +497,27 @@ class SnapshotCache:
                 logger.info('Cache refresh started module=%s reason=%s', module, reason)
                 try:
                     check_cancel()
+                    source_identity = self.target_identity()
                     result = self.copy_with_retry(module, full)
                     if result is None:
                         break  # Leave this module pending so a restart can resume it.
-                    check_cancel()
+                    if module not in HISTORY_MODULES:
+                        check_cancel()
                     filename, rows = result
+                    if source_identity != self.target_identity():
+                        raise CacheUnavailable("数据库目标已变更，请重新全量同步")
                     if filename != entry.get('file') or not entry.get('updated_at'):
                         entry['updated_at'] = now().isoformat()
                     entry.update(file=filename, rows=rows, error=None, sync_note=self.sync_notes.get(module))
+                    if self.unified_source:
+                        entry["database_target"] = source_identity
                     entry['progress'].update(status='complete', stage='同步完成', percent=100, elapsed_seconds=round(time.monotonic()-started, 1))
                     logger.info('Cache refresh complete module=%s rows=%s seconds=%.2f', module, rows, time.monotonic()-started)
                 except SyncCancelled:
-                    if marker.exists():
+                    if marker.exists() or self.stop_event.is_set():
                         break
+                    entry['error'] = None
+                    entry['progress'].update(status='cancelled', stage='已停止，可手动重新同步')
                 except Exception as exc:
                     if marker.exists():
                         break
@@ -565,6 +630,8 @@ class SnapshotCache:
 
     def tick(self, moment=None):
         moment = moment or now()
+        if self.schedule.read().get('enabled') is False:
+            return
         # Observe startup even while a manual/module sync holds refresh.lock. A
         # first successful lock after today's deadline must not look like a late
         # startup and discard a slot that became due while this worker was alive.
@@ -600,12 +667,13 @@ class SnapshotCache:
         self._refresh_locked(lock, selected, reason, slot, full)
 
     def start(self):
-        if not self.settings.cache_enabled or not self.settings.cache_auto_refresh:
+        if not self.settings.cache_enabled:
             return
         def loop():
             while not self.stop_event.is_set():
                 try:
-                    self.tick()
+                    if self.schedule.read().get('enabled', self.settings.cache_auto_refresh):
+                        self.tick()
                 except Exception as exc:
                     logger.error('Cache scheduler failed %s', diagnostic_details(exc))
                 self.stop_event.wait(30)

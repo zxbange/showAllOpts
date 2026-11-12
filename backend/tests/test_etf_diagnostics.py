@@ -54,6 +54,7 @@ def test_socket_error_and_unknown_error_have_safe_details():
 @pytest.mark.parametrize('failed_table', ['etf_share_daily', 'etf_price_daily', 'etf_trading_day'])
 def test_probe_identifies_failed_table_and_disposes_engine(tmp_path, caplog, failed_table):
     w, _, _ = worker(tmp_path)
+    w.configuration.validate=lambda body:w.configuration.load()
     calls, disposed = [], Mock()
     class Connection:
         def execute(self, statement):
@@ -82,6 +83,7 @@ def test_custom_target_preserves_original_diagnostic_and_logs_once(tmp_path, mon
     from app.services import database_sources
     w, _, _ = worker(tmp_path)
     body = form() | {'host': 'private-host.example', 'port': 3307, 'database': 'private_database'}
+    w.configuration.validate=lambda request:w.configuration.load() | {k:body[k] for k in ('host','port','database')}
     disposed = Mock()
     w.engine_factory = lambda url, **options: SimpleNamespace(
         connect=lambda: nullcontext(options['creator']()), dispose=disposed)

@@ -32,8 +32,7 @@ it('sends CSRF-protected mutations exactly once without automatic retry', async 
   setCsrf('csrf-test')
   const fetcher = vi.fn().mockResolvedValue({ ok: true, json: async () => ({ started: true }) })
   vi.stubGlobal('fetch', fetcher)
-  for (const action of ['refresh', 'sync-joinquant', 'cancel'] as const)
-    await updateValuation(action)
+  for (const action of ['refresh', 'cancel'] as const) await updateValuation(action)
   expect(
     fetcher.mock.calls.map(([url, options]) => [
       url,
@@ -42,12 +41,11 @@ it('sends CSRF-protected mutations exactly once without automatic retry', async 
     ]),
   ).toEqual([
     ['/api/v1/valuation-ruler/refresh', 'POST', 'csrf-test'],
-    ['/api/v1/valuation-ruler/sync-joinquant', 'POST', 'csrf-test'],
     ['/api/v1/valuation-ruler/cancel', 'POST', 'csrf-test'],
   ])
   fetcher.mockRejectedValue(new Error('connection lost'))
   await expect(updateValuation('refresh')).rejects.toThrow('connection lost')
-  expect(fetcher).toHaveBeenCalledTimes(4)
+  expect(fetcher).toHaveBeenCalledTimes(3)
 })
 it('preserves server validation explanations', async () => {
   vi.stubGlobal(

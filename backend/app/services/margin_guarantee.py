@@ -1,4 +1,7 @@
+from app.services.system_configuration import task_config, latest_task_slot
 """两融担保比例：东方财富接口、独立本地存储、北京时间08点调度。"""
+from app.services.system_runtime import source_client
+from app.services.collection_notifications import notify_collection
 from contextlib import contextmanager
 from datetime import date, datetime, timedelta, timezone
 import json
@@ -60,7 +63,7 @@ class MarginGuarantee:
         self.settings = settings
         self.root = settings.log_path / 'market-data' / 'margin-guarantee'
         self.root.mkdir(parents=True, exist_ok=True)
-        self.client_factory = client_factory or (lambda: httpx.Client(
+        self.client_factory = client_factory or (lambda: source_client(self.settings, factory=httpx.Client,
             timeout=httpx.Timeout(25, connect=10), verify=ssl.create_default_context(),
             trust_env=False, follow_redirects=False,
             headers={'User-Agent': 'ShowAllOpts/1.0 (market research)'}))
@@ -139,7 +142,7 @@ class MarginGuarantee:
         stage = state.get('stage', '尚未采集')
         if not running and state.get('active'):
             stage = '上次采集中断，再次更新将继续补采'
-        next_run = latest_slot(moment) + timedelta(days=1)
+        next_run = latest_task_slot(self.settings, 'margin', moment) + timedelta(days=1)
         with self.db() as db:
             pending = db.execute('SELECT count(*) FROM reports r LEFT JOIN points p '
                                  'ON p.trade_date=r.trade_date WHERE p.trade_date IS NULL '
@@ -157,8 +160,8 @@ class MarginGuarantee:
                     error=state.get('error'), pending_reports=pending,
                     source_corrections=corrections,
                     recent_failures=state.get('recent_failures', []), last_failure=state.get('last_failure'),
-                    daily_time=DAILY_TIME, timezone='Asia/Shanghai',
-                    next_run_at=next_run.isoformat() if self.settings.margin_worker_enabled else None)
+                    daily_time=task_config(self.settings, 'margin')['times'][0], timezone='Asia/Shanghai',
+                    next_run_at=next_run.isoformat() if task_config(self.settings, 'margin')['enabled'] else None)
 
     @staticmethod
     def unresolved_sql():
@@ -205,7 +208,7 @@ class MarginGuarantee:
                 return False
             state.update(run_id=uuid.uuid4().hex, active=True, error=None, stage='读取东方财富两融数据',
                          processed=0, total=None, percent=None, last_attempt_at=moment.isoformat(),
-                         recent_failures=[], last_failure=None)
+                         recent_failures=[], last_failure=None, current_scheduled_slot=slot)
             if slot:
                 state['scheduled_slot'] = slot
             self.write_state(state)
@@ -228,6 +231,7 @@ class MarginGuarantee:
             self._collect(lock, state, moment)
         return True
 
+    @notify_collection('margin')
     def _collect(self, lock, state, moment):
         started = monotonic()
         outcome = 'failed'
@@ -388,17 +392,19 @@ class MarginGuarantee:
 
     def tick(self, moment=None):
         moment = moment or now()
-        slot = latest_slot(moment).isoformat()
+        if not task_config(self.settings, 'margin')['enabled']:
+            return
+        slot = latest_task_slot(self.settings, 'margin', moment).isoformat()
         if self.schedule_floor is None:
             self.schedule_floor = slot
         if slot > self.schedule_floor:
             self.refresh(background=False, moment=moment, slot=slot)
 
     def start(self):
-        if not self.settings.margin_worker_enabled:
+        if self.scheduler and self.scheduler.is_alive():
             return
         # Startup only installs the scheduler. It never starts a historical download.
-        self.schedule_floor = latest_slot(now()).isoformat()
+        self.schedule_floor = latest_task_slot(self.settings, 'margin', now()).isoformat()
         def loop():
             while not self.stop_event.is_set():
                 try:

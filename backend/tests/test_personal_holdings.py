@@ -122,7 +122,7 @@ def test_source_change_baseline_and_stale_inflight_rejected(monitor,monkeypatch)
     original=job.read
     def read(connection,table):
         result=original(connection,table)
-        job.configure(dict(config,password='different-test-secret'))
+        job.configure(dict(config,database='other_stocks',password='different-test-secret'))
         return result
     monkeypatch.setattr(job,'read',read)
     assert not tick(monitor,[])
@@ -164,8 +164,9 @@ def test_window_closes_releases_and_next_day_compares(monitor):
     now[0]+=timedelta(seconds=1);assert job.poll()
     assert job.history('2026-11-03')['events'][0]['kind']=='clear'
     assert not job.history('2026-11-02')['events']
-    now[0]=datetime(2027,1,4,2,tzinfo=timezone.utc);assert not job.poll()
-    assert job.status()['calendar_error']
+    now[0]=datetime(2027,1,4,2,tzinfo=timezone.utc);assert job.poll()
+    assert job.status()['calendar_error'] is None
+    now[0]=datetime(2027,1,9,2,tzinfo=timezone.utc);assert job.poll()
     assert in_window(datetime(2026,11,2,4,tzinfo=timezone.utc))  # lunch included
 
 
@@ -191,7 +192,7 @@ def test_admin_only_all_endpoints_csrf_no_password_echo(monitor):
     sign_in(client);assert client.get('/api/v1/personal-holdings/status').status_code==200
     assert 'test-secret-only' not in client.get('/api/v1/personal-holdings/configuration').text
     response=client.post('/api/v1/personal-holdings/configuration',json={'password':'secret-raw-invalid'})
-    assert response.status_code==422 and 'secret-raw-invalid' not in response.text
+    assert response.status_code==409 and 'secret-raw-invalid' not in response.text
     assert client.post('/api/v1/personal-holdings/sync',json={'request_id':'a'*32}).status_code==200
     client.headers['X-CSRF-Token']='bad';assert client.post('/api/v1/personal-holdings/start',json={}).status_code==403
     assert client.post('/api/v1/personal-holdings/sync',json={'request_id':'b'*32}).status_code==403
@@ -212,11 +213,17 @@ def test_row_limit_and_failed_midstream_are_not_empty(monkeypatch):
 
 def test_secret_key_mismatch_cannot_read_or_rewrite(monitor):
     from cryptography.fernet import Fernet
-    from pydantic import SecretStr
-    from app.services.database_sources import SourceError
+    from app.services.system_configuration import SystemConfiguration, SystemConfigurationError
     job,*_=monitor
-    job.settings.validation_encryption_key=SecretStr(Fernet.generate_key().decode())
-    with pytest.raises(SourceError):job.configuration()
+    central=SystemConfiguration(job.settings)
+    path=central.root / 'short-validation-secrets' / 'source.key'
+    original=path.read_bytes()
+    path.write_bytes(Fernet.generate_key())
+    try:
+        with pytest.raises(SystemConfigurationError):job.configuration()
+        assert job.state()['source'] is not None
+    finally:
+        path.write_bytes(original)
 
 
 def test_history_paginates_and_retains_previous_source_events(monitor):
@@ -285,10 +292,11 @@ def test_interrupted_configuration_publication_does_not_trap_active_version(moni
     with pytest.raises(sqlite3.OperationalError):job.configure(dict(config,password='orphan-secret'))
     assert job.state()['source']==old
     monkeypatch.setattr(job,'write',original)
-    job.configure(dict(config,password=None));assert job.state()['source']==old
+    job.configure(dict(config,password=None));assert job.state()['source']['revision']==2
     job.configure(dict(config,password='new-intended-secret'))
     assert job.state()['source']['revision']==3
-    assert job.sources.get(job.state()['source']['id'],3)['password']=='new-intended-secret'
+    from app.services.system_configuration import database_config
+    assert database_config(job.settings)['password']=='new-intended-secret'
 
 
 @pytest.mark.parametrize('moment', [datetime(2026,11,2,12,tzinfo=timezone.utc), datetime(2026,11,1,2,tzinfo=timezone.utc), datetime(2027,1,4,2,tzinfo=timezone.utc)])
@@ -374,7 +382,7 @@ def test_manual_empty_snapshot_and_stop_fence(monitor, monkeypatch):
 
 def test_manual_requires_saved_configuration(tmp_path):
     job=PersonalHoldings(Settings(_env_file=None,log_dir=tmp_path/'log'))
-    with pytest.raises(HoldingsError,match='保存'):job.request_sync('a'*32)
+    with pytest.raises(HoldingsError,match='系统配置'):job.request_sync('a'*32)
     assert not job.status()['configured']
 
 
@@ -539,3 +547,45 @@ def test_initialization_disconnect_logs_original_chain_and_retries(monitor, monk
     assert job.history('2026-11-02')['events'][0]['kind'] == 'add'
     assert tick(monitor) and len(counts) == 2
     assert len(job.history('2026-11-02')['events']) == 1
+
+
+def test_password_rotation_reconnects_without_resetting_baseline(monitor):
+    from app.services.system_configuration import SystemConfiguration
+    job,source,now,config,counts,closed=monitor
+    job.set_enabled(True);tick(monitor,[row()])
+    old=job.state()
+    central=SystemConfiguration(job.settings)
+    value=central.load();value['database']['password']='rotated-secret';central.save(value)
+    assert tick(monitor,[row(amt='200')])
+    assert job.state()['source']['id']==old['source']['id']
+    assert len(counts)==2 and len(closed)==1
+    assert len(job.history('2026-11-02')['events'])==1
+
+
+def test_central_table_change_fences_inflight_snapshot(monitor,monkeypatch):
+    from app.services.system_configuration import SystemConfiguration
+    job,source,now,*_=monitor
+    job.set_enabled(True);tick(monitor,[row()]);original=job.read
+    def changed(connection,table):
+        result=original(connection,table)
+        central=SystemConfiguration(job.settings)
+        value=central.load();value['schedules']['holdings']['table']='positions_new';central.save(value)
+        return result
+    monkeypatch.setattr(job,'read',changed)
+    assert not tick(monitor,[])
+    assert not job.history('2026-11-02')['events']
+    job.status()
+    assert job.state()['rows']==[] and not job.state()['baseline']
+
+
+def test_broken_legacy_configuration_preserves_pointer_and_snapshot(tmp_path):
+    job=PersonalHoldings(Settings(_env_file=None,log_dir=tmp_path))
+    ref=dict(id='old-broken-source',revision=1)
+    with job.db() as db:
+        state=job.state(db);state.update(source=ref,enabled=True,baseline=True,rows=normalize([row()]))
+        job.write(db,state)
+    assert not job.status()['configured']
+    assert not job.poll()
+    assert job.state()['source']==ref and job.state()['rows'] and job.state()['baseline']
+    assert not job.state()['enabled']
+    job.stop()

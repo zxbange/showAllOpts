@@ -1,7 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { Database, RefreshCw, X } from 'lucide-react'
 import { cancelCache, getCacheStatus, refreshCache } from '../api/client'
-import { CacheScheduleForm } from './CacheScheduleForm'
 import type { CacheStatus } from '../types/cache'
 import { usePolling } from '../hooks/usePolling'
 import '../styles/cache.css'
@@ -24,7 +23,7 @@ export function CacheControl() {
   const dialog = useRef<HTMLDialogElement>(null)
   const signature = useRef<string | null>(null)
   const mounted = useRef(false)
-  const { refresh: load, cancel: cancelLoad } = usePolling(
+  const { refresh: load } = usePolling(
     getCacheStatus,
     (result) => {
       setStatus(result)
@@ -124,17 +123,6 @@ export function CacheControl() {
         )}
         {status?.enabled && (
           <>
-            <CacheScheduleForm
-              schedule={status}
-              autoRefresh={status.auto_refresh}
-              onSaved={(plan) => {
-                cancelLoad()
-                setStatus((previous) => (previous ? { ...previous, ...plan } : previous))
-                void load().catch((reason: unknown) =>
-                  setError(reason instanceof Error ? reason.message : '暂时无法读取同步状态。'),
-                )
-              }}
-            />
             <div className="cache-list">
               {status.modules.map((item) => (
                 <div key={item.id} className="cache-row">

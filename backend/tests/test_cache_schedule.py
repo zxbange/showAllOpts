@@ -62,11 +62,11 @@ def test_api_round_trip_and_disabled_auto(scheduled, engine):
     settings, cache, _, calls = scheduled
     with TestClient(create_app(settings, engine)) as client:
         result = client.post('/api/v1/cache/schedule', json={'daily_time': '08:15'})
-        assert result.status_code == 200
-        assert result.json() == {'daily_time': '08:15', 'timezone': 'Asia/Shanghai', 'next_refresh_at': None}
+        assert result.status_code == 409
+        assert '系统配置' in result.json()['detail']
         status = client.get('/api/v1/cache/status').json()
-        assert status['daily_time'] == '08:15' and not status['auto_refresh']
-    assert cache.status()['daily_time'] == '08:15' and calls == []
+        assert status['daily_time'] == cache.schedule.fallback and not status['auto_refresh']
+    assert cache.status()['daily_time'] == cache.schedule.fallback and calls == []
 
 
 def test_save_failure_keeps_old_preference_and_reports_safe_error(scheduled, engine, monkeypatch):
@@ -77,9 +77,9 @@ def test_save_failure_keeps_old_preference_and_reports_safe_error(scheduled, eng
     monkeypatch.setattr(os, 'replace', fail)
     with TestClient(create_app(settings, engine)) as client:
         response = client.post('/api/v1/cache/schedule', json={'daily_time': '09:30'})
-        assert response.status_code == 503
+        assert response.status_code == 409
         assert 'secret' not in response.text
-        assert '无法读写同步时间设置' in response.json()['detail']
+        assert '系统配置' in response.json()['detail']
     assert cache.status()['daily_time'] == '08:15'
     assert list(cache.schedule.root.glob('schedule-*.tmp')) == []
 

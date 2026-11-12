@@ -73,6 +73,12 @@ export function Layout() {
               <span className="nav-key">私</span>
             </NavLink>
           )}
+          {session?.user?.role === 'admin' && (
+            <NavLink to="/system-configuration" aria-label="系统配置">
+              <Layers3 size={18} />
+              <span>系统配置</span>
+            </NavLink>
+          )}
         </nav>
         <div className="sidebar-bottom">
           <div className="sidebar-footer">
@@ -92,10 +98,12 @@ export function Layout() {
                 ? '总览'
                 : location.pathname === '/personal-holdings'
                   ? '个人持仓'
-                  : (group?.name ??
-                    researchModules.find((module) => location.pathname.startsWith(module.path))
-                      ?.name ??
-                    '研究模块')}
+                  : location.pathname === '/system-configuration'
+                    ? '系统配置'
+                    : (group?.name ??
+                      researchModules.find((module) => location.pathname.startsWith(module.path))
+                        ?.name ??
+                      '研究模块')}
               {location.pathname.includes('/industries/') ? ' / 趋势详情' : ''}
             </span>
           </div>

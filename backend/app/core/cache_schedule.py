@@ -18,6 +18,7 @@ class CacheScheduleError(RuntimeError):
 
 class CacheSchedule:
     def __init__(self, settings):
+        self.settings = settings
         self.root = settings.cache_path
         self.path = self.root / 'schedule.json'
         # Migrate the former shipped default, including old private config files.
@@ -34,6 +35,13 @@ class CacheSchedule:
             raise CacheScheduleError('无法读写同步时间设置，请检查服务存储权限后重试。') from exc
 
     def read(self):
+        from app.services.system_configuration import SystemConfiguration
+        service = SystemConfiguration(self.settings)
+        if service.record() is not None:
+            value = service.load()
+            plan = value['schedules']['cache']
+            return dict(daily_time=plan['times'][0], enabled=plan['enabled'],
+                        revision='system:' + json.dumps(plan, sort_keys=True), changed_at=None)
         try:
             data = json.loads(self.path.read_text(encoding='utf-8'))
             if (not isinstance(data, dict) or data.get('version') != 1

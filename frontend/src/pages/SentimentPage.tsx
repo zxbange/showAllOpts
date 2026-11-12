@@ -150,7 +150,7 @@ export function SentimentPage() {
         ) : (
           <EmptyState
             title="暂无市场热度数据"
-            description="请查看“市场日采集”中的配置与任务状态。完成一次写入账户配置后，交易日18:30自动启动，采集完成后显示数据。"
+            description="请在系统配置中设置数据库，采集完成后显示数据。"
           />
         )}
       </section>

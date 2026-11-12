@@ -98,6 +98,7 @@ export function GrowthDividendPage() {
         const completed =
           !previous ||
           (previous.running && !next.running) ||
+          (previous.database_syncing && !next.database_syncing) ||
           previous.last_success_at !== next.last_success_at ||
           (!next.running && previous.last_attempt_at !== next.last_attempt_at)
         const progressed =
@@ -112,7 +113,8 @@ export function GrowthDividendPage() {
       } catch (reason) {
         if (!controller.signal.aborted) setPollError(message(reason))
       } finally {
-        if (!controller.signal.aborted) timer = setTimeout(poll, previous?.running ? 2000 : 30000)
+        if (!controller.signal.aborted)
+          timer = setTimeout(poll, previous?.running || previous?.database_syncing ? 2000 : 30000)
       }
     }
     void loadHistory()
@@ -131,8 +133,15 @@ export function GrowthDividendPage() {
     }
   }, [revision])
 
-  async function act(action: 'refresh' | 'cancel' | 'sync-joinquant') {
-    if (operation.current || !admin || uncertain || (status?.running && action !== 'cancel')) return
+  async function act(action: 'refresh' | 'cancel') {
+    if (
+      status?.database_syncing ||
+      operation.current ||
+      !admin ||
+      uncertain ||
+      (status?.running && action !== 'cancel')
+    )
+      return
     const controller = new AbortController()
     operation.current = controller
     setBusy(true)
@@ -156,7 +165,8 @@ export function GrowthDividendPage() {
   }
 
   const latest = data?.latest
-  const running = status?.running ?? false
+  const databaseSyncing = status?.database_syncing ?? false
+  const running = !databaseSyncing && (status?.running ?? false)
   const progress = status?.percent == null ? null : Math.max(0, Math.min(100, status.percent))
   const shownError = actionError || error || pollError || (!running ? status?.error : null)
   const pending = status?.pending_dates ?? 0
@@ -334,19 +344,10 @@ export function GrowthDividendPage() {
         <div className="growth-dividend-update-heading">
           <div>
             <strong>
-              <Clock3 size={16} /> 每个交易日北京时间 18:00 更新
+              <Clock3 size={16} /> 数据更新
             </strong>
             <p>补齐当天与此前未成功更新的数据，历史记录从2018年起保留。</p>
           </div>
-          {admin && (
-            <button
-              className="button button-quiet"
-              onClick={() => void act('sync-joinquant')}
-              disabled={busy || loading || running || uncertain}
-            >
-              同步聚宽历史
-            </button>
-          )}
           {running ? (
             <button
               className="button button-quiet"
@@ -360,10 +361,10 @@ export function GrowthDividendPage() {
             <button
               className="button button-primary"
               onClick={() => void act('refresh')}
-              disabled={busy || loading || !admin || uncertain}
+              disabled={databaseSyncing || busy || loading || !admin || uncertain}
             >
               <Download size={16} />
-              {busy ? '正在启动…' : '更新数据'}
+              {databaseSyncing ? '数据库同步中' : busy ? '正在启动…' : '更新数据'}
             </button>
           )}
         </div>
@@ -377,7 +378,11 @@ export function GrowthDividendPage() {
               <progress aria-label="创红比更新进度" max={100} value={progress ?? undefined} />
             </>
           ) : (
-            <span>{status?.stage || '等待更新'}</span>
+            <span>
+              {databaseSyncing
+                ? '数据库同步中，请到顶部“数据同步”查看或取消。'
+                : status?.stage || '等待更新'}
+            </span>
           )}
           <div className="growth-dividend-update-meta">
             <span>上次完成 {timestamp(status?.last_success_at)}</span>

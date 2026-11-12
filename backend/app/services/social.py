@@ -1,3 +1,4 @@
+from app.services.system_configuration import SystemConfiguration, task_config, window_open, next_window_time
 """Persistent social monitoring, independent of the market snapshot database."""
 from contextlib import contextmanager
 from datetime import datetime, timezone, timedelta
@@ -67,12 +68,25 @@ def published_time(value):
 
 
 class SocialMonitor(NotificationMixin, CubeMonitorMixin):
+    def night_time(self, moment):
+        return not window_open(self.settings, 'social', moment)
+
+    def next_check_time(self, moment, delay=0):
+        return next_window_time(self.settings, 'social', moment, delay)
+
+    def cube_monitoring_time(self, moment):
+        return window_open(self.settings, 'social_cubes', moment, weekdays=True)
+
+    def next_cube_check_time(self, moment, delay=0):
+        return next_window_time(self.settings, 'social_cubes', moment, delay, weekdays=True)
+
     @staticmethod
     def current_moment():
         return datetime.now(CHINA)
 
     def __init__(self, settings):
         self.settings = settings
+        self._telegram_overlay = {}
         self.root = settings.log_path / 'social'
         self.root.mkdir(parents=True, exist_ok=True)
         # Serialize key creation across API workers. Never replace an existing key.
@@ -138,13 +152,39 @@ class SocialMonitor(NotificationMixin, CubeMonitorMixin):
         return self.cipher.decrypt(value.encode()).decode() if value else ''
 
     def config(self, db):
-        return {'telegram_enabled': True, 'feishu_enabled': False, 'feishu_webhook': '', 'feishu_secret': '',
+        config = {'telegram_enabled': True, 'feishu_enabled': False, 'feishu_webhook': '', 'feishu_secret': '',
                 **json.loads(db.execute('SELECT payload FROM config WHERE id=1').fetchone()[0])}
+        schedule = task_config(self.settings, 'social')
+        config.update(enabled=schedule['enabled'], interval_min=int(schedule['min_interval_minutes'] * 60),
+                      interval_max=int(schedule['max_interval_minutes'] * 60))
+        from app.services.system_integrations import integrations_config
+        telegram = integrations_config(self.settings)['telegram']
+        # Fernet encryption is randomized. A read must not appear to mutate
+        # unchanged credentials or make in-flight queue guards observe a change.
+        for key in ('token', 'chat_id'):
+            desired = telegram[key]
+            selected = None
+            for encrypted in (config.get(key, ''), self._telegram_overlay.get(key, '')):
+                try:
+                    if self.decode(encrypted) == desired:
+                        selected = encrypted
+                        break
+                except Exception:
+                    continue
+            if selected is None:
+                selected = self.encode(desired)
+            self._telegram_overlay[key] = selected
+            config[key] = selected
+        return config
 
     def write_config(self, db, value):
         db.execute('UPDATE config SET payload=? WHERE id=1', (json.dumps(value),))
 
     def update_config(self, changes, *, verified_platform=None):
+        if any(changes.get(key) is not None for key in ('token', 'chat_id')):
+            from app.services.system_configuration import SystemConfiguration
+            if SystemConfiguration(self.settings).record() is not None:
+                raise ValueError('请在系统配置页面修改 Telegram 凭据。')
         with self.db() as db:
             db.execute('BEGIN IMMEDIATE')
             config = self.config(db)
@@ -198,7 +238,7 @@ class SocialMonitor(NotificationMixin, CubeMonitorMixin):
                     if not (db.execute('SELECT 1 FROM authors WHERE enabled=1 LIMIT 1').fetchone()
                             or db.execute('SELECT 1 FROM cubes WHERE enabled=1 LIMIT 1').fetchone()):
                         raise ValueError('请先添加至少一个已启用的监控用户或组合；填写后需点击“添加用户”或“添加组合”')
-                    config['next_check'] = next_check_time(datetime.now(CHINA))
+                    config['next_check'] = self.next_check_time(datetime.now(CHINA))
                     if not was_enabled:
                         config['enabled_since'] = now()
                         config['platform_queues'] = {}
@@ -246,7 +286,7 @@ class SocialMonitor(NotificationMixin, CubeMonitorMixin):
             'interval_min': config.get('interval_min', POLL_INTERVAL_MIN),
             'interval_max': config.get('interval_max', POLL_INTERVAL_MAX),
             'browser_login_available': bool(getattr(self, 'browser_login', None) and self.browser_login.available),
-            'night_rest': night_time(datetime.now(CHINA)),
+            'night_rest': self.night_time(datetime.now(CHINA)),
             'platforms': config.get('platforms', {}),
             'last_check': config['last_check'], 'last_error': config['last_error'],
             'last_cleanup_date': config.get('last_cleanup_date'),
@@ -260,7 +300,7 @@ class SocialMonitor(NotificationMixin, CubeMonitorMixin):
             'xueqiu_cookie_configured': bool(config['xueqiu_cookie']),
             'authors': authors, 'counts': counts,
             'cubes': cubes, 'cube_counts': cube_counts,
-            'cube_monitoring_active': cube_monitoring_time(datetime.now(CHINA)),
+            'cube_monitoring_active': self.cube_monitoring_time(datetime.now(CHINA)),
         }
 
     def add_author(self, platform, uid, name):
@@ -269,7 +309,7 @@ class SocialMonitor(NotificationMixin, CubeMonitorMixin):
                 db.execute('INSERT INTO authors(platform,uid,name,added_at) VALUES(?,?,?,?)', (platform, uid, name or uid, now()))
                 config = self.config(db)
                 if config['enabled']:
-                    config['next_check'] = next_check_time(datetime.now(CHINA))
+                    config['next_check'] = self.next_check_time(datetime.now(CHINA))
                     self.write_config(db, config)
         except sqlite3.IntegrityError:
             raise ValueError('这个平台用户已经在监控列表中') from None
@@ -290,7 +330,7 @@ class SocialMonitor(NotificationMixin, CubeMonitorMixin):
                     # even if a new author immediately receives the same id.
                     queue['excluded_ids'] = sorted(set(queue.get('excluded_ids', ())) | {identifier})
                 if config['enabled']:
-                    config['next_check'] = next_check_time(datetime.now(CHINA))
+                    config['next_check'] = self.next_check_time(datetime.now(CHINA))
                 self.write_config(db, config)
             return result.rowcount > 0
 
@@ -330,7 +370,7 @@ class SocialMonitor(NotificationMixin, CubeMonitorMixin):
     def queue_targets(self, db, platform, moment):
         targets = {row['id']: dict(row, _kind='author') for row in db.execute(
             'SELECT * FROM authors WHERE platform=? AND enabled=1 ORDER BY id', (platform,))}
-        if platform == 'xueqiu' and cube_monitoring_time(moment):
+        if platform == 'xueqiu' and self.cube_monitoring_time(moment):
             targets.update({-row['id']: dict(row, _kind='cube', platform='xueqiu') for row in db.execute(
                 'SELECT * FROM cubes WHERE enabled=1 ORDER BY id')})
         return targets
@@ -412,19 +452,18 @@ class SocialMonitor(NotificationMixin, CubeMonitorMixin):
             db.execute('BEGIN IMMEDIATE')
             config = self.config(db)
             config.get('platform_queues', {}).pop(platform, None)
-            config['next_check'] = next_check_time(datetime.now(CHINA))
+            config['next_check'] = self.next_check_time(datetime.now(CHINA))
             self.write_config(db, config)
 
-    @staticmethod
-    def advance_queue(queue, moment):
+    def advance_queue(self, queue, moment):
         queue['index'] += 1
         # Schedule from completion, never replay overdue slots in a burst.
-        queue['next_check'] = next_check_time(moment, queue['interval'] / len(queue['author_ids']))
+        queue['next_check'] = self.next_check_time(moment, queue['interval'] / len(queue['author_ids']))
 
     def scheduled_author(self, platform):
         """Return at most one due author; each platform owns its own stable queue."""
         moment = datetime.now(CHINA)
-        if self.stop_event.is_set() or night_time(moment):
+        if self.stop_event.is_set() or self.night_time(moment):
             return None
         if getattr(self, 'browser_login', None) and self.browser_login.active(platform):
             return None
@@ -493,12 +532,12 @@ class SocialMonitor(NotificationMixin, CubeMonitorMixin):
                 has_authors = bool(db.execute('SELECT 1 FROM authors WHERE platform=? AND enabled=1 LIMIT 1',
                                              (platform,)).fetchone())
                 if platform == 'xueqiu' and has_cubes and not has_authors:
-                    due = next_cube_check_time(datetime.fromtimestamp(due, CHINA))
+                    due = self.next_cube_check_time(datetime.fromtimestamp(due, CHINA))
                 if getattr(self, 'browser_login', None) and self.browser_login.active(platform):
                     due = max(due, moment.timestamp() + 5)
-                due_times.append(next_check_time(datetime.fromtimestamp(due, CHINA)))
+                due_times.append(self.next_check_time(datetime.fromtimestamp(due, CHINA)))
                 if platform == 'xueqiu' and has_cubes:
-                    opens = next_cube_check_time(moment)
+                    opens = self.next_cube_check_time(moment)
                     if opens > moment.timestamp():
                         due_times.append(max(opens, state.get('retry_at', 0)))
             config['next_check'] = min(due_times) if due_times and config['enabled'] else None
@@ -624,7 +663,7 @@ class SocialMonitor(NotificationMixin, CubeMonitorMixin):
             platforms = current.get('platforms', {})
             weibo = not platforms.get('weibo', {}).get('paused')
             xueqiu = not platforms.get('xueqiu', {}).get('paused')
-            cubes = xueqiu and cube_monitoring_time(self.current_moment())
+            cubes = xueqiu and self.cube_monitoring_time(self.current_moment())
             rows = self.pending_channel_rows(db,
                 "SELECT 'post' AS kind,p.id AS id,COALESCE(julianday(p.published_at),"
                 "julianday(p.discovered_at),0) AS event_time FROM posts p "
@@ -666,7 +705,7 @@ class SocialMonitor(NotificationMixin, CubeMonitorMixin):
             parts = message_parts(row['platform'], json.loads(row['payload']))
             def active(db, current):
                 author = db.execute('SELECT enabled FROM authors WHERE id=?', (row['author_id'],)).fetchone()
-                return (not night_time(datetime.now(CHINA)) and author and author['enabled']
+                return (not self.night_time(datetime.now(CHINA)) and author and author['enabled']
                         and not current.get('platforms', {}).get(row['platform'], {}).get('paused'))
             errors.extend(self.deliver_message('posts', 'status', row, parts, active, blocked))
         if errors:
@@ -684,7 +723,7 @@ class SocialMonitor(NotificationMixin, CubeMonitorMixin):
         notify_since = None
         if not author['initialized'] and tracking_start:
             midnight = tracking_start.replace(hour=0, minute=0, second=0, microsecond=0)
-            notify_since = midnight if night_time(tracking_start) else midnight + timedelta(days=1)
+            notify_since = midnight if self.night_time(tracking_start) else midnight + timedelta(days=1)
             if notify_since > moment:
                 notify_since = None
             elif not author['scan_since']:
@@ -698,7 +737,7 @@ class SocialMonitor(NotificationMixin, CubeMonitorMixin):
             db.execute('UPDATE authors SET scan_since=? WHERE id=?', (scan_since, author['id']))
 
         def should_stop():
-            if self.stop_event.is_set() or night_time(datetime.now(CHINA)):
+            if self.stop_event.is_set() or self.night_time(datetime.now(CHINA)):
                 return True
             if getattr(self, 'browser_login', None) and self.browser_login.active(author['platform']):
                 return True
@@ -737,7 +776,7 @@ class SocialMonitor(NotificationMixin, CubeMonitorMixin):
 
     def cycle(self):
         moment = datetime.now(CHINA)
-        if night_time(moment):
+        if self.night_time(moment):
             self.save_next_check()
             return
         error_message = None
@@ -824,7 +863,7 @@ class SocialMonitor(NotificationMixin, CubeMonitorMixin):
         self.save_next_check(error_message, checked)
 
     def start(self):
-        if self.settings.social_worker_enabled:
+        if not self.thread or not self.thread.is_alive():
             self.thread = threading.Thread(target=self.run, name='social-monitor', daemon=True)
             self.thread.start()
 
@@ -836,6 +875,9 @@ class SocialMonitor(NotificationMixin, CubeMonitorMixin):
 
     def run(self):
         while not self.stop_event.is_set():
+            if not self.settings.social_worker_enabled and not SystemConfiguration(self.settings).path.exists():
+                self.stop_event.wait(1)
+                continue
             try:
                 # Exactly one background poller across Uvicorn workers sharing this directory.
                 with portalocker.Lock(str(self.root / 'worker.lock'), timeout=0):
@@ -845,7 +887,7 @@ class SocialMonitor(NotificationMixin, CubeMonitorMixin):
                         self.send_alerts()
                         with self.db() as db:
                             config = self.config(db)
-                        if night_time(datetime.now(CHINA)):
+                        if self.night_time(datetime.now(CHINA)):
                             if config['next_check'] is not None and time.time() >= config['next_check']:
                                 self.save_next_check()
                             self.stop_event.wait(1)

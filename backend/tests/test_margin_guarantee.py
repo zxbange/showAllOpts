@@ -202,6 +202,7 @@ def test_empty_history_and_six_year_stats_keep_percent_units_and_strict_rank(mon
 
 
 def test_fixed_china_08_slot_and_cross_worker_schedule_claim(monitor, monkeypatch):
+    monitor.settings.margin_worker_enabled = True
     calls = provider(monkeypatch, [])
     another = m.MarginGuarantee(monitor.settings, client_factory=lambda: nullcontext(object()), delay=0)
     before = MOMENT-timedelta(seconds=1)
@@ -220,6 +221,7 @@ def test_fixed_china_08_slot_and_cross_worker_schedule_claim(monitor, monkeypatc
 
 
 def test_start_after_08_installs_scheduler_without_startup_backfill(monitor, monkeypatch):
+    monitor.settings.margin_worker_enabled = True
     monitor.settings.margin_worker_enabled = True
     called = []
     monkeypatch.setattr(monitor, 'refresh', lambda *a, **kw: called.append(kw))

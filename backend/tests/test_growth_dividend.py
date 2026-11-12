@@ -264,7 +264,8 @@ def test_cross_process_lock_prevents_overlapping_collection(monitor, monkeypatch
         replacement.stop()
 
 
-def test_startup_backfills_once_and_scheduler_only_runs_at_18_on_exchange_days(monitor, monkeypatch):
+def test_startup_backfills_once_and_scheduler_runs_daily_without_fabricated_sessions(monitor, monkeypatch):
+    monitor.settings.growth_dividend_worker_enabled = True
     calls = provider(monkeypatch)
     monitor.tick(MOMENT.replace(hour=17))
     assert calls and monitor.history(MOMENT.replace(hour=17))['latest']['date'] == '2026-11-09'
@@ -275,11 +276,11 @@ def test_startup_backfills_once_and_scheduler_only_runs_at_18_on_exchange_days(m
     assert len(calls) == 3 and monitor.history(MOMENT)['latest']['date'] == '2026-11-10'
     calls.clear()
     monitor.tick(MOMENT.replace(hour=19))
-    # The synthetic calendar deliberately excludes the next weekday: never
-    # equate Monday-Friday with exchange sessions (holidays must be skipped).
+    # Daily scheduling includes holidays/weekends but creates no invented prices.
     monitor.tick(MOMENT.replace(day=11, hour=18))
     monitor.tick(MOMENT.replace(day=14, hour=18))
     assert calls == []
+    assert monitor.read_state()['scheduled_slot'] == m.slot_for(MOMENT.replace(day=14).date())
 
 
 def test_failed_daily_slot_waits_for_next_trading_day_then_recovers(monitor, monkeypatch):

@@ -145,6 +145,7 @@ def test_os_lock_blocks_another_instance_and_stale_run_cannot_overwrite(monitor)
 
 
 def test_20_slots_persist_across_restart_and_new_day_runs_once(monitor):
+    monitor.settings.valuation_ruler_worker_enabled = True
     calls=provider(monitor)
     monitor.tick(MOMENT.replace(hour=19),background=False)
     assert calls==[date(2026,11,9)]
@@ -159,6 +160,7 @@ def test_20_slots_persist_across_restart_and_new_day_runs_once(monitor):
 
 
 def test_interrupted_slot_resumes_but_failed_finished_slot_does_not_loop(monitor):
+    monitor.settings.valuation_ruler_worker_enabled = True
     slot=m.slot_for(date(2026,11,10))
     with monitor.db() as db:db.execute('INSERT INTO slots VALUES (?,?)',(slot,'running'))
     calls=provider(monitor,failures={date(2026,11,10):SourceError('access_denied',common=True)})
@@ -279,8 +281,8 @@ def test_calendar_regression_preserves_history_and_visible_gaps(monitor):
 
 
 def test_production_scheduler_flag_start_stop_without_network(monitor,monkeypatch):
-    monitor.start();assert monitor.scheduler is None
-    monitor.settings.valuation_ruler_worker_enabled=True;ticked=threading.Event()
+    assert monitor.tick(MOMENT, background=False) is None
+    ticked=threading.Event()
     monkeypatch.setattr(monitor,'tick',lambda:ticked.set())
     monitor.start();assert ticked.wait(1)
     original=monitor.scheduler;monitor.start();assert monitor.scheduler is original
@@ -288,6 +290,7 @@ def test_production_scheduler_flag_start_stop_without_network(monitor,monkeypatc
 
 
 def test_manual15_vs_schedule1959_and20(monitor):
+    monitor.settings.valuation_ruler_worker_enabled = True
     calls=provider(monitor)
     monitor.tick(MOMENT.replace(hour=19,minute=59),background=False)
     assert calls==[date(2026,11,9)]
@@ -301,6 +304,7 @@ def test_manual15_vs_schedule1959_and20(monitor):
 
 @pytest.mark.parametrize('candidate_value',['10','12'])
 def test_complete_automatic_overlap_deduplicated_over_weekend_and_restart(monitor,candidate_value):
+    monitor.settings.valuation_ruler_worker_enabled = True
     friday=date(2026,11,6);seed(monitor,friday,'10',JQ_SOURCE);calls=[]
     class Source:
         def __init__(self,*args):pass
@@ -322,6 +326,7 @@ def test_complete_automatic_overlap_deduplicated_over_weekend_and_restart(monito
 
 
 def test_unavailable_overlap_retry_next_slot_no_false_gap(monitor):
+    monitor.settings.valuation_ruler_worker_enabled = True
     friday=date(2026,11,6);seed(monitor,friday,'10',JQ_SOURCE)
     failures={friday:SourceError('snapshot_unavailable')};calls=provider(monitor,failures=failures)
     monitor.tick(MOMENT.replace(day=6,hour=20),background=False)
@@ -336,14 +341,13 @@ def test_admin_api_contract_and_no_store(engine,tmp_path,monkeypatch):
     with TestClient(app) as client:
         service=app.state.valuation_ruler
         monkeypatch.setattr(service,'refresh',lambda:True);monkeypatch.setattr(service,'cancel',lambda:False)
-        import app.services.valuation_ruler_import as imp
-        monkeypatch.setattr(imp,'start_import',lambda svc:True)
         for name in ('history','status'):
             response=client.get('/api/v1/valuation-ruler/'+name)
             assert response.status_code==200 and response.headers['cache-control']=='no-store'
-        for name,key,value in [('refresh','started',True),('sync-joinquant','started',True),('cancel','cancelled',False)]:
+        for name,key,value in [('refresh','started',True),('cancel','cancelled',False)]:
             response=client.post('/api/v1/valuation-ruler/'+name)
             assert response.status_code==202 and response.json()=={key:value}
+        assert client.post('/api/v1/valuation-ruler/sync-joinquant').status_code == 404
         assert any(item['id']=='valuation-ruler' for item in client.get('/api/v1/modules').json()['modules'])
 
 

@@ -2,6 +2,9 @@
 
 ETF collection and display reads can share a page-configured database account.
 """
+from app.services.system_runtime import source_client
+from app.services.system_configuration import pin_configuration
+from app.services.collection_notifications import emit_collection_result
 from datetime import datetime, timedelta
 from contextlib import contextmanager
 from zoneinfo import ZoneInfo
@@ -14,7 +17,7 @@ import uuid
 
 from app.core.diagnostics import diagnostic_details
 
-from app.services.etf_configuration import ETFConfiguration, ConfigurationFailure, DEFAULT_COLLECTION_TIME, target_key
+from app.services.etf_configuration import ETFConfiguration, ConfigurationFailure, DEFAULT_COLLECTION_TIME, target_key, reconcile_system_ledger
 from app.services.etf_diagnostics import log_database_failure
 
 import httpx
@@ -89,7 +92,7 @@ class ETFCollection:
                  client_factory=None, clock=None):
         self.settings, self.refresh = settings, refresh
         self.collector, self.engine_factory = collector, engine_factory
-        self.client_factory = client_factory or (lambda: httpx.Client(timeout=30, trust_env=False))
+        self.client_factory = client_factory or (lambda: source_client(self.settings, factory=httpx.Client, timeout=30, trust_env=False))
         self.clock = clock or (lambda: datetime.now(CHINA))
         self.root = settings.log_path / 'market-data' / 'etf-collection'
         self.stop_event = threading.Event()
@@ -290,7 +293,7 @@ class ETFCollection:
             if not self.configured:
                 self._reconcile_target_change(self.configuration_issue)
                 LOG.warning('ETF collection not ready: %s', self.configuration_issue)
-                return
+                # Stay idle until the administrator supplies the shared configuration.
             # Recover interrupted jobs without network I/O or stealing another worker's run.
             self.root.mkdir(parents=True, exist_ok=True, mode=0o700)
             try:
@@ -324,6 +327,10 @@ class ETFCollection:
                 LOG.warning('ETF scheduler interrupted %s', diagnostic_details(exc))
 
     def tick(self, moment):
+        with pin_configuration(self.settings):
+            return self._tick(moment)
+
+    def _tick(self, moment):
         if not self.configured:
             return False
         self.root.mkdir(parents=True, exist_ok=True, mode=0o700)
@@ -331,6 +338,9 @@ class ETFCollection:
             with portalocker.Lock(str(self.root / 'collection.lock'), timeout=0):
                 config = self.configuration.load()
                 with self.connect() as db:
+                    config = reconcile_system_ledger(self.configuration, db,
+                        ('observations', 'slots', 'metadata'), moment.isoformat())
+                    db.commit()
                     self._refresh(db)
                     self._recover_manual_runs(db)
                     db.execute("DELETE FROM metadata WHERE key='progress'")
@@ -374,6 +384,8 @@ class ETFCollection:
             return False
 
     def _run(self, db, slot, config, *, key=None, manual_id=None):
+        self._notification_changes = 0
+        self._notification_summary = []
         started = time.monotonic()
         run = uuid.uuid4().hex[:12]
         phase = 'startup'
@@ -439,6 +451,8 @@ class ETFCollection:
         LOG.info('ETF collection finish run=%s outcome=%s completed=%s total=%s seconds=%.3f',
                  run, state, last_completed, last_total, time.monotonic() - started)
         self._refresh(db)
+        emit_collection_result(self.settings, 'etf', scheduled=manual_id is None, run_key=run,
+            outcome=state, changed_count=self._notification_changes, summary=self._notification_summary)
         return complete
 
     def _refresh(self, db):
@@ -549,7 +563,10 @@ class ETFCollection:
                 engine = self.configuration.engine(config)
                 check_cancelled()
                 stage = 'write_records'
-                c.write_records(engine, shares, prices, calendar=calendar)
+                changed = c.write_records(engine, shares, prices, calendar=calendar)
+                if type(changed) is int and changed > 0:
+                    self._notification_changes = getattr(self, '_notification_changes', 0) + changed
+                    self._notification_summary = getattr(self, '_notification_summary', []) + [f'{end}: shares={len(shares)}, prices={len(prices)}']
             except CollectionInterrupted:
                 raise
             except Exception as exc:

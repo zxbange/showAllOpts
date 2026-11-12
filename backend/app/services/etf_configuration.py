@@ -67,123 +67,31 @@ class ETFConfiguration:
             raise ConfigurationFailure(str(error)) from None
 
     def load(self):
-        record = self.record()
-        if record:
-            try:
-                config = json.loads(self.cipher().decrypt(record['ciphertext']))
-                if config['revision'] != record['revision']:
-                    raise ValueError()
-                # Older encrypted records may contain a TLS preference/acknowledgment.
-                # Read them without rewriting credentials or revisions; the ETF driver
-                # now uses one fixed non-TLS transport, and the next save drops the keys.
-                config.pop('db_tls', None)
-                config.pop('db_transport_acknowledged', None)
-                return single_schedule(config)
-            except ConfigurationFailure:
-                raise
-            except Exception:
-                raise ConfigurationFailure('ETF配置无法解密，请恢复匹配的原密钥；现有数据保留') from None
-        raw = self.settings.etf_collection_writer_url.get_secret_value().strip()
-        config = dict(revision=0, host=self.settings.db_host, port=self.settings.db_port,
-                      database=self.settings.db_name, username='', password=None,
-                      enabled=self.settings.etf_collection_enabled,
-                      lookback_days=self.settings.etf_collection_lookback_days,
-                      batch_days=self.settings.etf_collection_batch_days,
-                      schedule=[DEFAULT_COLLECTION_TIME], source='none')
-        if raw:
-            try:
-                url = make_url(raw)
-                self.validate_target(url)
-                config.update(username=url.username or '', password=url.password or '', source='environment')
-            except ConfigurationFailure:
-                config['legacy_error'] = 'writer_target_mismatch'
-            except Exception:
-                config['legacy_error'] = 'invalid_writer_configuration'
-        return config
+        from app.services.system_configuration import database_config,task_config,SystemConfiguration
+        config=database_config(self.settings); task=task_config(self.settings,'etf')
+        return dict(config,enabled=task['enabled'],schedule=list(task['times']),
+            lookback_days=self.settings.etf_collection_lookback_days,batch_days=self.settings.etf_collection_batch_days,
+            source='system',target_mode='custom',effective_after=SystemConfiguration(self.settings).load().get('changed_at'))
 
     def reader_configuration(self):
-        config = self.load()
-        return config if config.get('target_mode') == 'custom' else None
+        return self.load()
 
     def validate_target(self, url):
-        reader = self.settings.database_url
-        target = lambda u: (u.drivername, u.host, u.port or 3306, u.database)
-        if target(url) != target(reader):
-            raise ConfigurationFailure('writer_target_mismatch')
+        from app.services.system_configuration import database_config
+        expected=self.url(database_config(self.settings))
+        target=lambda u:(u.drivername,(u.host or '').lower().rstrip('.'),u.port or 3306,u.database)
+        if target(url)!=target(expected): raise ConfigurationFailure('writer_target_mismatch')
 
     def validate(self, body):
-        previous = self.load()
-        if body['revision'] != previous['revision']:
-            raise ConfigurationFailure('配置已被其他页面修改，请刷新配置后重试')
-        username = body['username'].strip()
-        if not username:
-            raise ConfigurationFailure('请填写ETF采集账号')
-        custom = any(body.get(k) is not None for k in ('host', 'port', 'database'))
-        if custom and not all(body.get(k) is not None for k in ('host', 'port', 'database')):
-            raise ConfigurationFailure('请完整填写数据库主机、端口和库名')
-        target = ({k: body[k] for k in ('host', 'port', 'database')} if custom else
-                  {k: previous[k] for k in ('host', 'port', 'database')} if previous.get('target_mode') == 'custom' else
-                  dict(host=self.settings.db_host, port=self.settings.db_port, database=self.settings.db_name))
-        target['host'] = target['host'].strip().lower().rstrip('.')
-        target['database'] = target['database'].strip()
-        try:
-            ipaddress.ip_address(target['host'])
-        except ValueError:
-            if not re.fullmatch(r'(?=.{1,253}$)[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?', target['host']):
-                raise ConfigurationFailure('数据库主机应填写域名或IP地址，不要填写URL或连接字符串') from None
-        if type(target['port']) is not int or not 1 <= target['port'] <= 65535:
-            raise ConfigurationFailure('数据库端口应为1至65535的整数')
-        if not target['database'] or len(target['database']) > 64 or any(ord(c) < 32 for c in target['database']):
-            raise ConfigurationFailure('请填写有效的数据库名称')
-        password = body.get('password')
-        if password is None:
-            target_changed = target_key(previous) != target_key(target)
-            if previous['password'] is None or username != previous['username'] or target_changed:
-                raise ConfigurationFailure('首次配置、更换账号或数据库目标时请重新输入密码')
-            password = previous['password']
-        schedule = sorted(body['schedule'])
-        if len(schedule) != 1 or any(
-                not re.fullmatch(r'(?:[01][0-9]|2[0-3]):[0-5][0-9]', slot) for slot in schedule):
-            raise ConfigurationFailure('请设置一个每日采集时间（北京时间），格式为HH:MM')
-        return dict(revision=previous['revision'], **target, username=username, password=password,
-                    enabled=body['enabled'], lookback_days=body['lookback_days'],
-                    batch_days=body['batch_days'], schedule=schedule, source='page',
-                    target_mode='custom' if custom or previous.get('target_mode') == 'custom' else 'service')
+        raise ConfigurationFailure('数据库与自动任务配置已统一，请在系统配置页面修改')
 
     def public(self):
-        config = self.load()
-        target_changed = config.get('target_mode') != 'custom' and any(config[k] != value for k, value in (
-            ('host', self.settings.db_host), ('port', self.settings.db_port), ('database', self.settings.db_name)))
-        return {k: v for k, v in config.items() if k not in {'password', 'legacy_error', 'effective_after'}} | {
-            'host': self.settings.db_host if target_changed else config['host'],
-            'port': self.settings.db_port if target_changed else config['port'],
-            'database': self.settings.db_name if target_changed else config['database'],
-            'password_set': config['password'] is not None and not target_changed,
-            'db_local': local_database(self.settings.db_host if target_changed else config['host']), 'target_changed': target_changed,
-        }
+        config=self.load()
+        return {k:config[k] for k in ('revision','host','port','database','username','enabled','schedule','lookback_days','batch_days','source')} | {
+            'password_set':config['password'] is not None,'db_local':local_database(config['host']),'target_changed':False}
 
     def save(self, body):
-        previous = self.load()
-        config = self.validate(body)
-        config['revision'] += 1
-        config['effective_after'] = self.owner.clock().isoformat()
-        cipher = self.cipher()
-        encrypted = cipher.encrypt(json.dumps(config).encode())
-        with self.owner.connect() as db:
-            if target_key(previous) != target_key(config):
-                # Keep the old target's bookkeeping for audit; never apply it to a new DB.
-                archived = {name: [dict(row) for row in db.execute('SELECT * FROM ' + name)]
-                            for name in ('observations', 'slots', 'metadata')}
-                db.execute('CREATE TABLE IF NOT EXISTS target_archive (id INTEGER PRIMARY KEY, target TEXT, archived_at TEXT, state TEXT)')
-                db.execute('INSERT INTO target_archive(target,archived_at,state) VALUES(?,?,?)',
-                           (target_key(previous), config['effective_after'], json.dumps(archived)))
-                for name in ('observations', 'slots', 'metadata'):
-                    db.execute('DELETE FROM ' + name)
-                last_manual = db.execute('SELECT COALESCE(MAX(rowid),0) FROM manual_runs').fetchone()[0]
-                db.execute("INSERT INTO metadata VALUES('manual_after_rowid',?)", (str(last_manual),))
-            db.execute('INSERT OR REPLACE INTO configuration VALUES(1,?,?)', (config['revision'], encrypted))
-            db.execute("DELETE FROM metadata WHERE key='writer_error'")
-        return self.public()
+        raise ConfigurationFailure('数据库与自动任务配置已统一，请在系统配置页面修改')
 
     @staticmethod
     def url(config):
@@ -266,3 +174,36 @@ class ETFConfiguration:
                 engine.dispose()
         return dict(ok=True, permissions_verified=False,
                     message='连接及三张表读取通过；未写入数据，写权限须以实际采集结果为准')
+
+
+def reconcile_system_ledger(configuration, db, tables, stamp):
+    """Retarget only under collector lock; preserve old bookkeeping and secrets."""
+    import logging
+    from app.services.system_configuration import SystemConfiguration
+    config=configuration.load(); target=target_key(config)
+    row=db.execute("SELECT value FROM metadata WHERE key='system_database_target'").fetchone()
+    previous=row[0] if row else None
+    if previous is None:
+        record=configuration.record()
+        if record:
+            try:
+                previous=target_key(json.loads(configuration.cipher().decrypt(record['ciphertext'])))
+            except Exception:
+                previous='unverified-legacy-target'
+                logging.getLogger(__name__).warning('Legacy collection target unavailable; original credentials preserved')
+                if SystemConfiguration(configuration.settings).load()['revision']==0:
+                    raise ConfigurationFailure('旧采集目标无法核验，请在系统配置中明确保存统一数据库；原记录保留') from None
+        else:
+            previous=target_key(dict(host=configuration.settings.db_host,port=configuration.settings.db_port,database=configuration.settings.db_name))
+    if previous!=target:
+        db.execute('''CREATE TABLE IF NOT EXISTS system_target_archive (
+            id INTEGER PRIMARY KEY,target TEXT NOT NULL,archived_at TEXT NOT NULL,
+            table_name TEXT NOT NULL,payload TEXT NOT NULL)''')
+        for name in tables:
+            for item in db.execute('SELECT * FROM '+name).fetchall():
+                db.execute('INSERT INTO system_target_archive(target,archived_at,table_name,payload) VALUES(?,?,?,?)',
+                    (previous,stamp,name,json.dumps(dict(item))))
+            db.execute('DELETE FROM '+name)
+        db.execute("UPDATE manual_runs SET status='interrupted',phase='interrupted',error='configuration_changed' WHERE status='running'")
+    db.execute("INSERT OR REPLACE INTO metadata VALUES('system_database_target',?)",(target,))
+    return config

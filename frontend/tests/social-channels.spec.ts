@@ -34,6 +34,26 @@ async function mockMonitor(page: Page, configured = false) {
   const changes: Record<string, unknown>[] = []
   const tests: string[] = []
   await page.route('**/api/v1/**', async (route) => {
+    if (route.request().url().includes('/system-configuration'))
+      return route.fulfill({
+        json: {
+          revision: 1,
+          database_revision: 1,
+          timezone: 'Asia/Shanghai',
+          integrations: {
+            asharehub: { token_set: false },
+            telegram: { token_set: true, chat_id_set: true },
+          },
+          database: {
+            host: 'db.example',
+            port: 3306,
+            database: 'stocks',
+            username: 'collector',
+            password_set: true,
+          },
+          schedules: {},
+        },
+      })
     const path = new URL(route.request().url()).pathname
     if (!path.includes('/social-monitor'))
       return route.fulfill({ status: 503, json: { detail: '仅模拟博主监控接口' } })
@@ -90,7 +110,7 @@ test('notification channels can both run or independently stop while collection 
   const state = await mockMonitor(page)
   await page.goto('/social-monitor')
   await expect(page.getByText('通知已关闭', { exact: true })).toBeVisible()
-  await page.getByRole('tab', { name: '通知设置' }).click()
+  await page.goto('/system-configuration')
   const telegram = page.getByRole('switch', { name: '启用Telegram通知' })
   const feishu = page.getByRole('switch', { name: '启用飞书通知' })
   await expect(telegram).toBeChecked()
@@ -126,7 +146,6 @@ test('notification channels can both run or independently stop while collection 
   await feishu.click()
   await expect(feishu).not.toBeChecked()
   await expect(page.getByText('通知渠道均已关闭，监控运行时只采集、不推送。')).toBeVisible()
-  await expect(page.getByText('后台监控中', { exact: true })).toBeVisible()
   expect(state.status.enabled).toBe(true)
   expect(state.changes.slice(1)).toEqual([
     { feishu_enabled: true },
@@ -145,7 +164,7 @@ test('missing configuration prevents channel activation and blank edits preserve
 }) => {
   const state = await mockMonitor(page)
   await page.goto('/social-monitor')
-  await page.getByRole('tab', { name: '通知设置' }).click()
+  await page.goto('/system-configuration')
   await page.getByRole('switch', { name: '启用飞书通知' }).click()
   await expect(page.getByRole('alert')).toContainText('请先保存飞书的飞书 Webhook和飞书签名密钥')
   expect(state.changes).toEqual([])
@@ -166,7 +185,7 @@ test('missing configuration prevents channel activation and blank edits preserve
   expect(state.changes.at(-1)).toEqual({ feishu_enabled: true })
   expect(await page.content()).not.toContain('saved-private-secret')
   await page.reload()
-  await page.getByRole('tab', { name: '通知设置' }).click()
+  await page.goto('/system-configuration')
   await expect(page.getByRole('group', { name: '飞书签名密钥已配置' })).toBeVisible()
   expect(await page.content()).not.toContain('saved-private-secret')
 })
@@ -177,15 +196,14 @@ test('disabled notifications still allow starting monitoring and channel errors 
   const state = await mockMonitor(page, true)
   state.status.telegram_enabled = state.status.feishu_enabled = state.status.enabled = false
   await page.goto('/social-monitor')
-  await page.getByRole('button', { name: '启动监控', exact: true }).click()
-  await expect(page.getByText('后台监控中', { exact: true })).toBeVisible()
-  expect(state.changes).toEqual([{ enabled: true }])
-  await page.getByRole('tab', { name: '通知设置' }).click()
+  await expect(page.getByRole('button', { name: '启动监控', exact: true })).toHaveCount(0)
+  state.status.enabled = true
+  await page.goto('/system-configuration')
   await page.route('**/api/v1/social-monitor/config', (route) =>
     route.fulfill({ status: 400, json: { detail: '飞书配置不可用，请重新保存。' } }),
   )
   await page.getByRole('switch', { name: '启用飞书通知' }).click()
   await expect(page.getByRole('alert')).toContainText('飞书配置不可用')
   await expect(page.getByRole('switch', { name: '启用飞书通知' })).not.toBeChecked()
-  await expect(page.getByText('后台监控中', { exact: true })).toBeVisible()
+  expect(state.status.enabled).toBe(true)
 })

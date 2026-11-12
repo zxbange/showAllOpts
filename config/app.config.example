@@ -55,3 +55,12 @@ ETF_COLLECTION_BATCH_DAYS=5
 MARKET_COLLECTION_ENABLED=true
 MARKET_COLLECTION_WORKER_ENABLED=true
 MARKET_COLLECTION_WRITER_URL=
+
+# Managed by the administrator system configuration page; never commit real credentials.
+ASHAREHUB_API_KEY=
+
+# Managed by the administrator system configuration page; never commit real credentials.
+TELEGRAM_BOT_TOKEN=
+
+# Managed by the administrator system configuration page; never commit real credentials.
+TELEGRAM_CHAT_ID=

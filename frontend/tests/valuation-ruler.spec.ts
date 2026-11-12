@@ -113,7 +113,7 @@ test('running prevents duplicate submissions and allows cancellation', async ({ 
   await page.goto('/valuation-ruler')
   await page.getByRole('button', { name: '采集并补数据', exact: true }).click()
   await expect(page.getByRole('button', { name: '采集中', exact: true })).toBeDisabled()
-  await expect(page.getByRole('button', { name: '同步聚宽历史', exact: true })).toBeDisabled()
+  await expect(page.getByRole('button', { name: '同步聚宽历史', exact: true })).toHaveCount(0)
   expect(starts).toBe(1)
   await page.getByRole('button', { name: '停止采集', exact: true }).click()
   await expect(page.getByRole('button', { name: '采集并补数据', exact: true })).toBeEnabled()
@@ -235,4 +235,21 @@ test('pending POST remains locked across route departure and return', async ({ p
   await expect(page.getByRole('button', { name: '正在提交…', exact: true })).toBeDisabled()
   expect(starts).toBe(1)
   release?.()
+})
+
+test('database sync cannot be cancelled by the public collection button', async ({ page }) => {
+  let mutations = 0
+  await page.route('**/api/v1/valuation-ruler/**', async (route) => {
+    if (route.request().method() === 'POST') mutations++
+    await route.fulfill({
+      json: route.request().url().endsWith('/status')
+        ? { ...idle, database_syncing: true }
+        : history,
+    })
+  })
+  await page.goto('/valuation-ruler')
+  await expect(page.getByRole('button', { name: '数据库同步中', exact: true })).toBeDisabled()
+  await expect(page.getByRole('button', { name: '停止采集', exact: true })).toHaveCount(0)
+  await expect(page.getByText('数据库同步中，请到顶部“数据同步”查看或取消。')).toBeVisible()
+  expect(mutations).toBe(0)
 })

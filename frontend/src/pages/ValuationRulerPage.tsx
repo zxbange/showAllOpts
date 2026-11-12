@@ -91,7 +91,8 @@ export function ValuationRulerPage() {
         previous &&
         (previous.last_success_at !== next.last_success_at ||
           previous.completed_days !== next.completed_days ||
-          (previous.status === 'running' && next.status !== 'running'))
+          (previous.status === 'running' && next.status !== 'running') ||
+          (previous.database_syncing && !next.database_syncing))
       )
         reload()
     } catch (reason) {
@@ -107,7 +108,10 @@ export function ValuationRulerPage() {
       if (!stopped)
         timer = setTimeout(
           poll,
-          current.current?.status === 'running' || mutation.uncertain || mutation.pending
+          current.current?.status === 'running' ||
+            current.current?.database_syncing ||
+            mutation.uncertain ||
+            mutation.pending
             ? 2000
             : 15000,
         )
@@ -122,7 +126,11 @@ export function ValuationRulerPage() {
   }, [readStatus])
   async function act(action: ValuationAction) {
     if (!admin || mutation.pending || mutation.uncertain || !current.current || statusError) return
-    if (action !== 'cancel' && current.current.status === 'running') return
+    if (
+      current.current.database_syncing ||
+      (action !== 'cancel' && current.current.status === 'running')
+    )
+      return
     mutation.pending = true
     setBusy(true)
     setActionError('')
@@ -145,8 +153,9 @@ export function ValuationRulerPage() {
       }
     }
   }
-  const running = status?.status === 'running'
-  const disabled = !admin || busy || uncertain || !status || !!statusError
+  const databaseSyncing = status?.database_syncing ?? false
+  const running = !databaseSyncing && status?.status === 'running'
+  const disabled = databaseSyncing || !admin || busy || uncertain || !status || !!statusError
   const latest = data?.latest
   const benchmark = data?.benchmarks
   const comparison = status?.comparison
@@ -278,18 +287,18 @@ export function ValuationRulerPage() {
       <section className="panel valuation-update" aria-label="估值数据采集">
         <div className="valuation-update-row">
           <div>
-            <h2>自动更新计划 · 北京时间 20:00</h2>
+            <h2>数据采集</h2>
             <p>
               {status
                 ? status.automatic
                   ? '自动采集已启用。'
-                  : '自动采集当前未启用，请管理员检查服务器配置。'
+                  : '自动采集当前未启用，请管理员检查系统配置。'
                 : '正在核验自动采集状态。'}
             </p>
             <p>
               手动采集由服务器按交易日历与15:00收盘校验，从最后保存日期补至最新到期交易日，并重试历史失败日期。
             </p>
-            <p>聚宽历史脚本写入 MySQL 后，点击“同步聚宽历史”。不修改已有完整记录。</p>
+            <p>聚宽历史脚本写入 MySQL 后，通过顶部“数据同步”统一更新。</p>
           </div>
           <div className="valuation-actions">
             <button
@@ -298,14 +307,13 @@ export function ValuationRulerPage() {
               onClick={() => void act('refresh')}
             >
               <Download size={16} />
-              {running ? '采集中' : busy ? '正在提交…' : '采集并补数据'}
-            </button>
-            <button
-              className="button button-quiet"
-              disabled={disabled || running}
-              onClick={() => void act('sync-joinquant')}
-            >
-              同步聚宽历史
+              {databaseSyncing
+                ? '数据库同步中'
+                : running
+                  ? '采集中'
+                  : busy
+                    ? '正在提交…'
+                    : '采集并补数据'}
             </button>
             {running && (
               <button
@@ -319,20 +327,24 @@ export function ValuationRulerPage() {
             )}
           </div>
         </div>
-        {!admin && <p>仅管理员可采集、同步与停止任务。</p>}
+        {!admin && <p>仅管理员可采集与停止任务。</p>}
         <div aria-live="polite">
-          <p>
-            {running
-              ? '采集中'
-              : status?.cancelled
-                ? '已停止'
-                : status?.status === 'failed'
-                  ? '采集未完成'
-                  : '等待更新'}{' '}
-            · {status?.phase ? (phaseLabels[status.phase] ?? status.phase) : '等待状态'} · 目标{' '}
-            {status?.target_date ?? '—'} · 完成 {status?.completed_days ?? 0} 日 / 失败{' '}
-            {status?.failed_days ?? 0} 日
-          </p>
+          {databaseSyncing ? (
+            <p>数据库同步中，请到顶部“数据同步”查看或取消。</p>
+          ) : (
+            <p>
+              {running
+                ? '采集中'
+                : status?.cancelled
+                  ? '已停止'
+                  : status?.status === 'failed'
+                    ? '采集未完成'
+                    : '等待更新'}{' '}
+              · {status?.phase ? (phaseLabels[status.phase] ?? status.phase) : '等待状态'} · 目标{' '}
+              {status?.target_date ?? '—'} · 完成 {status?.completed_days ?? 0} 日 / 失败{' '}
+              {status?.failed_days ?? 0} 日
+            </p>
+          )}
           {status?.joinquant_imported != null && (
             <p>
               本次聚宽导入 {status.joinquant_imported} 日 · 冲突 {status.joinquant_conflicts}{' '}

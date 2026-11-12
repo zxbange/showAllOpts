@@ -154,24 +154,37 @@ def test_shutdown_interrupts_backoff_and_resumes_full_rebuild(cached, session, e
     assert_matches(resumed,session,'industry-momentum')
 
 
+def capture_driver_options(monkeypatch):
+    from types import SimpleNamespace
+    from app.services.database_sources import DatabaseSources
+    options = []
+    monkeypatch.setattr(DatabaseSources, 'allowed', lambda self, config: '127.0.0.1')
+    monkeypatch.setattr(database.socket, 'create_connection', lambda *a, **k: SimpleNamespace(close=lambda: None))
+    def driver(**kwargs):
+        options.append(kwargs)
+        return SimpleNamespace(connect=lambda **k: None, close=lambda: None)
+    monkeypatch.setattr(database.pymysql, 'connect', driver)
+    monkeypatch.setattr(database, 'create_engine', lambda url, **kwargs: kwargs['creator']())
+    return options
+
+
 def test_background_source_timeout_is_separate_from_direct_page_queries(monkeypatch):
-    options=[]
-    monkeypatch.setattr(database,'create_engine',lambda url,**kwargs: options.append(kwargs))
+    options=capture_driver_options(monkeypatch)
     settings=Settings(_env_file=None,cache_db_read_timeout=150)
     database.build_engine(settings)
     database.build_engine(settings,for_cache=True)
-    assert [o['connect_args']['read_timeout'] for o in options]==[20,150]
-    assert all(o['connect_args']['connect_timeout']==8 and o['hide_parameters'] for o in options)
+    assert [o['read_timeout'] for o in options]==[20,150]
+    assert all(o['connect_timeout']==8 and o['ssl_disabled'] and o['defer_connect'] for o in options)
 
 
 def test_app_and_cli_select_the_background_timeout(cached, engine, monkeypatch, capsys):
     import app.main as application
     settings,_=cached
     selected=[]
-    def build(config, *, for_cache=False):
+    def build(config, *, for_cache=False, configuration=None):
         selected.append(for_cache)
         return engine
-    monkeypatch.setattr(application,'build_engine',build)
+    monkeypatch.setattr(database,'build_engine',build)
     application.create_app(settings)
     application.create_app(settings.model_copy(update={'cache_enabled':False}))
     path=Path(__file__).resolve().parents[2]/'scripts/refresh_cache.py'
@@ -198,10 +211,9 @@ def test_background_sync_limits_are_validated(values):
 
 @pytest.mark.parametrize('seconds', [None, 1800, 3600])
 def test_large_sync_read_timeout_reaches_driver(monkeypatch, seconds):
-    options = []
-    monkeypatch.setattr(database, 'create_engine', lambda url, **kwargs: options.append(kwargs))
+    options = capture_driver_options(monkeypatch)
     monkeypatch.delenv('CACHE_DB_READ_TIMEOUT', raising=False)
     values = {} if seconds is None else {'cache_db_read_timeout': seconds}
     settings = Settings(_env_file=None, **values)
     database.build_engine(settings, for_cache=True)
-    assert options[0]['connect_args']['read_timeout'] == (600 if seconds is None else seconds)
+    assert options[0]['read_timeout'] == (600 if seconds is None else seconds)

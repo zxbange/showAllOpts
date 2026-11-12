@@ -301,7 +301,6 @@ function A00Page() {
             <span>暂无新报价</span>
           )}
           {!data?.status.running && data?.status.stale && <span>已保存报价尚未更新至今日</span>}
-          <small>每天 11:00、18:00 自动采集 · 北京时间</small>
         </div>
       </section>
       <section className="commodity-panel">

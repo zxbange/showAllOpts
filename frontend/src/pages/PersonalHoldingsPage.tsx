@@ -28,16 +28,7 @@ type Status = {
   error: string | null
   observed_at: string | null
 }
-type Config = {
-  host: string
-  port: number
-  database: string
-  username: string
-  table: string
-  password_set?: boolean
-}
 type History = { days: string[]; events: Event[]; next_before: number | null }
-const empty: Config = { host: '', port: 3306, database: '', username: '', table: '' }
 const names: Record<string, string> = { buy: '买入', add: '加仓', reduce: '减仓', clear: '清仓' }
 const today = () =>
   new Intl.DateTimeFormat('en-CA', {
@@ -80,15 +71,9 @@ export function PersonalHoldingsPage() {
 
 function Holdings() {
   const [status, setStatus] = useState<Status | null>(null)
-  const [config, setConfig] = useState<Config>(empty)
-  const [saved, setSaved] = useState<Config | null>(null)
-  const [password, setPassword] = useState('')
-  const [passwordEdited, setPasswordEdited] = useState(false)
   const [busy, setBusy] = useState(false)
-  const [configurationLoaded, setConfigurationLoaded] = useState(false)
   const [error, setError] = useState('')
   const [pollError, setPollError] = useState('')
-  const [test, setTest] = useState<'idle' | 'success' | 'failed'>('idle')
   const [day, setDay] = useState(today)
   const [history, setHistory] = useState<History>({ days: [], events: [], next_before: null })
   const [historyError, setHistoryError] = useState('')
@@ -110,19 +95,6 @@ function Holdings() {
     mounted.current = true
     const controller = new AbortController()
     let timer: ReturnType<typeof setTimeout>
-    request<Config | null>('/configuration', undefined, controller.signal)
-      .then((value) => {
-        if (!controller.signal.aborted && value) {
-          setConfig(value)
-          setSaved(value)
-        }
-      })
-      .catch((err) => {
-        if (!controller.signal.aborted) setError(err.message)
-      })
-      .finally(() => {
-        if (!controller.signal.aborted) setConfigurationLoaded(true)
-      })
     async function poll() {
       const token = generation.current
       try {
@@ -163,52 +135,23 @@ function Holdings() {
       })
     return () => controller.abort()
   }, [day, status?.version])
-  function edit(key: keyof Config, value: string) {
-    setConfig((old) => ({ ...old, [key]: key === 'port' ? Number(value) : value }))
-    setTest('idle')
-    setError('')
-  }
-  const unchangedTarget =
-    saved &&
-    ['host', 'port', 'database', 'username', 'table'].every(
-      (key) => config[key as keyof Config] === saved[key as keyof Config],
-    )
-  async function operate(action: 'test' | 'configuration' | 'start' | 'stop' | 'sync') {
+  async function operate(action: 'start' | 'stop' | 'sync') {
     if (mutating.current) return
     mutating.current = true
     setBusy(true)
     setError('')
     generation.current++
     try {
-      if (action === 'test' || action === 'configuration') {
-        const { password_set: _state, ...fields } = config
-        const result = await request<Config>('/' + action, {
-          ...fields,
-          password: passwordEdited ? password : null,
-        })
-        if (!mounted.current) return
-        if (action === 'test') setTest('success')
-        else {
-          setSaved(result)
-          setConfig(result)
-          setPassword('')
-          setPasswordEdited(false)
-          setTest('idle')
-          setStatus(await request<Status>('/status'))
-        }
-      } else {
-        if (action === 'sync' && !syncId.current) syncId.current = crypto.randomUUID()
-        const result = await request<Status>(
-          '/' + action,
-          action === 'sync' ? { request_id: syncId.current } : {},
-        )
-        if (action === 'sync') syncId.current = null
-        if (mounted.current) setStatus(result)
-      }
+      if (action === 'sync' && !syncId.current) syncId.current = crypto.randomUUID()
+      const result = await request<Status>(
+        '/' + action,
+        action === 'sync' ? { request_id: syncId.current } : {},
+      )
+      if (action === 'sync') syncId.current = null
+      if (mounted.current) setStatus(result)
     } catch (err) {
       if (mounted.current) {
         setError((err as Error).message)
-        if (action === 'test') setTest('failed')
       }
     } finally {
       generation.current++
@@ -381,23 +324,15 @@ function Holdings() {
       </section>
       <section className="holdings-toolbar">
         <div>
-          <strong>交易日 09:25–15:10 · 北京时间</strong>
-
           <small>最近成功读取：{stamp(status?.observed_at ?? null)}</small>
         </div>
         <div className="holdings-actions">
           <button
             className="button"
-            disabled={
-              busy ||
-              !status?.configured ||
-              !unchangedTarget ||
-              passwordEdited ||
-              status?.manual?.status === 'pending'
-            }
+            disabled={busy || !status?.configured || status?.manual?.status === 'pending'}
             onClick={() => void operate('sync')}
           >
-            {status?.manual?.status === 'pending' ? '同步中…' : '立即同步'}
+            {status?.manual?.status === 'pending' ? '采集中…' : '立即采集'}
           </button>
           <button
             className="button button-primary"
@@ -409,7 +344,7 @@ function Holdings() {
         </div>
         <span role="status">
           {status?.manual?.status === 'completed'
-            ? '同步完成'
+            ? '采集完成'
             : status?.manual?.status === 'cancelled'
               ? status.manual.error
               : ''}
@@ -420,85 +355,6 @@ function Holdings() {
           {error || pollError || status?.calendar_error || status?.error}
         </p>
       )}
-      <details
-        className="holdings-card holdings-configuration"
-        open={!status?.configured || undefined}
-      >
-        <summary>数据库配置</summary>
-        <form
-          onSubmit={(event) => {
-            event.preventDefault()
-            void operate('configuration')
-          }}
-        >
-          <fieldset disabled={busy || !configurationLoaded}>
-            <div className="holdings-form">
-              {(
-                [
-                  ['host', '主机'],
-                  ['port', '端口'],
-                  ['database', '数据库'],
-                  ['username', '用户名'],
-                  ['table', '持仓表名'],
-                ] as const
-              ).map(([key, label]) => (
-                <label key={key}>
-                  {label}
-                  <input
-                    required
-                    type={key === 'port' ? 'number' : 'text'}
-                    min={key === 'port' ? 1 : undefined}
-                    max={key === 'port' ? 65535 : undefined}
-                    value={config[key]}
-                    onChange={(event) => edit(key, event.target.value)}
-                    autoComplete="off"
-                  />
-                </label>
-              ))}
-              <label>
-                密码
-                <input
-                  type="password"
-                  value={password}
-                  placeholder={
-                    !passwordEdited && unchangedTarget && saved?.password_set ? '********' : ''
-                  }
-                  autoComplete="new-password"
-                  onChange={(event) => {
-                    setPassword(event.target.value)
-                    setPasswordEdited(true)
-                    setTest('idle')
-                  }}
-                />
-              </label>
-            </div>
-            <small>
-              密码占位表示已保存。修改连接或表名时需重新输入；编辑后清空表示使用空密码。源表须含
-              strategy2、name、amt、code，股票代码须为文本。
-            </small>
-            <div className="holdings-actions">
-              <button
-                type="button"
-                className={`button holdings-test ${test}`}
-                aria-label={
-                  test === 'success'
-                    ? '测试连接成功'
-                    : test === 'failed'
-                      ? '测试连接失败'
-                      : '测试连接'
-                }
-                onClick={() => void operate('test')}
-              >
-                测试连接 {test === 'success' ? '✓' : test === 'failed' ? '×' : ''}
-              </button>
-              <button type="submit" className="button">
-                保存
-              </button>
-            </div>
-          </fieldset>
-        </form>
-        <small>更换数据源会停止监控并建立新基准，历史记录保留。保存后点击“开始监控”。</small>
-      </details>
     </div>
   )
 }

@@ -8,6 +8,8 @@ export interface GrowthDividendPoint {
 }
 
 export interface GrowthDividendStatus {
+  database_syncing?: boolean
+  sync_message?: string | null
   comparison_conflicts?: number
   recent_conflicts?: {
     code: string

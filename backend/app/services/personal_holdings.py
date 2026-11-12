@@ -17,7 +17,7 @@ from sqlalchemy.exc import DBAPIError
 from sqlalchemy import text
 
 from app.services.holdings_snapshot import HoldingsError, MAX_ROWS, changes, normalize
-from app.services.holdings_calendar import trading_day
+from app.services.system_configuration import SystemConfiguration, task_config
 from app.services.database_sources import DatabaseSources, SourceError
 
 LOG = logging.getLogger(__name__)
@@ -40,9 +40,10 @@ def clock():
     return datetime.now(timezone.utc)
 
 
-def in_window(moment):
+def in_window(moment, settings=None):
     local = moment.astimezone(SHANGHAI)
-    return trading_day(local.date()) is True and (9, 25) <= (local.hour, local.minute) < (15, 10)
+    plan = task_config(settings, 'holdings') if settings is not None else {'start': '09:25', 'end': '15:10'}
+    return plan['start'] <= local.strftime('%H:%M') < plan['end']
 
 
 def table_name(value):
@@ -95,55 +96,76 @@ class PersonalHoldings:
             state['manual'] = dict(state['manual'], status='cancelled', error='配置或监控状态已变更，请重新同步')
         db.execute('UPDATE holdings_state SET payload=? WHERE id=1', (json.dumps(state, ensure_ascii=False),))
 
+    def _system_configuration(self):
+        from app.core.database import database_identity
+        value = SystemConfiguration(self.settings).load()
+        schedule = value['schedules']['holdings']
+        config = dict(value['database'], table=schedule['table'], name='个人持仓')
+        ref = dict(id='system:' + database_identity(config) + ':' + config['table'],
+                   revision=value['database_revision']) if config['table'] else None
+        return config, schedule, ref
+
+    def _apply_system_configuration(self):
+        with portalocker.Lock(str(self.root / 'configuration.lock'), timeout=10):
+            return self._apply_system_configuration_locked()
+
+    def _apply_system_configuration_locked(self):
+        config, schedule, ref = self._system_configuration()
+        with self.db() as db:
+            db.execute('BEGIN IMMEDIATE')
+            state = self.state(db)
+            # A failed legacy import yields an empty table. Keep the recovery
+            # pointer and snapshots, but never poll that legacy connection.
+            if ref is None and state['source'] and not state['source']['id'].startswith('system:'):
+                if state['enabled']:
+                    state.update(enabled=False, epoch=uuid.uuid4().hex)
+                    self.write(db, state)
+                return config, schedule, None
+            enabled = bool(schedule['enabled'] and ref)
+            if state['source'] != ref or state['enabled'] != enabled:
+                target_changed = (state['source'] or {}).get('id') != (ref or {}).get('id')
+                state.update(source=ref, enabled=enabled, epoch=uuid.uuid4().hex,
+                             next_poll=0, system_table=config['table'])
+                if target_changed:
+                    state.update(baseline=False, rows=[], version=state['version']+1,
+                                 checked_at=None, observed_at=None, error=None)
+                self.write(db, state)
+        return config, schedule, ref
+
     def configuration(self):
-        ref = self.state()['source']
-        if not ref:
-            return None
-        config = self.sources.get(ref['id'], ref['revision'])
-        return {key: value for key, value in config.items() if key != 'password'} | {'password_set': True}
+        config, _, ref = self._apply_system_configuration()
+        return ({key: value for key, value in config.items() if key != 'password'} |
+                {'password_set': config['password'] is not None}) if ref else None
 
     def input_config(self, config):
-        config = dict(config, name='个人持仓', table=table_name(config['table']))
-        config = self.sources.canonical(config)
+        config = self.sources.canonical(dict(config, name='个人持仓', table=table_name(config['table'])))
         if config.get('password') is None:
-            ref = self.state()['source']
-            if not ref:
-                raise HoldingsError('首次配置请填写数据库密码')
-            old = self.sources.get(ref['id'], ref['revision'])
-            if not self.sources.can_retain_password(old, config):
-                raise HoldingsError('连接或表名已改变，请重新输入密码')
-            config['password'] = old['password']
+            previous, _, _ = self._system_configuration()
+            if any(config[key] != previous[key] for key in ('host', 'port', 'database', 'username')):
+                raise HoldingsError('连接已改变，请重新输入密码')
+            config['password'] = previous['password']
         return config
 
     def configure(self, config):
-        # Serialize source publication and active pointer changes across workers.
+        # Internal compatibility only; the retired HTTP endpoint rejects edits.
         with portalocker.Lock(str(self.root / 'configuration.lock'), timeout=10):
             config = self.input_config(config)
             if self.settings.validation_allowed_targets and f"{config['host'].lower().rstrip('.')}:{config['port']}" not in self.settings.validation_allowed_targets:
                 raise SourceError('数据库目标未获部署者允许，请检查 VALIDATION_ALLOWED_TARGETS')
-            old = self.state()['source']
-            latest_revision = None
-            if old:
-                active = self.sources.get(old['id'], old['revision'])
-                if self.sources.canonical(active) == config:
-                    return self.configuration()
-                # A crash after encrypted version insertion but before active
-                # pointer publication may leave an orphan. It must not permanently
-                # block a later explicit save or silently activate that orphan.
-                with self.db() as db:
-                    latest_revision = db.execute('SELECT max(revision) FROM validation_sources WHERE id=?', (old['id'],)).fetchone()[0]
-            ref = self.sources.save(config, old['id'] if old else None, latest_revision)
-            with self.db() as db:
-                db.execute('BEGIN IMMEDIATE')
-                state = self.state(db)
-                if state['source'] != ref:
-                    state.update(source=ref, enabled=False, epoch=uuid.uuid4().hex, baseline=False,
-                                 rows=[], version=state['version']+1, next_poll=0,
-                                 checked_at=None, observed_at=None, error=None)
-                    self.write(db, state)
-        return self.configuration()
+            service = SystemConfiguration(self.settings)
+            value = service.load()
+            database = {key: config[key] for key in ('host', 'port', 'database', 'username', 'password')}
+            if value['database'] != database or value['schedules']['holdings']['table'] != config['table']:
+                value['database'] = database
+                value['schedules']['holdings'].update(table=config['table'], enabled=False)
+                service.save(value)
+            result, _, ref = self._apply_system_configuration_locked()
+        return {key: val for key, val in result.items() if key != 'password'} | {'password_set': True}
 
     def request_sync(self, request_id):
+        _, _, ref = self._apply_system_configuration()
+        if ref is None:
+            raise HoldingsError('请先在系统配置中设置持仓数据表')
         # Durable intent: HTTP completion/navigation does not own the sampling work.
         with self.db() as db:
             db.execute('BEGIN IMMEDIATE')
@@ -158,25 +180,24 @@ class PersonalHoldings:
         return self.status()
 
     def set_enabled(self, enabled):
-        with self.db() as db:
-            db.execute('BEGIN IMMEDIATE')
-            state = self.state(db)
-            if enabled and not state['source']:
-                raise HoldingsError('请先保存数据库配置')
-            if state['enabled'] != enabled:
-                # Epoch fences in-flight results on stop/resume/config changes.
-                state.update(enabled=enabled, epoch=uuid.uuid4().hex, next_poll=0)
-                self.write(db, state)
+        with portalocker.Lock(str(self.root / 'configuration.lock'), timeout=10):
+            service = SystemConfiguration(self.settings)
+            value = service.load()
+            if enabled and not value['schedules']['holdings']['table']:
+                raise HoldingsError('请先在系统配置中设置持仓数据表')
+            value['schedules']['holdings']['enabled'] = enabled
+            service.save(value)
+            self._apply_system_configuration_locked()
 
     def status(self):
+        _, _, ref = self._apply_system_configuration()
         state = self.state()
-        configured = state['source'] is not None
         state.pop('source')
         state.pop('epoch')
-        state['window_open'] = in_window(clock())
-        state['configured'] = configured
-        state['trading_day'] = trading_day(clock().astimezone(SHANGHAI).date())
-        state['calendar_error'] = '交易日历未覆盖今天，已停止源库轮询，请更新官方年度日历' if state['trading_day'] is None else None
+        state['window_open'] = in_window(clock(), self.settings)
+        state['configured'] = ref is not None
+        state['trading_day'] = None
+        state['calendar_error'] = None
         return state
 
     def history(self, day, before=None, limit=100):
@@ -246,9 +267,13 @@ class PersonalHoldings:
 
     def poll(self):
         moment = clock()
+        config, schedule, expected_ref = self._apply_system_configuration()
+        if expected_ref is None:
+            self.release()
+            return False
         state = self.state()
         manual = (state.get('manual') or {}).get('status') == 'pending'
-        if self.stop_event.is_set() or (not manual and (not state['enabled'] or not in_window(moment))):
+        if self.stop_event.is_set() or (not manual and (not state['enabled'] or not in_window(moment, self.settings))):
             self.release()
             return False
         if self.lock is None:
@@ -264,47 +289,50 @@ class PersonalHoldings:
             db.execute('BEGIN IMMEDIATE')
             state = self.state(db)
             manual = (state.get('manual') or {}).get('status') == 'pending'
-            if not manual and (not state['enabled'] or not in_window(clock())):
+            if not manual and (not state['enabled'] or not in_window(clock(), self.settings)):
                 self.release()
                 return False
             if not manual and state['next_poll'] > moment.timestamp():
                 return False
             if not manual:
-                state['next_poll'] = moment.timestamp()+INTERVAL
+                state['next_poll'] = moment.timestamp()+schedule['interval_seconds']
                 self.write(db, state)
         stage = 'source_connect'
         try:
             if self.source_ref != state['source']:
                 self.close_source()
             if self.engine is None:
-                config = self.sources.get(state['source']['id'], state['source']['revision'])
                 self.engine = self.sources.build_engine(config)
                 self.source_ref = state['source']
                 self.connection = self.engine.connect()
-            config = self.sources.get(state['source']['id'], state['source']['revision'])
             stage = 'source_read'
             snapshot = self.read(self.connection, config['table'])
             stage = 'snapshot_save'
             observed = clock()
-            with self.db() as db:
-                db.execute('BEGIN IMMEDIATE')
-                current = self.state(db)
-                if (self.stop_event.is_set() or current['epoch'] != state['epoch']
-                        or (not manual and (not current['enabled'] or not in_window(observed)))):
+            with portalocker.Lock(str(self.root / 'configuration.lock'), timeout=10):
+                _, current_schedule, current_ref = self._system_configuration()
+                if current_ref != expected_ref or (not manual and not current_schedule['enabled']):
                     self.close_source()
                     return False
-                events = changes(current['rows'], snapshot) if current['baseline'] else []
-                version = current['version'] + int(not current['baseline'] or current['rows'] != snapshot)
-                for event in events:
-                    db.execute('INSERT INTO holdings_events(epoch,version,day,observed_at,payload) VALUES(?,?,?,?,?)',
-                               (current['epoch'], version, observed.astimezone(SHANGHAI).date().isoformat(),
-                                observed.isoformat(), json.dumps(event, ensure_ascii=False)))
-                current.update(rows=snapshot, baseline=True, version=version,
-                               observed_at=observed.isoformat(), checked_at=observed.isoformat(), error=None,
-                               next_poll=current['next_poll'] if manual else max(current['next_poll'], observed.timestamp()))
-                if manual:
-                    current['manual'] = dict(current['manual'], status='completed', error=None)
-                self.write(db, current)
+                with self.db() as db:
+                    db.execute('BEGIN IMMEDIATE')
+                    current = self.state(db)
+                    if (self.stop_event.is_set() or current['epoch'] != state['epoch']
+                            or (not manual and (not current['enabled'] or not in_window(observed, self.settings)))):
+                        self.close_source()
+                        return False
+                    events = changes(current['rows'], snapshot) if current['baseline'] else []
+                    version = current['version'] + int(not current['baseline'] or current['rows'] != snapshot)
+                    for event in events:
+                        db.execute('INSERT INTO holdings_events(epoch,version,day,observed_at,payload) VALUES(?,?,?,?,?)',
+                                   (current['epoch'], version, observed.astimezone(SHANGHAI).date().isoformat(),
+                                    observed.isoformat(), json.dumps(event, ensure_ascii=False)))
+                    current.update(rows=snapshot, baseline=True, version=version,
+                                   observed_at=observed.isoformat(), checked_at=observed.isoformat(), error=None,
+                                   next_poll=current['next_poll'] if manual else max(current['next_poll'], observed.timestamp()))
+                    if manual:
+                        current['manual'] = dict(current['manual'], status='completed', error=None)
+                    self.write(db, current)
             return True
         except Exception as error:
             # Record the original failure before cleanup; never log SQL/messages.
@@ -318,7 +346,7 @@ class PersonalHoldings:
                 db.execute('BEGIN IMMEDIATE')
                 current = self.state(db)
                 if current['epoch'] == state['epoch'] and (manual or current['enabled']):
-                    current.update(checked_at=clock().isoformat(), next_poll=current['next_poll'] if manual else clock().timestamp()+INTERVAL,
+                    current.update(checked_at=clock().isoformat(), next_poll=current['next_poll'] if manual else clock().timestamp()+schedule['interval_seconds'],
                                    error=str(error) if isinstance(error, (HoldingsError, SourceError)) else
                                    '读取或保存失败，保留上次持仓；下一轮自动重试')
                     if manual:
@@ -327,7 +355,7 @@ class PersonalHoldings:
                     self.write(db, current)
             return False
         finally:
-            if manual and (not self.state()['enabled'] or not in_window(clock())):
+            if manual and (not self.state()['enabled'] or not in_window(clock(), self.settings)):
                 self.release()
 
     def loop(self):

@@ -1,3 +1,4 @@
+from app.services.system_configuration import task_config
 """Persistent, unified month-end scheduling in Asia/Shanghai (UTC+8)."""
 from calendar import monthrange
 from contextlib import contextmanager
@@ -22,30 +23,32 @@ def china_time(moment=None):
     return value.astimezone(CHINA)
 
 
-def month_end(year, month):
-    return datetime(year, month, monthrange(year, month)[1], 21, tzinfo=CHINA)
+def month_end(year, month, at='21:00'):
+    hour, minute = map(int, at.split(':'))
+    return datetime(year, month, monthrange(year, month)[1], hour, minute, tzinfo=CHINA)
 
 
-def next_run(moment=None):
+def next_run(moment=None, at='21:00'):
     """First month's last calendar day at 21:00 strictly after moment."""
     moment = china_time(moment)
     for year in (moment.year, moment.year + 1):
         for month in range(1, 13):
-            slot = month_end(year, month)
+            slot = month_end(year, month, at)
             if slot > moment:
                 return slot
 
 
-def latest_due(moment):
+def latest_due(moment, at='21:00'):
     for year in (moment.year, moment.year - 1):
         for month in range(12, 0, -1):
-            slot = month_end(year, month)
+            slot = month_end(year, month, at)
             if slot <= moment:
                 return slot
 
 
 class MonthlyCashCowScheduler:
     def __init__(self, settings, screens):
+        self.settings = settings
         self.screen = screens[10]
         self.root = settings.log_path / 'market-data' / 'cash-cow-schedule'
         self.root.mkdir(parents=True, exist_ok=True)
@@ -67,12 +70,13 @@ class MonthlyCashCowScheduler:
         finally:
             db.close()
 
-    @staticmethod
-    def next_run(moment=None):
-        return next_run(moment)
+    def next_run(self, moment=None):
+        return next_run(moment, task_config(self.settings, 'cash_cow')['times'][0])
 
     def tick(self, moment=None):
         """Start one shared run. Return its periods, or None when not due."""
+        if not task_config(self.settings, 'cash_cow')['enabled']:
+            return None
         moment = china_time(moment)
         lock = portalocker.Lock(str(self.root / 'tick.lock'), timeout=0,
                                 flags=portalocker.LOCK_EX | portalocker.LOCK_NB)
@@ -86,7 +90,7 @@ class MonthlyCashCowScheduler:
                            ('enabled_at', moment.isoformat()))
                 enabled_at = china_time(datetime.fromisoformat(db.execute(
                     'SELECT value FROM settings WHERE key=?', ('enabled_at',)).fetchone()[0]))
-            due = latest_due(moment)
+            due = latest_due(moment, task_config(self.settings, 'cash_cow')['times'][0])
             screen = self.screen
             if due < enabled_at or screen.running():
                 return None

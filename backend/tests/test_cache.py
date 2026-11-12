@@ -22,6 +22,8 @@ from test_earnings_api import seed as earnings_seed
 def cached(engine, session, tmp_path):
     session.add_all([row(datetime(2026,1,5).date(), 'A', 3), row(datetime(2026,1,6).date(), 'A', 5)])
     session.commit()
+    from history_sync_helpers import seed_history_sources
+    seed_history_sources(engine)
     growth_seed(session)
     dividend_seed(session)
     earnings_seed(session)
@@ -120,7 +122,7 @@ def test_refresh_selects_only_source_columns_and_does_not_write_source(cached, e
             queried = any(model.__tablename__ in sql for sql in selects)
             assert queried, model.__tablename__
     # Optional ownership journal is detected with read-only SQLite table introspection.
-    assert all(s.lstrip().startswith(('SELECT', 'PRAGMA main.table_info(', 'PRAGMA temp.table_info('))
+    assert all(s.lstrip().startswith(('SELECT', 'PRAGMA main.table_info(', 'PRAGMA temp.table_info(', 'PRAGMA main.table_xinfo(', 'PRAGMA temp.table_xinfo('))
                for s in statements)
     assert all('member_codes' not in s and 'analysis' not in s for s in statements)
     assert all(m['ready'] and not m['error'] for m in cache.status()['modules'])

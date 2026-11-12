@@ -55,12 +55,12 @@ it('uses the existing CSRF session for mutations and does not retry accepted com
   expect(fetcher).toHaveBeenCalledTimes(3)
 })
 
-it('sends JoinQuant history sync once with the current CSRF token', async () => {
+it('sends collection refresh once with the current CSRF token', async () => {
   setCsrf('sync-token')
   const fetcher = vi.fn().mockResolvedValue({ ok: true, json: async () => ({ started: false }) })
   vi.stubGlobal('fetch', fetcher)
-  expect(await updateGrowthDividend('sync-joinquant')).toEqual({ started: false })
+  expect(await updateGrowthDividend('refresh')).toEqual({ started: false })
   expect(fetcher).toHaveBeenCalledTimes(1)
-  expect(fetcher.mock.calls[0][0]).toBe('/api/v1/growth-dividend/sync-joinquant')
+  expect(fetcher.mock.calls[0][0]).toBe('/api/v1/growth-dividend/refresh')
   expect(fetcher.mock.calls[0][1].headers.get('X-CSRF-Token')).toBe('sync-token')
 })

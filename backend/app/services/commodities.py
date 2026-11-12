@@ -1,4 +1,8 @@
+from app.services.system_configuration import task_config, latest_task_slot, pin_configuration
+from contextvars import copy_context
 """Independent persisted quotes. Daily Shanghai scheduling and manual collection share a cross-process lock."""
+from app.services.system_runtime import source_client
+from app.services.collection_notifications import notify_collection
 from contextlib import contextmanager
 from pathlib import Path
 from datetime import date, datetime, timezone, timedelta
@@ -32,6 +36,7 @@ def latest_slot(moment):
 SEED=Path(__file__).resolve().parents[1]/'data/a00_changjiang.json'
 
 class Commodities:
+    task_key = 'commodities'
     tracks_failed_targets = True
     max_requests = 24
     max_collection_seconds = 120
@@ -39,6 +44,8 @@ class Commodities:
     slot_for = staticmethod(latest_slot)
 
     def __init__(self,settings):
+        self.settings = settings
+        self.settings = settings
         self.root=settings.log_path/'market-data'/'commodities'
         self.root.mkdir(parents=True,exist_ok=True)
         self.thread=None;self.scheduler=None;self.stopping=threading.Event()
@@ -76,7 +83,7 @@ class Commodities:
                 state.update(pendingTargets=pending, pendingCount=count)
         lock=self.lock();running=lock is None
         if lock:lock.release()
-        return dict(state,running=running,automatic=True,schedule=self.schedule_label)
+        return dict(state,running=running,automatic=task_config(self.settings, self.task_key)['enabled'],schedule='、'.join(task_config(self.settings, self.task_key)['times']))
     def state(self,**values):
         with self.db() as db:db.execute('UPDATE state SET payload=? WHERE id=1',(json.dumps(values,ensure_ascii=False),))
     def history(self):
@@ -91,7 +98,8 @@ class Commodities:
     def schedule_loop(self):
         while not self.stopping.is_set():
             try:
-                self.refresh(slot=self.slot_for(now()))
+                if task_config(self.settings, self.task_key)['enabled']:
+                    self.refresh(slot=latest_task_slot(self.settings, self.task_key, now()))
             except Exception as exc:
                 LOG.error('Commodity scheduler failed %s', diagnostic_details(exc))
             self.stopping.wait(5)
@@ -120,7 +128,11 @@ class Commodities:
                         return False
             self.state(stage='读取最新现货报价',error=None,trigger='scheduled' if slot else 'manual',slot=slot.isoformat() if slot else None)
             LOG.info('Commodity collection start trigger=%s slot=%s', 'scheduled' if slot else 'manual', slot.isoformat() if slot else '-')
-            self.thread=threading.Thread(target=self.collect,args=(lock,slot),daemon=True,name='commodities')
+            with pin_configuration(self.settings):
+                context = copy_context()
+            def pinned_collect(lock, slot):
+                return context.run(self.collect, lock, slot)
+            self.thread=threading.Thread(target=pinned_collect,args=(lock,slot),daemon=True,name='commodities')
             self.thread.start()
         except BaseException:lock.release();raise
         return True
@@ -156,6 +168,7 @@ class Commodities:
                              articlesChecked=0, requestCount=0, deferredArticles=0,
                              sourceLimited=True)
 
+    @notify_collection('commodities')
     def collect(self,lock,slot=None):
         failures = fetched = parsed = inserted = changed = requests = 0
         began = monotonic()
@@ -169,7 +182,7 @@ class Commodities:
         started = now().isoformat()
         today = now().astimezone(CHINA).date()
         target_day = slot.astimezone(CHINA).date() if slot else today
-        target_mode = 'complete_spot' if slot is not None and slot.astimezone(CHINA).hour == 18 else 'current_spot'
+        target_mode = 'complete_spot' if slot is not None and slot.astimezone(CHINA).strftime('%H:%M') == task_config(self.settings, 'commodities')['times'][-1] else 'current_spot'
 
         def should_stop():
             return self.stopping.is_set() or requests >= self.max_requests or monotonic() - began >= self.max_collection_seconds
@@ -228,7 +241,7 @@ class Commodities:
             with self.db() as db:
                 db.execute('INSERT INTO failed_targets VALUES(?,?,?) ON CONFLICT(day) DO UPDATE SET reason=excluded.reason, attempted_at=excluded.attempted_at',
                            (target_day.isoformat(), 'interrupted_or_pending', started))
-            with httpx.Client(timeout=httpx.Timeout(15,connect=8),trust_env=False,follow_redirects=False) as client:
+            with source_client(self.settings, factory=httpx.Client, timeout=httpx.Timeout(15,connect=8),trust_env=False,follow_redirects=False) as client:
                 status('读取最新现货报价')
                 home = None
                 try:

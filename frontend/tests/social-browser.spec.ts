@@ -66,7 +66,7 @@ test('platform cards use monitor state, one scan, automatic completion, logout a
     })
   })
   await page.goto('/social-monitor')
-  await page.getByRole('tab', { name: '通知设置' }).click()
+  await page.getByRole('tab', { name: '平台登录' }).click()
   const card = (name: string) =>
     page
       .locator('.social-browser-card')
@@ -149,7 +149,7 @@ test('a late status response cannot reopen a cancelled scan', async ({ page }) =
   })
   try {
     await page.goto('/social-monitor')
-    await page.getByRole('tab', { name: '通知设置' }).click()
+    await page.getByRole('tab', { name: '平台登录' }).click()
     const weibo = page
       .locator('.social-browser-card')
       .filter({ has: page.getByRole('heading', { name: '微博', exact: true }) })

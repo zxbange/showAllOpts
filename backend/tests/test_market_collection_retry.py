@@ -13,7 +13,7 @@ from test_market_collection import DAY, EVENING, N, historical_provider, worker
 from test_market_public import DAYS, DAY as PUBLIC_DAY, make_provider, member
 
 
-FRIDAY = EVENING.replace(day=13)
+FRIDAY = EVENING.replace(day=14)
 DATES = [date(2026, 11, day) for day in (10, 11, 12, 13)]
 BAD = ('sh600003', DATES[0])
 
@@ -371,7 +371,7 @@ def test_cached_calendar_fallback_still_uses_shared_dependency_budget(tmp_path):
         collection.tick()
         clock.advance(minutes=30)
     assert len(calls) <= 4
-    assert collection._meta('dependency-budget:scheduled:2026-11-11') is not None
+    assert collection._meta('dependency-budget:scheduled:2026-11-12') is not None
 
 
 def test_manual_dependency_failures_also_consume_current_automatic_slot(tmp_path):
@@ -385,7 +385,7 @@ def test_manual_dependency_failures_also_consume_current_automatic_slot(tmp_path
         collection.request_run(f'manual-calendar-{request}')
         assert not collection.tick()
     assert len(calls) == 4
-    assert collection._meta('dependency-budget:scheduled:2026-11-10') == '4'
+    assert collection._meta('dependency-budget:scheduled:2026-11-11') == '4'
     assert not collection.tick(clock.advance(minutes=30))
     assert len(calls) == 4
     # A later explicit request still has its own budget.

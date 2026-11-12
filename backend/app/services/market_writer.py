@@ -126,7 +126,7 @@ def write_market_results(owner, day, heat, crowding, snapshot):
     if owner.configuration.issue():
         raise WriterFailure('missing_writer_configuration')
     engine = None
-    result = dict(heat_status='pending', crowding_status='pending', heat_hash=None, crowding_hash=None)
+    result = dict(heat_status='pending', crowding_status='pending', heat_hash=None, crowding_hash=None, changed_count=0, changed_metrics=[])
     try:
         engine = owner.configuration.engine(config)
         provenance = owner.provenance(day) or {}
@@ -189,6 +189,8 @@ def write_market_results(owner, day, heat, crowding, snapshot):
                 if actual != expected:
                     raise WriterFailure('writer_value_mismatch')
                 result.update({kind + '_status': 'written', kind + '_hash': actual})
+                result['changed_count'] += 1
+                result['changed_metrics'].append(kind)
         return result
     except WriterFailure:
         raise

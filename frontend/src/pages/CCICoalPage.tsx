@@ -226,7 +226,7 @@ export function CCICoalPage() {
         ) : (
           <p>正在读取报价…</p>
         )}
-        <small>每天 21:00 自动采集（北京时间）</small>
+
         {data?.status.targetDate && (
           <div role="status" aria-label="CCI数据更新状态">
             <p>

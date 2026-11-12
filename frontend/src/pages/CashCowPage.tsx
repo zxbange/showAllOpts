@@ -242,15 +242,7 @@ function CashCowPeriodPage({
         {!admin && <p>仅管理员可更新或停止采集。</p>}
         <details className="cash-cow-rules">
           <summary>筛选口径</summary>
-          <p
-            title={
-              status?.next_run_at
-                ? `下次更新：${new Date(status.next_run_at).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai', hour12: false })}`
-                : undefined
-            }
-          >
-            每月最后一天 21:00 更新（北京时间）
-          </p>
+
           <p>
             近 {years}{' '}
             个完整年度逐年现金分红大于零、扣非归母净利润大于零，经营现金流净额覆盖现金分红，股利支付率为

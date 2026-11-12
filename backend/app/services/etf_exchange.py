@@ -435,6 +435,7 @@ def write_records(engine, shares, prices, calendar=None):
     ETFPrice.__table__.create(engine, checkfirst=True)
     if calendar is not None:
         ETFTradingDay.__table__.create(engine, checkfirst=True)
+    changed_count = 0
     with Session(engine) as session, session.begin():
         batches = [(ETFShare, shares), (ETFPrice, prices)]
         if calendar is not None:
@@ -447,10 +448,13 @@ def write_records(engine, shares, prices, calendar=None):
                 existing = calendar_rows.get(identity) if calendar_rows is not None else session.get(model, identity)
                 if existing is None:
                     session.add(model(**record))
+                    changed_count += int(model is not ETFTradingDay)
                 elif any(getattr(existing, key) != value for key, value in record.items() if key != 'updated_at'):
+                    changed_count += int(model is not ETFTradingDay)
                     for key, value in record.items():
                         setattr(existing, key, value)
                 # An identical recheck preserves updated_at and avoids cache churn.
+    return changed_count
 
 
 def main(argv=None, engine_factory=None):

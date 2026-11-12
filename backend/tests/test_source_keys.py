@@ -30,13 +30,17 @@ def test_keys_concurrent_and_restart(tmp_path):
 def test_existing_holdings_ciphertext_and_versions_remain_readable(monitor):
     from app.services.personal_holdings import PersonalHoldings
     job, _, _, config, *_ = monitor
+    ref=job.sources.save(dict(config,name='legacy-holdings'))
+    second=job.sources.save(dict(config,name='legacy-holdings',password='rotated-legacy-secret'),ident=ref['id'],expected_revision=ref['revision'])
+    assert second['revision']>ref['revision']
+    assert job.sources.get(ref['id'],ref['revision'])['password']==config['password']
     before = job.sources.list()
     ref = before[0]
     key = (job.root.parent/'short-validation-secrets'/'source.key').read_bytes()
     restarted = PersonalHoldings(job.settings)
     try:
         assert restarted.sources.list() == before
-        assert restarted.sources.get(ref['id'],ref['revision'])['password'] == config['password']
+        assert restarted.sources.get(ref['id'],ref['revision'])['password'] == 'rotated-legacy-secret'
         assert (job.root.parent/'short-validation-secrets'/'source.key').read_bytes() == key
         assert config['password'].encode() not in job.path.read_bytes()
     finally:
@@ -45,7 +49,8 @@ def test_existing_holdings_ciphertext_and_versions_remain_readable(monitor):
 
 @pytest.mark.skipif(not POSIX_KEY_STORAGE, reason='POSIX permissions')
 def test_missing_corrupt_or_public_key_never_replaces_saved_credentials(monitor):
-    job, *_ = monitor
+    job,_,_,config,*_=monitor
+    job.sources.save(dict(config,name='legacy-holdings'))
     path = job.root.parent/'short-validation-secrets'/'source.key'
     saved = path.read_bytes()
     path.unlink()

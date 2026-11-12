@@ -52,7 +52,8 @@ def test_write_to_existing_tables_replay_recovers_commit_without_local_ack(tmp_p
     assert first['heat_status'] == first['crowding_status'] == 'written'
     # Simulate a crash after MySQL commit and before local completion/hash bookkeeping.
     second = write_market_results(owner, DAY, HEAT, CROWDING, {})
-    assert first == second
+    assert first['changed_count'] == 2 and second['changed_count'] == 0
+    assert {k:v for k,v in first.items() if not k.startswith('changed_')} == {k:v for k,v in second.items() if not k.startswith('changed_')}
     with owner.engine.connect() as connection:
         heat = connection.execute(select(MarketSentiment.__table__)).mappings().one()
         assert heat['ratio'] == Decimal('0.1') and heat['eligible_count'] == 20 and heat['universe_count'] == 100

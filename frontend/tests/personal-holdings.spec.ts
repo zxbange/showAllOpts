@@ -3,7 +3,7 @@ import { test, expect, adminSession } from './fixtures'
 test('private configuration, baseline, grouped positions and daily history survive navigation', async ({
   page,
 }, info) => {
-  let configured = false
+  let configured = true
   let enabled = false
   let saved: any = null
   let version = 0
@@ -55,23 +55,7 @@ test('private configuration, baseline, grouped positions and daily history survi
   await page.clock.install({ time: new Date('2026-11-02T01:30:00Z') })
   await page.goto('/personal-holdings')
   await expect(page.getByRole('heading', { name: '个人持仓', exact: true })).toBeVisible()
-  await page.getByLabel('主机', { exact: true }).fill('mock.db.test')
-  await page.getByLabel('数据库', { exact: true }).fill('mock_positions')
-  await page.getByLabel('用户名', { exact: true }).fill('readonly')
-  await page.getByLabel('持仓表名', { exact: true }).fill('positions')
-  await page.getByLabel('密码', { exact: true }).fill('mock-secret-never-store')
-  await page.getByRole('button', { name: '测试连接', exact: true }).click()
-  await expect(page.getByRole('button', { name: '测试连接成功' })).toBeVisible()
-  expect(requests).toHaveLength(1)
-  await page.getByRole('button', { name: '保存', exact: true }).click()
-  await expect(page.getByRole('button', { name: '开始监控', exact: true })).toBeEnabled()
-  expect(enabled).toBe(false)
-  await page.getByText('数据库配置', { exact: true }).click()
-  await expect(page.getByLabel('密码', { exact: true })).toHaveAttribute('placeholder', '********')
-  await expect(page.getByLabel('密码', { exact: true })).toHaveValue('')
-  await page.getByRole('button', { name: '测试连接', exact: true }).click()
-  await expect(page.getByRole('button', { name: '测试连接成功' })).toBeVisible()
-  expect(requests.at(-1).body.password).toBe(null)
+  await expect(page.getByText('数据库配置', { exact: true })).toHaveCount(0)
   await page.getByRole('button', { name: '开始监控', exact: true }).click()
   await expect(page.getByRole('button', { name: '停止监控', exact: true })).toBeEnabled()
   rows = [
@@ -101,7 +85,6 @@ test('private configuration, baseline, grouped positions and daily history survi
   await page.clock.runFor(16000)
   await expect(page.getByText('加仓', { exact: true })).toBeVisible()
   await expect(page.getByText('+100', { exact: true })).toBeVisible()
-  await page.getByText('数据库配置', { exact: true }).click()
   await expect(page.locator('#main-content')).toHaveCount(1)
   await page.evaluate(() => {
     ;(document.activeElement as HTMLElement)?.blur()
@@ -301,25 +284,25 @@ test('manual sync outside trading window keeps monitoring off and survives navig
     })
   })
   await page.goto('/personal-holdings')
-  await page.getByRole('button', { name: '立即同步', exact: true }).click()
-  await expect(page.getByRole('button', { name: '同步中…' })).toBeDisabled()
+  await page.getByRole('button', { name: '立即采集', exact: true }).click()
+  await expect(page.getByRole('button', { name: '采集中…' })).toBeDisabled()
   expect(calls).toBe(1)
   await page.reload()
-  await expect(page.getByRole('button', { name: '同步中…' })).toBeDisabled()
+  await expect(page.getByRole('button', { name: '采集中…' })).toBeDisabled()
   manual.status = 'completed'
   version = 1
   await expect(page.getByRole('cell', { name: '000001', exact: true })).toBeVisible({
     timeout: 10000,
   })
   await expect(page.getByRole('button', { name: '开始监控', exact: true })).toBeEnabled()
-  await expect(page.getByRole('status')).toContainText('同步完成')
+  await expect(page.getByRole('status')).toContainText('采集完成')
   expect(calls).toBe(1)
   await page.screenshot({ path: info.outputPath('manual.png'), fullPage: true })
-  await page.getByRole('button', { name: '立即同步', exact: true }).click()
-  await expect(page.getByRole('button', { name: '同步中…' })).toBeDisabled()
+  await page.getByRole('button', { name: '立即采集', exact: true }).click()
+  await expect(page.getByRole('button', { name: '采集中…' })).toBeDisabled()
   expect(calls).toBe(2)
   manual.status = 'completed'
-  await expect(page.getByRole('button', { name: '立即同步', exact: true })).toBeEnabled({
+  await expect(page.getByRole('button', { name: '立即采集', exact: true })).toBeEnabled({
     timeout: 10000,
   })
 })

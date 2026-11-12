@@ -3,6 +3,8 @@
 Only complete, validated observations can qualify. Interrupted refreshes never
 replace a published snapshot. All currency amounts are CNY; rates use percent.
 """
+from app.services.system_runtime import source_client
+from app.services.collection_notifications import notify_collection
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 import json
@@ -95,12 +97,13 @@ class CashCowScreen:
     def __init__(self, settings, *, years=10, source_factory=None, client_factory=None):
         if years not in PERIODS:
             raise ValueError('仅支持近3年、5年或10年')
+        self.settings = settings
         self.years = years
         self.schedule_enabled = settings.cash_cow_worker_enabled
         self.root = settings.log_path / 'market-data' / 'cash-cow'
         self.root.mkdir(parents=True, exist_ok=True)
         self.source_factory = source_factory
-        self.client_factory = client_factory or (lambda: httpx.Client(
+        self.client_factory = client_factory or (lambda: source_client(self.settings, factory=httpx.Client,
             timeout=httpx.Timeout(25, connect=10), trust_env=True,
             follow_redirects=False, headers={'User-Agent': 'Mozilla/5.0 ShowAllOpts/1.0'}))
         self.stop_event = threading.Event()
@@ -179,13 +182,15 @@ class CashCowScreen:
 
     def _status(self, state, result):
         from app.services.cash_cow_schedule import next_run
+        from app.services.system_configuration import task_config
+        schedule = task_config(self.settings, 'cash_cow')
         running = self.running()
         marker = self.cancel_path(state)
         snapshot = result.get('snapshot') or {}
         return dict(years=self.years, periods=list(PERIODS), collection_years=max(PERIODS),
                     run_id=state.get('run_id'),
-                    next_run_at=next_run().isoformat() if self.schedule_enabled else None,
-                    schedule_time='21:00', running=running, cancelling=bool(running and marker and marker.exists()),
+                    next_run_at=next_run(at=schedule['times'][0]).isoformat() if schedule['enabled'] else None,
+                    schedule_time=schedule['times'][0], running=running, cancelling=bool(running and marker and marker.exists()),
                     stage=('上次更新中断，请重新更新' if not running and state.get('active')
                            else state.get('stage', '尚未筛选')),
                     processed=state.get('processed', 0), total=state.get('total'),
@@ -261,6 +266,7 @@ class CashCowScreen:
             raise
         return True
 
+    @notify_collection('cash_cow')
     def _collect(self, lock, state, moment):
         from app.services.cash_cow_source import EastmoneyCashCowSource, CashCowSourceError
         marker = self.cancel_path(state)

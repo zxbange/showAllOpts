@@ -180,11 +180,11 @@ def test_invalid_prices_rejected(payload):
 def test_idempotency_and_same_day_revision():
     engine = create_engine('sqlite://')
     shares, prices, _ = m.collect(FakeSource(), DAY, DAY, FUNDS)
-    m.write_records(engine, shares, prices)
-    m.write_records(engine, shares, prices)
+    assert m.write_records(engine, shares, prices) == 4
+    assert m.write_records(engine, shares, prices) == 0
     shares[0]['shares'] += 100
     prices[0]['close_price'] = Decimal('4.9')
-    m.write_records(engine, shares, prices)
+    assert m.write_records(engine, shares, prices) == 2
     with Session(engine) as session:
         assert len(session.scalars(select(ETFShare)).all()) == 2
         assert len(session.scalars(select(ETFPrice)).all()) == 2

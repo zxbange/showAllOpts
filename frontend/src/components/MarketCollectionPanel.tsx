@@ -1,14 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { Clock3, Database, RefreshCw } from 'lucide-react'
+import { Database, RefreshCw } from 'lucide-react'
 import { useAuth } from './AccountAccess'
 import { usePolling } from '../hooks/usePolling'
 import {
   MarketCollectionRequestError,
-  getMarketCollectionConfiguration,
   getMarketCollectionStatus,
   runMarketCollection,
-  saveMarketCollectionConfiguration,
-  testMarketCollectionConfiguration,
 } from '../api/marketCollection'
 import {
   marketCollectionActive,
@@ -20,11 +17,7 @@ import {
   marketCollectionNeedsReload,
   marketResultLabel,
 } from '../lib/marketCollection'
-import type {
-  MarketCollectionConfiguration,
-  MarketCollectionInput,
-  MarketCollectionStatus,
-} from '../types/marketCollection'
+import type { MarketCollectionStatus } from '../types/marketCollection'
 import '../styles/market-collection.css'
 
 const count = (value: number | null | undefined) =>
@@ -53,11 +46,6 @@ const phases: Record<string, string> = {
 export function MarketCollectionPanel({ onCollected }: { onCollected: () => void }) {
   const admin = useAuth().session?.user?.role === 'admin'
   const [status, setStatus] = useState<MarketCollectionStatus | null>(null)
-  const [config, setConfig] = useState<MarketCollectionConfiguration | null>(null)
-  const [saved, setSaved] = useState<MarketCollectionConfiguration | null>(null)
-  const [password, setPassword] = useState('')
-  const [configVersion, setConfigVersion] = useState(0)
-  const [configError, setConfigError] = useState('')
   const [statusError, setStatusError] = useState('')
   const [actionError, setActionError] = useState('')
   const [message, setMessage] = useState('')
@@ -134,36 +122,8 @@ export function MarketCollectionPanel({ onCollected }: { onCollected: () => void
       : 30000,
   )
 
-  useEffect(() => {
-    if (!admin) {
-      setConfig(null)
-      setSaved(null)
-      setPassword('')
-      return
-    }
-    const controller = new AbortController()
-    setConfigError('')
-    getMarketCollectionConfiguration(controller.signal)
-      .then((value) => {
-        if (!controller.signal.aborted) {
-          setConfig(value)
-          setSaved(value)
-        }
-      })
-      .catch(() => {
-        if (!controller.signal.aborted) setConfigError('无法读取采集配置，请重试。')
-      })
-    return () => controller.abort()
-  }, [admin, configVersion])
-
   const running = marketCollectionActive(status) || acceptedActive
   const workerDisabled = !!status?.worker_disabled || status?.status === 'worker_disabled'
-  const passwordNeeded =
-    !!config &&
-    (!saved?.password_set || saved.target_changed || config.username !== saved.username) &&
-    !password
-  const configurationBlocked =
-    !config || !config.transport_secure || !config.username.trim() || passwordNeeded
   const retry =
     ['paused', 'partial', 'blocked', 'failed'].includes(status?.status ?? '') || !!status?.pending
 
@@ -171,50 +131,6 @@ export function MarketCollectionPanel({ onCollected }: { onCollected: () => void
     void refreshStatus().catch(() => {
       if (mounted.current) setStatusError('暂时无法读取采集状态，已有图表仍可查看。')
     })
-  }
-
-  async function submit(kind: 'save' | 'test') {
-    if (!admin || !config || running || confirming || lock.current || configurationBlocked) return
-    lock.current = true
-    actionKind.current = kind
-    mutationVersion.current++
-    const controller = new AbortController()
-    operation.current = controller
-    setBusy(kind)
-    setActionError('')
-    setMessage('')
-    const body: MarketCollectionInput = {
-      revision: config.revision,
-      username: config.username.trim(),
-      enabled: config.enabled,
-      ...(password ? { password } : {}),
-    }
-    try {
-      if (kind === 'save') {
-        const next = await saveMarketCollectionConfiguration(body, controller.signal)
-        if (!mounted.current || controller.signal.aborted) return
-        setConfig(next)
-        setSaved(next)
-        setPassword('')
-        setMessage('日采集配置已保存，市场热度与抱团拥挤度共用此账户。')
-      } else {
-        const result = await testMarketCollectionConfiguration(body, controller.signal)
-        if (!mounted.current || controller.signal.aborted) return
-        setMessage(
-          `${result.message}${result.permissions_verified ? '' : ' 本次仅读取连接与表，实际写入结果以采集任务为准。'}`,
-        )
-      }
-    } catch (reason) {
-      if (mounted.current && !controller.signal.aborted)
-        setActionError(marketCollectionErrorMessage(reason instanceof Error ? reason.message : ''))
-    } finally {
-      lock.current = false
-      if (operation.current === controller) operation.current = null
-      if (mounted.current) {
-        setBusy('')
-        pollNow()
-      }
-    }
   }
 
   async function run() {
@@ -287,9 +203,6 @@ export function MarketCollectionPanel({ onCollected }: { onCollected: () => void
             日采集使用东方财富目标日报表及公开行情，并核对官方分类数量；以聚宽原脚本为目标口径，热度与拥挤度分别核验发布，证据不足的缺口保留。
           </p>
         </div>
-        <span className="market-collection-schedule">
-          <Clock3 size={15} /> 交易日 18:30 启动 · 北京时间
-        </span>
       </div>
       <div className="market-collection-overview">
         <div role="status">
@@ -316,9 +229,7 @@ export function MarketCollectionPanel({ onCollected }: { onCollected: () => void
               本轮交易日 {status.trade_date} · 状态更新 {timestamp(status.updated_at)}
             </p>
           )}
-          {status && !status.configured && (
-            <p>请由管理员完成一次写入账户配置，之后按计划自动采集。</p>
-          )}
+          {status && !status.configured && <p>请管理员在系统配置中设置数据库。</p>}
         </div>
         {admin && (
           <button
@@ -410,134 +321,6 @@ export function MarketCollectionPanel({ onCollected }: { onCollected: () => void
             重新读取状态
           </button>
         </div>
-      )}
-      {admin && (
-        <details className="market-collection-settings">
-          <summary>日采集配置</summary>
-          {configError && (
-            <p className="market-collection-notice" role="alert">
-              {configError}
-            </p>
-          )}
-          {!config ? (
-            <button
-              className="button button-quiet"
-              onClick={() => setConfigVersion((value) => value + 1)}
-            >
-              重新读取配置
-            </button>
-          ) : (
-            <form
-              onSubmit={(event) => {
-                event.preventDefault()
-                void submit('save')
-              }}
-            >
-              <p className="market-collection-target">
-                固定数据库目标{' '}
-                <strong>
-                  {config.host}:{config.port} / {config.database}
-                </strong>
-              </p>
-              {saved?.target_changed && (
-                <p className="market-collection-notice" role="alert">
-                  数据库目标已变更，请输入当前目标的写入密码后保存。
-                </p>
-              )}
-              {saved?.source === 'etf' && (
-                <p className="market-collection-note">
-                  已使用现有 ETF 采集写入账户；如需更换，保存一次即可同时用于这两个市场指标。
-                </p>
-              )}
-              {!config.transport_secure && (
-                <p className="market-collection-notice" role="alert">
-                  请通过 HTTPS 访问后保存或测试数据库凭据。
-                </p>
-              )}
-              <fieldset disabled={!!busy || running || confirming || !config.transport_secure}>
-                <div className="market-collection-fields">
-                  <label>
-                    采集写入账号
-                    <input
-                      required
-                      autoComplete="off"
-                      value={config.username}
-                      onChange={(event) => {
-                        setConfig({ ...config, username: event.target.value })
-                        setPassword('')
-                        setMessage('')
-                      }}
-                    />
-                  </label>
-                  <label>
-                    数据库密码
-                    <input
-                      type="password"
-                      autoComplete="new-password"
-                      value={password}
-                      placeholder={
-                        saved?.password_set &&
-                        !saved.target_changed &&
-                        saved.username === config.username
-                          ? '留空保留已保存密码（账号不变时）'
-                          : '请输入密码'
-                      }
-                      onChange={(event) => setPassword(event.target.value)}
-                    />
-                  </label>
-                </div>
-                {passwordNeeded && (
-                  <p className="market-collection-note">
-                    首次配置或更换写入账号时，请输入对应密码。
-                  </p>
-                )}
-                <label className="market-collection-check">
-                  <input
-                    type="checkbox"
-                    checked={config.enabled}
-                    onChange={(event) => setConfig({ ...config, enabled: event.target.checked })}
-                  />
-                  启用市场自动采集
-                </label>
-                <p className="market-collection-note">
-                  每个交易日北京时间 18:30
-                  启动。每轮首采后，失败项最多再试3轮；同一采集请求或同一计划内重复检查、服务重启均不重置次数。新的手动采集请求或下一轮18:30计划会重新开始计次。
-                </p>
-                <p className="market-collection-note">
-                  已登记的失败缺口持续保留，不因后续日期采集成功而丢弃；未登记的更早历史缺口不自动补采，已有成功记录保留。
-                </p>
-                <div className="market-collection-actions">
-                  <button className="button" type="submit" disabled={configurationBlocked}>
-                    {busy === 'save' ? '保存中…' : '保存日采集配置'}
-                  </button>
-                  <button
-                    className="button button-quiet"
-                    type="button"
-                    disabled={configurationBlocked}
-                    onClick={() => void submit('test')}
-                  >
-                    {busy === 'test' ? '测试中…' : '测试数据库连接（只读）'}
-                  </button>
-                  <button
-                    className="button button-quiet"
-                    type="button"
-                    onClick={() => {
-                      setPassword('')
-                      setConfig(null)
-                      setMessage('')
-                      setConfigVersion((value) => value + 1)
-                    }}
-                  >
-                    重置修改
-                  </button>
-                </div>
-              </fieldset>
-              {running && (
-                <p className="market-collection-note">采集运行期间请等待任务结束后再修改配置。</p>
-              )}
-            </form>
-          )}
-        </details>
       )}
       {actionError && !(actionKind.current === 'run' && running) && (
         <p className="market-collection-notice" role="alert">
