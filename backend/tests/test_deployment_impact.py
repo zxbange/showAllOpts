@@ -11,7 +11,7 @@ spec.loader.exec_module(impact)
     (['collectors/research.py'],False),
     (['collectors/README.md'],False),
     (['collectors/README.md','backend/app/main.py'],True),
-    (['scripts/deploy.py'],False), (['collectors/tools/sync_result_journal.py'],False),
+    (['scripts/deploy.py'],True), (['collectors/tools/sync_result_journal.py'],False),
     (['collectors/rules/result_journal.py'],False), (['frontend/package-lock.json'],True),
     (['collectors/tools/sync_earnings_version.py','collectors/净利润断层_数据库版.py'],False),
     (['collectors-other/tool.py'],True),

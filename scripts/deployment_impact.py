@@ -12,7 +12,7 @@ NO_DEPLOY_PREFIXES = ('scripts/', 'collectors/', 'docs/', 'backend/tests/', 'fro
 
 def requires_deployment(paths):
     paths = list(paths)
-    return not paths or any(not path.startswith(NO_DEPLOY_PREFIXES) for path in paths)
+    return not paths or any(path == 'scripts/deploy.py' or not path.startswith(NO_DEPLOY_PREFIXES) for path in paths)
 
 
 def compare(base, head, cwd=None):

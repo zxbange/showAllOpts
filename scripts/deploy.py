@@ -467,6 +467,192 @@ def restore_frontend(web_root, backup):
         raise DeployError('Initial deployment index was not removed during recovery.')
 
 
+def cleanup_releases():
+    """Bound deploy artifacts, under deployment_lock; never remove application data.
+
+    Keep the live environment and two actual rollback predecessors. Unknown or
+    unfinished releases and their complete dependency chains are protected.
+    """
+    runtime = ROOT / '.runtime/releases'
+    if not runtime.is_dir() or runtime.is_symlink():
+        return
+    runtime = runtime.resolve()
+    records = {}
+    protected = set()
+    for stage in runtime.iterdir():
+        if not stage.is_dir() or stage.is_symlink():
+            continue
+        try:
+            record = json.loads((stage / 'status.json').read_text())
+            if not isinstance(record, dict):
+                raise ValueError('invalid record')
+            records[stage] = record
+        except (OSError, ValueError):
+            protected.add(stage)
+    def owner(path):
+        try:
+            relative = path.resolve().relative_to(runtime)
+            return runtime / relative.parts[0] if relative.parts else None
+        except (OSError, ValueError, RuntimeError):
+            return None
+    current = owner(ROOT / 'backend/.venv')
+    if current not in records or records[current].get('status') != 'complete':
+        LOG.warning('Release cleanup skipped: live release cannot be verified')
+        return
+    keep = {current}
+    cursor = current
+    rollback_count = 0
+    while rollback_count < 2:
+        predecessor = owner(cursor / 'previous-venv')
+        if predecessor is None or predecessor in keep or not predecessor.exists():
+            break
+        keep.add(predecessor)
+        if (predecessor / 'venv/bin/python').is_file():
+            rollback_count += 1
+        cursor = predecessor
+    terminal = {'complete', 'preparation-failed', 'recovered'}
+    protected.update(stage for stage, record in records.items()
+                     if record.get('status') not in terminal)
+    full_chain = set(protected)
+    # Detect processes referencing a release, including open files, mappings,
+    # command arguments and cwd. Fail closed when a same-user process is unreadable.
+    try:
+        for process in PROC.iterdir():
+            if not process.name.isdigit():
+                continue
+            try:
+                if process.stat().st_uid != os.getuid():
+                    continue
+                paths = [process / 'cwd', process / 'exe']
+                paths.extend((process / 'fd').iterdir())
+                for path in paths:
+                    try:
+                        target = owner(Path(os.readlink(path)))
+                        if target is not None:
+                            protected.add(target)
+                    except FileNotFoundError:
+                        pass
+                text = (process / 'cmdline').read_bytes().replace(b'\0', b' ').decode(errors='replace')
+                text += (process / 'maps').read_text()
+                protected.update(stage for stage in records if str(stage) + '/' in text)
+            except (FileNotFoundError, ProcessLookupError):
+                continue
+    except (OSError, RuntimeError):
+        LOG.warning('Release cleanup skipped: process references unavailable')
+        return
+    # Never recurse into a mounted filesystem inside a historical release.
+    try:
+        for line in Path('/proc/self/mountinfo').read_text().splitlines():
+            mount = Path(re.sub(r'\\([0-7]{3})', lambda m: chr(int(m[1], 8)), line.split()[4]))
+            target = owner(mount)
+            if target is not None:
+                protected.add(target)
+                full_chain.add(target)
+    except (OSError, IndexError):
+        LOG.warning('Release cleanup skipped: mount references unavailable')
+        return
+    # Preflight every candidate before deleting anything: retained workspaces may
+    # still own a rollback dependency, even when their status says complete.
+    for stage in records.keys() - keep:
+        try:
+            allowed = {'source', 'venv', 'previous-venv', 'previous-static', 'status.json', 'status.next'}
+            source = stage / 'source'
+            if (any(p.name not in allowed for p in stage.iterdir())
+                    or any(p.is_symlink() and p.name != 'previous-venv' for p in stage.iterdir())):
+                raise DeployError('unknown layout')
+            if source.exists():
+                if run(['git', 'status', '--porcelain', '--untracked-files=all'], capture=True, cwd=source):
+                    raise DeployError('modified source')
+                ignored = run(['git', 'ls-files', '--others', '--ignored', '--exclude-standard'], capture=True, cwd=source)
+                if any(not (name.startswith(('frontend/node_modules/', 'frontend/dist/', 'log/'))
+                            or name in {'frontend/tsconfig.app.tsbuildinfo', 'frontend/tsconfig.node.tsbuildinfo'}
+                            or ('__pycache__' in Path(name).parts and name.endswith('.pyc')))
+                       for name in ignored.splitlines()):
+                    raise DeployError('unknown ignored files')
+                if (source/'log').is_symlink() or ((source/'log').exists()
+                        and (ROOT/'log/release-archive'/stage.name).exists()):
+                    raise DeployError('logs require inspection')
+        except (OSError, DeployError, subprocess.TimeoutExpired):
+            protected.add(stage)
+            full_chain.add(stage)
+            LOG.warning('Release cleanup protecting %s: workspace requires inspection', stage.name)
+    # A protected failed/unknown release may still need its full recovery chain.
+    queue = list((protected - keep) | full_chain)
+    visited = set()
+    while queue:
+        stage = queue.pop()
+        if stage in visited:
+            continue
+        visited.add(stage)
+        dependency = owner(stage / 'previous-venv')
+        if dependency is not None and dependency.exists():
+            protected.add(dependency)
+            queue.append(dependency)
+    keep.update(protected)
+    deleted = 0
+    free_before = shutil.disk_usage(runtime).free
+    for stage, record in records.items():
+        if stage in keep:
+            continue
+        try:
+            # Only recognized deploy layout is eligible. Never discard user files.
+            allowed = {'source', 'venv', 'previous-venv', 'previous-static', 'status.json', 'status.next'}
+            if any(p.name not in allowed for p in stage.iterdir()):
+                LOG.warning('Release cleanup retained %s: unknown files', stage.name)
+                continue
+            source = stage / 'source'
+            if source.is_symlink() or any(p.is_symlink() for p in (stage/'venv', stage/'previous-static')):
+                LOG.warning('Release cleanup retained %s: unexpected symlink', stage.name)
+                continue
+            if source.exists():
+                if run(['git', 'status', '--porcelain', '--untracked-files=all'], capture=True, cwd=source):
+                    LOG.warning('Release cleanup retained %s: modified source', stage.name)
+                    continue
+                ignored = run(['git', 'ls-files', '--others', '--ignored', '--exclude-standard'], capture=True, cwd=source)
+                prefixes = ('frontend/node_modules/', 'frontend/dist/', 'log/')
+                files = {'frontend/tsconfig.app.tsbuildinfo', 'frontend/tsconfig.node.tsbuildinfo'}
+                if any(not (name.startswith(prefixes) or name in files
+                            or ('__pycache__' in Path(name).parts and name.endswith('.pyc')))
+                       for name in ignored.splitlines()):
+                    LOG.warning('Release cleanup retained %s: unknown ignored files', stage.name)
+                    continue
+                # Preserve logs outside releases before unregistering the worktree.
+                logs = source / 'log'
+                if logs.exists() or logs.is_symlink():
+                    if logs.is_symlink():
+                        LOG.warning('Release cleanup retained %s: linked logs', stage.name)
+                        continue
+                    archive = ROOT / 'log/release-archive' / stage.name
+                    archive.parent.mkdir(parents=True, exist_ok=True)
+                    if archive.exists():
+                        LOG.warning('Release cleanup retained %s: log archive exists', stage.name)
+                        continue
+                    logs.rename(archive)
+                run(['git', 'worktree', 'remove', '--force', str(source)])
+            shutil.rmtree(stage)
+            deleted += 1
+            LOG.info('Release cleanup removed=%s', stage.name)
+        except (OSError, DeployError, subprocess.TimeoutExpired):
+            LOG.warning('Release cleanup retained %s: cleanup failed', stage.name, exc_info=True)
+    # Explicitly terminate the bounded rollback chain, not leave dangling links.
+    for stage in keep:
+        link = stage / 'previous-venv'
+        target = owner(link)
+        if stage not in protected and link.is_symlink() and target is not None and not target.exists():
+            link.unlink()
+            LOG.info('Release cleanup rollback boundary=%s', stage.name)
+    LOG.info('Release cleanup finish deleted=%s retained=%s rollback_limit=2 disk_free_before=%s disk_free_after=%s',
+             deleted, sum(1 for p in runtime.iterdir() if p.is_dir()),
+             free_before, shutil.disk_usage(runtime).free)
+
+
+def safe_cleanup_releases():
+    try:
+        cleanup_releases()
+    except Exception:
+        LOG.warning('Release cleanup failed; live deployment unchanged', exc_info=True)
+
+
 def deploy(options):
     web_root, check_env = preflight(options)
     previous = clean_head(branch=options.branch)
@@ -482,6 +668,7 @@ def deploy(options):
         if json.loads(record.read_text()).get('status') in ('activating', 'recovery-failed'):
             raise DeployError('Unfinished deployment: inspect {} before another release.'.format(record))
     target = target_commit(options, previous)
+    safe_cleanup_releases()
     stage = Path(tempfile.mkdtemp(prefix=target[:12]+'-', dir=runtime))
     os.chmod(stage, 0o700)
     details = {'previous': previous, 'target': target, 'was_active': was_active,
@@ -525,11 +712,14 @@ def deploy(options):
         ready(options.service, options.api_url, previous=before if was_active else None)
         write_status(stage, 'complete', **details)
         LOG.info('Deployment complete: %s. Recovery files retained: %s', target, stage)
+        # Cleanup failure must not roll back an already healthy published release.
+        safe_cleanup_releases()
         if not options.web_url:
             LOG.warning('Website proxy/static checks skipped: supply --web-url.')
     except BaseException:
         if not activation_started:
             write_status(stage, 'preparation-failed', **details)
+            safe_cleanup_releases()
             raise
         handlers = {sig: signal.signal(sig, signal.SIG_IGN) for sig in INTERRUPT_SIGNALS}
         errors = []
