@@ -275,7 +275,7 @@ test('manage cube monitoring and inspect rebalances within the configured time w
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
   await page.getByRole('tab', { name: /组合调仓/ }).focus()
   await page.keyboard.press('End')
-  await expect(page.getByRole('tab', { name: '通知设置' })).toBeFocused()
+  await expect(page.getByRole('tab', { name: '平台登录' })).toBeFocused()
   await page.getByRole('tab', { name: /组合调仓/ }).click()
   await panel.getByLabel('按组合筛选').selectOption('1')
   await panel.getByRole('button', { name: '下一页', exact: true }).click()

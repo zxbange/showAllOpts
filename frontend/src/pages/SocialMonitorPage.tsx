@@ -105,7 +105,7 @@ function authorState(author: Author, status: Status) {
   if (!author.enabled)
     return { label: '已暂停', reason: '该博主已手动暂停，点击“恢复”重新监控。', waiting: false }
   if (!status.enabled)
-    return { label: '已暂停', reason: '总监控开关已关闭，点击“启动监控”恢复。', waiting: false }
+    return { label: '已暂停', reason: '总监控开关已关闭，请在系统配置中启用。', waiting: false }
   const platform = status.platforms?.[author.platform]
   if (platform?.paused)
     return {

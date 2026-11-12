@@ -230,8 +230,10 @@ test('open the monitor directly, configure users, notifications and inspect post
   await expect(page.locator('.social-author strong[title]')).toHaveText('测试博主')
   await expect(page.getByText('UID 3962719063')).toHaveCount(0)
   status.enabled = true
-  await page.getByRole('button', { name: '刷新列表' }).click()
-  await expect(page.getByText('10–16', { exact: false }).first()).toBeVisible()
+  await page.getByRole('tab', { name: '最新动态', exact: true }).click()
+  await page.getByRole('button', { name: '刷新列表', exact: true }).click()
+  await expect(page.locator('.social-summary').getByText('10–16', { exact: false })).toBeVisible()
+  await expect(page.getByText('总监控开关已关闭，请在系统配置中启用。')).toHaveCount(0)
   await page.getByRole('tab', { name: /监控博主/ }).click()
   await page.locator('.social-author').getByRole('button', { name: '暂停', exact: true }).click()
   await expect(page.locator('.social-author-reason')).toContainText('该博主已手动暂停')
