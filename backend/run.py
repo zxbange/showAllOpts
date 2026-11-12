@@ -4,6 +4,7 @@ import logging
 
 import uvicorn
 
+from app.core.worker_diagnostics import WORKER_HEALTHCHECK_SECONDS, worker_diagnostics
 from app.core.config import Settings
 from app.core.logging import configure_logging, logging_config
 
@@ -19,11 +20,13 @@ def main():
     settings = Settings()
     configure_logging(settings)
     logger = logging.getLogger('app.server')
-    logger.info('Starting API host=%s port=%s workers=%s log_dir=%s',
-                args.host, args.port, args.workers, settings.log_path)
+    logger.info('Starting API host=%s port=%s workers=%s log_dir=%s worker_healthcheck_seconds=%s',
+                args.host, args.port, args.workers, settings.log_path, WORKER_HEALTHCHECK_SECONDS)
     try:
-        uvicorn.run('app.main:app', host=args.host, port=args.port, workers=args.workers,
-                    log_config=logging_config(settings), access_log=True)
+        with worker_diagnostics():
+            uvicorn.run('app.main:app', host=args.host, port=args.port, workers=args.workers,
+                        timeout_worker_healthcheck=WORKER_HEALTHCHECK_SECONDS,
+                        log_config=logging_config(settings), access_log=True)
     except Exception:
         logger.exception('API server failed')
         raise SystemExit(1) from None
