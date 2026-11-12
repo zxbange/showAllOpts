@@ -22,7 +22,7 @@
 
 起点为 2010-01-01。每天单独调用 `get_index_stocks('000300.XSHG', date=D)`，必须恰有 300 个唯一成分。`get_fundamentals` 明确请求 valuation.code/day/pe_ratio 并使用 date=D，校验每行日期。指数收盘使用 fq=None 的原始指数行情。
 
-仅正 PE-TTM 等权算术平均，负 PE 不进入平均但原始负值完整保留。零、空、非有限、缺失或多余成分都停止本日。原始 PE 和指数价格超出数据库小数精度时拒绝，而不是偷偷四舍五入。只有派生均值使用 Decimal HALF_EVEN 保留 12 位。成分代码排序后以换行连接、无末尾换行，计算 SHA256。
+仅正 PE-TTM 等权算术平均，负 PE 不进入平均但保留带符号的成分值。零、空、非有限、缺失或多余成分都停止本日。新读取的源 PE 按 Decimal HALF_EVEN 保留 12 位小数，指数收盘价保留 8 位，避免平台浮点尾数导致正常数据无法入库；启动时显示该口径。越界或舍入后归零仍停止，并标明股票代码及字段。先规范成分精度，再求和、计算均值（HALF_EVEN 保留 12 位），确保汇总与入库明细一致。已有记录和汇总仍严格校验，不自动舍入或覆盖。成分代码排序后以换行连接、无末尾换行，计算 SHA256。
 
 写入 valuation_ruler_daily / valuation_ruler_member / valuation_ruler_trading_day，来源分别 JQ_PLATFORM.PE_TTM.V1 与 JQDATA.GET_TRADE_DAYS，方法版本 csi300_equal_positive_pe_ttm_v1。保存完整 300 个带符号 PE、成分哈希、日期、来源和原始指数收盘。
 

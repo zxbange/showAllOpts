@@ -92,18 +92,27 @@ def as_date(value):
     return dt.datetime.strptime(value, '%Y-%m-%d').date()
 
 
-def number(value, precision, scale):
+def number(value, precision, scale, field='数值', round_source=False):
     if _builtins.isinstance(value, _builtins.bool) or value is None:
-        raise HistoryError('源数值缺失或类型错误。')
+        raise HistoryError('{}：数值缺失或类型错误。'.format(field))
     try:
         result = Decimal(_builtins.str(value))
     except (InvalidOperation, ValueError):
-        raise HistoryError('源数值无效。') from None
+        raise HistoryError('{}：数值无效。'.format(field)) from None
     with localcontext() as ctx:
         ctx.prec = 80
-        if (not result.is_finite() or result.copy_abs() >= Decimal(10) ** (precision-scale)
-                or result != result.quantize(Decimal(10) ** -scale)):
-            raise HistoryError('源数值非有限、越界或小数精度超限；不会静默舍入。')
+        if not result.is_finite():
+            raise HistoryError('{}：数值非有限（NaN/Infinity）。'.format(field))
+        bound = Decimal(10) ** (precision-scale)
+        if result.copy_abs() >= bound:
+            raise HistoryError('{}：数值超出 DECIMAL({},{}) 范围。'.format(field, precision, scale))
+        rounded = result.quantize(Decimal(10) ** -scale, rounding=ROUND_HALF_EVEN)
+        if result != rounded:
+            if not round_source:
+                raise HistoryError('{}：小数精度超过 {} 位；已有数据及汇总不自动舍入。'.format(field, scale))
+            if rounded.copy_abs() >= bound or rounded == 0:
+                raise HistoryError('{}：按 {} 位小数舍入后越界或归零。'.format(field, scale))
+            result = rounded
     return result
 
 
@@ -196,7 +205,7 @@ def complete(row, model):
         if not col.nullable and value is None:
             raise HistoryError('已有记录不完整，需人工核实；不会覆盖。')
         if _builtins.isinstance(col.type, Numeric):
-            number(value, col.type.precision, col.type.scale)
+            number(value, col.type.precision, col.type.scale, model.__tablename__+'.'+col.name)
     return True
 
 
@@ -387,12 +396,13 @@ def summarize(day, close, members):
         raise HistoryError('沪深300必须恰好300个唯一当日成分。')
     if _builtins.any(not valid_code(code) for code, pe in members):
         raise HistoryError('成分代码格式无效。')
-    close = number(close, 24, 8)
+    close = number(close, 24, 8, INDEX+' close')
     if close <= 0:
         raise HistoryError('指数原始收盘价无效。')
-    checked = [(code, number(pe, 30, 12)) for code, pe in members]
-    if _builtins.any(pe == 0 for code, pe in checked):
-        raise HistoryError('PE-TTM为零，不能视作亏损或缺失。')
+    checked = [(code, number(pe, 30, 12, code+' pe_ratio')) for code, pe in members]
+    for code, pe in checked:
+        if pe == 0:
+            raise HistoryError('{} pe_ratio：PE-TTM为零，不能视作亏损或缺失。'.format(code))
     positive = [pe for code, pe in checked if pe > 0]
     if not positive:
         raise HistoryError('没有正PE样本。')
@@ -425,7 +435,11 @@ def source_day(day):
                           fields=['close'], fq=None, skip_paused=False)
     if prices is None or _builtins.len(prices) != 1 or 'close' not in prices.columns or as_date(prices.index[0]) != day:
         raise HistoryError('指数原始收盘行情缺失或日期不匹配。')
-    return summarize(day, prices.iloc[0]['close'], _builtins.list(_builtins.zip(frame['code'], frame['pe_ratio'])))
+    # Normalize only fresh source values, before aggregation. Stored rows remain strict.
+    close = number(prices.iloc[0]['close'], 24, 8, INDEX+' close', round_source=True)
+    members = [(code, number(pe, 30, 12, code+' pe_ratio', round_source=True))
+               for code, pe in _builtins.zip(frame['code'], frame['pe_ratio'])]
+    return summarize(day, close, members)
 
 
 def existing_day(session, day):
@@ -455,6 +469,7 @@ def run(start_date=START_DATE, end_date=END_DATE, write_database=WRITE_DATABASE,
         raise HistoryError('估值标尺历史起点不得早于2010年。')
     if not _builtins.isinstance(write_database, _builtins.bool):
         raise HistoryError('write_database 必须为 True 或 False。')
+    _builtins.print('源数据按 HALF_EVEN 舍入：PE 保留12位小数，指数收盘价保留8位；汇总按入库后的成分值计算。')
     engine = Session = None
     current_day = None
     stage = '读取交易日历'

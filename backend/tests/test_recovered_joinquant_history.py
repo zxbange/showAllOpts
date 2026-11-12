@@ -80,7 +80,8 @@ def test_valuation_collector_importer_code_contract(monkeypatch, code, valid):
 
 
 @pytest.mark.parametrize('api_location', ['module', 'notebook', 'builtins'])
-def test_valuation_dated_collector_to_importer_to_sqlite_contract(monkeypatch, tmp_path, api_location):
+@pytest.mark.parametrize('float_tail', [False, True])
+def test_valuation_dated_collector_to_importer_to_sqlite_contract(monkeypatch, tmp_path, api_location, float_tail):
     """Real collector schema/rows and importer; only the external JQ API is synthetic."""
     from app.services import valuation_ruler_import as importer
     from app.services.valuation_ruler import ValuationRuler, CHINA
@@ -105,11 +106,12 @@ def test_valuation_dated_collector_to_importer_to_sqlite_contract(monkeypatch, t
         assert query == 'dated-query' and date == day
         calls.append(('pe', date))
         return pd.DataFrame({'code': codes, 'day': [day]*300,
-                             'pe_ratio': [-3.5]+[12.25]*299})
+                             'pe_ratio': [-3.5000000000000004 if float_tail else -3.5]+
+                                         [12.250000000000002 if float_tail else 12.25]*299})
     def price(index, **kwargs):
         assert index == m.INDEX
         assert kwargs['start_date'] == kwargs['end_date'] == day and kwargs['fq'] is None
-        return pd.DataFrame({'close': [4000.125]}, index=[day])
+        return pd.DataFrame({'close': [4000.1250000000005 if float_tail else 4000.125]}, index=[day])
     m.jq.get_index_stocks, m.jq.get_fundamentals, m.jq.get_price = members, fundamentals, price
     m.jq.get_all_trade_days = lambda: [day]
     m.jq.get_trade_days = lambda **kwargs: [day]
@@ -142,6 +144,20 @@ def test_valuation_dated_collector_to_importer_to_sqlite_contract(monkeypatch, t
         actual = {row['code']: row['pe_ttm'] for row in db.execute('SELECT code,pe_ttm FROM members')}
     assert set(actual) == set(codes)
     assert Decimal(actual[codes[0]]) == Decimal('-3.5')
+
+
+def test_valuation_source_precision_explicit_rounding_and_safety(monkeypatch):
+    m = load('估值标尺历史补采_聚宽研究版.py', monkeypatch)
+    for raw, expected in [('1.1234567890125', '1.123456789012'),
+                          ('-1.1234567890135', '-1.123456789014')]:
+        assert m.number(raw, 30, 12, '600000.XSHG pe_ratio', round_source=True) == Decimal(expected)
+        with pytest.raises(m.HistoryError, match='小数精度'):
+            m.number(raw, 30, 12)
+    for raw, reason in [(None, '缺失'), ('NaN', '非有限'), ('Infinity', '非有限'),
+                        ('1e18', '超出'), ('1e-14', '归零'),
+                        ('999999999999999999.9999999999999', '越界')]:
+        with pytest.raises(m.HistoryError, match='600000.XSHG pe_ratio.*'+reason):
+            m.number(raw, 30, 12, '600000.XSHG pe_ratio', round_source=True)
 
 
 def test_valuation_notebook_builtin_shadowing(monkeypatch):
