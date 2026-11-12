@@ -19,7 +19,8 @@ import re
 import logging
 
 from app.services.growth_dividend_source import fetch_calendar
-from app.services.market_diagnostics import copy_source_failure, source_failure_context
+from app.services.market_diagnostics import (copy_source_failure, source_failure_context,
+    record_http_failure, source_failure_details)
 from app.services.market_eastmoney_universe import safe_cache_directory
 from app.services.market_methodology import JOINQUANT_HEAT_METHOD
 from app.services.market_history import (audit_historical_membership, equity_namespace,
@@ -97,18 +98,26 @@ class PublicMarketProvider(SinaMarketProvider):
         self.counts = counts
         self._dated_master = getattr(master, 'dated_report', False) is True
         self.price_source_id = getattr(archives, 'source_id', 'tdx_daily_archive')
-        audit_namespace = ('eastmoney-audited-asharehub-v1' if self.price_source_id == 'asharehub_technical_factors_pro'
+        audit_namespace = ('eastmoney-audited-asharehub-v2' if self.price_source_id == 'asharehub_daily'
                            else 'eastmoney-audited-v1')
         self._audit_cache = Path(cache_root) / audit_namespace if cache_root is not None and self._dated_master else None
         self._membership_windows, self._listing_outcomes = {}, {}
-        self._listing_transport_error = None
         if listing_metadata is None and self._dated_master:
             from app.services.market_eastmoney_listing import EastmoneyListingMetadata
             listing_metadata = EastmoneyListingMetadata(self.client, cache_root=cache_root)
+            if asharehub_api_key is not None and asharehub_api_key.get_secret_value().strip():
+                from app.services.market_asharehub_listing import AShareHubListingMetadata
+                from app.services.market_listing import ListingMetadataSources
+                listing_metadata = ListingMetadataSources(
+                    AShareHubListingMetadata(self.client, asharehub_api_key, cache_root=cache_root),
+                    listing_metadata)
         self.listing_metadata = listing_metadata
         self.master, self.archives, self.actions, self.suspensions = master, archives, actions, suspensions
         self.calendar_loader = calendar_loader or fetch_calendar
         self.factor_url = factor_url
+        from app.services.market_factor_cache import SinaFactorCache
+        self._factor_cache = SinaFactorCache(cache_root, parse_factors, source_url=factor_url)
+        self._factor_capture_days = {}
         self.tencent_qfq_url = tencent_qfq_url
         self._calendar_days = None
         self._daily, self._contexts, self._factors = {}, {}, {}
@@ -363,6 +372,8 @@ class PublicMarketProvider(SinaMarketProvider):
                       {'present': symbol in item['symbols']} for item in self._membership_windows[day]]}
         present = [item['present'] for item in window['sessions']]
         if not all(present) and present[-1] and all(present[present.index(True):]):
+            LOG.info('Market listing validation symbol=%s date=%s first_present=%s',
+                     symbol, day, window['sessions'][present.index(True)]['date'])
             metadata = self._ipo_metadata(symbol, day)
             window['ipo_evidence'] = {key: metadata.get(key) for key in
                 ('symbol', 'exchange', 'ipo_date', 'source_id', 'evidence_version', 'request_secid',
@@ -371,8 +382,6 @@ class PublicMarketProvider(SinaMarketProvider):
         return window
 
     def _ipo_metadata(self, symbol, day):
-        if self._listing_transport_error is not None:
-            raise self._listing_transport_error
         key = (symbol, day)
         if key not in self._listing_outcomes:
             if len(self._listing_outcomes) >= 128:
@@ -381,16 +390,28 @@ class PublicMarketProvider(SinaMarketProvider):
                 if self.listing_metadata is None:
                     raise SinaDataError('缺少上市日期来源。', code='dated_membership_gap')
                 self._listing_outcomes[key] = self.listing_metadata.fetch(symbol, day)
+                metadata = self._listing_outcomes[key]
+                source = metadata.get('source_id') if isinstance(metadata, dict) else None
+                if source not in ('eastmoney_listing_metadata', 'asharehub_listing_metadata'):
+                    source = 'unknown'
+                LOG.info('Market listing verified source_id=%s symbol=%s date=%s', source, symbol, day)
             except Exception as error:
                 if getattr(error, 'stop_collection', False):
                     raise
-                if getattr(error, 'status_code', None) in (403, 429):
-                    raise copy_source_failure(error, SinaRateLimitError(error.status_code)) from None
+                if getattr(error, 'status_code', None) in (401, 403, 429):
+                    raise copy_source_failure(error, SinaRateLimitError(
+                        403 if error.status_code == 401 else error.status_code)) from None
                 import httpx
                 if (isinstance(error, (httpx.HTTPError, MarketDependencyError)) or
                         getattr(error, 'code', None) in ('network_error', 'request_deadline', 'catalogue_deadline')):
-                    self._listing_transport_error = copy_source_failure(error, MarketDependencyError('dated_membership_window_unverified'))
-                    raise self._listing_transport_error from None
+                    # A single IPO metadata failure is an unresolved observation,
+                    # not a failure of the shared 20-day universe. Do not cache
+                    # transient errors: the collector retries this symbol later.
+                    record_http_failure(error, error)
+                    LOG.warning('Market listing unresolved symbol=%s date=%s code=%s %s',
+                                symbol, day, 'dated_membership_gap', source_failure_details(error))
+                    raise copy_source_failure(error, SinaDataError(
+                        '单证券上市日期连接暂不可用。', code='dated_membership_gap')) from None
                 self._listing_outcomes[key] = copy_source_failure(error,
                     SinaDataError('单证券上市日期尚未核实。', code='dated_membership_gap'))
         result = self._listing_outcomes[key]
@@ -574,14 +595,35 @@ class PublicMarketProvider(SinaMarketProvider):
     def _adjust(self, symbol, first, actions):
         if actions == []:
             return (lambda day, close: close), 'constant-scale equivalence; no action in complete source window'
+        captured_day = datetime.now(timezone(timedelta(hours=8))).date()
+        def covered(factors):
+            dates = {value[0] for value in factors}
+            return factors[0][0] <= first and all(_day(action['date']) in dates for action in (actions or []))
+        if symbol in self._factor_capture_days and self._factor_capture_days[symbol] != captured_day:
+            self._factors.pop(symbol, None)
+        if symbol in self._factors and not covered(self._factors[symbol]):
+            self._factors.pop(symbol, None)
         if symbol not in self._factors:
-            requests = []
-            text = self._request_text(self.factor_url.format(symbol=symbol), None, requests)
-            self._factors[symbol] = parse_factors(text, symbol)
+            text = self._factor_cache.load(symbol, captured_day)
+            cache_hit = text is not None
+            factors = parse_factors(text, symbol) if cache_hit else None
+            if factors is not None and not covered(factors):
+                self._factor_cache.invalidate(symbol, captured_day)
+                text, factors, cache_hit = None, None, False
+            if text is None:
+                requests = []
+                text = self._request_text(self.factor_url.format(symbol=symbol), None, requests)
+                factors = parse_factors(text, symbol)
+            if not covered(factors):
+                raise SinaDataError('复权因子未覆盖窗口或已知除权日。', code='adjustment_unavailable')
+            if not cache_hit:
+                self._factor_cache.save(symbol, captured_day, text)
+            self._factors[symbol] = factors
+            self._factor_capture_days[symbol] = captured_day
+            LOG.debug('Market factor source=sina_qfq symbol=%s capture_date=%s cache_hit=%s',
+                      symbol, captured_day, cache_hit)
         factors = self._factors[symbol]
         dates = [day for day, _ in factors]
-        if dates[0] > first or any(_day(action['date']) not in dates for action in (actions or [])):
-            raise SinaDataError('复权因子未覆盖窗口或已知除权日。', code='adjustment_unavailable')
         def adjusted(day, close):
             index = bisect_right(dates, day) - 1
             if index < 0:
@@ -673,7 +715,7 @@ class PublicMarketProvider(SinaMarketProvider):
             if membership_window is not None:
                 evidence.update(dated_membership_verified=True, membership_window=membership_window)
                 if membership_window.get('ipo_evidence') is not None:
-                    evidence['sources'].append('eastmoney_listing_metadata')
+                    evidence['sources'].append(membership_window['ipo_evidence']['source_id'])
             # Current full-day pauses and <20-session IPOs cannot enter the heat
             # denominator. Their exclusion needs no invented adjusted MA value.
             if snapshot.get('paused') == 1 or len(relevant) < 20:

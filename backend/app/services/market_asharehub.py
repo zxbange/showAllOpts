@@ -23,8 +23,8 @@ from app.services.market_diagnostics import (
 from app.services.market_eastmoney_universe import safe_cache_directory
 from app.services.market_sina import SinaDataError, SinaRateLimitError, _day, _number
 
-URL = 'https://asharehub.com/v2/market/technical-factors-pro'
-SOURCE_ID = 'asharehub_technical_factors_pro'
+URL = 'https://asharehub.com/v2/market/daily'
+SOURCE_ID = 'asharehub_daily'
 MAX_RESPONSE_BYTES = 64 * 1024 * 1024
 MAX_CACHE_BYTES = 8 * 1024 * 1024
 MAX_ROWS = 20000
@@ -71,7 +71,7 @@ class AShareHubDailyArchives:
     def __init__(self, client, api_key, cache_root=None):
         self.client = client
         self._api_key = api_key
-        self.cache_root = Path(cache_root) / 'asharehub-daily-v1' if cache_root is not None else None
+        self.cache_root = Path(cache_root) / 'asharehub-raw-daily-v2' if cache_root is not None else None
 
     def _check(self):
         check = getattr(self.client, 'check', None)

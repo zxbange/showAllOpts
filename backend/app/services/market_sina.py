@@ -585,7 +585,7 @@ def verified_membership_sessions(symbol, day, sessions, window):
     first = present.index(True)
     if not all(present[first:]):
         raise SinaDataError('证券存在中间缺口或重新进入。', code='dated_membership_gap')
-    from app.services.market_eastmoney_listing import validate_listing_evidence
+    from app.services.market_listing import validate_listing_evidence
     ipo = window.get('ipo_evidence')
     try:
         validate_listing_evidence(ipo, symbol, day)

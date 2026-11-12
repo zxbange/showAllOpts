@@ -263,3 +263,14 @@ def test_precise_unit_conversion_is_exact_not_default_context_rounded():
     item = row(); item['amount'] = '123456789012345678901.123456789'
     result = AShareHubDailyArchives.parse(json.dumps([item]).encode(), DAY)
     assert result['rows'][0]['amount'] == '123456789012345678901123.456789'
+
+
+def test_lightweight_daily_endpoint_keeps_native_amount_precision_and_new_namespace(tmp_path):
+    assert URL == 'https://asharehub.com/v2/market/daily'
+    assert SOURCE_ID == 'asharehub_daily'
+    value = row(); value['amount'] = '1927307.5905'
+    instance = archive(lambda request: httpx.Response(200, json=[value]), cache_root=tmp_path)
+    result = instance.fetch(DAY)
+    assert result['rows'][0]['amount'] == '1927307590.5'
+    assert instance.cache_root.name == 'asharehub-raw-daily-v2'
+    assert 'technical-factors-pro' not in result['source_url']

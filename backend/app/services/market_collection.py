@@ -428,7 +428,7 @@ class MarketCollection:
                      disabled_reason=issue or ('worker_disabled' if worker_disabled else None),
                      worker_disabled=worker_disabled, timezone='Asia/Shanghai', schedule=list(SCHEDULE),
                      provider='public_market', raw_price_source=(
-                         'asharehub_technical_factors_pro' if getattr(self.settings, 'asharehub_api_key', None)
+                         'asharehub_daily' if getattr(self.settings, 'asharehub_api_key', None)
                          and self.settings.asharehub_api_key.get_secret_value().strip() else 'tdx_daily_archive'),
                      trade_date=None, total=0, completed=0, pending=0,
                      heat_methodology=JOINQUANT_HEAT_METHOD, price_basis='qfq', denominator='eligible',
@@ -1379,12 +1379,17 @@ class MarketCollection:
         with self.connect() as db:
             pending = [dict(item) for item in db.execute('SELECT * FROM observations WHERE day=? ORDER BY symbol', (day,))
                        if item['status'] == 'pending' or not self._verified_heat_quote(json.loads(item['quote_json']) if item['quote_json'] else None)]
-        for item in pending:
+        progress_started = monotonic_time.monotonic()
+        LOG.info('Market heat progress date=%s pending=%d processed=0 elapsed_seconds=0', day, len(pending))
+        for position, item in enumerate(pending, 1):
             self._check(run_id)
             if item['symbol'] in attempted:
                 continue
             symbol = item['symbol']
             self._fetch_one(provider, day, snapshot_rows[symbol])
+            if position % 100 == 0 or position == len(pending):
+                LOG.info('Market heat progress date=%s pending=%d processed=%d elapsed_seconds=%.3f',
+                         day, len(pending), position, monotonic_time.monotonic() - progress_started)
         self._check(run_id)
         with self.connect() as db:
             quotes = [json.loads(item[0]) for item in db.execute('SELECT quote_json FROM observations WHERE day=? AND quote_json IS NOT NULL', (day,))]

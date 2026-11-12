@@ -13,10 +13,10 @@ import httpx
 
 
 _SOURCES = frozenset({
-    'eastmoney_dated_universe', 'eastmoney_listing_metadata',
+    'eastmoney_dated_universe', 'eastmoney_listing_metadata', 'asharehub_listing_metadata',
     'exchange_master', 'sse_current', 'sse_delisted', 'szse_current', 'szse_cdr',
     'szse_delisted', 'szse_listing_suspended',
-    'tdx_daily_archive', 'asharehub_technical_factors_pro',
+    'tdx_daily_archive', 'asharehub_technical_factors_pro', 'asharehub_daily',
 })
 _STAGES = frozenset({
     'cache_read', 'cache_write', 'window_validation',

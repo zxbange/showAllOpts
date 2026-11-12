@@ -401,3 +401,31 @@ def test_current_symbol_never_overwritten(tmp_path):
     with pytest.raises(UniverseDataError):
         source._save(SYMBOL, json.dumps(payload(f189=20201029)).encode())
     assert path.read_bytes() == before
+
+
+def test_transient_connection_retried_once_and_timeout_is_sixty_seconds(caplog):
+    calls = []
+    def serve(request):
+        calls.append(request)
+        assert request.extensions['timeout']['connect'] == 60.0
+        assert request.extensions['timeout']['read'] == 60.0
+        if len(calls) == 1:
+            raise httpx.ConnectTimeout('secret must not be logged')
+        return httpx.Response(200, json=payload())
+    source = em.EastmoneyListingMetadata(httpx.Client(transport=httpx.MockTransport(serve)))
+    assert source.fetch(SYMBOL, DAY)['ipo_date'] == '2026-11-10'
+    assert len(calls) == 2
+    assert 'secret must not be logged' not in caplog.text
+    assert SYMBOL in caplog.text and DAY in caplog.text
+    assert em.REQUEST_SECONDS == 60.0
+
+
+def test_connection_retry_exhausted_is_bounded():
+    calls = []
+    def serve(request):
+        calls.append(request)
+        raise httpx.ConnectTimeout('temporary')
+    source = em.EastmoneyListingMetadata(httpx.Client(transport=httpx.MockTransport(serve)))
+    with pytest.raises(UniverseDataError):
+        source.fetch(SYMBOL, DAY)
+    assert len(calls) == 2

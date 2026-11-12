@@ -126,6 +126,7 @@ def test_valid_factor_assignment_uses_decimal_and_known_event_dates():
 def test_known_action_requires_corresponding_factor():
     provider = make_provider(actions=[{'symbol': 'sh689123', 'date': str(DAYS[8]), 'category': 1}])
     provider._factors['sh689123'] = [(date(2020,1,1), Decimal('1'))]
+    provider._request_text = lambda *args: 'var sh689123qfq={"total":1,"data":[{"d":"2020-01-01","f":"1"}]}'
     snapshot = provider.fetch_universe(DAY)
     quote = provider.fetch_quote('sh689123', DAY, snapshot=snapshot['rows'][0])
     assert quote['error'] == 'adjustment_unavailable'
@@ -284,3 +285,59 @@ def test_historical_provider_audits_actual_identities_and_counts_before_acceptan
     assert snapshot['universe_evidence']['historical_reconstruction_verified'] is True
     assert snapshot['universe_evidence']['joinquant_universe_directly_verified'] is False
     assert provider.fetch_quote(m['symbol'], DAY, snapshot=snapshot['rows'][0])['status'] == 'current'
+
+
+def test_full_precision_factor_cache_reused_by_new_provider_only_same_capture_day(tmp_path, monkeypatch):
+    from app.services import market_public
+    from datetime import datetime, timezone
+    calls = []
+    body = 'var sh689123qfq={"total":1,"data":[{"d":"2020-01-01","f":"1.123456789012345678"}]};'
+    client = httpx.Client(transport=httpx.MockTransport(lambda request: (calls.append(request), httpx.Response(200, text=body))[1]))
+    class Clock(datetime):
+        current = datetime(2026, 11, 12, 3, tzinfo=timezone.utc)
+        @classmethod
+        def now(cls, tz=None):
+            return cls.current.astimezone(tz) if tz else cls.current.replace(tzinfo=None)
+    monkeypatch.setattr(market_public, 'datetime', Clock)
+    def provider():
+        return PublicMarketProvider(client, cache_root=tmp_path, master=SimpleNamespace(), archives=SimpleNamespace(),
+                                    suspensions=SimpleNamespace(), counts=SimpleNamespace())
+    first = provider(); adjusted, _ = first._adjust('sh689123', date(2026, 10, 1), None)
+    original = adjusted(DAY, Decimal('10'))
+    second = provider(); adjusted_again, _ = second._adjust('sh689123', date(2026, 10, 1), None)
+    assert len(calls) == 1 and adjusted_again(DAY, Decimal('10')) == original
+    Clock.current += timedelta(days=1)
+    second._adjust('sh689123', date(2026, 10, 1), None)
+    assert len(calls) == 2
+
+
+def test_factor_missing_window_not_persisted_and_next_request_can_recover(tmp_path):
+    symbol = 'sh689123'
+    partial = 'var sh689123qfq={"total":1,"data":[{"d":"2026-11-01","f":"1"}]} '
+    complete = 'var sh689123qfq={"total":1,"data":[{"d":"2020-01-01","f":"1"}]}'
+    calls = []
+    def response(request):
+        calls.append(request)
+        return httpx.Response(200, text=partial if len(calls) == 1 else complete)
+    p = PublicMarketProvider(httpx.Client(transport=httpx.MockTransport(response)), cache_root=tmp_path,
+                             master=SimpleNamespace(), archives=SimpleNamespace(), suspensions=SimpleNamespace(), counts=SimpleNamespace())
+    with pytest.raises(SinaDataError):
+        p._adjust(symbol, date(2026, 10, 1), None)
+    assert not list(tmp_path.rglob('sh689123.json'))
+    adjusted, _ = p._adjust(symbol, date(2026, 10, 1), None)
+    assert len(calls) == 2 and adjusted(DAY, Decimal('10')) == 10
+
+
+def test_factor_cache_valid_for_short_window_refreshes_for_longer_window(tmp_path):
+    symbol = 'sh689123'
+    payloads = iter(['var sh689123qfq={"total":1,"data":[{"d":"2026-10-20","f":"1"}]}',
+                     'var sh689123qfq={"total":1,"data":[{"d":"2020-01-01","f":"2"}]}'])
+    calls = []
+    def response(request):
+        calls.append(request)
+        return httpx.Response(200, text=next(payloads))
+    p = PublicMarketProvider(httpx.Client(transport=httpx.MockTransport(response)), cache_root=tmp_path,
+                             master=SimpleNamespace(), archives=SimpleNamespace(), suspensions=SimpleNamespace(), counts=SimpleNamespace())
+    p._adjust(symbol, date(2026, 10, 21), None)
+    adjusted, _ = p._adjust(symbol, date(2026, 10, 1), None)
+    assert len(calls) == 2 and adjusted(DAY, Decimal('10')) == 5

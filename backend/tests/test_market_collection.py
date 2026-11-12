@@ -1503,3 +1503,15 @@ def test_crowding_table_failure_does_not_block_heat_frontier_or_repeat_same_day_
     assert collection._day('2026-11-10')['heat_status'] == 'written'
     assert collection._day('2026-11-10')['crowding_status'] == 'pending'
     assert collection.status()['runs'][0]['status'] == 'partial'
+
+
+def test_heat_progress_logs_count_and_elapsed_without_stock_payload(tmp_path, caplog):
+    collection, provider, writer, clock = worker(tmp_path)
+    historical_provider(provider)
+    with caplog.at_level('INFO', logger='app.services.market_collection'):
+        collection.tick()
+    progress = [r.getMessage() for r in caplog.records if 'Market heat progress' in r.getMessage()]
+    assert any('pending=120 processed=0' in text for text in progress)
+    assert any('processed=100 elapsed_seconds=' in text for text in progress)
+    assert any('processed=120 elapsed_seconds=' in text for text in progress)
+    assert not any('fake-password' in text or 'quote_json' in text for text in progress)

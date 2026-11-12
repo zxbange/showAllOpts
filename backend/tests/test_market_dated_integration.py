@@ -267,7 +267,7 @@ def test_metadata_failure_scope_and_memo(transport):
     provider,_=make_dated(listing_metadata=SimpleNamespace(fetch=fail))
     for symbol,day in [('sh689009',DAY),('sh689009',DAY),('sh689009',DAYS[-2]),('sz302132',DAY)]:
         with pytest.raises((SinaDataError,MarketDependencyError)):provider._ipo_metadata(symbol,day)
-    assert len(calls)==(1 if transport else 3)
+    assert len(calls)==(4 if transport else 3)  # transient failures never poison other symbols/dates
 
 def test_semantic_digest_stable_across_delivery_metadata():
     provider,_=make_dated();first=provider.fetch_universe(DAY);original=provider.master.fetch
@@ -298,3 +298,78 @@ def test_saved_quote_raw_proof_survives_replaceable_ipo_cache_eviction(tmp_path,
     validate_listing_evidence(quote['evidence']['membership_window']['ipo_evidence'],'sh689009',DAY)
     assert json.dumps(quote,sort_keys=True)==saved
     assert aggregate_heat({'date':str(DAY),'expected_count':1,'rows':[row]},[quote])['pending_count']==0
+
+
+def test_listing_timeout_is_per_security_and_other_quotes_continue():
+    calls = []
+    def listing(symbol, day):
+        calls.append(symbol)
+        raise httpx.ConnectTimeout('temporary')
+    provider, _ = make_dated(absent={'sh689009': DAYS[:5]},
+                             listing_metadata=SimpleNamespace(fetch=listing))
+    snapshot = provider.fetch_universe(DAY)
+    rows = {row['symbol']: row for row in snapshot['rows']}
+    failed = provider.fetch_quote('sh689009', DAY, snapshot=rows['sh689009'])
+    assert failed['status'] == 'transient_failure'
+    assert failed['error'] == 'dated_membership_gap'
+    other = provider.fetch_quote('sh600001', DAY, snapshot=rows['sh600001'])
+    assert other['status'] == 'current'
+    heat = aggregate_heat(snapshot, [failed, other])
+    assert heat['pending_count'] > 0 and not heat['publishable']
+    assert aggregate_crowding(snapshot)['publishable']
+    provider.fetch_quote('sh689009', DAY, snapshot=rows['sh689009'])
+    assert calls == ['sh689009', 'sh689009']
+
+
+def test_asharehub_ipo_evidence_keeps_membership_matching_and_aggregation():
+    from app.services.market_asharehub_listing import _proof
+    def listing(symbol, day):
+        return _proof(json.dumps({'symbol': symbol[2:] + '.SH', 'exchange': 'SSE',
+            'name': 'New stock', 'list_status': 'L', 'list_date': str(DAYS[5]).replace('-', ''),
+            'delist_date': None}).encode(), symbol)
+    provider, _ = make_dated(absent={'sh689009': DAYS[:5]}, listing_metadata=SimpleNamespace(fetch=listing))
+    snapshot = provider.fetch_universe(DAY)
+    row = next(r for r in snapshot['rows'] if r['symbol'] == 'sh689009')
+    quote = provider.fetch_quote('sh689009', DAY, snapshot=row)
+    assert quote['status'] == 'insufficient_history'
+    assert 'asharehub_listing_metadata' in quote['evidence']['sources']
+    assert aggregate_heat({'date': str(DAY), 'expected_count': 1, 'rows': [row]}, [quote])['pending_count'] == 0
+    quote['evidence']['membership_window']['ipo_evidence']['ipo_date'] = str(DAYS[4])
+    assert aggregate_heat({'date': str(DAY), 'expected_count': 1, 'rows': [row]}, [quote])['pending_count'] == 1
+
+
+def test_configured_key_selects_batch_listing_adapter(tmp_path):
+    from pydantic import SecretStr
+    from app.services.market_listing import ListingMetadataSources
+    provider = PublicMarketProvider(httpx.Client(transport=httpx.MockTransport(lambda r: pytest.fail('No network'))),
+                                    cache_root=tmp_path, asharehub_api_key=SecretStr('synthetic-key'))
+    assert isinstance(provider.listing_metadata, ListingMetadataSources)
+    assert provider.listing_metadata.primary.__class__.__name__ == 'AShareHubListingMetadata'
+
+
+@pytest.mark.parametrize('status', [401, 403, 429])
+def test_listing_denial_stops_collection_not_cached_as_missing(status):
+    from app.services.market_universe import UniverseDataError
+    def denied(symbol, day):
+        raise UniverseDataError('denied', code='http_error', status_code=status)
+    provider, _ = make_dated(listing_metadata=SimpleNamespace(fetch=denied))
+    with pytest.raises(SinaRateLimitError) as error:
+        provider._ipo_metadata('sh689009', DAY)
+    assert error.value.status_code == (403 if status == 401 else status)
+    assert provider._listing_outcomes == {}
+
+
+def test_listing_failure_log_preserves_safe_transport_diagnostics(caplog):
+    from app.services.market_diagnostics import record_transport_failure, source_failure_context
+    from app.services.market_universe import UniverseDataError
+    def fail(symbol, day):
+        with source_failure_context(source_id='eastmoney_listing_metadata', stage='request'):
+            raise record_transport_failure(httpx.ConnectTimeout('private token must not appear'),
+                UniverseDataError('safe message', code='network_error'))
+    provider, _ = make_dated(listing_metadata=SimpleNamespace(fetch=fail))
+    with pytest.raises(SinaDataError):
+        provider._ipo_metadata('sh689009', DAY)
+    assert 'source_id=eastmoney_listing_metadata' in caplog.text
+    assert 'transport_category=connect_timeout' in caplog.text
+    assert 'sh689009' in caplog.text
+    assert 'private token' not in caplog.text

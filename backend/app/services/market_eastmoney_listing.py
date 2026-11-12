@@ -8,6 +8,7 @@ from contextlib import contextmanager
 from datetime import date
 from hashlib import sha256
 import json
+import logging
 import os
 from pathlib import Path
 import re
@@ -26,7 +27,8 @@ VERSION = 1
 SCHEMA = 'eastmoney_stock_get_f189_v1'
 MAX_REQUESTS = 32
 MAX_ACTIVE_SECONDS = 180.0
-REQUEST_SECONDS = 30.0
+REQUEST_SECONDS = 60.0
+LOG = logging.getLogger(__name__)
 MAX_BYTES = 64 * 1024
 MAX_CACHE_ENUMERATION = 1024
 MAX_CACHE_ENTRIES = 128
@@ -124,7 +126,7 @@ class EastmoneyListingMetadata(ExchangeSecurityMaster):
     attempt. Oldest own entries may be evicted; saved proofs retain raw bodies.
     """
     def __init__(self, client, *, cache_root=None):
-        super().__init__(client, timeout=httpx.Timeout(10.0, read=20.0))
+        super().__init__(client, timeout=httpx.Timeout(60.0))
         self.cache_root = Path(cache_root) / 'eastmoney-listing-v1' if cache_root is not None else None
         self._request_count = 0
         self._active_seconds = 0.0
@@ -331,9 +333,21 @@ class EastmoneyListingMetadata(ExchangeSecurityMaster):
             raw = self._load(symbol)
             cached = raw is not None
             if not cached:
-                response = self._request(URL, {'secid': secid, 'fields': 'f57,f58,f189,f13',
-                    'fltt': 2, 'invt': 2}, [])
-                raw = response.content
+                for attempt in range(1, 3):
+                    LOG.info('Market listing request source_id=%s symbol=%s date=%s attempt=%d',
+                             SOURCE_ID, symbol, target, attempt)
+                    try:
+                        response = self._request(URL, {'secid': secid, 'fields': 'f57,f58,f189,f13',
+                            'fltt': 2, 'invt': 2}, [])
+                        raw = response.content
+                        break
+                    except Exception as error:
+                        from app.services.market_listing import transient_connection_failure
+                        LOG.warning('Market listing failed source_id=%s symbol=%s date=%s attempt=%d type=%s',
+                                    SOURCE_ID, symbol, target, attempt, type(error).__name__)
+                        if attempt == 2 or not transient_connection_failure(error):
+                            raise
+                        self._check_budget()
             result = self._validate(raw, symbol)
             if date.fromisoformat(result['ipo_date']) > target:
                 raise _invalid('IPO 日期晚于目标日期，不能证明历史成员资格。')
