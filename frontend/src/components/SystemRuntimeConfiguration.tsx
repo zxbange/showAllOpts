@@ -45,6 +45,7 @@ export function SystemRuntimeConfiguration({
             <label>
               日志级别
               <select
+                aria-label="日志级别"
                 value={value.logging.level}
                 onChange={(e) =>
                   onChange({ ...value, logging: { ...value.logging, level: e.target.value } })

@@ -187,15 +187,13 @@ test('open the monitor directly, configure users, notifications and inspect post
     const summary = bounds('.social-summary')
     const checks = bounds('.social-check-times')
     const firstCheck = bounds('.social-check-times > span')
-    const rule = bounds('.social-rule')
     const button = bounds('.social-schedule > .button')
     const overview = bounds('.social-overview')
     const tabs = bounds('.social-page > .module-card-switch')
     const panel = bounds('#social-panel-feed')
     return {
       checkGap: firstCheck.top - summary.bottom,
-      ruleGap: rule.top - checks.bottom,
-      buttonGap: button.top - rule.bottom,
+      buttonGap: button.top - checks.bottom,
       sectionGaps: [panel.top - overview.bottom],
       tabsAboveHeading: tabs.bottom <= bounds('.social-heading').top,
       mobile: innerWidth <= 620,
@@ -207,8 +205,10 @@ test('open the monitor directly, configure users, notifications and inspect post
     'check times stay close to the overview statistics',
   ).toBeGreaterThanOrEqual(8)
   expect(layout.checkGap).toBeLessThanOrEqual(20)
-  expect(layout.ruleGap, 'the schedule text stays together').toBeGreaterThanOrEqual(0)
-  expect(layout.ruleGap).toBeLessThanOrEqual(10)
+  await expect(page.locator('.social-rule')).toHaveCount(0)
+  await expect(
+    page.locator('.social-schedule').getByRole('link', { name: '系统配置' }),
+  ).toBeVisible()
   if (layout.mobile) {
     expect(
       layout.buttonGap,

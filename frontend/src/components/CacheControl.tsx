@@ -111,7 +111,7 @@ export function CacheControl() {
         </div>
         <p className="cache-intro">
           {status?.enabled
-            ? `页面读取本地快照，启动时不自动同步。${status.auto_refresh ? `每天北京时间 ${status.daily_time} 自动同步` : '自动同步已关闭'}，同步失败时保留上次成功数据。`
+            ? `页面读取本地快照，启动时不自动同步。${status.auto_refresh ? '自动同步已启用，时间在系统配置中设置' : '自动同步已关闭'}，同步失败时保留上次成功数据。`
             : status
               ? '当前使用数据库直连，尚未启用本地缓存。'
               : '正在读取同步状态…'}

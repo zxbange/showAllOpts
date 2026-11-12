@@ -4,7 +4,12 @@ test('legacy source reports upgrade requirement in sync status', async ({ page }
   await page.route('**/api/v1/cache/status', (route) =>
     route.fulfill({
       json: {
-        ...initial,
+        enabled: true,
+        refreshing: false,
+        manual_enabled: true,
+        auto_refresh: true,
+        daily_time: '07:00',
+        timezone: 'Asia/Shanghai',
         modules: [
           {
             id: 'microcap-temperature',
