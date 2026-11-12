@@ -78,6 +78,7 @@ class RetentionTests(unittest.TestCase):
 
     def test_active_old_release_protected(self):
         proc = self.proc/'123'; proc.mkdir(); (proc/'fd').mkdir()
+        (proc/'stat').write_text('123 (python) ' + ' '.join(['0']*19 + ['1']))
         (proc/'cwd').symlink_to(self.stages[1]/'source')
         (proc/'cmdline').write_bytes(b'python')
         (proc/'maps').write_text('')
@@ -87,6 +88,7 @@ class RetentionTests(unittest.TestCase):
 
     def test_current_process_reference_does_not_keep_all_history(self):
         proc = self.proc/'123'; proc.mkdir(); (proc/'fd').mkdir()
+        (proc/'stat').write_text('123 (python) ' + ' '.join(['0']*19 + ['1']))
         (proc/'cwd').symlink_to(self.stages[5]/'source')
         (proc/'cmdline').write_bytes(b'python'); (proc/'maps').write_text('')
         d.cleanup_releases()
@@ -109,4 +111,60 @@ class RetentionTests(unittest.TestCase):
     def test_unverifiable_live_skips(self):
         (self.root/'backend/.venv').unlink()
         d.cleanup_releases()
+        self.assertTrue(all(p.exists() for p in self.stages))
+
+    def fallback_fixture(self):
+        proc = self.proc/'123'; proc.mkdir(); (proc/'fd').mkdir()
+        (proc/'stat').write_text('123 (python) ' + ' '.join(['0']*19 + ['1']))
+        (proc/'cmdline').write_bytes(b'python')
+        original_read = Path.read_text
+        def read(path, *args, **kwargs):
+            if path == proc/'maps':
+                raise PermissionError('test /proc restriction')
+            return original_read(path, *args, **kwargs)
+        return proc, read
+
+    def test_privileged_readonly_fallback_protects_mapped_release(self):
+        proc, read = self.fallback_fixture()
+        original_run = d.run
+        def run(args, **kwargs):
+            if args[:3] == ['sudo', '-n', 'lsof']:
+                self.assertTrue(kwargs['require_clean_stderr'])
+                self.assertEqual(kwargs['timeout'], 60)
+                return 'p123\nfmem\nn'+str(self.stages[1]/'venv/lib/module.so')
+            return original_run(args, **kwargs)
+        with patch.object(Path, 'read_text', read), patch.object(d.shutil, 'which', return_value='/usr/bin/lsof'), patch.object(d, 'run', run):
+            d.cleanup_releases()
+        self.assertTrue(self.stages[0].exists()); self.assertTrue(self.stages[1].exists())
+        self.assertFalse(self.stages[2].exists())
+
+    def test_fallback_incomplete_or_denied_never_deletes(self):
+        proc, read = self.fallback_fixture()
+        for result in ('p999\nfcwd\nn/tmp', 'p123\nfNOFD', 'p123\nfcwd\nn/proc/123/cwd (readlink: Permission denied)'):
+            with self.subTest(result=result), patch.object(Path, 'read_text', read), patch.object(d.shutil, 'which', return_value='/usr/bin/lsof'), patch.object(d, 'run', return_value=result):
+                d.cleanup_releases()
+            self.assertTrue(all(p.exists() for p in self.stages))
+        with patch.object(Path, 'read_text', read), patch.object(d.shutil, 'which', return_value='/usr/bin/lsof'), patch.object(d, 'run', side_effect=d.DeployError('sudo denied')):
+            d.cleanup_releases()
+        self.assertTrue(all(p.exists() for p in self.stages))
+
+    def test_fallback_pid_reuse_never_deletes(self):
+        proc, read = self.fallback_fixture()
+        def run(args, **kwargs):
+            (proc/'stat').write_text('123 (python) ' + ' '.join(['0']*19 + ['2']))
+            return 'p123\nfcwd\nn/tmp'
+        with patch.object(Path, 'read_text', read), patch.object(d.shutil, 'which', return_value='/usr/bin/lsof'), patch.object(d, 'run', run):
+            d.cleanup_releases()
+        self.assertTrue(all(p.exists() for p in self.stages))
+
+    def test_process_inspection_stderr_is_not_silently_ignored(self):
+        import sys
+        with self.assertRaises(d.DeployError):
+            d.run([sys.executable, '-c', 'import sys; sys.stderr.write("incomplete")'],
+                  capture=True, require_clean_stderr=True)
+
+    def test_missing_lsof_preserves_all_releases(self):
+        proc, read = self.fallback_fixture()
+        with patch.object(Path, 'read_text', read), patch.object(d.shutil, 'which', return_value=None):
+            d.cleanup_releases()
         self.assertTrue(all(p.exists() for p in self.stages))

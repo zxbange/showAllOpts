@@ -49,7 +49,7 @@ def parse_args(argv=None):
     return parser.parse_args(argv)
 
 
-def run(args, *, capture=False, env=None, cwd=None, timeout=900):
+def run(args, *, capture=False, env=None, cwd=None, timeout=900, require_clean_stderr=False):
     child_env = dict(os.environ if env is None else env)
     if NON_INTERACTIVE:
         child_env.update(GIT_TERMINAL_PROMPT='0', GIT_SSH_COMMAND='ssh -oBatchMode=yes',
@@ -60,7 +60,7 @@ def run(args, *, capture=False, env=None, cwd=None, timeout=900):
                                stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                                start_new_session=not interactive_sudo)
     try:
-        stdout, _ = process.communicate(timeout=timeout)
+        stdout, stderr = process.communicate(timeout=timeout)
     except BaseException:
         # Reap the entire command group before recovery can touch its files.
         handlers = {sig: signal.signal(sig, signal.SIG_IGN) for sig in INTERRUPT_SIGNALS}
@@ -86,6 +86,8 @@ def run(args, *, capture=False, env=None, cwd=None, timeout=900):
             for sig, handler in handlers.items():
                 signal.signal(sig, handler)
         raise
+    if require_clean_stderr and stderr.strip():
+        raise DeployError('Command reported incomplete inspection: '+Path(args[0]).name)
     if process.returncode:
         raise DeployError('Command failed: {} (exit {}).'.format(Path(args[0]).name, process.returncode))
     if not capture:
@@ -514,8 +516,11 @@ def cleanup_releases():
     protected.update(stage for stage, record in records.items()
                      if record.get('status') not in terminal)
     full_chain = set(protected)
-    # Detect processes referencing a release, including open files, mappings,
-    # command arguments and cwd. Fail closed when a same-user process is unreadable.
+    # First read arguments (not provided by lsof) for every service-user process.
+    # A restrictive /proc may deny cwd/fd/maps even for the same UID. In that
+    # case use an existing noninteractive sudo+lsof capability, never change it.
+    processes = {}
+    restricted = False
     try:
         for process in PROC.iterdir():
             if not process.name.isdigit():
@@ -523,22 +528,65 @@ def cleanup_releases():
             try:
                 if process.stat().st_uid != os.getuid():
                     continue
-                paths = [process / 'cwd', process / 'exe']
-                paths.extend((process / 'fd').iterdir())
-                for path in paths:
-                    try:
-                        target = owner(Path(os.readlink(path)))
-                        if target is not None:
-                            protected.add(target)
-                    except FileNotFoundError:
-                        pass
                 text = (process / 'cmdline').read_bytes().replace(b'\0', b' ').decode(errors='replace')
-                text += (process / 'maps').read_text()
+                stat_fields = (process / 'stat').read_text().rsplit(')', 1)[1].split()
+                if stat_fields[0] == 'Z':  # zombie: no address space or open files
+                    continue
+                if not text.strip():
+                    raise DeployError('live process arguments unavailable')
+                start = stat_fields[19]
+                processes[process] = start
                 protected.update(stage for stage in records if str(stage) + '/' in text)
+                try:
+                    paths = [process / 'cwd', process / 'exe']
+                    paths.extend((process / 'fd').iterdir())
+                    for path in paths:
+                        try:
+                            target = owner(Path(os.readlink(path)))
+                            if target is not None:
+                                protected.add(target)
+                        except FileNotFoundError:
+                            pass
+                    mappings = (process / 'maps').read_text()
+                    protected.update(stage for stage in records if str(stage) + '/' in mappings)
+                except PermissionError:
+                    restricted = True
             except (FileNotFoundError, ProcessLookupError):
                 continue
-    except (OSError, RuntimeError):
-        LOG.warning('Release cleanup skipped: process references unavailable')
+        if restricted:
+            if RESTRICTED_HELPER or not shutil.which('lsof'):
+                raise DeployError('privileged read-only process inspection unavailable')
+            # Explicit -n: no prompt even for a manually invoked deployment.
+            output = run(['sudo', '-n', 'lsof', '-nP', '-a', '-u', str(os.getuid()), '-F', 'pfn'],
+                         capture=True, timeout=60, require_clean_stderr=True)
+            seen = set()
+            named = set()
+            pid = None
+            for line in output.splitlines():
+                if line.startswith('p') and line[1:].isdigit():
+                    pid = line[1:]
+                    seen.add(pid)
+                elif line == 'fNOFD':
+                    raise DeployError('lsof could not inspect process files')
+                elif line.startswith('n'):
+                    if any(error in line for error in ('Permission denied', '(readlink:', '(opendir:', '(stat:')):
+                        raise DeployError('lsof returned unreadable process files')
+                    named.add(pid)
+                    target = owner(Path(line[1:]))
+                    if target is not None:
+                        protected.add(target)
+            # Missing processes may have exited. A still-live or reused PID not
+            # represented in lsof means the snapshot is incomplete: do not delete.
+            for process, start in processes.items():
+                try:
+                    now = (process / 'stat').read_text().rsplit(')', 1)[1].split()[19]
+                    if process.name not in named or now != start:
+                        raise DeployError('process snapshot changed or incomplete')
+                except (FileNotFoundError, ProcessLookupError):
+                    continue
+            LOG.info('Release cleanup process inspection source=sudo_lsof processes=%s', len(seen))
+    except (OSError, RuntimeError, ValueError, IndexError, DeployError, subprocess.TimeoutExpired) as exc:
+        LOG.warning('Release cleanup skipped: process references unavailable type=%s', type(exc).__name__)
         return
     # Never recurse into a mounted filesystem inside a historical release.
     try:
