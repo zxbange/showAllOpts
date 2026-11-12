@@ -5,15 +5,14 @@ from pathlib import Path
 import re
 import subprocess
 
-# Collectors can affect runtime; only maintenance scripts and the index are exempt.
-NO_DEPLOY_PREFIXES = ('scripts/', 'collectors/tools/')
-NO_DEPLOY_PATHS = frozenset({'collectors/README.md'})
+# Standalone collection/maintenance and their tests/docs do not publish the website.
+# CI still verifies all changes; runtime, dependencies and workflows remain deployable.
+NO_DEPLOY_PREFIXES = ('scripts/', 'collectors/', 'docs/', 'backend/tests/', 'frontend/tests/')
 
 
 def requires_deployment(paths):
     paths = list(paths)
-    return not paths or any(not path.startswith(NO_DEPLOY_PREFIXES) and path not in NO_DEPLOY_PATHS
-                            for path in paths)
+    return not paths or any(not path.startswith(NO_DEPLOY_PREFIXES) for path in paths)
 
 
 def compare(base, head, cwd=None):

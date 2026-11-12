@@ -57,7 +57,7 @@
 
 ## 脚本目录变更不自动部署
 
-所有main推送仍跑完整CI。`scripts/deployment_impact.py` 比较推送前后完整差异：仅 `scripts/`、`collectors/tools/` 内文件（含子目录）或 `collectors/README.md` 变化时，跳过deploy。采集入口和 `collectors/rules/` 公共规则仍执行部署判断；`scripts-other/`、`collectors/tools-other/` 等相似前缀不包含在内。
+所有main推送仍跑完整CI。`scripts/deployment_impact.py` 比较推送前后完整差异：仅 `scripts/`、`collectors/`、`docs/`、`backend/tests/`、`frontend/tests/` 内文件（含子目录）变化时，跳过deploy。因此聚宽采集脚本及其测试、文档一起修改也不会发布网站。`scripts-other/`、`collectors-other/`、`backend/tests-other/` 等相似前缀不包含在内。
 
 目录外应用、共享运行时代码、工作流、依赖或混合变更仍部署。目录内的 `scripts/deploy.py`、同步工具、分类程序等也按用户要求跳过自动部署；这些工具更新若需立即激活，须在CI通过后手动运行 `operation=deploy`，否则会随以后一次正常部署一起进入服务器。删除必需脚本可能使CI失败，此规则不绕过测试。
 
