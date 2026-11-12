@@ -123,6 +123,9 @@ test('failed uncertain start remains blocked after navigation and fresh idle sta
   page,
 }) => {
   let starts = 0
+  await page.route('**/api/auth/users', (route) =>
+    route.fulfill({ json: { users: [adminSession.user] } }),
+  )
   await page.route('**/api/v1/valuation-ruler/**', async (route) => {
     if (route.request().method() === 'POST') {
       starts++
@@ -135,7 +138,10 @@ test('failed uncertain start remains blocked after navigation and fresh idle sta
   await page.getByRole('button', { name: '重新读取采集状态' }).click()
   await expect(page.getByRole('button', { name: '采集并补数据', exact: true })).toBeDisabled()
   await page.getByRole('link', { name: '用户管理', exact: true }).click()
+  await expect(page).toHaveURL(/\/account$/)
+  await expect(page.getByRole('heading', { name: '用户管理', exact: true })).toBeVisible()
   await page.goBack()
+  await expect(page).toHaveURL(/\/valuation-ruler$/)
   await expect(page.getByRole('button', { name: '采集并补数据', exact: true })).toBeDisabled()
   expect(starts).toBe(1)
 })
