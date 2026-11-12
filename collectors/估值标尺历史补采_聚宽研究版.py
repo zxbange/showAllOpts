@@ -13,7 +13,7 @@ from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
 
 WRITE_DATABASE = True
-MAX_DAYS = 20
+MAX_DAYS = None  # 默认一次补齐请求区间的全部缺失交易日；可设整数限制本轮天数。
 END_DATE = None
 Base = declarative_base()
 

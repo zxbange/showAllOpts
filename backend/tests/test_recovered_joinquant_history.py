@@ -665,9 +665,9 @@ def test_full_span_none_handles_over_250_days_and_resumes(script, monkeypatch, t
         db_path = tmp_path/'full-span.sqlite3'
         config.create_mysql_engine = lambda: create_engine('sqlite:///' + str(db_path))
         monkeypatch.setitem(sys.modules, 'mysql_connector', config)
-    result = script.run(max_days=None, write_database=write_database)
+    result = script.run(write_database=write_database)
     assert len(result) == 251 and calls == days
     assert clock_calls  # A frozen requested range, not a loop extending through future dates.
     if write_database:
         script.source_day = lambda *args, **kw: pytest.fail('Complete historical rows must not be downloaded again')
-        assert script.run(end_date=days[-1], max_days=None, write_database=True) == []
+        assert script.run(end_date=days[-1], write_database=True) == []
