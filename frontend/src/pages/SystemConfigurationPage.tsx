@@ -1,3 +1,4 @@
+import { SystemTaskConfiguration } from '../components/SystemTaskConfiguration'
 import { SystemRuntimeConfiguration } from '../components/SystemRuntimeConfiguration'
 import { useEffect, useState } from 'react'
 import { useAuth } from '../components/AccountAccess'
@@ -5,20 +6,6 @@ import { SystemNotificationConfiguration } from '../components/SystemNotificatio
 import { systemConfigurationRequest } from '../api/systemConfiguration'
 import type { SystemConfiguration, TaskConfiguration } from '../api/systemConfiguration'
 import '../styles/system-configuration.css'
-const names: Record<string, string> = {
-  cache: '本地数据同步',
-  margin: '两融担保比例',
-  etf: '国家队动态',
-  commodities: 'A00 铝',
-  growth_dividend: '创红比 / 科创红利比',
-  market: '市场热度 / 抱团拥挤度',
-  valuation_ruler: '估值标尺',
-  cci: 'CCI 动力煤',
-  cash_cow: '奶牛股',
-  holdings: '个人持仓',
-  social: '微博 / 雪球动态',
-  social_cubes: '雪球组合',
-}
 export function SystemConfigurationPage() {
   return useAuth().session?.user?.role === 'admin' ? (
     <Editor />
@@ -98,6 +85,13 @@ function Editor() {
       <header>
         <span className="eyebrow">管理员专属</span>
         <h1>系统配置</h1>
+        <nav className="system-settings-nav" aria-label="配置分区">
+          <a href="#settings-tasks">自动任务</a>
+          <a href="#settings-runtime">运行参数</a>
+          <a href="#settings-credentials">接口凭证</a>
+          <a href="#settings-database">数据库</a>
+          <a href="#settings-notifications">社交通知</a>
+        </nav>
       </header>
       {error && (
         <p role="alert" className="system-settings-error">
@@ -110,11 +104,6 @@ function Editor() {
           {w}
         </p>
       ))}
-      <SystemNotificationConfiguration
-        telegramConfigured={
-          !!config?.integrations?.telegram.token_set && !!config?.integrations?.telegram.chat_id_set
-        }
-      />
       {!config ? (
         <button className="button" onClick={() => setReload((n) => n + 1)}>
           重新读取配置
@@ -127,131 +116,7 @@ function Editor() {
           }}
         >
           <fieldset disabled={!!busy}>
-            <section className="panel system-settings-section">
-              <h2>
-                自动任务 <small>北京时间</small>
-              </h2>
-              <div className="system-task-list">
-                {Object.entries(config.schedules).map(([key, t]) => (
-                  <div className="system-task" key={key}>
-                    <label className="system-task-toggle">
-                      <input
-                        type="checkbox"
-                        checked={t.enabled}
-                        onChange={(e) => updateTask(key, { enabled: e.target.checked })}
-                      />
-                      <span>{names[key] ?? key}</span>
-                    </label>
-                    <div className="system-task-inputs">
-                      {t.telegram_notify !== undefined && (
-                        <label className="system-task-notify">
-                          <span>Telegram 通知</span>
-                          <input
-                            type="checkbox"
-                            checked={t.telegram_notify}
-                            onChange={(e) => updateTask(key, { telegram_notify: e.target.checked })}
-                          />
-                        </label>
-                      )}
-                      {t.frequency === 'month_end' && <small>每月最后一天</small>}
-                      {t.times?.map((time, i) => (
-                        <label key={i}>
-                          <span>{t.times!.length > 1 ? `时间 ${i + 1}` : '每日时间'}</span>
-                          <input
-                            type="time"
-                            required
-                            value={time}
-                            onChange={(e) =>
-                              updateTask(key, {
-                                times: t.times!.map((v, j) => (i === j ? e.target.value : v)),
-                              })
-                            }
-                          />
-                        </label>
-                      ))}
-                      {t.start !== undefined && (
-                        <label>
-                          开始
-                          <input
-                            type="time"
-                            required
-                            value={t.start}
-                            onChange={(e) => updateTask(key, { start: e.target.value })}
-                          />
-                        </label>
-                      )}
-                      {t.end !== undefined && (
-                        <label>
-                          结束
-                          <input
-                            type="text"
-                            inputMode="numeric"
-                            required
-                            pattern="(?:[01][0-9]|2[0-3]):[0-5][0-9]|24:00"
-                            value={t.end}
-                            onChange={(e) => updateTask(key, { end: e.target.value })}
-                          />
-                        </label>
-                      )}
-                      {t.interval_seconds !== undefined && (
-                        <label>
-                          间隔（秒）
-                          <input
-                            type="number"
-                            required
-                            min="1"
-                            value={t.interval_seconds}
-                            onChange={(e) =>
-                              updateTask(key, { interval_seconds: Number(e.target.value) })
-                            }
-                          />
-                        </label>
-                      )}
-                      {t.min_interval_minutes !== undefined && (
-                        <label>
-                          最短周期（分钟）
-                          <input
-                            type="number"
-                            min="1"
-                            max="1440"
-                            required
-                            value={t.min_interval_minutes}
-                            onChange={(e) =>
-                              updateTask(key, { min_interval_minutes: Number(e.target.value) })
-                            }
-                          />
-                        </label>
-                      )}
-                      {t.max_interval_minutes !== undefined && (
-                        <label>
-                          最长周期（分钟）
-                          <input
-                            type="number"
-                            min="1"
-                            max="1440"
-                            required
-                            value={t.max_interval_minutes}
-                            onChange={(e) =>
-                              updateTask(key, { max_interval_minutes: Number(e.target.value) })
-                            }
-                          />
-                        </label>
-                      )}
-                      {t.table !== undefined && (
-                        <label>
-                          持仓表名
-                          <input
-                            value={t.table}
-                            onChange={(e) => updateTask(key, { table: e.target.value })}
-                            autoComplete="off"
-                          />
-                        </label>
-                      )}
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </section>
+            <SystemTaskConfiguration schedules={config.schedules} onChange={updateTask} />
             {config.runtime && (
               <SystemRuntimeConfiguration
                 value={config.runtime}
@@ -259,7 +124,10 @@ function Editor() {
                 onChange={(runtime) => setConfig({ ...config, runtime })}
               />
             )}
-            <section className="panel system-settings-section">
+            <section
+              id="settings-credentials"
+              className="panel system-settings-section system-credentials"
+            >
               <h2>数据接口与消息凭证</h2>
               <div className="system-database-fields">
                 {[
@@ -306,7 +174,7 @@ function Editor() {
                 与数据库配置一起写入服务器配置文件；未修改的密钥保留，清除需点击保存。
               </p>
             </section>
-            <section className="panel system-settings-section">
+            <section id="settings-database" className="panel system-settings-section">
               <h2>统一数据库</h2>
               <div className="system-database-fields">
                 {(
@@ -386,6 +254,11 @@ function Editor() {
           </fieldset>
         </form>
       )}
+      <SystemNotificationConfiguration
+        telegramConfigured={
+          !!config?.integrations?.telegram.token_set && !!config?.integrations?.telegram.chat_id_set
+        }
+      />
     </div>
   )
 }

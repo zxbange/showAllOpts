@@ -1,3 +1,4 @@
+import { SettingsSwitch } from './SystemTaskConfiguration'
 import { useEffect, useState } from 'react'
 import { Send } from 'lucide-react'
 import { socialRequest as api } from '../api/social'
@@ -108,7 +109,7 @@ export function SystemNotificationConfiguration({
       setNotice('')
       setError(
         channel === 'telegram'
-          ? '请先保存下方 Telegram 机器人密钥和接收会话编号。'
+          ? '请先在“数据接口与消息凭证”保存 Telegram 机器人密钥和接收会话编号。'
           : `请先保存${item.title}的${item.fields.map(([, title]) => title).join('和')}。`,
       )
       return
@@ -121,15 +122,17 @@ export function SystemNotificationConfiguration({
 
   if (!status)
     return (
-      <section className="panel system-settings-section">
-        <h2>通知配置</h2>
+      <section id="settings-notifications" className="panel system-settings-section">
+        <h2>社交监控通知</h2>
         <p role="status">{error || '正在读取通知配置…'}</p>
       </section>
     )
   return (
-    <section className="panel system-settings-section">
-      <h2>通知配置</h2>
-      <p className="system-settings-muted">Telegram 机器人与接收会话供所有已启用通知的任务共用。</p>
+    <section id="settings-notifications" className="panel system-settings-section">
+      <h2>社交监控通知</h2>
+      <p className="system-settings-muted">
+        此区域独立保存，开关即时生效；Telegram 凭证与采集任务共用。
+      </p>
       {error && <p role="alert">{error}</p>}
       {notice && <p role="status">{notice}</p>}
       <h3>通知渠道</h3>
@@ -153,17 +156,12 @@ export function SystemNotificationConfiguration({
           >
             <div className="social-panel-heading">
               <h3 id={`social-channel-${channel.id}`}>{channel.title} 通知配置</h3>
-              <button
-                type="button"
-                role="switch"
-                aria-label={`启用${channel.title}通知`}
-                aria-checked={enabled}
-                className={`button ${enabled ? 'button-primary' : ''}`}
+              <SettingsSwitch
+                label={`启用${channel.title}通知`}
+                checked={enabled}
                 disabled={busy}
-                onClick={() => toggleNotification(channel.id)}
-              >
-                {enabled ? '已开启' : '已关闭'}
-              </button>
+                onChange={() => toggleNotification(channel.id)}
+              />
             </div>
             {channel.id === 'feishu' && (
               <p className="social-muted">

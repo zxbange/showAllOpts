@@ -192,3 +192,50 @@ test('changed target rejection preserves entered target', async ({ page }) => {
   await expect(page.getByRole('alert')).toContainText('重新输入密码')
   await expect(page.getByLabel('主机', { exact: true })).toHaveValue('remote.example')
 })
+
+test('schedule columns, explicit switches and 24-hour fields remain independent', async ({
+  page,
+}, testInfo) => {
+  let config = initial()
+  let saves = 0
+  await page.route('**/api/v1/**', (r) => r.fulfill({ json: { modules: [] } }))
+  await page.route('**/api/v1/system-configuration', (r) => {
+    if (r.request().method() === 'PUT') {
+      saves++
+      config = { ...config, schedules: r.request().postDataJSON().schedules }
+    }
+    return r.fulfill({ json: config })
+  })
+  await page.goto('/system-configuration')
+  const market = page.getByRole('row', { name: '市场热度 / 抱团拥挤度', exact: true })
+  const auto = market.getByRole('switch', { name: '自动运行', exact: true })
+  const notify = market.getByRole('switch', { name: 'Telegram 通知', exact: true })
+  await expect(auto).toBeChecked()
+  await expect(notify).not.toBeChecked()
+  await auto.uncheck()
+  await notify.check()
+  await expect(auto).not.toBeChecked()
+  await expect(notify).toBeChecked()
+  expect(saves).toBe(0)
+  await auto.focus()
+  await page.keyboard.press('Space')
+  await expect(auto).toBeChecked()
+  const time = market.getByLabel('每日时间')
+  await expect(time).toHaveAttribute('type', 'text')
+  await time.fill('23:59')
+  await page.getByRole('button', { name: '保存系统配置' }).click()
+  await expect.poll(() => saves).toBe(1)
+  expect(config.schedules.market.times).toEqual(['23:59'])
+  expect(config.schedules.market.telegram_notify).toBe(true)
+  await time.fill('24:01')
+  await page.getByRole('button', { name: '保存系统配置' }).click()
+  expect(saves).toBe(1)
+  await time.fill('1230')
+  await expect(time).toHaveValue('12:30')
+  await page.getByRole('button', { name: '重新读取配置' }).click()
+  await expect(time).toHaveValue('23:59')
+  await expect(page.getByRole('row', { name: '奶牛股', exact: true })).toContainText('每月最后一天')
+  await expect(page.locator('form form')).toHaveCount(0)
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
+  await page.screenshot({ path: `/tmp/settings-${testInfo.project.name}.png`, fullPage: true })
+})

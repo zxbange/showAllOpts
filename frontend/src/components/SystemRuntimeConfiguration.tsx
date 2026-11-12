@@ -36,7 +36,7 @@ export function SystemRuntimeConfiguration({
   statuses: DataSourceStatus[]
 }) {
   return (
-    <section className="panel system-settings-section">
+    <section id="settings-runtime" className="panel system-settings-section">
       <h2>运行参数</h2>
       <div className="system-runtime-groups">
         <section>
@@ -115,7 +115,7 @@ export function SystemRuntimeConfiguration({
           </div>
         </section>
       </div>
-      <h3>数据源请求超时</h3>
+      <h3>数据源请求超时（秒）</h3>
       <div className="system-source-grid">
         {Object.entries(value.sources).map(([id, source]) => {
           const status = statuses.find((item) => item.id === id)
