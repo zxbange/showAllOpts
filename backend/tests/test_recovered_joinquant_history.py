@@ -79,7 +79,8 @@ def test_valuation_collector_importer_code_contract(monkeypatch, code, valid):
             m.summarize(dt.date(2020, 1, 2), '4000', members)
 
 
-def test_valuation_dated_collector_to_importer_to_sqlite_contract(monkeypatch, tmp_path):
+@pytest.mark.parametrize('api_location', ['module', 'notebook', 'builtins'])
+def test_valuation_dated_collector_to_importer_to_sqlite_contract(monkeypatch, tmp_path, api_location):
     """Real collector schema/rows and importer; only the external JQ API is synthetic."""
     from app.services import valuation_ruler_import as importer
     from app.services.valuation_ruler import ValuationRuler, CHINA
@@ -112,6 +113,13 @@ def test_valuation_dated_collector_to_importer_to_sqlite_contract(monkeypatch, t
     m.jq.get_index_stocks, m.jq.get_fundamentals, m.jq.get_price = members, fundamentals, price
     m.jq.get_all_trade_days = lambda: [day]
     m.jq.get_trade_days = lambda **kwargs: [day]
+    if api_location != 'module':
+        import builtins
+        target = m if api_location == 'notebook' else builtins
+        for name in ('get_index_stocks', 'get_fundamentals', 'get_price', 'get_all_trade_days',
+                     'get_trade_days', 'query', 'valuation'):
+            monkeypatch.setattr(target, name, getattr(m.jq, name), raising=False)
+            delattr(m.jq, name)
     db_path = tmp_path/'collector.sqlite3'
     config = types.ModuleType('mysql_connector')
     config.create_mysql_engine = lambda: create_engine('sqlite:///' + str(db_path))
@@ -134,6 +142,45 @@ def test_valuation_dated_collector_to_importer_to_sqlite_contract(monkeypatch, t
         actual = {row['code']: row['pe_ttm'] for row in db.execute('SELECT code,pe_ttm FROM members')}
     assert set(actual) == set(codes)
     assert Decimal(actual[codes[0]]) == Decimal('-3.5')
+
+
+def test_valuation_notebook_builtin_shadowing(monkeypatch):
+    import numpy as np
+    m = load('估值标尺历史补采_聚宽研究版.py', monkeypatch)
+    for name, value in dict(any=np.any, all=np.all, sum=np.sum, max=np.max,
+                            bool=np.bool_, int=np.int64, str=np.str_).items():
+        monkeypatch.setattr(m, name, value, raising=False)
+    day = dt.date(2020, 1, 2)
+    m.jq.get_all_trade_days = lambda: [day]
+    m.jq.get_trade_days = lambda **kw: [day]
+    m.source_day = lambda day: m.summarize(day, '100', [
+        ('{:06d}.XSHG'.format(600000+i), '10') for i in range(300)])
+    result = m.run(start_date=day, end_date=day, write_database=False, max_days=1)
+    assert result[0]['mean_pe_ttm'] == Decimal(10)
+
+
+def test_valuation_missing_api_has_explicit_name(monkeypatch):
+    m = load('估值标尺历史补采_聚宽研究版.py', monkeypatch)
+    with pytest.raises(m.HistoryError, match='get_index_stocks'):
+        m.source_day(dt.date(2020, 1, 2))
+
+
+def test_valuation_failure_diagnostics_keep_date_stage_and_mysql_code_not_secrets(monkeypatch):
+    from sqlalchemy.exc import OperationalError
+    m = load('估值标尺历史补采_聚宽研究版.py', monkeypatch)
+    day = dt.date(2020, 1, 2)
+    m.range_days = lambda *a: [day]
+    def fail(day):
+        raise OperationalError('SELECT secret_sql', {'password': 'secret_password'},
+                               Exception(2013, 'mysql://secret_user:secret_password@private-host/db'))
+    m.source_day = fail
+    with pytest.raises(RuntimeError) as error:
+        m.run(write_database=False)
+    message = str(error.value)
+    assert '2020-01-02' in message and '读取成分、PE和指数行情' in message
+    assert 'OperationalError' in message and '2013' in message and 'run:' in message
+    assert all(secret not in message for secret in ('secret', 'private-host', 'SELECT', 'mysql://'))
+    assert error.value.__suppress_context__
 
 
 def test_valuation_existing_full_integrity(monkeypatch):
