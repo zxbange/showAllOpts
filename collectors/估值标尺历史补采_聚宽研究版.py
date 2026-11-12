@@ -3,6 +3,7 @@
 from __future__ import print_function, division
 import datetime as dt
 import builtins as _builtins
+import time
 import hashlib
 import re
 from decimal import Decimal, InvalidOperation, localcontext, ROUND_HALF_EVEN
@@ -19,6 +20,35 @@ Base = declarative_base()
 class HistoryError(ValueError):
     """Fixed credential-free source/schema diagnostics."""
     pass
+
+
+class Progress:
+    """One throttled Notebook/terminal line; counts advance only after successful work."""
+    def __init__(self):
+        self.started = time.monotonic()
+        self.last_draw = -1
+        self.width = 0
+        self.stage, self.done, self.total, self.day = '', 0, None, None
+
+    def update(self, stage, done=0, total=None, day=None, force=False):
+        now = time.monotonic()
+        changed = stage != self.stage
+        self.stage, self.done, self.total, self.day = stage, done, total, day
+        if not force and not changed and now-self.last_draw < 0.3:
+            return
+        if total is None:
+            bar = '[--------------------] --'
+        else:
+            ratio = done/total if total else 1
+            filled = _builtins.int(20*ratio)
+            bar = '[{}{}] {}/{} 日 {:.0f}%'.format('#'*filled, '-'*(20-filled), done, total, 100*ratio)
+        line = '估值历史补采 | {} | {} | {} | 已用 {:.0f}s'.format(stage, bar, day or '--', now-self.started)
+        _builtins.print('\r'+line+' '*_builtins.max(0, self.width-_builtins.len(line)), end='', flush=True)
+        self.width, self.last_draw = _builtins.len(line), now
+
+    def finish(self, status):
+        self.update(status, self.done, self.total, self.day, force=True)
+        _builtins.print(flush=True)
 
 
 def api(name):
@@ -428,30 +458,39 @@ def run(start_date=START_DATE, end_date=END_DATE, write_database=WRITE_DATABASE,
     engine = Session = None
     current_day = None
     stage = '读取交易日历'
+    progress = Progress()
+    progress.update(stage, force=True)
     try:
         days = range_days(start_date, end_date, max_days)
         pending = _builtins.list(days)
         if write_database:
             stage = '连接数据库/校验表结构'
+            progress.update(stage)
             engine, Session = database(MODELS, 'valuation-ruler')
             session = Session()
             try:
                 # Every requested date is checked, including gaps before MAX(date).
                 stage = '检查已有记录'
                 pending = []
-                for day in days:
+                for index, day in enumerate(days):
                     current_day = day
+                    progress.update(stage, index, _builtins.len(days), day)
                     if not existing_day(session, day):
                         pending.append(day)
+                    progress.update(stage, index+1, _builtins.len(days), day)
             finally:
                 session.close()
         results = []
-        for day in pending[:max_days]:
+        selected = pending[:max_days]
+        progress.update('待采集' if write_database else '预览采集', 0, _builtins.len(selected), force=True)
+        for index, day in enumerate(selected):
             current_day = day
             stage = '读取成分、PE和指数行情'
+            progress.update(stage, index, _builtins.len(selected), day)
             daily, members, cal = source_day(day)
             if write_database:
                 stage = '写入单日结果'
+                progress.update(stage, index, _builtins.len(selected), day)
                 session = Session()
                 try:
                     session.info['_result_journal_callbacks'][1](session)
@@ -472,13 +511,20 @@ def run(start_date=START_DATE, end_date=END_DATE, write_database=WRITE_DATABASE,
                 finally:
                     session.close()
             results.append(daily)
-        print('本轮处理 {} 日，剩余 {} 日；重复运行继续扫描全部缺口。'.format(_builtins.len(results), _builtins.max(0, _builtins.len(pending)-_builtins.len(results))))
+            progress.update(stage, index+1, _builtins.len(selected), day)
+        progress.finish(('本轮完成' if write_database else '预览完成（未入库）') if selected else '无需补采')
+        _builtins.print('本轮处理 {} 日，剩余 {} 日；重复运行继续扫描全部缺口。'.format(_builtins.len(results), _builtins.max(0, _builtins.len(pending)-_builtins.len(results))))
         return results
     except HistoryError as exc:
+        progress.finish('失败：本日未提交')
         raise HistoryError('{}：{} 本日未提交；之前完成日期保留。'.format(current_day or '初始化', exc)) from None
     except Exception as exc:
+        progress.finish('失败：本日未提交')
         raise RuntimeError('{}：估值历史采集中止；{}；本日未提交，之前完成日期保留。'.format(
             current_day or '初始化', diagnostic(exc, stage))) from None
+    except KeyboardInterrupt:
+        progress.finish('已中断')
+        raise
     finally:
         if engine is not None:
             engine.dispose()

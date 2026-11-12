@@ -165,6 +165,42 @@ def test_valuation_missing_api_has_explicit_name(monkeypatch):
         m.source_day(dt.date(2020, 1, 2))
 
 
+@pytest.mark.parametrize('fail', [False, True])
+def test_valuation_progress_tracks_completed_days_and_failure(monkeypatch, capsys, fail):
+    m = load('估值标尺历史补采_聚宽研究版.py', monkeypatch)
+    days = [dt.date(2020, 1, 2), dt.date(2020, 1, 3)]
+    m.range_days = lambda *a: days
+    def source(day):
+        if fail and day == days[1]:
+            raise m.HistoryError('测试源缺失')
+        return {'trade_date': day}, [], {}
+    m.source_day = source
+    if fail:
+        with pytest.raises(m.HistoryError):
+            m.run(write_database=False)
+    else:
+        assert len(m.run(write_database=False)) == 2
+    output = capsys.readouterr().out
+    assert '\r' in output and '已用' in output and '2020-01-03' in output
+    if fail:
+        assert '1/2 日 50%' in output and '2/2 日 100%' not in output
+        assert '失败：本日未提交' in output
+    else:
+        assert '2/2 日 100%' in output and '预览完成（未入库）' in output
+
+
+def test_valuation_progress_throttles_repeated_stage(monkeypatch, capsys):
+    m = load('估值标尺历史补采_聚宽研究版.py', monkeypatch)
+    monkeypatch.setattr(m.time, 'monotonic', lambda: 10)
+    progress = m.Progress()
+    for i in range(100):
+        progress.update('检查已有记录', i+1, 100)
+    progress.finish('检查完成')
+    output = capsys.readouterr().out
+    assert output.count('\r') == 2
+    assert '100/100 日 100%' in output
+
+
 def test_valuation_failure_diagnostics_keep_date_stage_and_mysql_code_not_secrets(monkeypatch):
     from sqlalchemy.exc import OperationalError
     m = load('估值标尺历史补采_聚宽研究版.py', monkeypatch)
