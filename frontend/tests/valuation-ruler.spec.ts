@@ -220,6 +220,9 @@ test('older status cannot re-enable collection after a newer running response', 
 test('pending POST remains locked across route departure and return', async ({ page }) => {
   let release: (() => void) | undefined
   let starts = 0
+  await page.route('**/api/auth/users', (route) =>
+    route.fulfill({ json: { users: [adminSession.user] } }),
+  )
   await page.route('**/api/v1/valuation-ruler/**', async (route) => {
     if (route.request().method() === 'POST') {
       starts++
@@ -232,11 +235,17 @@ test('pending POST remains locked across route departure and return', async ({ p
   await page.goto('/valuation-ruler')
   await page.getByRole('button', { name: '采集并补数据', exact: true }).click()
   await expect.poll(() => starts).toBe(1)
-  await page.getByRole('link', { name: '用户管理', exact: true }).click()
-  await page.goBack()
-  await expect(page.getByRole('button', { name: '正在提交…', exact: true })).toBeDisabled()
-  expect(starts).toBe(1)
-  release?.()
+  try {
+    await page.getByRole('link', { name: '用户管理', exact: true }).click()
+    await expect(page).toHaveURL(/\/account$/)
+    await expect(page.getByRole('heading', { name: '用户管理', exact: true })).toBeVisible()
+    await page.goBack()
+    await expect(page).toHaveURL(/\/valuation-ruler$/)
+    await expect(page.getByRole('button', { name: '正在提交…', exact: true })).toBeDisabled()
+    expect(starts).toBe(1)
+  } finally {
+    release?.()
+  }
 })
 
 test('database sync cannot be cancelled by the public collection button', async ({ page }) => {
