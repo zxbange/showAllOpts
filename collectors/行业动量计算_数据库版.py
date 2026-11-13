@@ -471,6 +471,8 @@ def run(start_date=None, end_date=END_DATE, industry_type=INDUSTRY_TYPE, skip_ex
     try:
         Base.metadata.create_all(engine)
         Session = sessionmaker(bind=engine)
+        # Even an up-to-date source needs a journal head when upgrading collectors.
+        _install_result_journal(Session, (IndustryMomentum,), 'industry-momentum')
         print('普通模式从最近 {} 个交易日窗口续采，窗口起始日 {}；不自动删除任何历史记录。'.format(
             RETENTION_TRADE_DAYS, retention_start))
         if end < retention_start:

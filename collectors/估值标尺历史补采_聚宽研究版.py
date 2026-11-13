@@ -492,7 +492,8 @@ def existing_day(session, day):
     return True
 
 
-def run(start_date=START_DATE, end_date=END_DATE, write_database=WRITE_DATABASE, max_days=MAX_DAYS):
+def run(start_date=START_DATE, end_date=END_DATE, write_database=WRITE_DATABASE, max_days=MAX_DAYS,
+        return_report=False):
     if as_date(start_date) < dt.date(2010, 1, 1):
         raise HistoryError('估值标尺历史起点不得早于2010年。')
     if not _builtins.isinstance(write_database, _builtins.bool):
@@ -527,7 +528,7 @@ def run(start_date=START_DATE, end_date=END_DATE, write_database=WRITE_DATABASE,
                     pending = [day for day in days if day > current_day]
             finally:
                 session.close()
-        results = []
+        results, added = [], 0
         selected = pending[:max_days]
         progress.update('待采集' if write_database else '预览采集', 0, _builtins.len(selected), force=True)
         for index, day in enumerate(selected):
@@ -541,6 +542,7 @@ def run(start_date=START_DATE, end_date=END_DATE, write_database=WRITE_DATABASE,
                 progress.update(stage, index, _builtins.len(selected), day)
                 session = Session()
                 try:
+                    inserted = False
                     session.info['_result_journal_callbacks'][1](session)
                     if existing_day(session, day):
                         old = session.query(ValuationDaily).filter_by(trade_date=day, index_code=INDEX, method_version=METHOD).one()
@@ -552,7 +554,9 @@ def run(start_date=START_DATE, end_date=END_DATE, write_database=WRITE_DATABASE,
                         session.add(ValuationDaily(**daily))
                         session.add_all([ValuationMember(**m) for m in members])
                         session.add(ValuationCalendar(**cal))
+                        inserted = True
                     session.commit()
+                    added += _builtins.int(inserted)
                 except Exception:
                     session.rollback()
                     raise
@@ -564,6 +568,9 @@ def run(start_date=START_DATE, end_date=END_DATE, write_database=WRITE_DATABASE,
         _builtins.print('本轮处理 {} 日，剩余 {} 日；{}'.format(_builtins.len(results),
             _builtins.max(0, _builtins.len(pending)-_builtins.len(results)),
             '重复运行从最后完成日期继续。' if write_database else '仅预览，未连接数据库。'))
+        if return_report:
+            return dict(added=added, skipped=_builtins.len(days)-_builtins.len(pending)+_builtins.len(selected)-added,
+                        remaining=_builtins.len(pending)-_builtins.len(selected), gaps=[], unit='日')
         return results
     except HistoryError as exc:
         progress.finish('失败：本日未提交')

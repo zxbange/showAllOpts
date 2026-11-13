@@ -1,6 +1,8 @@
 # -*- coding: utf-8 -*-
 """聚宽研究独立入口，Python 3.6+。默认全平台交易日历；不按证券上市日裁剪回溯行情。"""
 from datetime import date, datetime, timedelta
+import builtins
+from builtins import any, type, int, bool, isinstance, float, str, callable, getattr, sorted, set, len, range, min
 import math
 import sqlalchemy
 from decimal import Decimal
@@ -64,13 +66,31 @@ def china_now():
     return datetime.utcnow() + timedelta(hours=8)
 
 
+def api(name, namespace=None):
+    import jqdata
+    for value in ((namespace or {}).get(name), globals().get(name),
+                  getattr(jqdata, name, None), getattr(builtins, name, None)):
+        if callable(value):
+            return value
+    raise ValueError('聚宽研究环境缺少接口：{}'.format(name))
+
+
+def database():
+    from mysql_connector import create_mysql_engine
+    return create_mysql_engine()
+
+
 def run(start_date=DEFAULT_START_DATE, end_date=None, preview=True, max_days=20000,
-        max_windows=1000, window_days=250, check_cancel=None):
+        max_windows=1000, window_days=250, check_cancel=None,
+        api_namespace=None, engine_factory=None, progress=None, retry_earlier_missing=True):
     """先预览。写库 run(preview=False)，取消回调抛异常；逐日提交，可重复补洞。"""
-    from jqdata import get_trade_days, get_price
+    get_trade_days, get_price = api('get_trade_days', api_namespace), api('get_price', api_namespace)
     check_cancel = check_cancel or (lambda: None)
+    progress = progress or (lambda message: None)
     if any(type(n) is not int or n <= 0 for n in (max_days, max_windows, window_days)):
         raise ValueError('运行上限必须为正整数')
+    if not isinstance(retry_earlier_missing, bool):
+        raise ValueError('retry_earlier_missing 必须是布尔值')
     moment = china_now()
     closed = moment.date() if moment.hour >= 18 else moment.date() - timedelta(days=1)
     end = as_day(end_date) if end_date is not None else closed
@@ -84,22 +104,14 @@ def run(start_date=DEFAULT_START_DATE, end_date=None, preview=True, max_days=200
     if not days or len(days) > max_days:
         raise ValueError('区间为空或超过交易日上限')
     report = dict(start=str(days[0]), end=str(days[-1]), preview=preview,
+                  added=0, skipped=0, remaining=0, gaps=[], unit='条',
                   source=SOURCE, warning='当前平台可见历史，可能含历史修订；更早缺失原因未知，不保证最早完整覆盖。', indices={})
     engine = None
     try:
         if not preview:
-            import mysql_connector
-            # Force safe logging before engine construction, without changing global config.
-            from sqlalchemy import create_engine
-            from sqlalchemy.engine.url import URL
-            cfg = mysql_connector.get_database_config()
-            opts = mysql_connector.get_database_options()
-            options = mysql_connector.engine_options(opts)
-            options['echo'] = False
-            url = getattr(URL, 'create', URL)(drivername=mysql_connector.mysql_drivername(opts['driver']),
-                host=cfg['host'], port=int(cfg['port']), database=cfg['dbname'],
-                username=cfg['dbuser'], password=cfg['dbpassword'], query={'charset': opts['charset']})
-            engine = create_engine(url, **options)
+            progress('连接数据库并核对指数历史')
+            engine = (engine_factory or database)()
+            engine.echo = False
             engine.hide_parameters = True
             metadata.create_all(engine)
             with engine.connect() as conn:
@@ -107,11 +119,17 @@ def run(start_date=DEFAULT_START_DATE, end_date=None, preview=True, max_days=200
         stored = {code: set() for code in CODES}
         if engine:
             with engine.connect() as conn:
-                for code, day in conn.execute(select([PRICES.c.index_code, PRICES.c.trade_date]) if sqlalchemy.__version__.startswith('1.') else select(PRICES.c.index_code, PRICES.c.trade_date)):
+                keys = select([PRICES.c.index_code, PRICES.c.trade_date]) if sqlalchemy.__version__.startswith('1.') else select(PRICES.c.index_code, PRICES.c.trade_date)
+                for code, day in conn.execute(keys.where((PRICES.c.trade_date >= days[0]) & (PRICES.c.trade_date <= days[-1]))):
                     if code in stored:
                         stored[code].add(day)
         if engine:
+            with engine.connect() as conn:
+                saved_days = {row[0] for row in conn.execute(CALENDAR.select().with_only_columns(
+                    [CALENDAR.c.trade_date] if sqlalchemy.__version__.startswith('1.') else CALENDAR.c.trade_date))}
             for day in days:
+                if day in saved_days:
+                    continue
                 check_cancel()
                 with engine.begin() as conn:
                     if conn.execute(CALENDAR.select().where(CALENDAR.c.trade_date == day)).first() is None:
@@ -119,13 +137,18 @@ def run(start_date=DEFAULT_START_DATE, end_date=None, preview=True, max_days=200
         windows = 0
         for code in CODES:
             observed = []
-            missing = [d for d in days if d not in stored[code]]
+            first_saved = min(stored[code]) if stored[code] else None
+            missing = [d for d in days if d not in stored[code]
+                       and (retry_earlier_missing or first_saved is None or d >= first_saved)]
+            report['skipped'] += len(stored[code])
+            progress('{}：已有 {} 日，待查询 {} 日'.format(code, len(stored[code]), len(missing)))
             for offset in range(0, len(missing), window_days):
                 check_cancel()
                 windows += 1
                 if windows > max_windows:
                     raise ValueError('超过查询窗口上限，已保存数据保留')
                 target = missing[offset:offset + window_days]
+                progress('{}：读取 {} 至 {}'.format(code, target[0], target[-1]))
                 frame = get_price(code, start_date=target[0], end_date=target[-1], frequency='daily', fields=['close'], skip_paused=False, fq=None)
                 quotes = {}
                 if frame is not None and not frame.empty:
@@ -148,9 +171,14 @@ def run(start_date=DEFAULT_START_DATE, end_date=None, preview=True, max_days=200
                                 conn.execute(CALENDAR.insert().values(trade_date=day, source=CALENDAR_SOURCE, updated_at=datetime.utcnow()))
                             if day in quotes and conn.execute(PRICES.select().where((PRICES.c.index_code == code) & (PRICES.c.trade_date == day))).first() is None:
                                 conn.execute(PRICES.insert().values(index_code=code, trade_date=day, close=quotes[day], source=SOURCE, updated_at=datetime.utcnow()))
+                                report['added'] += 1
             known = set(observed) | (stored[code] & set(days))
             report['indices'][code] = dict(observed_first_day=str(min(known)) if known else None,
                 available=len(known), missing=len(set(days) - known), earlier_missing='unknown')
+            # Do not turn an unknown prehistory prefix into fabricated missing prices.
+            # Gaps inside/after observed history (or an entirely empty index) remain failures.
+            report['gaps'].extend((code, str(day)) for day in days
+                                  if day not in known and (not known or day >= min(known)))
         return report
     except Exception:
         raise RuntimeError('聚宽历史采集未完成，请检查平台权限、源表结构和连接配置；已提交数据保留。') from None

@@ -116,8 +116,18 @@ def test_calculation_and_model_definitions_keep_original_rules(batch):
     imports = [n for n in ast.walk(tree) if isinstance(n, (ast.Import, ast.ImportFrom))]
     # Self-contained factories may lazily import stable platform/standard dependencies.
     # No strategy/project-file imports are permitted (also checked for every entrypoint).
-    assert all(n in tree.body or (isinstance(n, ast.ImportFrom) and n.module in
-        {'contextlib', 'sqlalchemy', 'sqlalchemy.dialects.mysql'}) for n in imports)
+    history_factories = [factories['_valuation_ruler_strategy'], factories['_growth_dividend_strategy']]
+    history_imports = {id(n) for factory in history_factories for n in ast.walk(factory)
+                       if isinstance(n, (ast.Import, ast.ImportFrom))}
+    allowed_history = {'datetime', 'builtins', 'time', 'hashlib', 're', 'decimal', 'jqdata',
+                       'math', 'sqlalchemy', 'sqlalchemy.ext.declarative', 'sqlalchemy.orm', 'mysql_connector'}
+    for node in imports:
+        if id(node) in history_imports:
+            modules = [node.module] if isinstance(node, ast.ImportFrom) else [alias.name for alias in node.names]
+            assert set(modules) <= allowed_history
+        else:
+            assert node in tree.body or (isinstance(node, ast.ImportFrom) and node.module in
+                {'contextlib', 'sqlalchemy', 'sqlalchemy.dialects.mysql'})
     from mysql_connector import get_database_config
     assert batch.DB_CONFIG == get_database_config()
 
@@ -133,8 +143,9 @@ def test_pasted_notebook_with_shared_connector_and_no_other_strategy_files(batch
                    and n.func.id in ('exec', 'eval', 'compile', 'open') for n in ast.walk(tree))
     namespace = {'__name__': 'notebook_cell'}
     exec(compile(source, '<ipython-input-test>', 'exec'), namespace)
-    assert len(namespace['STRATEGIES']) == 10
-    # Construct all ten real strategies without accessing any project files.
+    assert len(namespace['STRATEGIES']) == 12
+    assert {'估值标尺', '创红比'} <= namespace['STRATEGIES'].keys()
+    # Construct every real strategy without accessing any project files.
     for name in namespace['STRATEGY_ORDER']:
         assert callable(namespace['_load_strategy'](name, CONFIG, {}))
     events = []

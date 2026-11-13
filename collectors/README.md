@@ -15,7 +15,8 @@ collectors/
 └── tools/                  仅在本地使用的代码同步工具
     ├── sync_earnings_version.py
     ├── sync_momentum_threshold.py
-    └── sync_result_journal.py
+    ├── sync_result_journal.py
+    └── sync_history_strategies.py
 ```
 
 ## 全历史恢复
@@ -32,7 +33,7 @@ collectors/
 
 | 用途 | 脚本 | 运行环境 |
 | --- | --- | --- |
-| 10 个策略批量采集、计算并写入数据库 | [策略批量采集_数据库版.py](策略批量采集_数据库版.py) | 聚宽研究环境 |
+| 12 个策略批量采集、计算并写入数据库 | [策略批量采集_数据库版.py](策略批量采集_数据库版.py) | 聚宽研究环境 |
 | ETF 份额与价格日常采集 | [etf_exchange_collector.py](etf_exchange_collector.py) | 项目 Python 环境；[运行说明](../docs/etf-exchange-collector.md) |
 | ETF 历史缺口补采 | [ETF历史补采_聚宽研究版.py](ETF历史补采_聚宽研究版.py) | 聚宽研究环境；填写配置后整段运行即入库，缺表自动创建 |
 | ETF 分类、规模筛选及跟踪标的去重研究 | [ETF分类去重_研究版.py](ETF分类去重_研究版.py) | 聚宽研究环境 |
@@ -55,12 +56,14 @@ collectors/
 | 高增长 | [高增长_数据库版.py](高增长_数据库版.py) |
 | ETF/LOF 动量热度 | [ETF动量热度_数据库版.py](ETF动量热度_数据库版.py) |
 | 个股机构持仓 | [个股机构持仓_数据库版.py](个股机构持仓_数据库版.py) |
+| 估值标尺 | [估值标尺历史补采_聚宽研究版.py](估值标尺历史补采_聚宽研究版.py) |
+| 创红比（含科创红利比） | [创红比历史补采_聚宽研究版.py](创红比历史补采_聚宽研究版.py) |
 
 聚宽脚本各自包含完整策略，但统一导入 `mysql_connector.py` 获取数据库配置。先将配置文件上传到研究目录，再运行所需策略。采集、计算后的结果写入数据库，网页再同步本地缓存。批量参数见[批量采集说明](../docs/collector-batch.md)。
 
 ## 独立策略与公共代码维护
 
-聚宽入口之间不互相调用。批量版内置十个策略，独立版各自包含策略及辅助函数；运行时统一依赖同目录中的 `mysql_connector.py`，无需上传 `rules/`、`tools/` 或其他策略文件。
+聚宽入口之间不互相调用。批量版内置十二个策略，独立版各自包含策略及辅助函数；运行时统一依赖同目录中的 `mysql_connector.py`，无需上传 `rules/`、`tools/` 或其他策略文件。
 
 `etf_exchange_collector.py` 是项目环境中的交易所采集入口，调用后端服务，不属于聚宽脚本；该命令行入口也使用 `mysql_connector.py` 的连接配置。网页自动采集仍使用网页已保存的目标配置，不受本次脚本配置迁移影响。
 
@@ -69,7 +72,7 @@ collectors/
 | `rules/earnings_followup.py` | 断层后续涨幅（保留历史，不再滚动删除） | 净利润断层独立版、批量版 |
 | `rules/earnings_version.py` | 财季版本及同步标记 | 净利润断层独立版、批量版 |
 | `rules/momentum_threshold.py` | 行业动量严格大于20%的精确判断 | 行业动量独立版、批量版 |
-| `rules/result_journal.py` | 采集结果变更记录 | 市场情绪跟踪、微盘温度计、ETF动量热度独立版及批量版，以及市场情绪/估值标尺专用历史入口 |
+| `rules/result_journal.py` | 采集结果变更记录 | 行业动量、微盘新高新低、市场情绪跟踪、微盘温度计、ETF动量热度独立版及批量版，以及市场情绪/估值标尺专用历史入口 |
 
 公共代码在本地维护阶段预先嵌入采集脚本，运行时不会加载源文件。修改公共规则后，在项目根目录执行：
 
@@ -77,6 +80,7 @@ collectors/
 python collectors/tools/sync_earnings_version.py
 python collectors/tools/sync_result_journal.py
 python collectors/tools/sync_momentum_threshold.py
+python collectors/tools/sync_history_strategies.py
 ```
 
 只核对一致性、不改文件：
@@ -85,9 +89,10 @@ python collectors/tools/sync_momentum_threshold.py
 python collectors/tools/sync_earnings_version.py --check
 python collectors/tools/sync_result_journal.py --check
 python collectors/tools/sync_momentum_threshold.py --check
+python collectors/tools/sync_history_strategies.py --check
 ```
 
-这些工具只同步标记的公共代码块，不会把独立策略的全部修改自动同步到批量版。修改策略时仍需同步检查两个入口。
+`sync_history_strategies.py` 将估值标尺、创红比独立实现嵌入批量版，并适配统一连接、配置和进度。其余工具只同步标记的公共代码块；其他策略修改仍须同步检查两个入口。工具只在本地维护时运行，聚宽无需上传。
 
 ## 行业动量20%边界
 
