@@ -1,4 +1,4 @@
-import { useLayoutEffect, useRef, type CSSProperties, type KeyboardEvent } from 'react'
+import { useLayoutEffect, useRef, type KeyboardEvent } from 'react'
 import type { LucideIcon } from 'lucide-react'
 import { NavLink, useLocation } from 'react-router-dom'
 import '../styles/page-header.css'
@@ -85,8 +85,6 @@ export function ModuleSwitch<T extends string>({
         return item.href ? (
           <NavLink
             key={item.id}
-            style={{ '--folder-order': items.length - index } as CSSProperties}
-            data-tone={index % 5}
             to={item.href}
             aria-label={item.name}
             title={item.description}
@@ -103,8 +101,6 @@ export function ModuleSwitch<T extends string>({
         ) : (
           <button
             key={item.id}
-            style={{ '--folder-order': items.length - index } as CSSProperties}
-            data-tone={index % 5}
             id={item.domId}
             aria-controls={item.controls}
             type="button"

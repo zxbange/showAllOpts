@@ -103,7 +103,7 @@
   margin: 0 0 5px;
 }
 .growth-identity span:not(.growth-rank) {
-  font-size: 12px;
+  font-size: 13px;
   color: var(--muted);
 }
 .growth-annual {
@@ -156,7 +156,7 @@
   font-size: 13px;
 }
 .growth-mini small {
-  font-size: 12px;
+  font-size: 13px;
   color: var(--muted);
 }
 .growth-mini svg {
@@ -168,7 +168,7 @@
 }
 .growth-mini text {
   fill: var(--muted);
-  font-size: 12px;
+  font-size: 13px;
 }
 .growth-mini .growth-bar-value {
   fill: var(--text);
@@ -179,7 +179,7 @@
   display: flex;
   justify-content: space-between;
   gap: 5px;
-  font-size: 12px;
+  font-size: 13px;
   color: var(--muted);
   flex-wrap: wrap;
   row-gap: 6px;
@@ -255,7 +255,7 @@
   max-height: 85vh;
   overflow: auto;
   border: 1px solid var(--border);
-  border-radius: 18px;
+  border-radius: var(--radius-panel);
   padding: 22px;
   color: var(--text);
   background: var(--surface);
@@ -298,7 +298,7 @@
     font-size: 16px;
   }
   .growth-identity span:not(.growth-rank) {
-    font-size: 12px;
+    font-size: 13px;
   }
   .growth-annual strong {
     font-size: 18px;
@@ -318,7 +318,7 @@
     padding: 12px 10px 10px;
   }
   .growth-mini-footer {
-    font-size: 12px;
+    font-size: 13px;
   }
   .growth-rule {
     padding: 14px;

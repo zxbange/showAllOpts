@@ -1,13 +1,6 @@
 import { PageHeader } from '../components/PageHeader'
 import { useCallback, useState } from 'react'
-import {
-  CalendarDays,
-  ChartNoAxesCombined,
-  Info,
-  RefreshCw,
-  TrendingUp,
-  Trophy,
-} from 'lucide-react'
+import { CalendarDays, ChartNoAxesCombined, RefreshCw, TrendingUp, Trophy } from 'lucide-react'
 import { getCrowdingHistory } from '../api/client'
 import { useResource } from '../hooks/useResource'
 import { formatDate } from '../lib/format'
@@ -173,12 +166,9 @@ export function CrowdingPage() {
           </>
         ) : null}
       </section>
-      <div className="method-card crowding-method">
-        <span className="method-icon">
-          <Info size={19} />
-        </span>
+      <details className="method-card crowding-method">
+        <summary>指标口径</summary>
         <div>
-          <h3>指标口径</h3>
           <p>
             股票按成交额降序，取数量前
             5%（向下取整），计算其成交额占比。占比越高，成交越集中，不代表涨跌方向。
@@ -191,7 +181,7 @@ export function CrowdingPage() {
             公开行情日采集采用聚宽原脚本的前5%成交额占比算法；行情来源不同，旧聚宽历史保持原值，来源切换处分段显示。
           </p>
         </div>
-      </div>
+      </details>
       <MarketCollectionPanel onCollected={reload} />
     </div>
   )

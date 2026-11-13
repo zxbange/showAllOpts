@@ -39,4 +39,4 @@ cd "$PROJECT_ROOT/frontend"
 npm ci --no-fund --no-audit
 npm run build
 echo 'Setup complete. Check the selected configuration (APP_ENV_FILE or config/app.config), then run: bash start.sh'
-echo 'For a persistent production service, see docs/linux-deployment.md.'
+echo 'For a persistent production service, see docs/operations/linux-deployment.md.'

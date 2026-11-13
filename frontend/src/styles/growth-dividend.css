@@ -10,7 +10,7 @@
 }
 .growth-dividend-stats .stat-note {
   min-height: 24px;
-  font-size: 12px;
+  font-size: 13px;
 }
 .growth-dividend-toolbar,
 .growth-dividend-dates,
@@ -81,7 +81,7 @@
 }
 .growth-dividend-legend small {
   color: var(--muted);
-  font-size: 11px;
+  font-size: 13px;
 }
 .growth-dividend-legend .line-sample {
   width: 25px;
@@ -93,7 +93,7 @@
 .growth-dividend-benchmark-note {
   margin: 8px 6px 14px;
   color: var(--muted);
-  font-size: 12px;
+  font-size: 13px;
   line-height: 1.8;
 }
 .growth-dividend-chart,
@@ -107,7 +107,7 @@
 .growth-dividend-trend .panel-bottom {
   flex-wrap: wrap;
   gap: 8px 20px;
-  font-size: 12px;
+  font-size: 13px;
 }
 .growth-dividend-update {
   padding: 20px 24px;
@@ -216,7 +216,7 @@
   }
   .growth-dividend-legend button {
     min-height: 40px;
-    font-size: 12px;
+    font-size: 13px;
     gap: 5px;
   }
   .growth-dividend-legend .line-sample {

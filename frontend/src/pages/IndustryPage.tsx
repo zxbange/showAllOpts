@@ -5,7 +5,6 @@ import {
   CalendarDays,
   ChartNoAxesCombined,
   CircleDot,
-  Info,
   RefreshCw,
   Trophy,
   TrendingUp,
@@ -160,19 +159,16 @@ export function IndustryPage() {
       </section>
       {data && (
         <section className="detail-bottom">
-          <div className="method-card">
-            <span className="method-icon">
-              <Info size={19} />
-            </span>
+          <details className="method-card">
+            <summary>计算口径</summary>
             <div>
-              <h3>计算口径</h3>
               <p>
                 动量 = 20 个交易日涨幅超过 20% 的股票数² ÷
                 行业成分股总数，衡量强势股集中度，受行业规模影响。
               </p>
               <span>缺失记录留空，不补零。</span>
             </div>
-          </div>
+          </details>
           <div className="observation-card">
             <strong>
               {data.summary.observed_days}

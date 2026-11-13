@@ -1,6 +1,6 @@
 .page-header {
   min-width: 0;
-  margin-bottom: 26px;
+  margin-bottom: 24px;
 }
 .page-header > .page-heading {
   margin-bottom: 0;
@@ -8,129 +8,71 @@
 .page-header .page-heading h1 {
   margin-top: 0;
 }
-.earnings-page > .page-header {
-  min-width: 0;
-  margin-bottom: 0;
-}
 .page-code {
   display: block;
-  margin-bottom: 8px;
+  margin-bottom: 6px;
   font-size: 13px;
   color: var(--muted);
   font-variant-numeric: tabular-nums;
 }
 .module-card-switch {
   display: flex;
-  flex-wrap: nowrap;
-  align-items: flex-end;
-  isolation: isolate;
-  height: 72px;
+  align-items: center;
+  gap: 6px;
+  min-height: 56px;
   max-width: 100%;
   min-width: 0;
   overflow-x: auto;
   overscroll-behavior-x: contain;
   scrollbar-width: thin;
-  padding: 8px 14px;
-  margin: 0 0 18px;
-  border-bottom: 2px solid #d8d2c9;
+  padding: 6px 0;
+  margin: 18px 0 0;
+  border-bottom: 1px solid var(--border);
 }
 .module-card {
-  --folder-paper: #f5dfd6;
-  --folder-active: #f1c9b8;
-  --folder-ink: #743724;
-  --folder-edge: #b77c65;
-  position: relative;
-  z-index: var(--folder-order);
   display: inline-flex;
   flex: 0 0 auto;
   align-items: center;
   justify-content: center;
-  gap: 7px;
-  height: 44px;
+  gap: 8px;
   min-width: 0;
-  padding: 0 24px;
-  border: 0;
-  background: transparent;
-  color: var(--folder-ink);
+  height: 44px;
+  padding: 0 16px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-control);
+  background: var(--panel);
+  color: var(--muted);
   white-space: nowrap;
   cursor: pointer;
   text-decoration: none;
-  transition: height 160ms ease;
+  transition:
+    background 150ms ease,
+    color 150ms ease;
 }
-.module-card + .module-card {
-  margin-left: -12px;
-}
-.module-card[data-tone='1'] {
-  --folder-paper: #dcebe3;
-  --folder-active: #bddbcb;
-  --folder-ink: #225442;
-  --folder-edge: #7fa48e;
-}
-.module-card[data-tone='2'] {
-  --folder-paper: #e1e8f5;
-  --folder-active: #c5d4ee;
-  --folder-ink: #314c78;
-  --folder-edge: #8c9ebb;
-}
-.module-card[data-tone='3'] {
-  --folder-paper: #f3e8cb;
-  --folder-active: #ead6a5;
-  --folder-ink: #655019;
-  --folder-edge: #b6a16a;
-}
-.module-card[data-tone='4'] {
-  --folder-paper: #ebe0ee;
-  --folder-active: #dbc6e2;
-  --folder-ink: #60416e;
-  --folder-edge: #a88cb2;
-}
-.module-card::before {
-  content: '';
-  position: absolute;
-  inset: 0;
-  z-index: -1;
-  border: 1px solid var(--folder-edge);
-  border-radius: 10px 16px 0 0;
-  background: var(--folder-paper);
-  transform: skewX(12deg);
-  transform-origin: bottom left;
-  box-shadow: 3px -2px 5px #3e302814;
-}
-.module-card svg {
-  flex-shrink: 0;
-}
-.module-card:hover::before {
-  background: var(--folder-active);
+.module-card:hover {
+  background: var(--surface);
+  color: var(--text);
 }
 .module-card.active {
-  z-index: 20;
-  height: 54px;
-}
-.module-card.active::before {
-  background: var(--folder-active);
-  border-top: 3px solid var(--folder-ink);
-  box-shadow: 4px -3px 8px #3e302828;
+  background: var(--accent-soft);
+  color: var(--accent);
+  border-color: var(--accent);
 }
 .module-card:focus-visible {
-  z-index: 21;
-  outline: 2px solid var(--folder-ink);
-  outline-offset: -7px;
-  border-radius: 8px 8px 0 0;
+  outline: 2px solid var(--accent);
+  outline-offset: -3px;
 }
 .module-card-text strong {
-  font-size: 13px;
-  font-weight: 550;
+  font-size: 14px;
+  font-weight: 500;
   line-height: 1.5;
 }
 .module-card.active .module-card-text strong {
-  font-weight: 750;
+  font-weight: 700;
 }
 @media (max-width: 700px) {
   .module-card {
-    padding-inline: 22px;
-  }
-  .module-card-switch {
-    margin-bottom: 14px;
+    padding-inline: 12px;
   }
 }
 @media (prefers-reduced-motion: reduce) {
@@ -139,14 +81,7 @@
   }
 }
 @media (forced-colors: active) {
-  .module-card::before {
-    background: Canvas;
-    border-color: ButtonText;
-  }
-  .module-card.active::before {
-    border-top-color: Highlight;
-  }
-  .module-card:focus-visible {
-    outline-color: Highlight;
+  .module-card.active {
+    border-color: Highlight;
   }
 }

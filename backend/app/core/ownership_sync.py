@@ -86,16 +86,20 @@ def copy_ownership(cache, full=False):
     """Return (filename, rows), or None when legacy metadata reconciliation is required."""
     previous = cache.snapshot_path('institution-ownership', cache.read_state()['modules'].get('institution-ownership', {}))
     cursor = read_cursor(previous) if not full else None
+    cache.sync_notes['institution-ownership'] = None
     with cache.source.connect() as source:
         if cache.source.dialect.name == 'mysql':
             source = source.execution_options(isolation_level='REPEATABLE READ')
         with source.begin():
             inspector = inspect(source)
             if not inspector.has_table(HEAD.name) or not inspector.has_table(CHANGE.name):
+                cache.sync_notes['institution-ownership'] = '源库缺少机构持仓变更日志，本轮核对历史清单；升级采集器后建立增量基线。'
                 logger.info('Cache ownership journal unavailable; using legacy reconciliation')
                 return None
             head = source.execute(select(HEAD).where(HEAD.c.id == 'main')).mappings().first()
             if head is None:
+                cache.sync_notes['institution-ownership'] = '源库尚未初始化机构持仓同步版本，本轮核对历史清单。'
+                logger.info('Cache ownership journal unavailable reason=missing-head; using legacy reconciliation')
                 return None
             if head['revision'] < 0 or not head['generation']:
                 raise SnapshotDataError('机构持仓同步版本信息无效。')
@@ -106,8 +110,18 @@ def copy_ownership(cache, full=False):
                 return previous.name, cursor['rows']
             configure_compression(source, cache.settings.cache_ownership_compression)
             if not incremental:
+                reason = ('手动完整同步' if full else '本地没有可用快照' if previous is None
+                          else '旧快照缺少增量游标' if cursor is None
+                          else '源库同步代次已变更' if cursor['generation'] != head['generation']
+                          else '源库版本落后于本地游标')
+                cache.sync_notes['institution-ownership'] = '历史重建：{}；完成后恢复增量。'.format(reason)
+                logger.warning('Cache ownership baseline required reason=%s local_revision=%s source_revision=%s',
+                               reason, cursor['revision'] if cursor else None, head['revision'])
+                report('历史重建：' + reason, percent=5)
                 from app.core.ownership_baseline import resume_baseline
                 return resume_baseline(cache, source, dict(head), previous)
+            logger.info('Cache ownership incremental from_revision=%s to_revision=%s',
+                        cursor['revision'], head['revision'])
             filename = 'institution-ownership-' + uuid.uuid4().hex + '.sqlite'
             path = cache.root / filename
             destination = create_engine('sqlite:///' + path.as_posix(), poolclass=NullPool)

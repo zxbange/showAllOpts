@@ -1,4 +1,3 @@
-.social-heading,
 .social-feed-heading,
 .social-schedule {
   display: flex;
@@ -21,7 +20,6 @@
   line-height: 1.7;
   overflow-wrap: anywhere;
 }
-.social-heading p,
 .social-feed-heading p {
   margin: 6px 0 0;
 }
@@ -79,7 +77,7 @@
 }
 .social-summary span {
   color: var(--muted);
-  font-size: 12px;
+  font-size: 13px;
 }
 .social-summary small {
   color: var(--muted);
@@ -91,7 +89,7 @@
 }
 .social-schedule {
   color: var(--muted);
-  font-size: 12px;
+  font-size: 13px;
 }
 .social-author-form {
   display: grid;
@@ -111,7 +109,7 @@
   display: inline-block;
   padding: 2px 8px;
   border-radius: 5px;
-  font-size: 11px;
+  font-size: 13px;
   font-weight: 550;
 }
 .social-platform.weibo {
@@ -191,7 +189,7 @@
   align-items: center;
   gap: 5px;
   color: var(--accent);
-  font-size: 12px;
+  font-size: 13px;
 }
 .social-empty {
   text-align: center;
@@ -210,7 +208,7 @@
   display: flex;
   align-items: center;
   gap: 12px;
-  font-size: 12px;
+  font-size: 13px;
 }
 @media (max-width: 620px) {
   .social-summary > div:nth-child(4) {
@@ -229,7 +227,7 @@
   padding: 12px 20px;
   border-top: 1px solid var(--border);
   color: var(--muted);
-  font-size: 12px;
+  font-size: 13px;
   line-height: 1.8;
 }
 .social-pause-details {
@@ -263,7 +261,7 @@
   border-left: 2px solid var(--gold);
   background: #fffcf5;
   border-radius: 4px;
-  font-size: 12px;
+  font-size: 13px;
   line-height: 1.8;
   overflow-wrap: anywhere;
 }
@@ -276,10 +274,6 @@
 }
 .social-page [hidden] {
   display: none !important;
-}
-.social-heading {
-  padding: 0;
-  align-items: flex-start;
 }
 .social-page h1 {
   font-size: clamp(24px, 3vw, 30px);
@@ -349,7 +343,7 @@
   padding: 0;
   margin: 0;
   color: var(--muted);
-  font-size: 12px;
+  font-size: 13px;
   line-height: 1.7;
 }
 .social-rule svg {
@@ -393,10 +387,10 @@
 .social-tabs small,
 .social-count {
   padding: 2px 8px;
-  border-radius: 20px;
+  border-radius: var(--radius-panel);
   background: var(--surface);
   color: var(--muted);
-  font-size: 11px;
+  font-size: 13px;
   white-space: nowrap;
 }
 .social-tabs > button[aria-selected='true'] small {
@@ -502,7 +496,7 @@
 .social-author > .social-muted {
   grid-column: 1;
   margin: 9px 0 0;
-  font-size: 12px;
+  font-size: 13px;
 }
 .social-author > .social-actions {
   grid-column: 2;
@@ -512,7 +506,7 @@
 .social-author .button {
   min-height: 30px;
   padding: 5px 9px;
-  font-size: 12px;
+  font-size: 13px;
 }
 .social-author > .social-error {
   grid-column: 1 / -1;
@@ -579,7 +573,7 @@
 .social-credential-saved > .button {
   min-height: 30px;
   padding: 4px 10px;
-  font-size: 12px;
+  font-size: 13px;
 }
 .social-secret-mask {
   color: var(--muted);
@@ -679,7 +673,7 @@
 }
 .social-post > .social-muted {
   margin: 6px 0 12px 46px;
-  font-size: 12px;
+  font-size: 13px;
 }
 .social-post-text {
   margin-left: 46px;
@@ -791,7 +785,7 @@
     width: 100%;
   }
   .social-rule {
-    font-size: 12px;
+    font-size: 13px;
   }
   .social-state-note {
     padding: 12px 16px;
@@ -805,7 +799,7 @@
     flex: 1;
     gap: 6px;
     padding: 9px 8px;
-    font-size: 12px;
+    font-size: 13px;
     white-space: nowrap;
   }
   .social-tabs > button svg {
@@ -819,7 +813,7 @@
     gap: 12px;
   }
   .social-panel-heading p {
-    font-size: 12px;
+    font-size: 13px;
   }
   .social-author-form {
     grid-template-columns: 90px minmax(0, 1fr);
@@ -856,7 +850,7 @@
   }
   .social-feed-heading .button {
     padding: 8px 10px;
-    font-size: 12px;
+    font-size: 13px;
   }
   .social-search {
     gap: 8px;
@@ -966,7 +960,7 @@
 .social-cube-window > div {
   display: grid;
   gap: 2px;
-  font-size: 12px;
+  font-size: 13px;
 }
 .social-cube-window span {
   color: var(--muted);
@@ -1020,7 +1014,7 @@
 }
 .social-cube-symbol {
   color: var(--muted);
-  font-size: 12px;
+  font-size: 13px;
 }
 .social-cube-owner,
 .social-cube-alias {
@@ -1033,7 +1027,7 @@
   flex-wrap: wrap;
   gap: 3px 14px;
   margin-top: 6px;
-  font-size: 12px;
+  font-size: 13px;
   overflow-wrap: anywhere;
 }
 .social-rebalance-time {
@@ -1041,7 +1035,7 @@
   flex-wrap: wrap;
   gap: 4px 14px;
   margin-top: 8px;
-  font-size: 12px;
+  font-size: 13px;
 }
 .social-cube-changes {
   display: grid;
@@ -1076,11 +1070,11 @@
 .social-cube-stock > span,
 .social-cube-price {
   color: var(--muted);
-  font-size: 11px;
+  font-size: 13px;
 }
 .social-cube-action {
   color: var(--muted);
-  font-size: 12px;
+  font-size: 13px;
 }
 .social-cube-weights {
   text-align: right;
@@ -1152,6 +1146,6 @@
   }
   .social-cube-feed-heading .button {
     padding: 8px 10px;
-    font-size: 12px;
+    font-size: 13px;
   }
 }

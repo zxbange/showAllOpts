@@ -7,7 +7,6 @@ import {
   TrendingUp,
   Layers3,
   CheckCheck,
-  Info,
   X,
   ChartColumn,
 } from 'lucide-react'
@@ -341,12 +340,9 @@ export function GrowthPage() {
           {chartStock && (
             <GrowthChartsDialog stock={chartStock} onClose={() => setChartStock(null)} />
           )}
-          <section className="method-card">
-            <span className="method-icon">
-              <Info size={19} />
-            </span>
+          <details className="method-card">
+            <summary>财报口径与计算规则</summary>
             <div>
-              <h3>财报口径与计算规则</h3>
               <p>
                 同比 =（本期 − 上期）/ |上期|。基期为零、指标缺失或同类报告年份不连续均不入选。
                 允许历史亏损，最新一期两项均须为正。各公司取已披露的最新三期，报告年份可能不同。
@@ -356,7 +352,7 @@ export function GrowthPage() {
                 {data.snapshot.updated_at.replace('T', ' ').slice(0, 19)}（北京时间）。
               </span>
             </div>
-          </section>
+          </details>
         </>
       )}
     </div>

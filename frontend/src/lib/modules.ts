@@ -22,17 +22,6 @@ export interface ResearchModule {
   searchTerms?: string[]
   icon: LucideIcon
   tone: 'coral' | 'jade' | 'gold'
-  illustration:
-    | 'heatmap'
-    | 'concentration'
-    | 'temperature'
-    | 'shares'
-    | 'earnings'
-    | 'breadth'
-    | 'dividend'
-    | 'growth'
-    | 'etf-heat'
-    | 'ownership'
 }
 
 export const individualModules: ResearchModule[] = [
@@ -45,7 +34,6 @@ export const individualModules: ResearchModule[] = [
     tags: ['沪深300', 'PE-TTM', '历史分位'],
     icon: ChartNoAxesCombined,
     tone: 'jade',
-    illustration: 'temperature',
   },
   {
     id: 'commodities',
@@ -56,7 +44,6 @@ export const individualModules: ResearchModule[] = [
     tags: ['A00铝', 'CCI动力煤'],
     icon: Coins,
     tone: 'gold',
-    illustration: 'shares',
   },
   {
     id: 'social-monitor',
@@ -67,7 +54,6 @@ export const individualModules: ResearchModule[] = [
     tags: ['微博', '雪球', 'Telegram', '飞书'],
     icon: Users,
     tone: 'jade',
-    illustration: 'ownership',
   },
   {
     id: 'institution-ownership',
@@ -78,7 +64,6 @@ export const individualModules: ResearchModule[] = [
     tags: ['机构持仓', '股东户数', '社保新进'],
     icon: Users,
     tone: 'gold',
-    illustration: 'ownership',
   },
   {
     id: 'etf-momentum',
@@ -89,7 +74,6 @@ export const individualModules: ResearchModule[] = [
     tags: ['ETF热力图', '跨资产', '收盘动量'],
     icon: TrendingUp,
     tone: 'coral',
-    illustration: 'etf-heat',
   },
   {
     id: 'cash-cow',
@@ -100,7 +84,6 @@ export const individualModules: ResearchModule[] = [
     tags: ['3/5/10年分红', '现金流覆盖'],
     icon: Coins,
     tone: 'jade',
-    illustration: 'dividend',
   },
   {
     id: 'high-growth',
@@ -111,7 +94,6 @@ export const individualModules: ResearchModule[] = [
     tags: ['四类财报', '持续增长', '净利润与EPS'],
     icon: TrendingUp,
     tone: 'coral',
-    illustration: 'growth',
   },
   {
     id: 'dividend-selection',
@@ -122,7 +104,6 @@ export const individualModules: ResearchModule[] = [
     tags: ['三组独立排名', '股息率', 'PE估值'],
     icon: Coins,
     tone: 'gold',
-    illustration: 'dividend',
   },
   {
     id: 'microcap-breadth',
@@ -133,7 +114,6 @@ export const individualModules: ResearchModule[] = [
     tags: ['新高新低', '微盘400', '每日采样'],
     icon: ArrowUpDown,
     tone: 'jade',
-    illustration: 'breadth',
   },
   {
     id: 'earnings-gap',
@@ -144,7 +124,6 @@ export const individualModules: ResearchModule[] = [
     tags: ['季度选股', '公告证据', '信号日期'],
     icon: FileSearch,
     tone: 'gold',
-    illustration: 'earnings',
   },
   {
     id: 'industry-momentum',
@@ -155,7 +134,6 @@ export const individualModules: ResearchModule[] = [
     tags: ['行业热力图', '趋势下钻', '每日采样'],
     icon: Grid2X2,
     tone: 'coral',
-    illustration: 'heatmap',
   },
   {
     id: 'market-sentiment',
@@ -166,7 +144,6 @@ export const individualModules: ResearchModule[] = [
     tags: ['MA20', '冰点20%', '过热80%'],
     icon: Thermometer,
     tone: 'jade',
-    illustration: 'temperature',
   },
   {
     id: 'growth-dividend',
@@ -177,7 +154,6 @@ export const individualModules: ResearchModule[] = [
     tags: ['创红比', '科创红利比', '科创50', '每日18:00更新'],
     icon: ChartNoAxesCombined,
     tone: 'coral',
-    illustration: 'concentration',
   },
   {
     id: 'margin-guarantee',
@@ -188,7 +164,6 @@ export const individualModules: ResearchModule[] = [
     tags: ['两融担保比例', '每日08:00更新'],
     icon: ChartNoAxesCombined,
     tone: 'gold',
-    illustration: 'concentration',
   },
   {
     id: 'market-crowding',
@@ -199,7 +174,6 @@ export const individualModules: ResearchModule[] = [
     tags: ['成交额集中度', '历史曲线', 'EMA 参考'],
     icon: Activity,
     tone: 'jade',
-    illustration: 'concentration',
   },
   {
     id: 'microcap-temperature',
@@ -210,7 +184,6 @@ export const individualModules: ResearchModule[] = [
     tags: ['综合温度', '等权指数', '每个交易日采样'],
     icon: Thermometer,
     tone: 'gold',
-    illustration: 'temperature',
   },
   {
     id: 'etf-shares',
@@ -232,7 +205,6 @@ export const individualModules: ResearchModule[] = [
     ],
     icon: ChartNoAxesCombined,
     tone: 'coral',
-    illustration: 'shares',
   },
 ]
 

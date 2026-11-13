@@ -8,7 +8,7 @@ import shutil
 from sqlalchemy import create_engine, func, inspect, select, union
 from sqlalchemy.pool import NullPool
 
-from app.core.cache_sync import chunks, key_filter, read_batches, transfer
+from app.core.cache_sync import chunks, key_filter, read_batches
 from app.core.sync_progress import report
 from app.models.etf import ETFPrice, ETFShare, ETFTradingDay
 
@@ -99,8 +99,13 @@ def copy_etf(cache, path, previous, full=False, *, source=None, identity=None):
                         changed = {key for key in old.keys() | new.keys() if old.get(key) != new.get(key)}
                         for batch in chunks(changed):
                             target.execute(table.delete().where(key_filter(table, batch)))
+                        # The manifest already contains every column. Reuse the same
+                        # source snapshot instead of downloading changed rows twice.
+                        names = [c.name for c in table.primary_key.columns] + [
+                            c.name for c in table.columns if c not in table.primary_key.columns.values()]
                         for batch in chunks(changed & new.keys()):
-                            transfer(source, target, table, key_filter(table, batch))
+                            report('写入本地 ' + table.name)
+                            target.execute(table.insert(), [dict(zip(names, key + new[key])) for key in batch])
                     if identity is not None:
                         target.exec_driver_sql('CREATE TABLE IF NOT EXISTS etf_cache_source_v1 (id INTEGER PRIMARY KEY, identity TEXT NOT NULL)')
                         target.exec_driver_sql('DELETE FROM etf_cache_source_v1')

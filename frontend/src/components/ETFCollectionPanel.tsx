@@ -209,12 +209,7 @@ export function ETFCollectionPanel({ onCollected }: { onCollected: () => void })
           {error}
         </p>
       )}
-      {!!status?.gap_count && (
-        <p>
-          本轮目标日仍有 {status.gap_count}{' '}
-          项数据缺口；勾选重试仅重置当前日常目标，不回补历史。本次日常采集完成不代表历史数据齐全。
-        </p>
-      )}
+      {!!status?.gap_count && <p>当前交易日缺失 {status.gap_count} 项，可重试。</p>}
       {!!status?.runs?.length && (
         <details>
           <summary>最近采集记录</summary>

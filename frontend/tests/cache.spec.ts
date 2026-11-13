@@ -271,9 +271,7 @@ test('full history repair is explicit, scoped, and resets to daily sync after ac
   await expect(mode).toHaveValue('incremental')
   await page.getByLabel('同步范围', { exact: true }).selectOption('industry-momentum')
   await mode.selectOption('full')
-  await expect(
-    page.getByText('将重新下载所选模块的全部保留数据，耗时较长；仅重建本地缓存，不修改源数据库。'),
-  ).toBeVisible()
+  await expect(page.getByText('重建本地缓存，源数据库不变。')).toBeVisible()
   await page.getByRole('button', { name: '立即同步', exact: true }).click()
   await expect.poll(() => posted.length).toBe(1)
   expect(posted[0]).toEqual({ module: 'industry-momentum', full: true })

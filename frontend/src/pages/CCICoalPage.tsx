@@ -182,10 +182,6 @@ export function CCICoalPage() {
   }
   return (
     <div className="commodity-page">
-      <header>
-        <span className="eyebrow">大宗商品 · 动力煤</span>
-        <h1>CCI动力煤</h1>
-      </header>
       <section className="commodity-summary">
         {grades.map((g) => {
           const latest = data?.rows.filter((r) => r.grade === g).at(-1)

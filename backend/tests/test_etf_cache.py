@@ -71,6 +71,9 @@ def test_incremental_reads_three_sessions_and_all_new_days_only(cached, session,
     assert not state(cache)['error']
     assert reads and all('WHERE' in sql for sql, _ in reads)
     assert any('2026-01-07' in str(params) for _, params in reads)
+    # Each small window already includes all values; changed payloads must not
+    # trigger a second network read. All three tables fit in one page here.
+    assert len(reads) == 3
     with cache.session('etf-shares') as local:
         assert local.get(ETFShare, ('510300.XSHG', days[0])).shares == 10
         assert local.get(ETFShare, ('510300.XSHG', days[1])).shares == 10
@@ -134,7 +137,9 @@ def test_price_sync_failure_keeps_entire_old_snapshot(cached, session, engine):
     session.get(ETFPrice, ('510300.XSHG', day)).close_price = Decimal(3)
     session.commit()
     def fail(conn, cursor, sql, *args):
-        if 'FROM etf_price_daily' in sql and 'WHERE' in sql:
+        # The window manifest is now the only payload read (the old second
+        # WHERE/primary-key download was removed).
+        if 'FROM etf_price_daily' in sql:
             raise RuntimeError('price payload failed')
     event.listen(engine, 'before_cursor_execute', fail)
     try:

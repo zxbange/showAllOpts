@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """聚宽研究环境：个股机构持仓、股东户数及社保新进。
 独立单文件；首次近五年，之后刷新近期报告及新披露户数。
-依赖和参数集中在开头；共用连接、会话及日期工具。用法见 docs/collector-batch.md。
+依赖和参数集中在开头；共用连接、会话及日期工具。用法见 docs/data/collector-batch.md。
 """
 import builtins
 import datetime

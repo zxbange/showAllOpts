@@ -141,7 +141,6 @@ function CashCowPeriodPage({
         <div>
           <h1>奶牛股</h1>
           <p>近 {years} 年持续分红，兼顾利润与经营现金流。</p>
-          <p>一次采集近 10 年数据，同时更新 3 / 5 / 10 年结果；切换年限仅查看结果。</p>
         </div>
         <div className="heading-actions">
           <label className="cash-cow-period">

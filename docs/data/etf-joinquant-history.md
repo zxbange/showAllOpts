@@ -1,6 +1,6 @@
 # ETF 历史：聚宽平台手动补采
 
-入口：[ETF历史补采_聚宽研究版.py](../collectors/ETF历史补采_聚宽研究版.py)。采集逻辑可粘贴到聚宽研究 Notebook，需一并上传 `collectors/mysql_connector.py`，不需要上传完整项目、调用项目 HTTP 接口、安装/登录外部 `jqdatasdk` 或运行交易所历史接口。后续每日自动更新仍由项目的交易所采集器负责，不改原批量采集脚本，也不设定新的定时任务。
+入口：[ETF历史补采_聚宽研究版.py](../../collectors/ETF历史补采_聚宽研究版.py)。采集逻辑可粘贴到聚宽研究 Notebook，需一并上传 `collectors/mysql_connector.py`，不需要上传完整项目、调用项目 HTTP 接口、安装/登录外部 `jqdatasdk` 或运行交易所历史接口。后续每日自动更新仍由项目的交易所采集器负责，不改原批量采集脚本，也不设定新的定时任务。
 
 ## 范围和数据口径
 

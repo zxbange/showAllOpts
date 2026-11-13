@@ -5,7 +5,7 @@
   padding: 8px 12px;
   border: 1px solid var(--border);
   background: var(--panel);
-  border-radius: 20px;
+  border-radius: var(--radius-panel);
   color: var(--jade);
   font-size: 13px;
   white-space: nowrap;
@@ -16,7 +16,7 @@
   height: 18px;
   background: var(--accent-soft);
   color: var(--accent);
-  font-size: 12px;
+  font-size: 13px;
   display: grid;
   place-items: center;
 }
@@ -29,7 +29,7 @@
   overflow: auto;
   padding: 26px;
   border: 1px solid var(--border);
-  border-radius: 22px;
+  border-radius: var(--radius-panel);
   background: var(--bg);
   color: var(--text);
   box-shadow: 0 24px 100px #352c2933;
@@ -92,12 +92,12 @@
 .cache-row small {
   display: block;
   color: var(--muted);
-  font-size: 12px;
+  font-size: 13px;
   margin-top: 5px;
   line-height: 1.7;
 }
 .cache-row-error {
-  font-size: 12px;
+  font-size: 13px;
   color: var(--accent);
   margin: 5px 0 0;
   line-height: 1.5;
@@ -106,8 +106,8 @@
   background: #e7f3ef;
   color: var(--jade);
   padding: 5px 8px;
-  font-size: 12px;
-  border-radius: 20px;
+  font-size: 13px;
+  border-radius: var(--radius-panel);
   white-space: nowrap;
 }
 .cache-badge-warn {

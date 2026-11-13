@@ -8,7 +8,7 @@
   text-align: left;
   padding: 20px;
   border: 1px solid var(--border);
-  border-radius: 18px;
+  border-radius: var(--radius-panel);
   background: var(--panel);
   box-shadow: 0 8px 26px #71503706;
   transition:
@@ -34,7 +34,7 @@
 }
 .breadth-period-title small {
   color: var(--muted);
-  font-size: 12px;
+  font-size: 13px;
   font-weight: 400;
 }
 .breadth-pair {
@@ -58,13 +58,13 @@
   font-variant-numeric: tabular-nums;
 }
 .breadth-pair i {
-  font-size: 12px;
+  font-size: 13px;
   font-style: normal;
   margin-left: 4px;
   font-weight: 400;
 }
 .breadth-pair em {
-  font-size: 12px;
+  font-size: 13px;
   font-style: normal;
   opacity: 1;
 }
@@ -105,7 +105,7 @@
   display: flex;
   justify-content: space-between;
   gap: 8px;
-  font-size: 12px;
+  font-size: 13px;
   margin-bottom: 10px;
 }
 .breadth-dominance-row span {

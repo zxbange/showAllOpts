@@ -37,6 +37,7 @@ def test_unchanged_does_not_scan_history_copy_or_advance_data_timestamp(journal,
     assert cache.refresh(MODULE,background=False)
     before=entry(cache)
     assert before['rows']==3 and cursor(cache)['revision']==1
+    assert '本地没有可用快照' in before['sync_note']
     calls=[]
     def capture(conn,cur,sql,*args):calls.append(sql)
     event.listen(engine,'before_cursor_execute',capture)
@@ -44,6 +45,7 @@ def test_unchanged_does_not_scan_history_copy_or_advance_data_timestamp(journal,
     cache.refresh(MODULE,background=False)
     assert entry(cache)['file']==before['file'] and entry(cache)['updated_at']==before['updated_at']
     assert not entry(cache)['error']
+    assert entry(cache)['sync_note'] is None
     assert not any('FROM ownership_report' in s or 'FROM ownership_stock' in s or 'FROM ownership_holders' in s for s in calls)
     assert not any('FROM ownership_change' in s for s in calls)
     event.remove(engine,'before_cursor_execute',capture)
@@ -96,9 +98,11 @@ def test_generation_reset_and_forced_full_rebuild(journal,engine):
         c.execute(OwnershipReport.__table__.update().values(payload={'value':99}))
     cache.refresh(MODULE,background=False)
     assert entry(cache)['file']!=before and cursor(cache)['generation']=='reset'
+    assert '源库同步代次已变更' in entry(cache)['sync_note']
     with cache.session(MODULE) as local: assert local.query(OwnershipReport).one().payload=={'value':99}
     before=entry(cache)['file'];cache.refresh(MODULE,background=False,full=True)
     assert entry(cache)['file']!=before and not entry(cache)['error']
+    assert '手动完整同步' in entry(cache)['sync_note']
 
 def test_bad_change_keeps_old_snapshot_and_cursor(journal,engine):
     ns,factory,cache=journal
@@ -116,9 +120,11 @@ def test_legacy_upgrade_and_journal_loss_invalidates_cursor(journal,engine):
     with engine.begin() as c:c.execute(HEAD.delete())
     cache.refresh(MODULE,background=False)
     assert not entry(cache)['error'] and cursor(cache) is None
+    assert '尚未初始化' in entry(cache)['sync_note']
     with engine.begin() as c:c.execute(HEAD.insert().values(id='main',generation='new',revision=1))
     cache.refresh(MODULE,background=False)
     assert cursor(cache)['revision']==1
+    assert '旧快照缺少增量游标' in entry(cache)['sync_note']
     # If metadata is lost, a fallback snapshot must not inherit a certified cursor.
     with engine.begin() as c:c.execute(HEAD.delete())
     cache.refresh(MODULE,background=False)

@@ -1,6 +1,6 @@
 # 抱团拥挤度：采集与展示
 
-> 默认启用本地缓存：采集入库后，等待每天北京时间 07:00 自动同步，或在网页“数据同步”/服务器命令中手动同步。页面刷新读取当前快照，详见[本地缓存说明](local-cache.md)。
+> 默认启用本地缓存：采集入库后，等待每天北京时间 07:00 自动同步，或在网页“数据同步”/服务器命令中手动同步。页面刷新读取当前快照，详见[本地缓存说明](../operations/local-cache.md)。
 
 
 本模块将原聚宽程序的每日「前 5% 股票成交额占比」写入 MySQL，在“市场情绪”页面的“抱团拥挤度”标签展示；另一个标签为[市场热度](market-sentiment.md)。网页只读数据库，采集仍在聚宽研究环境运行。
@@ -20,7 +20,7 @@
 
 ## 聚宽运行方法
 
-仓库提供脱敏模板 [抱团拥挤度_数据库版.py](../collectors/抱团拥挤度_数据库版.py)，复制到聚宽私有研究目录。同时上传 `mysql_connector.py`，在其中填写 host、port、dbname、dbuser、dbpassword，指向网页所读取的同一个数据库。该独立文件沿用现有入库脚本的 `mysql+mysqldb` / SQLAlchemy 连接方式，不读取网页项目的 `config/app.config`。
+仓库提供脱敏模板 [抱团拥挤度_数据库版.py](../../collectors/抱团拥挤度_数据库版.py)，复制到聚宽私有研究目录。同时上传 `mysql_connector.py`，在其中填写 host、port、dbname、dbuser、dbpassword，指向网页所读取的同一个数据库。该独立文件沿用现有入库脚本的 `mysql+mysqldb` / SQLAlchemy 连接方式，不读取网页项目的 `config/app.config`。
 
 默认参数：
 
@@ -106,7 +106,7 @@ sudo systemctl status showallopts-api --no-pager
 curl -fsS 'http://127.0.0.1:8000/api/v1/market-crowding/history?days=30'
 ```
 
-本功能未增加运行依赖。以上适用于现有依赖已安装的 systemd + Nginx 部署；新环境按 [Linux 部署指南](linux-deployment.md) 安装。保留现有 `config/app.config`、systemd 覆盖配置及 Nginx 自定义端口，不必更改代理规则。浏览器仍用原访问地址，首页会出现新模块；若仍显示旧版请刷新页面。Docker 环境重新构建镜像后启动即可。
+本功能未增加运行依赖。以上适用于现有依赖已安装的 systemd + Nginx 部署；新环境按 [Linux 部署指南](../operations/linux-deployment.md) 安装。保留现有 `config/app.config`、systemd 覆盖配置及 Nginx 自定义端口，不必更改代理规则。浏览器仍用原访问地址，首页会出现新模块；若仍显示旧版请刷新页面。Docker 环境重新构建镜像后启动即可。
 
 ## 验证范围
 

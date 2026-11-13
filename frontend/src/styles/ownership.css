@@ -19,8 +19,8 @@
 }
 .ownership-panel {
   background: #fff;
-  border: 1px solid #eaded3;
-  border-radius: 20px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-panel);
   padding: 24px;
   margin-bottom: 20px;
   box-shadow: 0 8px 28px #69412e06;
@@ -56,11 +56,11 @@
 }
 .ownership-page input,
 .ownership-page select {
-  border: 1px solid #e5d7ca;
+  border: 1px solid var(--border);
   border-radius: 10px;
   padding: 11px;
   background: #fff;
-  color: #423932;
+  color: var(--text);
   font: inherit;
 }
 .ownership-results {
@@ -88,7 +88,7 @@
 .ownership-table small {
   display: block;
   color: var(--muted);
-  font-size: 12px;
+  font-size: 13px;
   margin-top: 5px;
 }
 .ownership-grid {
@@ -299,7 +299,7 @@
 }
 
 .ownership-table tbody tr:hover {
-  background: #fcf8f3;
+  background: var(--surface);
 }
 
 .ownership-grid > * {

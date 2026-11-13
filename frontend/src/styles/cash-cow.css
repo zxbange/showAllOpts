@@ -63,13 +63,13 @@
   min-width: 0;
   max-width: 100%;
   padding: 10px 12px;
-  border: 1px solid #d8d2c9;
+  border: 1px solid var(--border);
   border-radius: 8px;
   background: transparent;
   color: inherit;
 }
 .cash-cow-stock {
-  border-top: 1px solid #e2ddd5;
+  border-top: 1px solid var(--border);
 }
 .cash-cow-stock > summary {
   display: grid;
@@ -82,14 +82,14 @@
 .cash-cow-stock small {
   display: block;
   color: var(--muted);
-  font-size: 12px;
+  font-size: 13px;
   margin: 4px 0;
 }
 .cash-cow-stock strong {
   font-size: 16px;
 }
 .cash-cow-expand {
-  font-size: 12px;
+  font-size: 13px;
   text-decoration: underline;
 }
 .cash-cow-table {
@@ -108,7 +108,7 @@
 .cash-cow-table td {
   text-align: right;
   padding: 10px;
-  border-bottom: 1px solid #e2ddd5;
+  border-bottom: 1px solid var(--border);
 }
 .cash-cow-table caption {
   text-align: left;
@@ -141,7 +141,7 @@
 }
 .cash-cow-period select {
   padding: 9px;
-  border: 1px solid #d8d2c9;
+  border: 1px solid var(--border);
   border-radius: 8px;
   color: inherit;
   background: transparent;
@@ -152,7 +152,7 @@
   gap: 8px 22px;
   margin-bottom: 16px;
   color: var(--muted);
-  font-size: 12px;
+  font-size: 13px;
 }
 .cash-cow-updates time {
   font-variant-numeric: tabular-nums;

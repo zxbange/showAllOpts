@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """聚宽单文件串行采集：直接粘贴到 Notebook，或 %run -i 本文件。
 ETF 动量热度在本文件内独立实现；不读取外部策略、配置或日志文件。
-依赖和参数集中在开头；共用连接、会话及日期工具。用法见 docs/collector-batch.md。
+依赖和参数集中在开头；共用连接、会话及日期工具。用法见 docs/data/collector-batch.md。
 """
 import bisect
 import builtins

@@ -3,7 +3,6 @@ import { useCallback, useState } from 'react'
 import {
   CalendarDays,
   ChartNoAxesCombined,
-  Info,
   Layers3,
   RefreshCw,
   Thermometer,
@@ -251,12 +250,9 @@ export function MicrocapPage() {
           </section>
         </div>
       )}
-      <section className="method-card crowding-method">
-        <span className="method-icon">
-          <Info size={19} />
-        </span>
+      <details className="method-card crowding-method">
+        <summary>指标口径</summary>
         <div>
-          <h3>指标口径</h3>
           <p>
             剔除北交所、ST 和上市不足 250 个自然日的股票，在数据完整的股票中选择市值最小的 1000
             只。综合温度 = 相对估值历史分位 × 50% + 换手率拥挤度历史分位 × 25% +
@@ -267,7 +263,7 @@ export function MicrocapPage() {
             对照组采用相同筛选；指数按上期成分股等权收益续算。缺失值不补零。
           </span>
         </div>
-      </section>
+      </details>
     </div>
   )
 }

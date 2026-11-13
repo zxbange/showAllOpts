@@ -154,9 +154,9 @@ export function SentimentPage() {
           />
         )}
       </section>
-      <div className="method-card">
+      <details className="method-card">
+        <summary>统计口径</summary>
         <div>
-          <h3>统计口径</h3>
           {differentMethod ? (
             <>
               <p>
@@ -183,7 +183,7 @@ export function SentimentPage() {
             公开行情日采集与聚宽历史的数据来源不同；新采集以聚宽原脚本算法为目标，通过口径核验后才发布。既有记录保留原值，并按记录标注来源与口径。
           </p>
         </div>
-      </div>
+      </details>
       <MarketCollectionPanel onCollected={reload} />
     </div>
   )

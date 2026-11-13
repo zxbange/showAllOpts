@@ -100,8 +100,11 @@ describe.each([
         createElement(MemoryRouter, { initialEntries: [path] }, createElement(Page)),
       )
       const panelHtml = '<section aria-label="市场日采集">Shared collection panel</section>'
-      expect(html).toContain(`<h3>${methodology}</h3>`)
-      expect(html.indexOf(`<h3>${methodology}</h3>`)).toBeLessThan(html.indexOf(panelHtml))
+      expect(html).toContain(`<summary>${methodology}</summary>`)
+      expect(html.indexOf(`<summary>${methodology}</summary>`)).toBeLessThan(
+        html.indexOf(panelHtml),
+      )
+      expect(html).not.toContain('<details open')
       // Nothing may render after the shared panel inside the page root.
       expect(html.endsWith(`${panelHtml}</div>`)).toBe(true)
       expect(MarketCollectionPanel).toHaveBeenCalledTimes(1)

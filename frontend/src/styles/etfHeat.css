@@ -7,7 +7,7 @@
 .etf-heat-filters button {
   border: 1px solid var(--border);
   background: transparent;
-  border-radius: 20px;
+  border-radius: var(--radius-panel);
   padding: 7px 14px;
   color: var(--text);
   cursor: pointer;
@@ -22,7 +22,7 @@
   justify-content: flex-end;
   gap: 16px;
   padding: 0 24px 16px;
-  font-size: 12px;
+  font-size: 13px;
   color: var(--muted);
   flex-wrap: wrap;
 }
@@ -58,7 +58,7 @@
 .etf-tile-meta {
   display: flex;
   justify-content: space-between;
-  font-size: 12px;
+  font-size: 13px;
   gap: 8px;
 }
 .etf-heat-tile h3 {
@@ -73,7 +73,7 @@
 }
 .etf-tile-code,
 .etf-heat-tile small {
-  font-size: 12px;
+  font-size: 13px;
   opacity: 1;
 }
 .etf-method-note {
@@ -93,7 +93,7 @@
   border-radius: 8px;
   background: #eee9e3;
   color: #6b625a;
-  font-size: 12px;
+  font-size: 13px;
 }
 .etf-checks .passed {
   background: #e0eee7;
@@ -126,7 +126,7 @@
   .etf-heat-legend {
     gap: 8px;
     padding: 0 12px 12px;
-    font-size: 12px;
+    font-size: 13px;
   }
 }
 @media (prefers-reduced-motion: reduce) {

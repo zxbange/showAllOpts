@@ -1,3 +1,4 @@
+import { PageHeader } from '../components/PageHeader'
 import { ModuleSwitch } from '../components/ModuleSwitch'
 import { Coins } from 'lucide-react'
 import { useSearchParams } from 'react-router-dom'
@@ -211,10 +212,6 @@ function A00Page() {
   const latest = data?.rows.at(-1)
   return (
     <div className="commodity-page">
-      <header>
-        <span className="eyebrow">大宗商品 · 长江现货</span>
-        <h1>A00铝</h1>
-      </header>
       <section className="commodity-summary">
         <div>
           <small>最近报价 · {latest?.quoteDate ?? '—'}</small>
@@ -353,20 +350,35 @@ export function CommoditiesPage() {
   const coal = params.get('instrument') === 'cci'
   return (
     <div className="commodity-page">
-      <ModuleSwitch
-        label="大宗商品品种"
-        value={coal ? 'cci' : 'a00'}
-        items={[
-          { id: 'a00', name: 'A00铝', description: 'A00铝报价', icon: Coins, href: '/commodities' },
-          {
-            id: 'cci',
-            name: 'CCI动力煤',
-            description: 'CCI动力煤三档报价',
-            icon: Coins,
-            href: '/commodities?instrument=cci',
-          },
-        ]}
-      />
+      <PageHeader
+        switcher={
+          <ModuleSwitch
+            label="大宗商品品种"
+            value={coal ? 'cci' : 'a00'}
+            items={[
+              {
+                id: 'a00',
+                name: 'A00铝',
+                description: 'A00铝报价',
+                icon: Coins,
+                href: '/commodities',
+              },
+              {
+                id: 'cci',
+                name: 'CCI动力煤',
+                description: 'CCI动力煤三档报价',
+                icon: Coins,
+                href: '/commodities?instrument=cci',
+              },
+            ]}
+          />
+        }
+      >
+        <div>
+          <h1>{coal ? 'CCI动力煤' : 'A00铝'}</h1>
+          <p>大宗商品报价</p>
+        </div>
+      </PageHeader>
       {coal ? <CCICoalPage /> : <A00Page />}
     </div>
   )

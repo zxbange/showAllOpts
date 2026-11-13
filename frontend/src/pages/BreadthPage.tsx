@@ -1,6 +1,6 @@
 import { PageHeader } from '../components/PageHeader'
 import { useCallback, useState } from 'react'
-import { Activity, ArrowUpDown, CalendarDays, Info, RefreshCw, TrendingUp } from 'lucide-react'
+import { Activity, ArrowUpDown, CalendarDays, RefreshCw, TrendingUp } from 'lucide-react'
 import { getBreadthHistory } from '../api/client'
 import { useResource } from '../hooks/useResource'
 import { formatDate } from '../lib/format'
@@ -251,12 +251,9 @@ export function BreadthPage() {
               </table>
             </div>
           </section>
-          <section className="method-card">
-            <span className="method-icon">
-              <Info size={19} />
-            </span>
+          <details className="method-card">
+            <summary>统计口径</summary>
             <div>
-              <h3>统计口径</h3>
               <p>
                 剔除 68、4、8 开头、ST 及上市不超过 240 个自然日的股票，取总市值最小的 400 只。
                 当日收盘价与此前 N 个交易日收盘价比较：不低于最高价计新高，不高于最低价计新低。
@@ -268,7 +265,7 @@ export function BreadthPage() {
                 加权求和，不归一化。变化以点数差表示；历史范围按已采集交易日，缺失不补零。
               </span>
             </div>
-          </section>
+          </details>
         </>
       )}
     </div>

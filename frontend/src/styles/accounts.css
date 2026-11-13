@@ -7,8 +7,8 @@
 .account-card,
 .account-panel {
   background: var(--surface, #fff);
-  border: 1px solid var(--border, #ead9cb);
-  border-radius: 20px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-panel);
   padding: 28px;
 }
 .account-card {
@@ -39,10 +39,10 @@
   min-width: 0;
   width: 100%;
   padding: 11px;
-  border: 1px solid #d8c5b5;
+  border: 1px solid var(--border);
   border-radius: 8px;
   background: #fff;
-  color: #352e28;
+  color: var(--text);
   font: inherit;
 }
 .account-error {
@@ -52,7 +52,7 @@
   display: block;
   overflow-wrap: anywhere;
   padding: 12px;
-  background: #f6f0e9;
+  background: var(--surface);
   line-height: 1.6;
 }
 .accounts-page {
@@ -84,7 +84,7 @@
 .account-table th,
 .account-table td {
   padding: 12px;
-  border-bottom: 1px solid #ead9cb;
+  border-bottom: 1px solid var(--border);
   text-align: left;
 }
 .account-menu {

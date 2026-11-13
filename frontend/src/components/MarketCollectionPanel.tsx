@@ -199,9 +199,7 @@ export function MarketCollectionPanel({ onCollected }: { onCollected: () => void
           <h2>
             <Database size={17} /> 市场日采集
           </h2>
-          <p>
-            日采集使用东方财富目标日报表及公开行情，并核对官方分类数量；以聚宽原脚本为目标口径，热度与拥挤度分别核验发布，证据不足的缺口保留。
-          </p>
+          <p>统一更新市场热度与抱团拥挤度。</p>
         </div>
       </div>
       <div className="market-collection-overview">

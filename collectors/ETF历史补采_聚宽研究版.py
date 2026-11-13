@@ -4,7 +4,7 @@
 仅使用平台内置 jqdata，不使用外部 JQData SDK、账号认证或交易所 HTTP 接口。
 默认自动创建缺少的数据表、只新增缺失记录；已有数据不覆盖。
 只需预览时将 WRITE_DATABASE 改为 False；源缺失是否允许部分入库由 ALLOW_PARTIAL 控制。
-完整说明见 docs/etf-joinquant-history.md；不替代后续交易所每日自动采集。
+完整说明见 docs/data/etf-joinquant-history.md；不替代后续交易所每日自动采集。
 """
 from __future__ import print_function, division
 

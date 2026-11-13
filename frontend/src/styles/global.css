@@ -6,13 +6,16 @@
   font-synthesis: none;
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
-  --bg: #fbf8f4;
+  --bg: #f8f9fb;
   --panel: #ffffff;
-  --surface: #f7f1eb;
-  --border: #e9dfd5;
-  --text: #352c29;
-  --muted: #695b53;
-  --accent: #c44837;
+  --surface: #f2f4f7;
+  --border: #dde1e6;
+  --text: #242b36;
+  --muted: #596473;
+  --text-muted: var(--muted);
+  --radius-control: 8px;
+  --radius-panel: 12px;
+  --accent: #b13e2f;
   --accent-soft: #fcece5;
   --on-accent: #ffffff;
   --warm: #bd4c35;
@@ -110,11 +113,11 @@ svg {
   flex-shrink: 0;
   position: fixed;
   inset: 0 auto 0 0;
-  background: #fffdf9;
+  background: var(--panel);
   border-right: 1px solid var(--border);
   display: flex;
   flex-direction: column;
-  padding: 32px 22px 20px;
+  padding: 24px 16px 20px;
   z-index: 5;
   overflow-y: auto;
 }
@@ -153,7 +156,7 @@ svg {
   display: flex;
   align-items: center;
   gap: 12px;
-  padding: 14px 14px;
+  padding: 11px 14px;
   border-radius: 9px;
   color: var(--muted);
   font-size: 14px;
@@ -174,24 +177,8 @@ svg {
 .nav-key {
   margin-left: auto;
   font-family: Manrope, sans-serif;
-  font-size: 12px;
+  font-size: 13px;
   opacity: 1;
-}
-.sidebar-bottom {
-  margin-top: auto;
-}
-.sidebar-footer {
-  border-top: 1px solid var(--border);
-  padding: 22px 8px 0;
-  display: flex;
-  align-items: center;
-  gap: 7px;
-  color: var(--muted);
-  font-size: 12px;
-}
-.sidebar-footer > span:last-child {
-  margin-left: auto;
-  font-size: 12px;
 }
 .status-dot {
   display: inline-block;
@@ -211,21 +198,21 @@ svg {
   background: var(--bg);
 }
 .topbar {
-  height: 79px;
+  height: 68px;
   flex-shrink: 0;
   border-bottom: 1px solid var(--border);
   display: flex;
   align-items: center;
   justify-content: space-between;
   padding: 0 42px;
-  background: #fffdf9;
+  background: var(--panel);
 }
 .breadcrumb {
   display: flex;
   align-items: center;
   gap: 13px;
   color: var(--muted);
-  font-size: 12px;
+  font-size: 13px;
 }
 .breadcrumb > span {
   color: var(--text);
@@ -238,7 +225,7 @@ svg {
   align-items: center;
   gap: 22px;
   color: var(--muted);
-  font-size: 12px;
+  font-size: 13px;
   letter-spacing: 0.5px;
 }
 .avatar {
@@ -251,37 +238,15 @@ svg {
   border-radius: 50%;
   color: var(--accent);
   font-family: Manrope, sans-serif;
-  font-size: 12px;
+  font-size: 13px;
   font-weight: 700;
 }
 .main-content {
   width: 100%;
   max-width: 1510px;
-  padding: 37px 42px 44px;
+  padding: 28px 32px 40px;
   margin: 0 auto;
   flex: 1;
-}
-.page-footer {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  margin: 0 42px;
-  padding: 21px 0 25px;
-  border-top: 1px solid var(--border);
-  font-size: 12px;
-  color: var(--muted);
-  letter-spacing: 0;
-  gap: 12px;
-}
-.page-footer > span {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-.page-footer i {
-  height: 9px;
-  width: 1px;
-  background: var(--surface);
 }
 .tiny-line {
   width: 18px;
@@ -294,7 +259,7 @@ svg {
   justify-content: center;
   gap: 9px;
   min-height: 40px;
-  border-radius: 7px;
+  border-radius: var(--radius-control);
   padding: 10px 17px;
   font-size: 14px;
   font-weight: 600;
@@ -303,7 +268,7 @@ svg {
     background 0.2s;
 }
 .button:hover {
-  transform: translateY(-2px);
+  filter: brightness(0.97);
 }
 .button-primary {
   background: var(--accent);
@@ -329,13 +294,13 @@ svg {
   padding: 7px 10px;
   border: 1px solid var(--border);
   border-radius: 5px;
-  font-size: 12px;
-  letter-spacing: 1px;
+  font-size: 13px;
+  letter-spacing: 0;
   color: var(--accent);
   background: var(--surface);
 }
 .pill-small {
-  font-size: 12px;
+  font-size: 13px;
   padding: 5px 8px;
   letter-spacing: 0;
   border-color: var(--border);
@@ -360,7 +325,7 @@ svg {
   letter-spacing: 0.5px;
 }
 .subtle-tag {
-  font-size: 12px;
+  font-size: 13px;
   color: var(--muted);
   display: flex;
   align-items: center;
@@ -377,10 +342,10 @@ svg {
   row-gap: 16px;
 }
 .page-heading h1 {
-  font-size: 29px;
+  font-size: 28px;
   font-weight: 650;
-  letter-spacing: 1px;
-  margin: 9px 0 10px;
+  letter-spacing: 0;
+  margin: 0 0 6px;
   display: flex;
   align-items: center;
   gap: 12px;
@@ -396,7 +361,7 @@ svg {
   border: 1px solid var(--border);
   color: var(--muted);
   background: var(--surface);
-  font-size: 12px;
+  font-size: 13px;
   font-weight: 400;
   letter-spacing: 0.5px;
   padding: 5px 8px;
@@ -416,7 +381,7 @@ svg {
   padding: 11px 13px;
   border: 1px solid var(--border);
   border-radius: 6px;
-  font-size: 12px;
+  font-size: 13px;
   color: var(--muted);
   background: var(--panel);
   font-family: Manrope, sans-serif;
@@ -430,7 +395,7 @@ svg {
 .stat-card {
   background: var(--panel);
   border: 1px solid var(--border);
-  border-radius: 10px;
+  border-radius: var(--radius-panel);
   padding: 20px;
   overflow: hidden;
   position: relative;
@@ -453,7 +418,7 @@ svg {
   font-size: 31px;
   font-weight: 600;
   letter-spacing: -0.8px;
-  margin: 13px 0 10px;
+  margin: 10px 0 8px;
   line-height: 1.2;
   font-variant-numeric: tabular-nums;
   overflow-wrap: anywhere;
@@ -467,11 +432,11 @@ svg {
 }
 .stat-note {
   color: var(--muted);
-  font-size: 12px;
+  font-size: 13px;
   line-height: 1.7;
 }
 .stat-accent {
-  background: linear-gradient(120deg, #fff1e8, #fff9ec);
+  background: var(--panel);
   border-color: #efd4bd;
 }
 .stat-accent:after {
@@ -499,7 +464,7 @@ svg {
 .panel {
   background: var(--panel);
   border: 1px solid var(--border);
-  border-radius: 12px;
+  border-radius: var(--radius-panel);
   overflow: hidden;
   box-shadow: 0 4px 20px rgba(97, 57, 35, 0.025);
 }
@@ -529,7 +494,7 @@ svg {
   height: 5px;
 }
 .subtle-count {
-  font-size: 12px;
+  font-size: 13px;
   color: var(--muted);
   background: var(--surface);
   padding: 3px 7px;
@@ -581,7 +546,7 @@ svg {
   align-items: center;
   border-top: 1px solid var(--border);
   padding: 16px 0 13px;
-  font-size: 12px;
+  font-size: 13px;
   color: var(--muted);
   gap: 10px;
   flex-wrap: wrap;
@@ -595,7 +560,7 @@ svg {
   display: flex;
   align-items: center;
   gap: 8px;
-  font-size: 12px;
+  font-size: 13px;
   color: var(--muted);
 }
 .heat-legend i {
@@ -608,7 +573,7 @@ svg {
 .legend-type {
   margin-left: 5px;
   color: var(--muted);
-  font-size: 12px;
+  font-size: 13px;
 }
 .heatmap-grid {
   display: grid;
@@ -618,7 +583,7 @@ svg {
   background: var(--surface);
   border: 1px solid var(--border);
   padding: 6px;
-  border-radius: 7px;
+  border-radius: var(--radius-control);
   align-content: stretch;
   grid-auto-rows: minmax(112px, auto);
 }
@@ -653,7 +618,7 @@ svg {
   align-items: center;
   justify-content: space-between;
   font-family: Manrope, sans-serif;
-  font-size: 12px;
+  font-size: 13px;
   opacity: 1;
   margin-bottom: auto;
   padding-bottom: 6px;
@@ -690,7 +655,7 @@ svg {
   align-items: center;
   gap: 12px;
   color: var(--muted);
-  font-size: 12px;
+  font-size: 13px;
   margin-top: 15px;
   line-height: 1.7;
 }
@@ -724,7 +689,7 @@ svg {
 }
 .leader-card:hover {
   border-color: var(--border);
-  transform: translateY(-2px);
+  filter: brightness(0.97);
 }
 .leader-rank {
   font-family: Manrope, sans-serif;
@@ -738,7 +703,7 @@ svg {
   margin-bottom: 5px;
 }
 .leader-card div > span {
-  font-size: 12px;
+  font-size: 13px;
   color: var(--muted);
 }
 .leader-score {
@@ -754,7 +719,7 @@ svg {
   display: flex;
   align-items: center;
   justify-content: flex-end;
-  font-size: 12px;
+  font-size: 13px;
   margin-top: 4px;
 }
 .leader-card > svg {
@@ -777,7 +742,7 @@ svg {
   align-items: center;
   gap: 7px;
   color: var(--muted);
-  font-size: 12px;
+  font-size: 13px;
   margin: 0 0 24px;
 }
 .back-link:hover {
@@ -829,7 +794,7 @@ svg {
   align-items: center;
   gap: 7px;
   padding-top: 10px;
-  font-size: 12px;
+  font-size: 13px;
   color: var(--muted);
 }
 .chart-legend > span:first-child {
@@ -843,7 +808,7 @@ svg {
 }
 .chart-legend .legend-extra {
   color: var(--muted);
-  font-size: 12px;
+  font-size: 13px;
   margin-left: 5px;
 }
 .trend-chart {
@@ -865,20 +830,10 @@ svg {
 .method-card {
   background: var(--panel);
   border: 1px solid var(--border);
-  border-radius: 10px;
+  border-radius: var(--radius-panel);
   padding: 23px;
   display: flex;
   gap: 13px;
-}
-.method-icon {
-  width: 33px;
-  height: 33px;
-  border-radius: 8px;
-  display: grid;
-  place-items: center;
-  background: var(--surface);
-  color: var(--muted);
-  flex-shrink: 0;
 }
 .method-card h3 {
   font-size: 14px;
@@ -893,7 +848,7 @@ svg {
 }
 .method-card div > span {
   display: block;
-  font-size: 12px;
+  font-size: 13px;
   line-height: 1.8;
   color: var(--muted);
   margin-top: 12px;
@@ -901,7 +856,7 @@ svg {
 .observation-card {
   background: linear-gradient(120deg, #fff2e6, #fffaf2);
   border: 1px solid var(--border);
-  border-radius: 10px;
+  border-radius: var(--radius-panel);
   padding: 23px;
 }
 .observation-card strong {
@@ -913,20 +868,20 @@ svg {
   margin: 9px 0;
 }
 .observation-card strong small {
-  font-size: 12px;
+  font-size: 13px;
   font-weight: 400;
   margin-left: 8px;
   color: var(--muted);
 }
 .observation-card p {
-  font-size: 12px;
+  font-size: 13px;
   color: var(--muted);
 }
 .observation-card > span:last-child {
   display: flex;
   align-items: center;
   gap: 5px;
-  font-size: 12px;
+  font-size: 13px;
   color: var(--muted);
   margin-top: 12px;
 }
@@ -958,7 +913,7 @@ svg {
   font-weight: 500;
 }
 .state-panel p {
-  font-size: 12px;
+  font-size: 13px;
   color: var(--muted);
   max-width: 500px;
   line-height: 1.8;
@@ -971,7 +926,7 @@ svg {
   background-size: 300% 100%;
   animation: shimmer 1.8s infinite;
   border: 1px solid var(--border);
-  border-radius: 10px;
+  border-radius: var(--radius-panel);
 }
 .skeleton-stat {
   height: 139px;
@@ -1064,9 +1019,6 @@ svg {
   .topbar {
     padding: 0 26px;
   }
-  .page-footer {
-    margin: 0 26px;
-  }
 
   .stat-card {
     padding: 17px 15px;
@@ -1075,7 +1027,7 @@ svg {
     font-size: 28px;
   }
   .stat-note {
-    font-size: 12px;
+    font-size: 13px;
   }
   .heatmap-section {
     padding: 20px;
@@ -1086,7 +1038,7 @@ svg {
     aspect-ratio: auto;
   }
   .cell-top {
-    font-size: 12px;
+    font-size: 13px;
     padding-bottom: 3px;
   }
   .cell-value {
@@ -1109,7 +1061,7 @@ svg {
     font-size: 17px;
   }
   .leader-card div > span {
-    font-size: 12px;
+    font-size: 13px;
   }
   .leader-card > svg {
     display: none;
@@ -1124,8 +1076,7 @@ svg {
     justify-content: center;
   }
   .brand > span:last-child,
-  .main-nav a > span,
-  .sidebar-footer {
+  .main-nav a > span {
     display: none;
   }
   .main-nav a {
@@ -1151,7 +1102,7 @@ svg {
   }
   .date-badge {
     padding: 11px 9px;
-    font-size: 12px;
+    font-size: 13px;
   }
 
   .detail-bottom {
@@ -1175,7 +1126,7 @@ svg {
     font-size: 13px;
   }
   .cell-top {
-    font-size: 12px;
+    font-size: 13px;
   }
 }
 @media (max-width: 700px) {
@@ -1190,8 +1141,7 @@ svg {
     background: var(--panel);
     backdrop-filter: blur(16px);
   }
-  .brand,
-  .sidebar-bottom {
+  .brand {
     display: none;
   }
   .main-nav {
@@ -1205,7 +1155,7 @@ svg {
   .main-nav a {
     padding: 8px 22px;
     gap: 9px;
-    font-size: 12px;
+    font-size: 13px;
   }
   .main-nav a > span:not(.nav-key) {
     display: inline;
@@ -1231,7 +1181,7 @@ svg {
   }
   .breadcrumb {
     gap: 8px;
-    font-size: 12px;
+    font-size: 13px;
     min-width: 0;
   }
   .breadcrumb > a,
@@ -1252,12 +1202,6 @@ svg {
   .main-content {
     padding: 24px 18px 30px;
   }
-  .page-footer {
-    margin: 0 18px;
-    font-size: 12px;
-    letter-spacing: 0.7px;
-    flex-wrap: wrap;
-  }
 
   .section-heading h2 {
     font-size: 18px;
@@ -1267,7 +1211,7 @@ svg {
   }
 
   .pill-small {
-    font-size: 12px;
+    font-size: 13px;
     padding: 4px 6px;
   }
 
@@ -1282,7 +1226,7 @@ svg {
     margin-bottom: 8px;
   }
   .heading-tag {
-    font-size: 12px;
+    font-size: 13px;
   }
   .page-heading p {
     font-size: 14px;
@@ -1291,7 +1235,7 @@ svg {
     margin-top: 3px;
   }
   .date-badge {
-    font-size: 12px;
+    font-size: 13px;
     padding: 8px 10px;
     min-height: 34px;
   }
@@ -1315,7 +1259,7 @@ svg {
     font-size: 13px;
   }
   .stat-note {
-    font-size: 12px;
+    font-size: 13px;
   }
   .heatmap-section {
     padding: 15px 12px;
@@ -1342,11 +1286,11 @@ svg {
   }
   .heatmap-meta {
     padding-top: 12px;
-    font-size: 12px;
+    font-size: 13px;
   }
   .heat-legend {
     gap: 5px;
-    font-size: 12px;
+    font-size: 13px;
   }
   .heat-legend i {
     width: 60px;
@@ -1366,7 +1310,7 @@ svg {
     padding: 10px;
   }
   .cell-top {
-    font-size: 12px;
+    font-size: 13px;
     padding-bottom: 4px;
   }
   .cell-name {
@@ -1379,7 +1323,7 @@ svg {
     flex-direction: column;
     align-items: flex-start;
     gap: 6px;
-    font-size: 12px;
+    font-size: 13px;
     margin-top: 12px;
   }
   .leader-grid {
@@ -1397,7 +1341,7 @@ svg {
     font-size: 14px;
   }
   .leader-card div > span {
-    font-size: 12px;
+    font-size: 13px;
   }
   .leader-score strong {
     font-size: 21px;
@@ -1409,7 +1353,7 @@ svg {
     font-size: 13px;
   }
   .back-link {
-    font-size: 12px;
+    font-size: 13px;
     margin-bottom: 20px;
   }
   .trend-panel {
@@ -1429,7 +1373,7 @@ svg {
     height: 310px;
   }
   .chart-subtitle {
-    font-size: 12px;
+    font-size: 13px;
   }
   .detail-bottom {
     grid-template-columns: 1fr;
@@ -1589,7 +1533,7 @@ svg {
   margin: 10px 0 0;
 }
 .temperature-heading > span {
-  font-size: 12px;
+  font-size: 13px;
   color: var(--muted);
 }
 .temperature-track {
@@ -1614,7 +1558,7 @@ svg {
 .temperature-scale {
   position: relative;
   height: 25px;
-  font-size: 12px;
+  font-size: 13px;
   color: var(--muted);
 }
 .temperature-scale span {
@@ -1662,7 +1606,7 @@ svg {
   font-weight: 500;
 }
 .temperature-factors small {
-  font-size: 12px;
+  font-size: 13px;
   color: var(--muted);
   line-height: 1.5;
 }
@@ -1709,10 +1653,10 @@ svg {
     flex-direction: column;
     gap: 3px;
     padding: 5px 4px;
-    font-size: 12px;
+    font-size: 13px;
   }
   .main-nav a > span:not(.nav-key) {
-    font-size: 12px;
+    font-size: 13px;
   }
   .microcap-page .range-switch button {
     padding: 8px 5px;
@@ -1831,4 +1775,43 @@ textarea::placeholder {
   .cache-dialog select {
     font-size: 16px;
   }
+}
+
+/* Long methodology stays available without taking space from the data. */
+details.method-card {
+  display: block;
+  background: var(--panel);
+  padding: 14px 18px;
+}
+details.method-card > summary {
+  cursor: pointer;
+  color: var(--muted);
+  font-size: 14px;
+  font-weight: 600;
+}
+details.method-card[open] > summary {
+  margin-bottom: 12px;
+  color: var(--text);
+}
+details.method-card > div,
+details.method-card p {
+  font-size: 14px;
+  line-height: 1.7;
+}
+summary:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 4px;
+}
+.main-content table {
+  font-variant-numeric: tabular-nums;
+}
+.main-content th {
+  color: var(--muted);
+  font-weight: 600;
+}
+.main-content tbody tr:hover {
+  background: var(--surface);
+}
+.main-content :is(.panel, .social-panel, .account-panel, .holdings-card, .commodity-panel) {
+  border-color: var(--border);
 }

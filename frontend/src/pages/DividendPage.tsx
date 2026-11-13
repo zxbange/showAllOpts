@@ -1,15 +1,7 @@
 import { useSearchParams } from 'react-router-dom'
 import { PageHeader } from '../components/PageHeader'
 import { useCallback, useState } from 'react'
-import {
-  CalendarDays,
-  Coins,
-  Info,
-  Layers3,
-  RefreshCw,
-  Search,
-  SlidersHorizontal,
-} from 'lucide-react'
+import { CalendarDays, Coins, Layers3, RefreshCw, Search, SlidersHorizontal } from 'lucide-react'
 import { getDividendOverview } from '../api/client'
 import { useResource } from '../hooks/useResource'
 import { EmptyState, ErrorState, LoadingState } from '../components/States'
@@ -244,12 +236,9 @@ export function DividendPage() {
               <span>左右滑动查看完整指标 · 页面刷新读取当前数据快照</span>
             </div>
           </section>
-          <section className="method-card">
-            <span className="method-icon">
-              <Info size={19} />
-            </span>
+          <details className="method-card">
+            <summary>两种筛选口径</summary>
             <div>
-              <h3>两种筛选口径</h3>
               <p>
                 纯高股息：按股权登记日统计近 1095 天累计分红，在可选池内有分红记录的股票中取比例前
                 10%，再要求 0.1 &lt; PEG &lt; 2、营收同比 &gt; 3%、净利润同比 &gt; 8%、扣非 ROE &gt;
@@ -265,7 +254,7 @@ export function DividendPage() {
                 财务数据取当日已披露值，报告期可能不同；停牌价使用填充值，缺失指标显示“—”。
               </span>
             </div>
-          </section>
+          </details>
         </>
       )}
     </div>

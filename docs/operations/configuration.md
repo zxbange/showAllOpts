@@ -18,7 +18,7 @@ systemd 模板通过 `APP_ENV_FILE=config/app.config` 选择生产配置；Docke
 
 进程环境变量优先于选中的配置文件，未提供的字段使用程序默认值。选中生产配置时不与开发配置合并。相对路径以项目根目录为基准，不受终端工作目录或 systemd 工作目录影响。显式指定的文件不存在、不可读或路径为空时启动失败。
 
-配置项见 [config/app.config.example](../config/app.config.example)。`APP_ENV_FILE` 设置在启动进程的环境中，不要写进 `app.config` 内部。配置修改后需重启。
+配置项见 [config/app.config.example](../../config/app.config.example)。`APP_ENV_FILE` 设置在启动进程的环境中，不要写进 `app.config` 内部。配置修改后需重启。
 
 ## Linux 生产配置和现有配置迁移
 
@@ -102,6 +102,6 @@ Compose 在宿主机读取文件，将键值注入后端容器环境。`config/`
 
 两融担保比例使用独立的东方财富接口采集任务，`MARGIN_WORKER_ENABLED=true` 为默认值，旧配置无需补填。每天北京时间08:00检查（约30秒调度间隔），不受 `CACHE_REFRESH_TIME` 影响；设为 `false` 只关闭该模块定时任务，仍可手动更新。本地数据与续传清单位于 `LOG_DIR/market-data/margin-guarantee/`，需持久化保留。启动不立即补跑，首次可在“两融担保比例”页面点击“更新数据”。
 
-创红比的 `GROWTH_DIVIDEND_WORKER_ENABLED=true` 默认启用，旧配置无需补填。首次启动自动后台补齐2018年以来的指数日线，此后每个交易日北京时间18:00更新当天并重试历史缺口，独立于 `CACHE_REFRESH_TIME`。设为 `false` 关闭自动回填与定时采集，保留页面手动更新。行情、交易日历和进度位于 `LOG_DIR/market-data/growth-dividend/`，应随现有 `log/` 持久化；无需添加 MySQL 表或公开行情接口密钥。口径、数据起点与错误恢复见[创红比](growth-dividend.md)。
+创红比的 `GROWTH_DIVIDEND_WORKER_ENABLED=true` 默认启用，旧配置无需补填。首次启动自动后台补齐2018年以来的指数日线，此后每个交易日北京时间18:00更新当天并重试历史缺口，独立于 `CACHE_REFRESH_TIME`。设为 `false` 关闭自动回填与定时采集，保留页面手动更新。行情、交易日历和进度位于 `LOG_DIR/market-data/growth-dividend/`，应随现有 `log/` 持久化；无需添加 MySQL 表或公开行情接口密钥。口径、数据起点与错误恢复见[创红比](../data/growth-dividend.md)。
 
 修改这些配置后重启后端。缓存开关和命令用法见[本地缓存说明](local-cache.md)，真实配置仍按本文规则排除 GitHub。

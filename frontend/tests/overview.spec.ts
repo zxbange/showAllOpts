@@ -116,7 +116,7 @@ test('group tabs preserve direct links, active navigation and mobile layout', as
     await expect(tabs).toBeVisible()
     const heading = await page.locator('.page-header .page-heading').boundingBox()
     const cards = await tabs.boundingBox()
-    expect(cards!.y + cards!.height).toBeLessThanOrEqual(heading!.y)
+    expect(heading!.y + heading!.height).toBeLessThanOrEqual(cards!.y)
     await expect(tabs.locator('.module-card')).toHaveCount(
       group === '市场情绪' || group === '业绩选股' ? 6 : 2,
     )
@@ -242,7 +242,7 @@ test('compact bookmarks scroll and support keyboard without activating the wrong
     }
   })
   expect(bounds.rows).toBe(1)
-  expect(bounds.height).toBeCloseTo(54, 2)
+  expect(bounds.height).toBeCloseTo(44, 2)
   expect(bounds.lastVisible).toBe(true)
   expect(bounds.bodyOverflow).toBe(false)
   if (info.project.name === 'mobile') {
@@ -302,7 +302,7 @@ test('compact bookmarks scroll and support keyboard without activating the wrong
   await expect(page.getByRole('link', { name: '进入国家队动态', exact: true })).toHaveCount(0)
 })
 
-test('page-local module bookmarks stay above titles and preserve ordinary controls', async ({
+test('page-local module bookmarks stay below titles and preserve ordinary controls', async ({
   page,
 }, info) => {
   await page.route('**/api/v1/**', (route) =>
@@ -320,7 +320,7 @@ test('page-local module bookmarks stay above titles and preserve ordinary contro
     await expect(nav).toBeVisible()
     const box = await nav.boundingBox()
     const heading = await page.getByRole('heading', { level: 1 }).boundingBox()
-    expect(box!.y + box!.height).toBeLessThanOrEqual(heading!.y)
+    expect(heading!.y + heading!.height).toBeLessThanOrEqual(box!.y)
     expect(
       await nav.evaluate(
         (el) =>

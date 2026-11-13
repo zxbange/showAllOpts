@@ -34,6 +34,6 @@
 | `check_xueqiu_response.py` | 使用已保存凭据发起一次雪球接口只读请求，分析响应类型 |
 | `check_xueqiu_browser.py` | 使用临时浏览器上下文和已保存凭据进行访问对照，复用上一个脚本的响应判断逻辑 |
 
-三个排查脚本用途不同，按故障情况手动运行，不属于日常采集任务。运行账号与配置应和服务一致，具体命令见[浏览器登录排查](../docs/social-browser-login.md)和[博主监控说明](../docs/social-monitor.md)。
+三个排查脚本用途不同，按故障情况手动运行，不属于日常采集任务。运行账号与配置应和服务一致，具体命令见[浏览器登录排查](../docs/operations/social-browser-login.md)和[博主监控说明](../docs/data/social-monitor.md)。
 
 `__init__.py` 用于包导入；`__pycache__/` 是 Python 自动生成的缓存，不是需要维护的脚本，不提交 Git。

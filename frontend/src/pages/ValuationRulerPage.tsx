@@ -256,8 +256,8 @@ export function ValuationRulerPage() {
           </span>
         </div>
       </section>
-      <section className="panel valuation-method">
-        <h2>统计口径与覆盖</h2>
+      <details className="panel valuation-method method-card">
+        <summary>统计口径与覆盖</summary>
         <p>
           按每个交易日实际沪深300成分名单，正 PE-TTM
           等权算术平均；负PE与缺失PE分别统计，均不参与均值。保留300只成分，存在有效正PE的日期进入分位样本；缺失交易日不填充、不跨缺口连线。
@@ -283,7 +283,7 @@ export function ValuationRulerPage() {
             <p>{data.gap_dates.join('、')}</p>
           </details>
         )}
-      </section>
+      </details>
       <section className="panel valuation-update" aria-label="估值数据采集">
         <div className="valuation-update-row">
           <div>
@@ -295,10 +295,7 @@ export function ValuationRulerPage() {
                   : '自动采集当前未启用，请管理员检查系统配置。'
                 : '正在核验自动采集状态。'}
             </p>
-            <p>
-              手动采集由服务器按交易日历与15:00收盘校验，从最后保存日期补至最新到期交易日，并重试历史失败日期。
-            </p>
-            <p>聚宽历史脚本写入 MySQL 后，通过顶部“数据同步”统一更新。</p>
+            <p>更新已收盘交易日，自动重试缺口。</p>
           </div>
           <div className="valuation-actions">
             <button

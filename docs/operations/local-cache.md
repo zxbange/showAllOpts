@@ -156,7 +156,7 @@ Linux 在项目根目录执行 `bash deploy.sh` 更新并重启后端，再到�
 
 ## 个股机构持仓的变更序号同步
 
-新版聚宽采集器维护事务性的变更序号和主键记录，本模块不再扫描全历史主键及更新时间。首次/升级建立一次完整基线，之后按序号查询新增、更正和删除；未变化时直接结束。所有写入须使用新版脚本，人工 SQL 改库后用 `--module institution-ownership --full` 复核。旧库没有变更表时兼容原扫描流程。详见 [机构持仓同步加速](institution-ownership.md#本地同步加速)。
+新版聚宽采集器维护事务性的变更序号和主键记录，本模块不再扫描全历史主键及更新时间。首次/升级建立一次完整基线，之后按序号查询新增、更正和删除；未变化时直接结束。所有写入须使用新版脚本，人工 SQL 改库后用 `--module institution-ownership --full` 复核。旧库没有变更表时兼容原扫描流程。详见 [机构持仓同步加速](../data/institution-ownership.md#本地同步加速)。
 
 ### 大数据量同步超时
 
@@ -180,6 +180,6 @@ grep -E 'Cache transfer|Cache manifest|Cache slow read|Cache read failed' log/ap
 
 若读耗时占主导，优先检查实际源查询、公网链路和客户端 CPU；若写耗时占主导，检查本地磁盘负载。无需因线程状态直接扩大超时或开启更多并行同步连接。
 
-机构持仓首次全量支持断点续传：详见 [首次全量同步断点续传](institution-ownership.md#首次全量同步断点续传)。请保留缓存目录内的 `.partial` 文件；未成功的单页会重新下载，已提交页可以复用，最终补差与校验通过才供页面读取。
+机构持仓首次全量支持断点续传：详见 [首次全量同步断点续传](../data/institution-ownership.md#首次全量同步断点续传)。请保留缓存目录内的 `.partial` 文件；未成功的单页会重新下载，已提交页可以复用，最终补差与校验通过才供页面读取。
 
-机构持仓压缩传输开关 `CACHE_OWNERSHIP_COMPRESSION=true` 默认生效，详情见 [传输与本地写入优化](institution-ownership.md#公网传输与本地写入优化)。开关不影响既有缓存和续传断点。
+机构持仓压缩传输开关 `CACHE_OWNERSHIP_COMPRESSION=true` 默认生效，详情见 [传输与本地写入优化](../data/institution-ownership.md#公网传输与本地写入优化)。开关不影响既有缓存和续传断点。

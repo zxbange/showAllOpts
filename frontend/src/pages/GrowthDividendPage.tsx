@@ -427,9 +427,9 @@ export function GrowthDividendPage() {
         )}
       </section>
 
-      <div className="method-card growth-dividend-method">
+      <details className="method-card growth-dividend-method">
+        <summary>统计口径</summary>
         <div>
-          <h3>统计口径</h3>
           <p>
             创红比 = 创业板指收盘点位 ÷ 中证红利收盘点位；科创红利比 = 科创50收盘点位 ÷
             中证红利收盘点位。
@@ -439,7 +439,7 @@ export function GrowthDividendPage() {
             分位基准只使用真实有效比值：创红比从2018-01-01起，科创红利比从首个有效数据日起，均计算至最新历史数据；缩放区间不参与计算。
           </span>
         </div>
-      </div>
+      </details>
     </div>
   )
 }

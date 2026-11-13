@@ -1,3 +1,4 @@
+import { PageHeader } from '../components/PageHeader'
 import { SystemTaskConfiguration } from '../components/SystemTaskConfiguration'
 import { SystemRuntimeConfiguration } from '../components/SystemRuntimeConfiguration'
 import { useEffect, useState } from 'react'
@@ -82,9 +83,10 @@ function Editor() {
   }
   return (
     <div className="system-settings">
-      <header>
-        <span className="eyebrow">管理员专属</span>
-        <h1>系统配置</h1>
+      <PageHeader>
+        <div>
+          <h1>系统配置</h1>
+        </div>
         <nav className="system-settings-nav" aria-label="配置分区">
           <a href="#settings-tasks">自动任务</a>
           <a href="#settings-runtime">运行参数</a>
@@ -92,7 +94,7 @@ function Editor() {
           <a href="#settings-database">数据库</a>
           <a href="#settings-notifications">社交通知</a>
         </nav>
-      </header>
+      </PageHeader>
       {error && (
         <p role="alert" className="system-settings-error">
           {error}

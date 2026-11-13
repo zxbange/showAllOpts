@@ -1,3 +1,4 @@
+import { PageHeader } from '../components/PageHeader'
 import { Link } from 'react-router-dom'
 import { ModuleSwitch } from '../components/ModuleSwitch'
 import { useAuth } from '../components/AccountAccess'
@@ -223,10 +224,11 @@ export function SocialMonitorPage() {
   if (!status)
     return (
       <section className="social-page">
-        {switcher}
-        <header className="social-heading">
-          <h1>博主动态监控</h1>
-        </header>
+        <PageHeader switcher={switcher}>
+          <div>
+            <h1>博主动态监控</h1>
+          </div>
+        </PageHeader>
         <div className="social-panel" aria-busy={!(error || loadError) || busy}>
           {error || loadError ? (
             <>
@@ -252,12 +254,11 @@ export function SocialMonitorPage() {
 
   return (
     <section className="social-page">
-      {switcher}
-      <header className="social-heading">
+      <PageHeader switcher={switcher}>
         <div>
           <h1>博主动态监控</h1>
         </div>
-      </header>
+      </PageHeader>
       {(error || loadError) && (
         <div role="alert" className="social-error">
           {error || loadError}

@@ -6,7 +6,7 @@
 .earnings-intro {
   padding: 16px 24px;
   border: 1px solid #edd9c9;
-  border-radius: 18px;
+  border-radius: var(--radius-panel);
   background: linear-gradient(115deg, #fff1e7, #fffaf2 65%, #f7ebdc);
   display: flex;
   align-items: center;
@@ -22,7 +22,7 @@
 .earnings-intro p,
 .earnings-note {
   color: var(--muted);
-  font-size: 12px;
+  font-size: 13px;
   line-height: 1.9;
 }
 .earnings-intro > svg {
@@ -90,7 +90,7 @@
   top: 0;
   z-index: 1;
   padding: 16px 18px;
-  background: #fcf8f3;
+  background: var(--surface);
   color: var(--muted);
   font-size: 13px;
   font-weight: 500;
@@ -109,7 +109,7 @@
 .earnings-table small {
   display: block;
   color: var(--muted);
-  font-size: 12px;
+  font-size: 13px;
   margin-top: 6px;
   white-space: nowrap;
 }
@@ -126,7 +126,7 @@
 .earnings-chip,
 .earnings-hit {
   display: inline-block;
-  font-size: 12px;
+  font-size: 13px;
   border-radius: 5px;
   background: var(--surface);
   padding: 3px 6px;
@@ -161,7 +161,7 @@
   align-items: center;
   gap: 8px;
   color: var(--muted);
-  font-size: 12px;
+  font-size: 13px;
   width: fit-content;
 }
 .earnings-detail-metrics {
@@ -182,7 +182,7 @@
 }
 .earnings-detail-metrics small {
   display: block;
-  font-size: 12px;
+  font-size: 13px;
   color: var(--muted);
   margin-bottom: 12px;
 }
@@ -216,7 +216,7 @@
 }
 .earnings-disclosure h2 span {
   margin-left: auto;
-  font-size: 12px;
+  font-size: 13px;
   font-weight: 400;
   color: var(--muted);
 }
@@ -234,13 +234,13 @@
 .earnings-disclosure dl {
   display: grid;
   gap: 13px;
-  font-size: 12px;
+  font-size: 13px;
   margin: 20px 0;
 }
 .earnings-disclosure dt {
   color: var(--muted);
   margin-bottom: 5px;
-  font-size: 12px;
+  font-size: 13px;
 }
 .earnings-disclosure dd {
   margin: 0;
@@ -248,13 +248,13 @@
 .earnings-source-reason {
   background: var(--surface);
   padding: 12px;
-  font-size: 12px;
+  font-size: 13px;
   line-height: 1.9;
   overflow-wrap: anywhere;
 }
 .earnings-raw {
   margin-top: 15px;
-  font-size: 12px;
+  font-size: 13px;
   color: var(--muted);
 }
 .earnings-raw summary {

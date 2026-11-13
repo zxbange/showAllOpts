@@ -189,13 +189,13 @@ test('open the monitor directly, configure users, notifications and inspect post
     const firstCheck = bounds('.social-check-times > span')
     const button = bounds('.social-schedule > .button')
     const overview = bounds('.social-overview')
-    const tabs = bounds('.social-page > .module-card-switch')
+    const tabs = bounds('.social-page > .page-header .module-card-switch')
     const panel = bounds('#social-panel-feed')
     return {
       checkGap: firstCheck.top - summary.bottom,
       buttonGap: button.top - checks.bottom,
       sectionGaps: [panel.top - overview.bottom],
-      tabsAboveHeading: tabs.bottom <= bounds('.social-heading').top,
+      tabsBelowHeading: tabs.top >= bounds('.page-heading').bottom,
       mobile: innerWidth <= 620,
       overflow: document.documentElement.scrollWidth > innerWidth,
     }
@@ -216,7 +216,7 @@ test('open the monitor directly, configure users, notifications and inspect post
     ).toBeGreaterThanOrEqual(6)
     expect(layout.buttonGap).toBeLessThanOrEqual(20)
   }
-  expect(layout.tabsAboveHeading).toBe(true)
+  expect(layout.tabsBelowHeading).toBe(true)
   for (const gap of layout.sectionGaps) {
     expect(gap, 'overview, tabs and active panel remain visually separated').toBeGreaterThanOrEqual(
       12,

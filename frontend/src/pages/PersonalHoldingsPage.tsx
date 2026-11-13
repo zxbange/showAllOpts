@@ -1,3 +1,4 @@
+import { PageHeader } from '../components/PageHeader'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useAuth } from '../components/AccountAccess'
 import { apiFetch } from '../api/http'
@@ -176,9 +177,8 @@ function Holdings() {
   }
   return (
     <div className="holdings-page">
-      <header className="holdings-heading">
+      <PageHeader>
         <div>
-          <span className="eyebrow">管理员专属</span>
           <h1>个人持仓</h1>
         </div>
         <span className="holdings-status">
@@ -192,7 +192,7 @@ function Holdings() {
                   ? '监控中'
                   : '等待交易时段'}
         </span>
-      </header>
+      </PageHeader>
       <section aria-label="当前持仓">
         <div className="holdings-section-title">
           <h2>当前持仓</h2>

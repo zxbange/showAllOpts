@@ -68,7 +68,7 @@
   white-space: nowrap;
 }
 .margin-stats .stat-value small {
-  font-size: 12px;
+  font-size: 13px;
 }
 .margin-stats .stat-note {
   min-height: 40px;
@@ -125,7 +125,7 @@
     margin: 0;
   }
   .margin-stats .stat-note {
-    font-size: 12px;
+    font-size: 13px;
     min-height: 38px;
   }
   .margin-progress-label,

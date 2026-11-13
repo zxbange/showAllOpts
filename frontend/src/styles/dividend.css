@@ -12,7 +12,7 @@
 .dividend-toolbar > span {
   margin-left: auto;
   color: var(--muted);
-  font-size: 12px;
+  font-size: 13px;
 }
 .dividend-search {
   display: flex;
@@ -84,7 +84,7 @@
 .dividend-stock small {
   display: flex;
   gap: 8px;
-  font-size: 12px;
+  font-size: 13px;
   color: var(--muted);
 }
 .dividend-stock small em {
@@ -93,7 +93,7 @@
   background: #e9f5f0;
   border-radius: 4px;
   padding: 1px 4px;
-  font-size: 12px;
+  font-size: 13px;
 }
 .dividend-rank {
   color: var(--muted);

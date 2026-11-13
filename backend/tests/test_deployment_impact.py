@@ -22,7 +22,7 @@ spec.loader.exec_module(impact)
     (['collectors/策略批量采集_数据库版.py'],False),
     (['collectors/估值标尺历史补采_聚宽研究版.py',
       'backend/tests/test_recovered_joinquant_history.py',
-      'docs/joinquant-market-valuation-history.md'],False),
+      'docs/data/joinquant-market-valuation-history.md'],False),
     (['frontend/tests/overview.spec.ts'],False),
     (['backend/tests-other/runtime.py'],True),
     (['frontend/tests-other/runtime.ts'],True),

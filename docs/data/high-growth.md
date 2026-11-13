@@ -25,7 +25,7 @@
 
 ## 数据源与采集
 
-独立脚本：[`collectors/高增长_数据库版.py`](../collectors/高增长_数据库版.py)。也已加入 [`策略批量采集_数据库版.py`](../collectors/策略批量采集_数据库版.py) 的最后一项，名称为 `高增长`。
+独立脚本：[`collectors/高增长_数据库版.py`](../../collectors/高增长_数据库版.py)。也已加入 [`策略批量采集_数据库版.py`](../../collectors/策略批量采集_数据库版.py) 的最后一项，名称为 `高增长`。
 
 在 `collectors/mysql_connector.py` 中填写 `DB_CONFIG` 并上传研究目录；GitHub 版本只有占位值。`STRATEGY_CONFIG['高增长']` 可配置 `end_date`、`batch_size`、`page_size`，默认分别为 `None`（运行当天，北京时间）、100、2000。把完整单文件粘贴至聚宽 Notebook 即可，不依赖其他本地文件。采集过程中显示批次、财报读取、条件检查、估值补充和写入阶段。
 

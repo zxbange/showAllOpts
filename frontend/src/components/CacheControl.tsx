@@ -202,7 +202,6 @@ export function CacheControl() {
                 <Database size={17} />
                 <strong>从数据库同步</strong>
               </div>
-              <p>可同步全部模块或指定模块。日常同步按各模块的数据特点增量更新。</p>
               <div className="cache-fields">
                 <label>
                   同步范围
@@ -235,9 +234,7 @@ export function CacheControl() {
                 </label>
               </div>
               <p id="cache-sync-mode-help">
-                {full
-                  ? '将重新下载所选模块的全部保留数据，耗时较长；仅重建本地缓存，不修改源数据库。'
-                  : '行业动量、抱团拥挤度、ETF份额和微盘新高新低按分类日期追加。源库历史数据修订或补录后，请选择完整重新同步。'}
+                {full ? '重建本地缓存，源数据库不变。' : '同步新增与变更；旧采集器自动兼容对账。'}
               </p>
               <button type="submit" className="cache-submit" disabled={busy}>
                 <RefreshCw size={15} className={busy ? 'cache-spin' : ''} />
@@ -252,9 +249,7 @@ export function CacheControl() {
                 </p>
               )}
             </form>
-            <p className="cache-footnote">
-              百分比表示阶段进度，并非剩余时间；大表读取时可暂时停留。数据日期以模块页面为准。“刷新”只读取本地数据，“同步”才从数据库更新。
-            </p>
+            <p className="cache-footnote">刷新读取本地，同步更新数据库数据。百分比为阶段进度。</p>
           </>
         )}
       </dialog>

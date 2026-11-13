@@ -1,3 +1,4 @@
+import { PageHeader } from '../components/PageHeader'
 import { useEffect, useState } from 'react'
 import { useAuth, type User } from '../components/AccountAccess'
 import { accountRequest } from '../api/http'
@@ -37,9 +38,11 @@ export function UsersPage() {
   }
   return (
     <div className="accounts-page">
-      <header className="page-header">
-        <h1>{admin ? '用户管理' : '我的账号'}</h1>
-      </header>
+      <PageHeader>
+        <div>
+          <h1>{admin ? '用户管理' : '我的账号'}</h1>
+        </div>
+      </PageHeader>
       {error && (
         <p role="alert" className="account-error">
           {error}

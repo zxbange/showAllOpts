@@ -4,7 +4,7 @@ import { groupForPath, individualModules } from '../lib/modules'
 import { ModuleSwitch } from './ModuleSwitch'
 import '../styles/page-header.css'
 
-/** 所有业务页共用：顶部模块书签 → 标题与操作区 → 页面内容。 */
+/** 所有业务页共用：标题与操作区 → 模块切换 → 页面内容。 */
 export function PageHeader({ children, switcher }: { children: ReactNode; switcher?: ReactNode }) {
   const { pathname, search } = useLocation()
   const group = groupForPath(pathname)
@@ -37,6 +37,7 @@ export function PageHeader({ children, switcher }: { children: ReactNode; switch
   })
   return (
     <header className="page-header">
+      <div className="page-heading">{children}</div>
       {switcher ??
         (group && groupItems && (
           <ModuleSwitch
@@ -49,7 +50,6 @@ export function PageHeader({ children, switcher }: { children: ReactNode; switch
             }
           />
         ))}
-      <div className="page-heading">{children}</div>
     </header>
   )
 }

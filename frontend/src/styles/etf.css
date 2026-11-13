@@ -54,7 +54,7 @@
 }
 .etf-column-date {
   display: block;
-  font-size: 12px;
+  font-size: 13px;
   font-weight: 400;
   color: var(--muted);
   margin-top: 5px;
@@ -81,7 +81,7 @@
 }
 .etf-fund-code {
   display: block;
-  font-size: 12px;
+  font-size: 13px;
   color: var(--muted);
   margin: 6px 0 0 15px;
 }
@@ -116,11 +116,11 @@
 }
 .etf-chart-toolbar > span {
   color: var(--muted);
-  font-size: 12px;
+  font-size: 13px;
 }
 .etf-chart-toolbar > .button {
   margin-left: auto;
-  font-size: 12px;
+  font-size: 13px;
 }
 .etf-chart {
   width: 100%;
@@ -322,7 +322,7 @@
 }
 .etf-config-section .etf-permission-note {
   margin: 16px 0 0;
-  font-size: 12px;
+  font-size: 13px;
   overflow-wrap: anywhere;
 }
 .etf-collection-actions {

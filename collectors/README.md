@@ -21,7 +21,7 @@ collectors/
 
 ## 全历史恢复
 
-先查看[全项目聚宽覆盖与入库边界](../docs/joinquant-history-coverage.md)。可获取数据提供可执行脚本；无法证明同口径的数据明确跳过，不用其他指标伪替代。聚宽当前可见历史可能含事后修订，不能声称为原始PIT。
+先查看[全项目聚宽覆盖与入库边界](../docs/data/joinquant-history-coverage.md)。可获取数据提供可执行脚本；无法证明同口径的数据明确跳过，不用其他指标伪替代。聚宽当前可见历史可能含事后修订，不能声称为原始PIT。
 
 新增专用入口：
 
@@ -34,7 +34,7 @@ collectors/
 | 用途 | 脚本 | 运行环境 |
 | --- | --- | --- |
 | 12 个策略批量采集、计算并写入数据库 | [策略批量采集_数据库版.py](策略批量采集_数据库版.py) | 聚宽研究环境 |
-| ETF 份额与价格日常采集 | [etf_exchange_collector.py](etf_exchange_collector.py) | 项目 Python 环境；[运行说明](../docs/etf-exchange-collector.md) |
+| ETF 份额与价格日常采集 | [etf_exchange_collector.py](etf_exchange_collector.py) | 项目 Python 环境；[运行说明](../docs/data/etf-exchange-collector.md) |
 | ETF 历史缺口补采 | [ETF历史补采_聚宽研究版.py](ETF历史补采_聚宽研究版.py) | 聚宽研究环境；填写配置后整段运行即入库，缺表自动创建 |
 | ETF 分类、规模筛选及跟踪标的去重研究 | [ETF分类去重_研究版.py](ETF分类去重_研究版.py) | 聚宽研究环境 |
 
@@ -59,7 +59,7 @@ collectors/
 | 估值标尺 | [估值标尺历史补采_聚宽研究版.py](估值标尺历史补采_聚宽研究版.py) |
 | 创红比（含科创红利比） | [创红比历史补采_聚宽研究版.py](创红比历史补采_聚宽研究版.py) |
 
-聚宽脚本各自包含完整策略，但统一导入 `mysql_connector.py` 获取数据库配置。先将配置文件上传到研究目录，再运行所需策略。采集、计算后的结果写入数据库，网页再同步本地缓存。批量参数见[批量采集说明](../docs/collector-batch.md)。
+聚宽脚本各自包含完整策略，但统一导入 `mysql_connector.py` 获取数据库配置。先将配置文件上传到研究目录，再运行所需策略。采集、计算后的结果写入数据库，网页再同步本地缓存。批量参数见[批量采集说明](../docs/data/collector-batch.md)。
 
 ## 独立策略与公共代码维护
 

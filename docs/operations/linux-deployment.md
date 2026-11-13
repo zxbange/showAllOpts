@@ -4,7 +4,7 @@ GitHub `main` 自动部署的默认关闭工作流、受限 SSH 入口、逐项�
 
 开发时使用 `start.sh` 同时启动前后端；长期运行使用 systemd 管理 Python API、Nginx 提供前端静态页面。数据库继续使用现有 MySQL，应用读取各功能模块已采集入库的数据。
 
-本文默认沿用现有 `/home/ubuntu/showAllOpts` 项目目录和 `ubuntu` 账号，与 [README systemctl 管理指引](../README.md#linux-后台服务systemctl-管理) 一致。RHEL 或其他账号部署时，请统一替换目录、用户和组，并核对目标系统权限与 SELinux 设置。
+本文默认使用 `/home/ubuntu/showAllOpts` 项目目录和 `ubuntu` 账号。RHEL 或其他账号部署时，请统一替换目录、用户和组，并核对目标系统权限与 SELinux 设置。
 
 ## 1. 系统环境
 
@@ -34,7 +34,7 @@ nvm use 22
 nvm alias default 22
 ```
 
-已有 nvm 环境时，只需加载其 `nvm.sh` 并执行 `nvm use 22`。不要假设系统默认 nodejs 软件包满足要求；确认当前用户可以调用 `node` 和 `npm`。`setup.sh` 提示 `Install Node.js 22.12+ and npm first.` 时，请按 [README 的 Node.js 排查步骤](../README.md#setupsh-提示缺少-nodejs--npm) 处理。
+已有 nvm 环境时，加载其 `nvm.sh` 并执行 `nvm install 22`、`nvm use 22`。用部署账号执行 `node --version` 和 `npm --version`，确认版本满足要求；不要用 sudo 切换到另一个 Node 环境。
 
 ```bash
 node --version
@@ -98,7 +98,7 @@ bash start.sh --host 127.0.0.1
 
 ### 日志目录与服务升级
 
-应用按天轮转 `log/app.log` 和 `log/error.log`，默认各保留 30 份历史日文件。格式和参数见 [README 运行日志](../README.md#运行日志按天轮转)。systemd 使用文件系统保护，需要在启动前准备可写目录。以下命令必须在相关进程停止后执行，旧日志和锁文件也统一归 `ubuntu`：
+应用按天轮转 `log/app.log` 和 `log/error.log`，默认各保留 30 份历史日文件。格式见[日志诊断](logging-diagnostics.md)。systemd 使用文件系统保护，需要在启动前准备可写目录。以下命令必须在相关进程停止后执行，旧日志和锁文件也统一归 `ubuntu`：
 
 ```bash
 sudo install -d -o ubuntu -g ubuntu -m 0750 /home/ubuntu/showAllOpts/log
@@ -336,17 +336,17 @@ npm run build
 
 ## 抱团拥挤度模块升级
 
-新模块需先在聚宽运行独立采集程序，创建并写入 `market_crowding` 表；网页账号需有该表 SELECT 权限。已有 systemd + Nginx 部署只需更新代码、构建并发布前端、重启 API，保留当前配置及访问端口。操作命令见 [抱团拥挤度部署说明](market-crowding.md#linux-已部署项目升级)。
+新模块需先在聚宽运行独立采集程序，创建并写入 `market_crowding` 表；网页账号需有该表 SELECT 权限。已有 systemd + Nginx 部署只需更新代码、构建并发布前端、重启 API，保留当前配置及访问端口。操作命令见 [抱团拥挤度部署说明](../data/market-crowding.md#linux-已部署项目升级)。
 
 ## 微盘温度计模块升级
 
-先在聚宽运行独立采集脚本，创建并写入 `microcap_temperature` 表，并给网页账号增加 SELECT 权限。然后更新代码、构建发布前端并重启 API；原配置、代理与端口不变。详见 [微盘温度计部署说明](microcap-temperature.md#已有-linux-部署升级)。
+先在聚宽运行独立采集脚本，创建并写入 `microcap_temperature` 表，并给网页账号增加 SELECT 权限。然后更新代码、构建发布前端并重启 API；原配置、代理与端口不变。详见 [微盘温度计部署说明](../data/microcap-temperature.md#已有-linux-部署升级)。
 
 ## ETF 份额模块升级
 
 微博、雪球的服务器扫码登录需要额外安装 Chromium，设置独立管理密钥。见 [服务器扫码登录部署与操作](social-browser-login.md)。
 
-已有部署接入 ETF 仪表盘时，先在聚宽创建并填充 `etf_share_daily`，给网页账号授予该表 SELECT 权限，再更新代码、构建并发布 `frontend/dist/`、重启 `showallopts-api`。无需更换 Nginx 端口、systemd 服务或真实数据库配置。完整命令与字段口径见 [ETF 份额仪表盘](etf-shares.md#已有部署升级)。
+已有部署接入 ETF 仪表盘时，先在聚宽创建并填充 `etf_share_daily`，给网页账号授予该表 SELECT 权限，再更新代码、构建并发布 `frontend/dist/`、重启 `showallopts-api`。无需更换 Nginx 端口、systemd 服务或真实数据库配置。完整命令与字段口径见 [ETF 份额仪表盘](../data/etf-shares.md#已有部署升级)。
 
 
 

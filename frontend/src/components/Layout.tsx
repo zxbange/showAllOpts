@@ -1,5 +1,5 @@
 import { useLayoutEffect, useRef } from 'react'
-import { ArrowUpRight, ChartNoAxesCombined, ChevronRight, House, Layers3 } from 'lucide-react'
+import { ChartNoAxesCombined, ChevronRight, House, Layers3 } from 'lucide-react'
 import { Link, NavLink, Outlet, useLocation } from 'react-router-dom'
 import { CacheControl } from './CacheControl'
 import { useAuth } from './AccountAccess'
@@ -80,12 +80,6 @@ export function Layout() {
             </NavLink>
           )}
         </nav>
-        <div className="sidebar-bottom">
-          <div className="sidebar-footer">
-            <span className="status-dot" />
-            研究工作台 <span>v1.0</span>
-          </div>
-        </div>
       </aside>
       <div className="workspace">
         <header className="topbar">
@@ -131,26 +125,6 @@ export function Layout() {
         <main id="main-content" className="main-content">
           <Outlet />
         </main>
-        <footer className="page-footer">
-          <span>
-            发奋墙 <i /> 研究工作台
-          </span>
-          <span>
-            数据来源 ·{' '}
-            {location.pathname === '/commodities'
-              ? new URLSearchParams(location.search).get('instrument') === 'cci'
-                ? 'coalindex.com（非官方）'
-                : '长江有色金属网（CCMN）'
-              : location.pathname === '/valuation-ruler'
-                ? '聚宽历史 / 中证成分 / 东方财富日采集（按记录标注）'
-                : location.pathname === '/margin-guarantee'
-                  ? '东方财富'
-                  : ['/market-sentiment', '/market-crowding'].includes(location.pathname)
-                    ? '东方财富主表 / 公开日行情 / 聚宽历史（按记录标注）'
-                    : '聚宽采集'}{' '}
-            <ArrowUpRight size={12} />
-          </span>
-        </footer>
       </div>
     </div>
   )

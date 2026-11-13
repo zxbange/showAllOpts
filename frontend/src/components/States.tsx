@@ -16,8 +16,8 @@ export function ErrorState({ message, retry }: { message: string; retry: () => v
   )
 }
 export function EmptyState({
-  title = '暂无行业动量数据',
-  description = '请先在聚宽采集入库，再通过“数据同步”更新本模块。',
+  title = '暂无数据',
+  description = '采集完成后同步数据。',
   search = false,
 }: {
   title?: string

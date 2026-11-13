@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """聚宽研究环境：粘贴运行或 %run -i 净利润断层_数据库版.py。无交易操作。
 统一最新已结束季度；默认仅追加新入选股票，每日跟踪全部历史已入选股票的收盘表现。
-规则、数据口径、限制详见 docs/earnings-gap.md。
+规则、数据口径、限制详见 docs/data/earnings-gap.md。
 """
 from jqdata import *
 from jqdata import jy, finance

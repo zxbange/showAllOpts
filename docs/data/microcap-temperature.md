@@ -1,13 +1,13 @@
 # 微盘温度计：采集与展示
 
-> 默认启用本地缓存：采集入库后，等待每天北京时间 07:00 自动同步，或在网页“数据同步”/服务器命令中手动同步。页面刷新读取当前快照，详见[本地缓存说明](local-cache.md)。
+> 默认启用本地缓存：采集入库后，等待每天北京时间 07:00 自动同步，或在网页“数据同步”/服务器命令中手动同步。页面刷新读取当前快照，详见[本地缓存说明](../operations/local-cache.md)。
 
 
 保留原程序的起始日期 **2021-01-01**、微盘股票数 **1000**，改为 **每个交易日采集一次**，结束日期在每次运行时取北京时间当天。独立采集文件负责写入 MySQL，showAllOpts 增加微盘温度计模块，网页只读数据。
 
 ## 聚宽运行
 
-仓库模板：[微盘温度计_数据库版.py](../collectors/微盘温度计_数据库版.py)。
+仓库模板：[微盘温度计_数据库版.py](../../collectors/微盘温度计_数据库版.py)。
 
 在配套的 `collectors/mysql_connector.py` 中填写 host、port、dbname、dbuser、dbpassword，与网页连接同一个数据库。该脚本沿用已有 `mysql+mysqldb` / SQLAlchemy 的连接及按期事务方式，不读取网页的 `config/app.config`。不再维护私有代码副本，提交 Git 前须将真实连接配置还原为占位值。
 
@@ -129,7 +129,7 @@ sudo systemctl status showallopts-api --no-pager
 curl -fsS 'http://127.0.0.1:8000/api/v1/microcap-temperature/history?days=30'
 ```
 
-本功能没有新增运行依赖；保留 `config/app.config`、现有 systemd 覆盖配置和 Nginx 端口。首次部署见 [Linux 部署说明](linux-deployment.md)。Windows 已有环境停止旧启动器后更新代码，重新运行 start.cmd；新建表前页面显示数据库错误，先完成聚宽入库。
+本功能没有新增运行依赖；保留 `config/app.config`、现有 systemd 覆盖配置和 Nginx 端口。首次部署见 [Linux 部署说明](../operations/linux-deployment.md)。Windows 已有环境停止旧启动器后更新代码，重新运行 start.cmd；新建表前页面显示数据库错误，先完成聚宽入库。
 
 ## 验证范围
 

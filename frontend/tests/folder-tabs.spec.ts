@@ -1,8 +1,10 @@
 import { test, expect } from './fixtures'
 
-test('six performance modules preserve URLs and folder layers, contrast and hit targets', async ({
+test('six performance modules preserve URLs, stable layout, contrast and hit targets', async ({
   page,
 }, info) => {
+  // Measure settled colors, not intermediate hover/selection transition frames.
+  await page.emulateMedia({ reducedMotion: 'reduce' })
   await page.route('**/api/v1/**', (route) =>
     route.fulfill({ status: 503, json: { detail: '离线导航测试' } }),
   )
@@ -43,7 +45,7 @@ test('six performance modules preserve URLs and folder layers, contrast and hit 
       .poll(() =>
         nav.locator('.active').evaluate((el) => Math.round(el.getBoundingClientRect().height)),
       )
-      .toBe(54)
+      .toBe(44)
     const result = await nav.evaluate((el) => {
       const luminance = (color: string) => {
         const values = color
@@ -62,33 +64,25 @@ test('six performance modules preserve URLs and folder layers, contrast and hit 
       return {
         activeHeight: Math.round(active.getBoundingClientRect().height),
         inactiveHeights: inactive.map((t) => Math.round(t.getBoundingClientRect().height)),
-        topLayer: inactive.every(
-          (t) => +getComputedStyle(active).zIndex > +getComputedStyle(t).zIndex,
-        ),
-        overlaps: tabs
+        gaps: tabs
           .slice(1)
           .map((t, i) =>
-            Math.round(tabs[i].getBoundingClientRect().right - t.getBoundingClientRect().left),
+            Math.round(t.getBoundingClientRect().left - tabs[i].getBoundingClientRect().right),
           ),
-        colors: tabs.map((t) => getComputedStyle(t, '::before').backgroundColor),
-        tones: tabs.map((t) => t.dataset.tone),
+        colors: tabs.map((t) => getComputedStyle(t).backgroundColor),
         contrasts: tabs.map((t) => {
           const foreground = luminance(getComputedStyle(t).color),
-            background = luminance(getComputedStyle(t, '::before').backgroundColor)
+            background = luminance(getComputedStyle(t).backgroundColor)
           return (
             (Math.max(foreground, background) + 0.05) / (Math.min(foreground, background) + 0.05)
           )
         }),
       }
     })
-    expect(result.activeHeight).toBe(54)
+    expect(result.activeHeight).toBe(44)
     expect(result.inactiveHeights).toEqual([44, 44, 44, 44, 44])
-    expect(result.topLayer).toBe(true)
-    expect(result.overlaps.every((v) => v === 12)).toBe(true)
-    expect(result.tones).toEqual(['0', '1', '2', '3', '4', '0'])
-    // Six tabs cycle five base tones. When the first/last tone is active,
-    // its active shade differs from the other tab's inactive shade.
-    expect(new Set(result.colors).size).toBe(names.indexOf(name) % 5 === 0 ? 6 : 5)
+    expect(result.gaps.every((v) => v >= 6)).toBe(true)
+    expect(new Set(result.colors).size).toBe(2)
     expect(Math.min(...result.contrasts)).toBeGreaterThanOrEqual(4.5)
   }
   for (const link of await nav.getByRole('link').all()) {
@@ -110,7 +104,7 @@ test('six performance modules preserve URLs and folder layers, contrast and hit 
     'aria-current',
     'page',
   )
-  await page.screenshot({ path: info.outputPath('performance-folders.png'), fullPage: true })
+  await page.screenshot({ path: info.outputPath('performance-navigation.png'), fullPage: true })
   await page.goBack()
   await expect(nav.getByRole('link', { name: '纯高股息', exact: true })).toHaveAttribute(
     'aria-current',

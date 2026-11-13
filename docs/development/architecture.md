@@ -1,0 +1,137 @@
+# 架构与扩展约定
+
+## 请求流向
+
+```text
+浏览器 React 页面
+  → frontend/src/api/client.ts
+  → Vite / Nginx /api 代理
+  → FastAPI 路由：校验查询参数
+  → Service：确定快照日期、计算区间指标、标记行业缺失
+  → Repository：参数化 SELECT
+  → 本地 SQLite 模块快照（每日 07:00 / 手动从 MySQL 同步）
+
+聚宽采集 → MySQL 模块数据表 → 后台只读同步 → 本地 SQLite 快照
+```
+
+前后端独立进程、独立依赖、独立构建。后端不返回网页，前端不直接访问数据库。数据库凭据只由后端从环境变量或选中的配置文件读取：Windows 启动器及直接运行 Python 未指定配置时使用 `backend/.env`；Linux `start.sh`、systemd 和 Compose 默认选择项目根目录下的 `config/app.config`。配置优先级与迁移方式见 [配置管理](../operations/configuration.md)。所有查询通过 SQLAlchemy 表达式绑定参数，不拼接用户输入的 SQL。
+
+## Linux 部署约定
+
+当前部署目录为 `/home/ubuntu/showAllOpts`，systemd 服务名为 `showallopts-api`，运行账号和组为 `ubuntu`。基础 service 配合本机 `99-ubuntu-home.conf` 覆盖配置运行，最终读取 `config/app.config`，写入项目 `log/`。`ProtectHome=read-only` 允许读取家目录中的代码，`ReadWritePaths` 允许写入日志目录。
+
+Nginx 从 `/var/www/showallopts` 提供前端静态资源，将 `/api` 代理到 `127.0.0.1:8000`。前端资源发布与后端进程启停分别管理。安装、权限、服务配置和升级步骤见 [Linux 部署指南](../operations/linux-deployment.md#4-systemd--nginx-后台服务)。
+
+## 数据一致性
+
+快照先确定分类内最大日期，再读取该日期全部行业，不把不同行业各自的最新日期拼成一张图。历史请求带快照日期，防止浏览过程中采集程序更新导致上下文变化。每次请求使用独立 Session，关闭时结束只读事务。
+
+接口排序使用动量和行业代码；显示排名根据排序重新编号。原始采集排名仍用于历史点信息。零分行业始终保留。
+
+行业动量数据库没有独立的交易日历或采集完成标志。历史缺失检查仅基于该分类有数据的日期，不能判断全市场共同缺失日，也不能保证某个最新快照已经完整采集。应在采集程序解决数据质量问题；网页不推断或伪造分数。
+
+## 扩展新模块
+
+1. 在后端增加对应 model / repository / service / schema / router；业务不堆叠到 `main.py`。
+2. 在 `/api/v1/modules` 注册模块元信息。
+3. 在前端增加页面与 API 类型，在 `App.tsx` 注册路由，并在 `src/lib/modules.ts` 登记名称、路径、分类、说明、标签、图标与视觉类型。首页卡片、搜索、分类计数、导航和面包屑共用此注册表，不必逐个修改入口。后端 `/modules` 元信息仍需同步维护。
+4. 增加必要的查询边界测试及浏览器用户流程测试。
+
+### 功能清单与逻辑检查入口
+
+| 功能 | 主要逻辑与检查边界 | 说明 |
+| --- | --- | --- |
+| 总览、导航、模块切换 | 共用模块注册表；直接链接、返回、空状态和错误状态仍保留导航 | 本文“总览与亮色主题” |
+| 行业动量 | 同一分类和交易日排名、零分保留、历史范围和 180 交易日清理 | [采集与保留规则](../data/collector-retention.md) |
+| ETF/LOF 动量 | 候选去重、规模与范围限制、计算结果完整性、热度曲线及 180 交易日清理 | [ETF 动量](../data/etf-momentum.md) |
+| 抱团拥挤度 | 分组数据日期、原始比例与百分比单位、EMA 和区间统计 | [拥挤度](../data/market-crowding.md) |
+| 市场热度 | 有效 A 股分母、站上 MA20 比例、20%/80% 边界与三年历史 | [市场热度](../data/market-sentiment.md) |
+| 两融担保比例 | 东方财富接口、日期和单位校验、历史续传、每日 08:00 调度、失败保留旧值 | [两融监控](../data/margin-guarantee.md) |
+| 创红比 | 三指数同日收盘点位、独立交易日历补缺、2018年以来历史、交易日18:00调度、双轴缩放 | [创红比](../data/growth-dividend.md) |
+| 微盘温度计 | 每日补缺、旧指标复用、分位与指数衔接、已有数据幂等 | [微盘温度计](../data/microcap-temperature.md) |
+| 微盘新高新低 | 四窗口统计、源日期缺口、只新增和历史保留 | [新高新低](../data/microcap-breadth.md) |
+| ETF 份额 | 分基金续传、前一交易日对齐、缺数不补零、共同基准 | [ETF 份额](../data/etf-shares.md) |
+| 高股息选股 | 两组筛选、交集、排序、完整快照事务替换、合法零入选 | [高股息](../data/dividend-selection.md) |
+| 高增长 | 四类累计财报、两段同比、EPS 与净利润口径、证据完整性 | [高增长](../data/high-growth.md) |
+| 净利润断层 | 财报/公告与价格信号日期、首次快照保留、季度数量、分页与详情 | [净利润断层](../data/earnings-gap.md) |
+| 个股机构持仓 | 新披露影响范围、股东类型兜底、披露股数、户数、社保三种比较、增量断点 | [机构持仓](../data/institution-ownership.md) |
+| 独立采集与研究脚本 | 日常采集、历史补采、私有配置隔离与保留的历史研究 | [脚本使用说明](../../collectors/README.md) |
+| 博主与组合监控 | 监控时段、去重、限流、登录状态、Telegram/飞书独立开关与投递记录 | [博主监控](../data/social-monitor.md)、[飞书配置](../operations/飞书通知配置.md) |
+| 数据同步与运行管理 | 模块隔离、完整性检查、原子发布、失败保留旧快照、逐任务停止、日程与资源清理 | [本地缓存](../operations/local-cache.md)、[部署](../operations/linux-deployment.md) |
+
+抱团拥挤度对应 `market_crowding` 表，复合主键为 `(top_pct, trade_date)`，每次请求一次 SELECT 获取数据，在服务层计算统计和 EMA 10；前端只将比例转换为百分比显示。模型共用 `models/base.py` 中的 Base，网页不创建表。
+
+各类采集的保留规则独立：行业和 ETF 动量仅保留 180 个交易日；拥挤度默认保留 2020 年以来的完整历史；微盘温度计从 2021 年起每日采集并补缺，旧五日指标按迁移规则复用；ETF 份额日常更新最新已收市交易日，历史由聚宽补采脚本补齐，不自动清理。细节见 [抱团拥挤度说明](../data/market-crowding.md) 与 [微盘温度计说明](../data/microcap-temperature.md)。
+
+微盘温度计使用独立的 `microcap_temperature` 表。采集器保存原始指标、当期历史分位、综合温度、累计指数和成分股；刷新最后一期时从该期之前的基准续算，避免重复计数。网页模型将成分股字段设为延迟加载，页面接口只读指标，不传输名单。网页不会在切换范围时重算分位或重新设置指数基期。
+
+ETF 份额按基金独立续传，源数据缺口不会补零。复合主键 `(fund_code, trade_date)` 支持最新日期和区间查询；非空页面请求执行两条 SELECT，历史查询只传输绘图字段。各卡片明确标记自己的数据日期，日增减严格关联 `previous_trade_date`；相对变化曲线使用共同基准日。完整口径、首次采集和部署说明见 [ETF 份额仪表盘](../data/etf-shares.md)。
+
+净利润断层使用 `earnings_gap_run` 与 `earnings_gap_stock` 保存每季度最新扫描元数据和全部入选股票。股票表以 `(report_period, code)` 为主键，另有季度+行业、季度+信号日期联合索引。独立脚本和批量入口默认均只新增，已有股票保留首次快照，只插入该季度未保存的股票，运行元数据按变化更新，命中数为累计保留数量；独立脚本显式指定 `skip_existing=False` 时才替换目标季度。两种模式均保存零命中运行元数据。列表查询分页且不加载公告和日线 JSON；详情一次主键查询取得全部证据。网页默认请求当前目标季度，无数据时不回退旧季度。已移除自动原因分析；旧表兼容列保留，API 不加载或返回它们，新采集结果写入空值占位。详见 [净利润断层说明](../data/earnings-gap.md)。
+
+## 错误、并发与浏览器行为
+
+- 后端数据库异常统一返回 503，不向浏览器返回 SQL、驱动异常全文或连接串。
+- 前端有加载、空数据、搜索无结果、断网/查询失败、未知页面状态。
+- 切换行业/时间范围时取消旧请求，防止较慢请求覆盖新结果。
+- 同步状态、博主动态和组合调仓共用 `usePolling`：上次请求结束后才计时发起下一次轮询；手动刷新、筛选变化和卸载取消旧请求，过期响应不更新当前结果。博主与组合监控的读取错误与操作错误分开保存，后台轮询不会清除操作失败提示。
+- ECharts 实例在组件卸载时销毁，容器变化通过 ResizeObserver 调整。
+- 热力图单元格使用原生链接，可键盘操作和新标签打开；图表尊重减少动态效果偏好。
+- 浏览器只使用 JSON API；所有文字通过 React 渲染，图表 tooltip 使用 canvas richText，避免拼接 HTML。
+- 应用按资源创建顺序注册清理回调；启动中途失败或某个任务停止报错时，仍尝试关闭其余后台任务及数据库连接。
+
+## Windows 开发启动器的进程管理
+
+`start.cmd` 与 `start.ps1` 共用 `scripts/dev.py`。旧版本只在 Python 的 `finally` 中终止直接子进程，而 Windows 关闭终端可能直接终止启动器，无法保证执行这段清理。前后端以 `CREATE_NO_WINDOW` 启动，也不会依靠终端关闭自动退出。
+
+`scripts/windows_job.py` 在创建任何服务进程之前，将启动器加入一个启用 `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE` 的 Windows Job Object；新建的后代进程自动加入同一个 Job。唯一的 Job 句柄不可继承，始终由启动器持有。启动器正常退出或被强制结束时，操作系统关闭句柄并回收全部后代进程，涵盖虚拟环境 Python 转发进程、Vite 和构建工具子进程。机制依据 [Microsoft Job Objects 文档](https://learn.microsoft.com/en-us/windows/win32/procthread/job-objects)。
+
+启动器自己也是 Job 成员，因此不在 `finally` 或析构函数中主动关闭这个句柄；否则会过早终止自身、打断日志刷新。正常 `Ctrl+C` 仍先执行原有退出清理与日志关闭，再由操作系统兜底。保护初始化失败时停止启动，不创建未受保护的服务；其他进程不属于该 Job，不会被清理。Linux 的原有信号处理与 systemd 部署方式不变。
+
+Windows 集成测试创建随机本地端口的子进程和孙进程，分别验证正常退出、强制结束启动器后的进程退出及立即重新绑定端口，同时确认独立服务仍然存活。测试不操作真实 8000 / 5173 服务或数据库。非 Windows 环境跳过此系统测试，启动器行为仍有独立回归测试。
+
+新机制只保护更新后由启动器创建的进程。旧进程占用端口时，用 `Get-NetTCPConnection -State Listen -LocalPort 8000,5173` 找到 PID，核实进程命令行属于本项目后，在原启动窗口停止；不要批量结束 Python / Node 进程。
+
+## 本地开发依赖
+
+`frontend/package-lock.json` 锁定 Node 依赖；后端 `requirements.txt` 定义运行依赖范围，`requirements-dev.txt` 增加测试依赖，`requirements.lock.txt` 记录本次验证环境的精确依赖版本（含开发依赖）。
+
+## 总览与亮色主题
+
+总览使用前端模块注册表展示全部已接入页面，进入具体模块后才请求对应业务数据。首页不调用行业快照或其他数据库接口，也不把采样频率不同的模块共用一个“最新日期”。分类和搜索在本地完成；无匹配时可重置。新增模块会自动进入目录和导航，移动导航可横向滚动。
+
+主背景、正文、边框和强调色集中在 `frontend/src/styles/global.css` 的 CSS 变量中；总览专属布局在 `styles/overview.css`；ECharts 的亮色画布配色统一在 `lib/chartTheme.ts`。行业热力图保留原有对数映射及排序，色阶由浅米金到朱红，文字按实际背景亮度选用黑色或白色。总览插画标注为视觉示意，不用于表达市场涨跌。
+
+本节的总览与主题调整只涉及网页展示，不更改采集、数据库结构和指标口径。桌面与手机浏览器测试覆盖搜索与分类组合、空结果重置、键盘跳转、所有已注册模块导航、数据库故障状态和原有图表交互。
+
+微盘新高新低使用 `microcap_breadth`，按 `(series_id, trade_date)` 唯一保存每日四周期数量。只新增续传，历史不清理；后端一次限量 SELECT，跳过成分股文本，按需计算比例和滚动指标。详见 [统计与部署说明](../data/microcap-breadth.md)。
+
+高股息选股使用 `dividend_selection_snapshot` 和 `dividend_selection_stock`，由聚宽单文件每次重算并事务替换最新结果，不保留历史；这是其他采集模块增量规则的独立例外。网页通过一次只读 JOIN 展示纯高股息前25只、低估值非银行前25只及银行前10只，详情见 [高股息选股](../data/dividend-selection.md)。
+
+
+## 本地快照查询层
+
+`get_session` 默认按 API 模块选择 `SnapshotCache` 的只读 SQLite 会话，现有 repository/service 查询和响应格式保持一致。只有同步任务连接源 MySQL，网页查询没有自动回源分支；`CACHE_ENABLED=false` 恢复原会话工厂。展示表按模块分事务复制，详情 JSON 保留，不复制网页不用的成分股和已删除分析字段。MySQL 使用 REPEATABLE READ，确保同一模块的快照头和明细来自同一事务。两融监控、博主监控等公开源服务各自维护独立状态，采集任务通过统一配置管理。
+
+
+每次生成一个新的 SQLite 文件，完成写入与完整性检查后原子替换元信息；已有请求继续读取旧版本，新请求读取新版本。源数据库保持只读，建表和索引操作仅发生在本地 SQLite。独立文件锁协调 Uvicorn 多进程、每日调度和 CLI/网页手动同步。未完成模块记录在元信息中，进程中断后可继续；数据库/账号/映射结构变化会切换缓存命名空间，避免复用错误数据。详情见[本地缓存说明](../operations/local-cache.md)。
+
+
+## 高增长模块
+
+`finance.STK_INCOME_STATEMENT` 累计合并财报由聚宽采集脚本读取，四类报告分别检查净利润和基本 EPS 的两段同比。`high_growth_snapshot` + `high_growth_stock` 保存最新名单与12期财报证据，每次事务替换；股票代码、排名均保证唯一。后端沿用 model/repository/service/schema/API 分层，`GET /api/v1/high-growth/latest` 仅一次只读查询。前端的 `/high-growth` 展示四组微缩柱状图、估值及可展开明细。缓存按 `high-growth` 整体替换最新名单，支持原有定时和手动同步。详细口径见 [高增长](../data/high-growth.md)。
+
+## ETF动量热度模块
+
+两张源表 `etf_momentum_pool`、`etf_momentum_heat` 由聚宽独立/批量脚本计算后写入；项目只同步计算结果到本地SQLite；候选池当前快照与按日基金历史分离。后端沿用模型、仓储、服务和路由层，从模块本地SQLite读取排名和曲线。前端 `/etf-momentum` 热力图与 `/etf-momentum/funds/:code` 详情页共享趋势图组件，支持负值坐标。详见 [ETF动量热度](../data/etf-momentum.md)。
+
+
+## 个股机构持仓
+
+聚宽统一采集基金持仓、十大流通股东与股东户数，按股票和日期存入 JSON；社保新进在采集端比较相邻完整季度。项目只读取计算结果，三张展示表按事务变更序号增量同步；无变更时复用原文件。源库变更键与数据同事务提交，本地同步序号随 SQLite 快照一起发布，旧库兼容主键和更新时间核对。采集断点和变更表不进入展示数据。入口 `/institution-ownership` 提供个股查询和社保新进，见 [详细说明](../data/institution-ownership.md)。
+
+### 已移除模块与历史存储
+
+短线选股、专用采集和胜率验证的页面、API、后台执行器已移除。旧网址返回页面不存在，短线任务不再由新版本启动；其他同步模块沿用原缓存目录和游标。此次代码移除不删除源库历史表、本地验证结果、历史缓存或凭据，不执行数据迁移。
+
+个人持仓仍使用通用 `database_sources` / `source_keys` 保存加密连接。为兼容既有配置，保留其 SQLite 内部表名、密钥目录和 `VALIDATION_ENCRYPTION_KEY` / `VALIDATION_ALLOWED_TARGETS` 配置名称；它们不再注册任何短线功能。大宗商品使用自身图表组件与调度，不依赖已移除的短线图表。

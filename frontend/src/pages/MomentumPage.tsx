@@ -65,7 +65,7 @@ export function MomentumPage() {
       ) : error ? (
         <ErrorState message={error} retry={reload} />
       ) : !data?.trade_date || !industries.length ? (
-        <EmptyState />
+        <EmptyState title="暂无行业动量数据" />
       ) : (
         <>
           <div className="stats-grid">

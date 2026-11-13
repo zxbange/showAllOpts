@@ -1,5 +1,6 @@
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
+import { MemoryRouter } from 'react-router-dom'
 import { describe, expect, it, vi } from 'vitest'
 import { SystemConfigurationPage } from './SystemConfigurationPage'
 const auth = vi.hoisted(() => ({ session: { user: { role: 'user' } } }))
@@ -13,6 +14,10 @@ describe('system settings permissions', () => {
   })
   it('mounts editor for admin', () => {
     auth.session.user.role = 'admin'
-    expect(renderToStaticMarkup(createElement(SystemConfigurationPage))).toContain('重新读取配置')
+    expect(
+      renderToStaticMarkup(
+        createElement(MemoryRouter, null, createElement(SystemConfigurationPage)),
+      ),
+    ).toContain('重新读取配置')
   })
 })

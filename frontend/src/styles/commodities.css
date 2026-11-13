@@ -8,7 +8,7 @@
 }
 .commodity-page p,
 .commodity-page small {
-  color: var(--text-muted, #756a62);
+  color: var(--muted);
 }
 .commodity-summary {
   display: grid;
@@ -16,7 +16,7 @@
   gap: 16px;
   background: #eef4ef;
   padding: 20px;
-  border-radius: 16px;
+  border-radius: var(--radius-panel);
 }
 .commodity-summary strong {
   display: block;
@@ -28,8 +28,8 @@
 }
 .commodity-panel {
   background: white;
-  border: 1px solid #e8ded3;
-  border-radius: 16px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-panel);
   padding: 20px;
   min-width: 0;
 }
@@ -72,7 +72,7 @@
 .commodity-table th {
   position: sticky;
   top: 0;
-  background: #fcf8f3;
+  background: var(--surface);
 }
 .commodity-table a {
   color: #26765e;
@@ -102,7 +102,7 @@
 }
 .commodity-tabs a {
   padding: 10px 18px;
-  border: 1px solid #e8ded3;
+  border: 1px solid var(--border);
   border-radius: 10px;
   color: #756a62;
   background: white;

@@ -3,7 +3,6 @@
   gap: 18px;
   min-width: 0;
 }
-.holdings-heading,
 .holdings-toolbar,
 .holdings-section-title,
 .holdings-card > header {
@@ -13,12 +12,9 @@
   gap: 18px;
   flex-wrap: wrap;
 }
-.holdings-heading h1 {
-  margin: 8px 0;
-}
 .holdings-page p,
 .holdings-page small {
-  color: var(--text-muted, #756a62);
+  color: var(--muted);
   line-height: 1.65;
 }
 .holdings-status {
@@ -31,11 +27,11 @@
 .holdings-toolbar {
   background: #f0f4ee;
   padding: 22px;
-  border-radius: 18px;
+  border-radius: var(--radius-panel);
 }
 .holdings-card {
-  border: 1px solid #e8ded3;
-  border-radius: 18px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-panel);
   background: #fff;
   padding: 16px;
   min-width: 0;
@@ -118,7 +114,7 @@
   white-space: nowrap;
 }
 .holdings-page th {
-  font-size: 12px;
+  font-size: 13px;
   font-weight: 500;
   color: #756a62;
 }
@@ -188,7 +184,7 @@
   border-radius: 4px;
 }
 .holdings-day small {
-  font-size: 12px;
+  font-size: 13px;
   font-weight: 400;
 }
 .holdings-toolbar .holdings-actions {
@@ -211,7 +207,7 @@
   position: sticky;
   top: 0;
   z-index: 1;
-  background: #fcf8f3;
+  background: var(--surface);
 }
 .holdings-history-scroll th,
 .holdings-history-scroll td {
