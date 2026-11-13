@@ -31,7 +31,7 @@ STRATEGY_CONFIG = {
         'end_date': None,  # 每次运行取北京时间当天；16:00 前只采集截至昨日的数据。
         'micro_num': 400,
         'initial_days': 180,  # 仅普通模式默认窗口；完整恢复请调用 run_history()。
-        'history_mode': True,  # 直接运行默认完整历史恢复；run() 默认普通模式保持兼容。
+        'history_mode': False,  # 与批量版一致，默认近期增量；完整历史须显式开启。
         'batch_size': 500,
         'price_batch_size': 100,
     },

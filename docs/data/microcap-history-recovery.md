@@ -1,6 +1,6 @@
 # 微盘温度计历史恢复
 
-独立入口 `collectors/微盘温度计_数据库版.py` 的 Notebook 主入口默认 `ARCHIVE_HISTORY=True`；直接调用 `run(archive_history=True)` 也可执行。批量版微盘配置 `archive_history=True` 同样执行。两者仅依赖一起上传的 `mysql_connector.py` 获取自选数据库配置，不调用另一个策略脚本。
+独立入口 `collectors/微盘温度计_数据库版.py` 默认 `ARCHIVE_HISTORY=False`，批量版默认 `archive_history=False`；日常只补齐2021起的原序列，不额外扫描全历史。需要独立历史归档时，显式调用 `run(archive_history=True)`，或将批量版对应参数设为 True。关闭归档不会删除已保存的历史。两者仅依赖一起上传的 `mysql_connector.py` 获取数据库配置。
 
 ## 保留原序列，另建历史归档
 

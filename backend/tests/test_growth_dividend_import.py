@@ -71,7 +71,7 @@ def test_strict_schema(source, monkeypatch):
     with source.connect() as c:
         with pytest.raises(ValueError): imp.check_schema(c)
 
-def test_collector_preview_full_calendar_no_config(monkeypatch):
+def test_collector_preview_explicit_history_no_config(monkeypatch):
     import pandas as pd
     path=Path(__file__).resolve().parents[2]/'collectors'/'创红比历史补采_聚宽研究版.py'
     spec=importlib.util.spec_from_file_location('jq_growth',path)
@@ -82,7 +82,7 @@ def test_collector_preview_full_calendar_no_config(monkeypatch):
         return pd.DataFrame({'close':[1234.123456789]},index=pd.to_datetime(['2010-01-04']))
     monkeypatch.setitem(sys.modules,'jqdata',SimpleNamespace(get_trade_days=lambda **kw:[date(2010,1,4)],get_price=prices))
     monkeypatch.setitem(sys.modules,'mysql_connector',None)
-    result=mod.run(end_date='2010-01-04')
+    result=mod.run(start_date='2010-01-04', end_date='2010-01-04')
     assert result['start']=='2010-01-04' and len(calls)==3
     assert '000922.XSHG' in calls and '000015.XSHG' not in calls
     assert result['indices']['000688.XSHG']['observed_first_day']=='2010-01-04'

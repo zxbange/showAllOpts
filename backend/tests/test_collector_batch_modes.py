@@ -45,7 +45,6 @@ def test_removed_options_cannot_silently_change_collection(batch, monkeypatch, n
 
 @pytest.fixture
 def daily_batch(batch, micro_source, monkeypatch):
-    batch.STRATEGY_CONFIG['微盘温度计']['archive_history'] = False
     c = strategy_env(batch, '微盘温度计', micro_source, monkeypatch)
     c.env['calculate_period'] = micro_source.env['calculate_period']
     micro.daily_index(c)
@@ -91,3 +90,18 @@ def test_batch_daily_only_uses_closed_days(daily_batch):
 
 def test_batch_daily_initial_failure_and_incremental_resume(daily_batch):
     micro.test_daily_initial_failure_and_next_day_incremental(daily_batch)
+
+
+@pytest.mark.parametrize('entry', ['standalone', 'batch'])
+def test_default_microcap_entries_do_not_scan_archive(daily_batch, micro_source, entry):
+    c = micro_source if entry == 'standalone' else daily_batch
+    micro.daily_index(c)
+    c.env['get_all_trade_days'] = lambda: pytest.fail('Daily entry must not scan full history')
+    c.env['collect_archive'] = lambda *a: pytest.fail('Archive requires explicit opt-in')
+    options = dict(micro_num=2)
+    if entry == 'standalone':
+        options['archive_history'] = c.env['ARCHIVE_HISTORY']
+    assert len(c.env['run'](**options)) == len(c.days)
+    before = micro.daily_rows(c)
+    assert not c.env['run'](**options)
+    assert micro.daily_rows(c) == before

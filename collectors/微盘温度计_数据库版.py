@@ -21,7 +21,7 @@ from sqlalchemy.orm import sessionmaker
 START_DATE = '2021-01-01'
 END_DATE = None  # 每次运行时取北京时间当天。
 MICRO_NUM = 1000
-ARCHIVE_HISTORY = True  # Notebook 入口额外重建独立历史序列，不替换2021默认。
+ARCHIVE_HISTORY = False  # 日常只补2021起的序列；显式设True才额外重建独立历史归档。
 SAMPLE_STEP = 1  # 每个交易日采集；从 START_DATE 检查并补齐历史缺口。
 BATCH_SIZE = 1000
 RAW_FIELDS = ('micro_median', 'relative_ratio', 'crowding_ratio', 'amount_crowding_ratio')

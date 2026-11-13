@@ -66,7 +66,7 @@ STRATEGY_CONFIG = {'个股机构持仓': {'end_date': None,
            'end_date': None,
            'micro_num': 1000,
            'batch_size': 1000,
-           'archive_history': True},
+           'archive_history': False},
  '净利润断层': {'end_date': None,
            'page_size': 1000,
            'history_mode': 'latest',
@@ -84,7 +84,7 @@ STRATEGY_CONFIG = {'个股机构持仓': {'end_date': None,
 
 # ETF份额和两融担保比例由项目接口任务采集，不在此注册。
 STRATEGY_CONFIG.update({'估值标尺': {'start_date': '2010-01-01', 'end_date': None, 'max_days': None},
-                        '创红比': {'start_date': None, 'end_date': None, 'window_days': 250,
+                        '创红比': {'start_date': '2018-01-01', 'end_date': None, 'window_days': 250,
                                   'max_days': 20000, 'max_windows': 1000, 'retry_earlier_missing': False}})
 STRATEGY_ORDER = ['行业动量', '抱团拥挤度', '市场情绪跟踪', '微盘温度计', '净利润断层', '微盘新高新低', '高股息选股', '高增长', 'ETF动量热度', '个股机构持仓', '估值标尺', '创红比']
 STRATEGY_OPTIONS = {}  # 历史策略固定只新增；高股息选股和高增长每次重算并替换最新快照。
@@ -2420,7 +2420,7 @@ def _microcap_strategy(_apis, _config):
             _install_result_journal(Session, (MicrocapTemperature,), 'microcap-temperature')
             current = collect_daily(Session, start, end, micro_num)
             if archive_history is None:
-                archive_history = settings.get('archive_history', True)
+                archive_history = settings.get('archive_history', False)
             if not isinstance(archive_history, builtins.bool):
                 raise ValueError('archive_history 必须是布尔值。')
             if archive_history:
@@ -6545,7 +6545,7 @@ def _growth_dividend_strategy(_apis, _config):
 
     from sqlalchemy import (MetaData, Table, Column, String, Date, DateTime, Float, inspect, select)
 
-    DEFAULT_START_DATE = None
+    DEFAULT_START_DATE = '2018-01-01'
 
     CODES = ('399006.XSHE', '000922.XSHG', '000688.XSHG')
 
@@ -6635,7 +6635,7 @@ def _growth_dividend_strategy(_apis, _config):
         all_days = [as_day(d) for d in get_trade_days(end_date=end)]
         if not all_days or all_days != sorted(set(all_days)) or all_days[-1] > end:
             raise ValueError('平台交易日历无效')
-        start = as_day(start_date) if start_date else all_days[0]
+        start = as_day(DEFAULT_START_DATE if start_date is None else start_date)
         days = [d for d in all_days if start <= d <= end]
         if not days or len(days) > max_days:
             raise ValueError('区间为空或超过交易日上限')

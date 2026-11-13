@@ -28,7 +28,7 @@ START_DATE = '2025-01-01'  # 该行业分类首次入库时使用的起始日期
 END_DATE = None  # None 表示每次运行时取北京时间当天，也可指定 'YYYY-MM-DD'。
 INDUSTRY_TYPE = 'sw_l2'
 RETENTION_TRADE_DAYS = 180  # 仅普通模式默认采集窗口；两种模式均不自动删除历史结果。
-HISTORY_MODE = True  # 直接运行默认完整恢复；run() 函数仍保留普通模式的既有行为。
+HISTORY_MODE = False  # 与批量版一致，默认近期增量；完整历史须显式开启。
 
 Base = declarative_base()
 RESULT_COLUMNS = [

@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""聚宽研究独立入口，Python 3.6+。默认全平台交易日历；不按证券上市日裁剪回溯行情。"""
+"""聚宽研究独立入口，Python 3.6+。默认2018年起；不按证券上市日裁剪回溯行情。"""
 from datetime import date, datetime, timedelta
 import builtins
 from builtins import any, type, int, bool, isinstance, float, str, callable, getattr, sorted, set, len, range, min
@@ -8,7 +8,7 @@ import sqlalchemy
 from decimal import Decimal
 from sqlalchemy import (MetaData, Table, Column, String, Date, DateTime, Float, inspect, select)
 
-DEFAULT_START_DATE = None
+DEFAULT_START_DATE = '2018-01-01'
 CODES = ('399006.XSHE', '000922.XSHG', '000688.XSHG')
 SOURCE = 'JQDATA.GET_PRICE.INDEX_CLOSE.V1'
 CALENDAR_SOURCE = 'JQDATA.GET_TRADE_DAYS'
@@ -99,7 +99,7 @@ def run(start_date=DEFAULT_START_DATE, end_date=None, preview=True, max_days=200
     all_days = [as_day(d) for d in get_trade_days(end_date=end)]
     if not all_days or all_days != sorted(set(all_days)) or all_days[-1] > end:
         raise ValueError('平台交易日历无效')
-    start = as_day(start_date) if start_date else all_days[0]
+    start = as_day(DEFAULT_START_DATE if start_date is None else start_date)
     days = [d for d in all_days if start <= d <= end]
     if not days or len(days) > max_days:
         raise ValueError('区间为空或超过交易日上限')

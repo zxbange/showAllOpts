@@ -161,3 +161,38 @@ def test_new_modules_refuse_overwrite_before_connecting(collectors, name):
     with pytest.raises(ValueError, match='skip_existing'):
         run(c, [name])
     assert c.connections == []
+
+
+@pytest.mark.parametrize('entry', ['standalone', 'batch'])
+@pytest.mark.parametrize('start_option', [{}, {'start_date': None}])
+def test_growth_default_starts_in_2018_and_preserves_older_rows(collectors, entry, start_option):
+    c = collectors
+    old_day, first = dt.date(2009, 12, 31), dt.date(2018, 1, 2)
+    days = [old_day, dt.date(2017, 12, 29), first] + DAYS
+    c.apis['get_trade_days'] = lambda end_date, **kw: [d for d in days if d <= end_date]
+    calls = []
+    def prices(code, start_date, end_date, **kwargs):
+        assert start_date >= first
+        calls.append((code, start_date))
+        target = [day for day in days if start_date <= day <= end_date]
+        return pd.DataFrame({'close': [4000]*len(target)}, index=target)
+    c.apis['get_price'] = prices
+    growth.metadata.create_all(c.engine)
+    with c.engine.begin() as conn:
+        conn.execute(growth.CALENDAR.insert().values(trade_date=old_day,
+            source=growth.CALENDAR_SOURCE, updated_at=dt.datetime(2020, 1, 1)))
+        conn.execute(growth.PRICES.insert().values(index_code='399006.XSHE', trade_date=old_day,
+            close=1234, source=growth.SOURCE, updated_at=dt.datetime(2020, 1, 1)))
+    if entry == 'batch':
+        c.options['创红比'] = dict(end_date=str(DAYS[-1]), **start_option)
+        assert run(c, ['创红比'])[0]['status'] == 'SUCCESS'
+    else:
+        module = load(ROOT / 'collectors/创红比历史补采_聚宽研究版.py', 'growth_default_start')
+        result = module.run(end_date=str(DAYS[-1]), preview=False, api_namespace=c.apis,
+                            engine_factory=lambda: c.engine, **start_option)
+        assert result['start'] == str(first)
+    assert len(calls) == 3 and all(start == first for _, start in calls)
+    with c.engine.connect() as conn:
+        stored = conn.execute(select(growth.CALENDAR.c.trade_date).order_by(growth.CALENDAR.c.trade_date)).scalars().all()
+        assert stored == [old_day, first] + DAYS
+        assert conn.scalar(select(growth.PRICES.c.close).where(growth.PRICES.c.trade_date == old_day)) == 1234
