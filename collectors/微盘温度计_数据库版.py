@@ -666,12 +666,14 @@ def collect_archive(Session, end, micro_num):
             MicrocapTemperature.series_id.like('micro{}_1d_%_v1_archive'.format(micro_num))).distinct().all()
         if len(anchors) > 1:
             raise ValueError('存在多个历史归档基点，必须明确选择，不能拼接。')
-        if anchors:
-            key = anchors[0][0]
-            first = datetime.datetime.strptime(key.split('_')[2], '%Y%m%d').date()
-            return collect_daily(Session, first, end, micro_num, archive=True)
     finally:
         session.close()
+    # Release the anchor query before collect_daily opens its own sessions.
+    # A return inside try evaluates the nested call before finally can close it.
+    if anchors:
+        key = anchors[0][0]
+        first = datetime.datetime.strptime(key.split('_')[2], '%Y%m%d').date()
+        return collect_daily(Session, first, end, micro_num, archive=True)
     first = None
     unknown = 0
     for index, day in enumerate(days):

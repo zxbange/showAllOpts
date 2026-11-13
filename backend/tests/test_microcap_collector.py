@@ -9,6 +9,8 @@ from types import SimpleNamespace
 import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
+from sqlalchemy.pool import QueuePool
+from test_collector_batch import batch, CONFIG
 
 
 class Frame:
@@ -34,7 +36,8 @@ def collector(tmp_path):
     env = {'__name__': 'offline_microcap', 'pd': SimpleNamespace(DataFrame=lambda data=None, columns=None: data or [])}
     exec(compile(tree, str(source), 'exec'), env)
     env['china_now'] = lambda: datetime.datetime(2021, 1, 29, 17)
-    engine = create_engine('sqlite:///' + str(tmp_path / 'microcap.sqlite'))
+    engine = create_engine('sqlite:///' + str(tmp_path / 'microcap.sqlite'),
+                           poolclass=QueuePool, pool_size=1, max_overflow=0, pool_timeout=0.1)
     env['Base'].metadata.create_all(engine)
     env['MysqlMicrocap'] = SimpleNamespace(connect_to_mysql=lambda: engine)
     days = [datetime.date(2021, 1, i) for i in range(4, 30) if datetime.date(2021, 1, i).weekday() < 5]
@@ -576,3 +579,33 @@ def test_archive_missing_valuation_fields_fail_not_noncomputable(collector):
     with pytest.raises(ValueError, match='字段'):
         c.env['collect_archive'](c.Session, c.days[-1], 2)
     assert not saved(c)
+
+
+def test_batch_archive_resume_releases_anchor_connection_on_noop_and_failure(collector, batch, monkeypatch):
+    c = collector
+    monkeypatch.setattr(batch, 'pd', SimpleNamespace(DataFrame=Frame))
+    setup_archive(c)
+    c.env['collect_archive'](c.Session, c.days[6], 2)
+    original = saved(c)
+    assert len(original) == 1
+
+    def unavailable(*args, **kwargs):
+        assert c.engine.pool.checkedout() == 0
+        raise RuntimeError('synthetic platform outage')
+
+    strategy = batch.STRATEGIES['微盘温度计']({
+        'get_all_trade_days': c.env['get_all_trade_days'],
+        'get_trade_days': c.env['get_trade_days'],
+        'get_all_securities': unavailable,
+    }, CONFIG)
+    assert strategy.collect_archive(c.Session, c.days[6], 2).empty
+    assert c.engine.pool.checkedout() == 0
+    with pytest.raises(RuntimeError, match='synthetic platform outage'):
+        strategy.collect_archive(c.Session, c.days[7], 2)
+    assert c.engine.pool.checkedout() == 0
+    assert saved(c) == original
+    # The same one-connection pool remains usable for resuming the committed archive.
+    c.env['collect_archive'](c.Session, c.days[7], 2)
+    assert saved(c)[:1] == original and len(saved(c)) == 2
+    assert strategy.collect_archive(c.Session, c.days[7], 2).empty
+    assert c.engine.pool.checkedout() == 0
