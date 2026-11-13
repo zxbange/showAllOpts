@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """聚宽研究环境：粘贴运行或 %run -i 净利润断层_数据库版.py。无交易操作。
-统一最新已结束季度；默认仅追加新入选股票，每日跟踪全部历史已入选股票的收盘表现。
+统一最新已结束季度；按上次成功检查日期增量筛选，每日跟踪已入选股票的收盘表现。
 规则、数据口径、限制详见 docs/data/earnings-gap.md。
 """
 from jqdata import *
@@ -535,42 +535,54 @@ def event(code, kind, pub, period, profit, growth, raw, growth_max=None):
                 reason_field=reason_field, raw=clean(raw), signal=None)
 
 
-def fetch_events(codes, period, as_of):
+def fetch_events(codes, period, as_of, start_date=None):
     events = []
     code_map = {code[:6]: code for code in codes}
     code_set = set(codes)
-    t = jy.SecuMain
-    mappings = paged(t, [t.SecuCategory == 1], jy.run_query)
-    companies = {}
-    for row in mappings:
-        code = code_map.get(str(row['SecuCode']))
-        if code:
-            companies.setdefault(row['CompanyCode'], set()).add(code)
-    if not companies:
-        raise ValueError('A 股公司代码映射为空，不能覆盖数据库。')
     cutoff = as_of + dt.timedelta(days=1)
     t = jy.LC_FSPerformedLetters
-    for row in paged(t, [t.EndDate == period, t.InfoPublDate < cutoff], jy.run_query):
+    filters = [t.EndDate == period, t.InfoPublDate < cutoff]
+    if start_date is not None:
+        filters.append(t.InfoPublDate >= start_date)
+    express = list(paged(t, filters, jy.run_query))
+    company_codes = sorted({row['CompanyCode'] for row in express})
+    companies = {}
+    mapped_count = 0
+    t = jy.SecuMain
+    # 没有窗口内快报时，不读取公司映射；有快报也只查对应公司。
+    for start in range(0, len(company_codes), 300):
+        for row in paged(t, [t.SecuCategory == 1, t.CompanyCode.in_(company_codes[start:start+300])], jy.run_query):
+            mapped_count += 1
+            code = code_map.get(str(row['SecuCode']))
+            if code:
+                companies.setdefault(row['CompanyCode'], set()).add(code)
+    if express and not mapped_count:
+        raise ValueError('A 股公司代码映射为空，不能覆盖数据库。')
+    for row in express:
         for code in sorted(companies.get(row['CompanyCode'], [])):
             events.append(event(code, 'express', row['InfoPublDate'], period,
                                 row['NPParentCompanyOwners'], row['NPCOwnersYOY'], row))
     print('业绩快报读取完成：{} 条。'.format(len(events)))
     t = finance.STK_FIN_FORCAST
-    for row in paged(t, [t.end_date == period, t.pub_date <= as_of], finance.run_query):
+    filters = [t.end_date == period, t.pub_date <= as_of]
+    if start_date is not None:
+        filters.append(t.pub_date >= start_date)
+    for row in paged(t, filters, finance.run_query):
         if row['code'] in code_set:
             # 不猜测可选预告金额字段的单位；原始字段完整保存在 raw。
             events.append(event(row['code'], 'forecast', row['pub_date'], period, None,
                                 row['profit_ratio_min'], row, row.get('profit_ratio_max')))
     print('业绩预告读取完成。')
-    events.extend(fetch_formal_events(codes, period, as_of))
+    events.extend(fetch_formal_events(codes, period, as_of, start_date))
     print('三类公告合计 {} 条。'.format(len(events)))
     unique = {json.dumps(e, ensure_ascii=False, sort_keys=True): e for e in events}
     return sorted(unique.values(), key=lambda e: (e['code'], e['publication_date'], e['kind']))
 
 
-def fetch_formal_events(codes, period, as_of):
+def fetch_formal_events(codes, period, as_of, start_date=None):
     events = []
     for start in range(0, len(codes), 300):
+        print('核对正式财报 {}/{} 只'.format(builtins.min(start+300, len(codes)), len(codes)))
         q = query(income.code, income.pubDate.label('publication_date'),
                   income.statDate.label('report_period'),
                   income.np_parent_company_owners.label('net_profit'),
@@ -579,6 +591,8 @@ def fetch_formal_events(codes, period, as_of):
                   indicator.statDate.label('indicator_period')).filter(
                       income.code.in_(codes[start:start+300]), income.statDate == period,
                       indicator.statDate == period)
+        if start_date is not None:
+            q = q.filter((income.pubDate >= start_date) | (indicator.pubDate >= start_date))
         frame = get_fundamentals(q, date=as_of)
         for row in checked_rows(frame, ['code', 'publication_date', 'report_period', 'net_profit',
                                         'profit_yoy', 'indicator_publication_date', 'indicator_period'], '正式财报'):
@@ -587,7 +601,7 @@ def fetch_formal_events(codes, period, as_of):
             if as_date(row['report_period']) != period or as_date(row['indicator_period']) != period:
                 raise ValueError('财报与指标的报告期不一致。')
             pub = builtins.max(as_date(row['publication_date']), as_date(row['indicator_publication_date']))
-            if pub <= as_of:
+            if pub <= as_of and (start_date is None or pub >= start_date):
                 events.append(event(row['code'], 'formal', pub, period, row['net_profit'], row['profit_yoy'], row))
     return events
 
@@ -604,6 +618,40 @@ def price_signal(previous_close, open_price, close_price):
                 intraday_pct=float((closing / opening - 1) * 100))
 
 
+def screening_prices(grouped, as_of):
+    """仅给财务条件通过的股票分批取价；共用日历，不向数据库写筛选中间态。"""
+    candidates = [(code, [e for e in events if e['eligible']]) for code, events in sorted(grouped.items())]
+    candidates = [(code, events) for code, events in candidates if events]
+    if not candidates:
+        return
+    first = builtins.min(as_date(e['publication_date']) for _, events in candidates for e in events)
+    print('读取筛选交易日历，财务条件通过 {} 只'.format(len(candidates)))
+    calendar = [as_date(d) for d in get_trade_days(start_date=first-dt.timedelta(days=40), end_date=as_of)]
+    if not calendar or calendar != sorted(set(calendar)) or calendar[0] < first-dt.timedelta(days=40) or calendar[-1] > as_of:
+        raise ValueError('交易日历为空、乱序或越界。')
+    fields = ['open', 'close', 'high', 'low', 'paused', 'volume']
+    for start in range(0, len(candidates), 50):
+        batch = candidates[start:start+50]
+        pubs = [as_date(e['publication_date']) for _, events in batch for e in events]
+        quote_start = next(d for d in calendar if d >= builtins.min(pubs)-dt.timedelta(days=40))
+        final_index = next((i for i, d in enumerate(calendar) if d >= builtins.max(pubs)), len(calendar)-1)
+        # 筛选只用公告对应日及前收盘；详情最多展示信号后20日，无需读到今天。
+        quote_end = calendar[builtins.min(len(calendar)-1, final_index+20)]
+        batch_codes = [code for code, _ in batch]
+        print('读取筛选行情 {}—{}/{} 只，{} 至 {}'.format(start+1, start+len(batch), len(candidates), quote_start, quote_end))
+        frame = get_price(batch_codes, start_date=quote_start, end_date=quote_end, frequency='daily',
+                          fields=fields, skip_paused=False, fq='pre', panel=False)
+        bars = {code: {} for code in batch_codes}
+        for row in checked_rows(frame, ['code', 'time']+fields, '分批股票行情'):
+            code, day = row['code'], as_date(row['time'])
+            if code not in bars or not quote_start <= day <= quote_end or day in bars[code]:
+                raise ValueError('分批行情股票、日期越界或重复，取消本次入库。')
+            bars[code][day] = row
+        for code, _ in batch:
+            yield code, bars[code], calendar
+        print('已完成行情筛选 {}/{} 只'.format(start+len(batch), len(candidates)))
+
+
 def screen(codes, names, events, period, as_of, historical=False):
     grouped = {}
     for e in events:
@@ -611,24 +659,9 @@ def screen(codes, names, events, period, as_of, historical=False):
             raise ValueError('公告报告期、股票代码或截止日期异常。')
         grouped.setdefault(e['code'], []).append(e)
     results = []
-    for index, (code, disclosures) in enumerate(sorted(grouped.items()), 1):
+    for code, bars, calendar in screening_prices(grouped, as_of):
+        disclosures = grouped[code]
         qualifying = [e for e in disclosures if e['eligible']]
-        if not qualifying:
-            continue
-        first = builtins.min(as_date(e['publication_date']) for e in qualifying)
-        calendar = [as_date(d) for d in get_trade_days(start_date=first-dt.timedelta(days=40), end_date=as_of)]
-        if not calendar or calendar != sorted(set(calendar)):
-            raise ValueError('交易日历为空或顺序异常。')
-        quote_end = as_of
-        if historical:
-            final_pub = builtins.max(as_date(e['publication_date']) for e in qualifying)
-            final_index = next((i for i, day in enumerate(calendar) if day >= final_pub), len(calendar)-1)
-            quote_end = calendar[builtins.min(len(calendar)-1, final_index+20)]
-        frame = get_price(code, start_date=calendar[0], end_date=quote_end, frequency='daily',
-                          fields=['open', 'close', 'high', 'low', 'paused', 'volume'],
-                          skip_paused=False, fq='pre')
-        checked_rows(frame, ['open', 'close', 'high', 'low', 'paused', 'volume'], '股票行情')
-        bars = {as_date(day): row.to_dict() for day, row in frame.iterrows()}
         hits = []
         for e in qualifying:
             pub = as_date(e['publication_date'])
@@ -680,11 +713,10 @@ def screen(codes, names, events, period, as_of, historical=False):
                       intraday_pct=selected['signal']['intraday_pct'], valuation_date=as_of,
                       events=disclosures, prices=prices)
         results.append(record)
-        if index % 25 == 0:
-            print('已检查 {} 只披露股票，命中 {} 只。'.format(index, len(results)))
     selected_codes = [r['code'] for r in results]
     valuations = {}
     for start in range(0, len(selected_codes), 300):
+        print('读取新入选股票估值 {}/{} 只'.format(builtins.min(start+300, len(selected_codes)), len(selected_codes)))
         q = query(valuation.code, valuation.market_cap, valuation.circulating_market_cap,
                   valuation.pe_ratio, valuation.pb_ratio).filter(valuation.code.in_(selected_codes[start:start+300]))
         frame = get_fundamentals(q, date=as_of)
@@ -1034,6 +1066,21 @@ def run_history(end_date=None, history_mode='gaps', start_period=None, max_perio
         engine.dispose()
 
 
+def scan_start(Session, period, as_of):
+    """复用随选股结果原子提交的截止日；首次只查最新收盘日，不自动补季度。"""
+    session = Session()
+    try:
+        checked = session.query(EarningsRun.as_of_date).filter(EarningsRun.report_period == period).scalar()
+        if checked is not None:
+            return checked if checked < as_of else None
+        # 换季仍从上次成功检查接续；不能因新季度没有记录而漏掉中间日期。
+        previous = session.query(EarningsRun.as_of_date).filter(EarningsRun.as_of_date <= as_of).order_by(
+            EarningsRun.as_of_date.desc()).first()
+        return previous[0] if previous else as_of
+    finally:
+        session.close()
+
+
 def run(end_date=END_DATE, skip_existing=True, history_mode=HISTORY_MODE,
         start_period=START_PERIOD, max_periods=MAX_PERIODS):
     if history_mode != 'latest':
@@ -1076,9 +1123,11 @@ def run(end_date=END_DATE, skip_existing=True, history_mode=HISTORY_MODE,
             finally:
                 session.close()
             pending = [code for code in codes if code not in existing]
-            print('本季度已入库 {} 只股票，保留原始快照；仅筛选其余 {} 只。'.format(len(existing), len(pending)))
-            events = fetch_events(pending, period, as_of) if pending else []
-            records = screen(pending, names, events, period, as_of) if pending else []
+            since = scan_start(Session, period, as_of)
+            print('本季度已有 {} 只；{}'.format(len(existing), '已检查至 {}，跳过公告筛选'.format(as_of)
+                  if since is None else '仅检查 {} 至 {} 披露'.format(since, as_of)))
+            events = fetch_events(pending, period, as_of, since) if pending and since is not None else []
+            records = screen(pending, names, events, period, as_of) if events else []
         records = save_results(Session, period, as_of, len(codes), records, skip_existing=skip_existing)
         _prune_earnings_history(Session, EarningsStock, EarningsRun, as_of)
         _migrate_earnings_versions(Session)

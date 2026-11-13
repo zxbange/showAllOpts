@@ -146,7 +146,7 @@ def test_signal_weekend_matches_next_day_not_previous_and_paused_excluded(c):
     bars=[dict(date=days[0],open=10,close=10,high=10,low=10,paused=0,volume=100),
           dict(date=days[1],open=10,close=10,high=10,low=10,paused=0,volume=100),
           dict(date=days[2],open=10.4,close=10.5,high=10.6,low=9,paused=0,volume=100)]
-    c.env['get_price']=lambda *a,**k:Frame(bars)
+    c.env['get_price']=lambda *a,**k:Frame([dict(b, code='600001.XSHG', time=b['date']) for b in bars])
     c.env['get_industry']=lambda codes,**k:{codes[0]:{'sw_l3':{'industry_code':'test','industry_name':'测试行业'}}}
     # Real SQL expressions are not required for the valuation stub.
     field=SimpleNamespace(in_=lambda codes:True)
@@ -174,7 +174,12 @@ def test_source_failure_never_connects_or_overwrites(c):
 
 
 
-def test_real_query_filters_three_sources_and_preserves_source_records(c):
+@pytest.mark.parametrize('start_date,kinds', [
+    (None, {'express', 'forecast', 'formal'}),
+    (dt.date(2026,10,15), {'express', 'formal'}),
+    (dt.date(2026,10,16), {'formal'}),
+])
+def test_real_query_filters_three_sources_and_preserves_source_records(c, start_date, kinds):
     from sqlalchemy import Column, Date, Integer, Float, String
     class Securities(c.env['Base']):
         __tablename__='fake_securities'
@@ -222,8 +227,10 @@ def test_real_query_filters_three_sources_and_preserves_source_records(c):
         ])
         s.commit()
         c.env['query']=s.query
+        source_tables=[]
         def fetch(q):
             model=q.column_descriptions[0]['entity']
+            source_tables.append(model)
             columns=[col.key for col in model.__table__.columns]
             return Frame([{key:getattr(row,key) for key in columns} for row in q.all()],columns)
         c.env['jy']=SimpleNamespace(SecuMain=Securities,LC_FSPerformedLetters=Express,run_query=fetch)
@@ -232,17 +239,22 @@ def test_real_query_filters_three_sources_and_preserves_source_records(c):
         calls=[]
         def formal(q,date):
             calls.append(date)
+            if start_date is not None:
+                assert ' OR ' in str(q)  # Either publication date can advance the effective disclosure.
             return Frame([dict(code='600001.XSHG',publication_date=dt.date(2026,10,15),
                 report_period=period,net_profit=1e8,profit_yoy=35,indicator_publication_date=dt.date(2026,10,16),
                 indicator_period=period)])
         c.env['get_fundamentals']=formal
-        events=c.env['fetch_events'](['600001.XSHG'],period,as_of)
-        assert len(events)==3 and calls==[as_of]
+        events=c.env['fetch_events'](['600001.XSHG'],period,as_of,start_date)
+        assert {e['kind'] for e in events}==kinds and calls==[as_of]
+        assert (Securities in source_tables) == ('express' in kinds)
         by_kind={e['kind']:e for e in events}
         assert by_kind['formal']['publication_date']=='2026-10-16'
-        assert by_kind['forecast']['profit_yoy_max']==45
-        assert by_kind['express']['profit_yoy']==25
-        assert by_kind['express']['raw']['EndDate']=='2026-09-30'
+        if 'forecast' in kinds:
+            assert by_kind['forecast']['profit_yoy_max']==45
+        if 'express' in kinds:
+            assert by_kind['express']['profit_yoy']==25
+            assert by_kind['express']['raw']['EndDate']=='2026-09-30'
         assert all(e['report_period']=='2026-09-30' for e in events)
 
 
@@ -373,7 +385,8 @@ def test_insert_only_earnings_rolls_back_new_rows_and_metadata(c):
 def test_insert_only_earnings_skips_fetching_already_saved_stocks(c):
     import pandas as pd
     a=record(c); b=record(c,code='600002.XSHG'); day=a['valuation_date']
-    c.env['save_results'](c.Session,a['report_period'],day,2,[a],skip_existing=True)
+    previous=day-dt.timedelta(days=1)
+    c.env['save_results'](c.Session,a['report_period'],previous,2,[dict(a,valuation_date=previous)],skip_existing=True)
     c.env['china_now']=lambda:dt.datetime(2026,10,17,17)
     c.env['get_trade_days']=lambda **kwargs:[day]
     c.env['get_all_securities']=lambda **kwargs:SimpleNamespace(
@@ -382,7 +395,8 @@ def test_insert_only_earnings_skips_fetching_already_saved_stocks(c):
     seen=[]
     def fetch(codes,*args):
         seen.append(list(codes))
-        return []
+        assert args[-1] == previous
+        return b['events']
     c.env['fetch_events']=fetch
     c.env['screen']=lambda codes,*args:[b]
     price_calls = []
