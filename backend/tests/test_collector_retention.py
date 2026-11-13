@@ -13,7 +13,8 @@ from sqlalchemy.orm import declarative_base, sessionmaker
 @pytest.fixture
 def collector(tmp_path):
     source = Path(__file__).resolve().parents[2] / 'collectors' / '行业动量计算_数据库版.py'
-    tree = ast.parse(source.read_text(encoding='utf-8'))
+    text = source.read_text(encoding='utf-8')
+    tree = ast.parse(text)
     names = {'IndustryMomentum', 'as_date', '_closed_day', '_checked_trade_days', 'save_day', 'get_last_saved_date',
              'get_retention_start', 'cleanup_old_data', 'run'}
     nodes = [node for node in tree.body if isinstance(node, (ast.ClassDef, ast.FunctionDef)) and node.name in names]
@@ -28,6 +29,10 @@ def collector(tmp_path):
                      datetime=SimpleNamespace(datetime=FrozenDatetime, date=datetime.date,
                                               timedelta=datetime.timedelta),
                      pd=SimpleNamespace(DataFrame=lambda data=None, columns=None: data or []))
+    # The real run now initializes the journal even when there are no new dates.
+    # Load its embedded, offline-safe helpers too; do not stub out the new behavior.
+    journal = text.split('# BEGIN SHARED RESULT JOURNAL', 1)[1].split('# END SHARED RESULT JOURNAL', 1)[0]
+    exec(compile(journal, str(source), 'exec'), namespace)
     exec(compile(ast.Module(body=nodes, type_ignores=[]), str(source), 'exec'), namespace)
     engine = create_engine('sqlite:///' + str(tmp_path / 'retention.sqlite'))
     namespace['Base'].metadata.create_all(engine)

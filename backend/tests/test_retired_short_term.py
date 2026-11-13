@@ -32,9 +32,9 @@ def test_catalogue_cache_and_models_exclude_module(client, engine, tmp_path):
     assert old.read_bytes() == b'historical-data-not-to-delete'
 
 
-def test_batch_only_removes_short_term(batch):
+def test_batch_keeps_current_collectors_without_restoring_short_term(batch):
     expected = {'行业动量','抱团拥挤度','市场情绪跟踪','微盘温度计','净利润断层',
-                '微盘新高新低','高股息选股','高增长','ETF动量热度','个股机构持仓'}
+                '微盘新高新低','高股息选股','高增长','ETF动量热度','个股机构持仓','估值标尺','创红比'}
     assert set(batch.STRATEGY_SPECS) == expected
     # ETF份额 runs through the exchange collector and has no legacy batch entry.
     assert set(batch.STRATEGY_ORDER) == expected
