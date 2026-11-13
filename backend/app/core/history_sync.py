@@ -144,7 +144,8 @@ def copy_history(cache, module, full=False):
             # Keep an immutable cache snapshot for restart/status, without making
             # page APIs read a different database from their public collectors.
             shutil.copyfile(path, snapshot)
-            with snapshot.open('rb') as stream:
+            # Windows fsync requires a writable handle; r+b preserves the copied bytes.
+            with snapshot.open('r+b') as stream:
                 os.fsync(stream.fileno())
             check()
             if source_identity(cache.source) != identity:

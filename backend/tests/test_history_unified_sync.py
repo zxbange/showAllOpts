@@ -35,6 +35,26 @@ def entry(cache, module):
     return next(item for item in cache.status()['modules'] if item['id'] == module)
 
 
+def test_valuation_missing_pe_survives_unified_sync(setup):
+    from app.services import valuation_ruler_import as importer
+    from app.core.history_sync import service_for
+    _, cache = setup
+    with cache.source.begin() as connection:
+        connection.execute(importer.MEMBER.update().where(importer.MEMBER.c.code == '000000.XSHE').values(pe_ttm=None))
+        connection.execute(importer.DAILY.update().values(positive_count=299, loss_count=0, pe_sum=2990))
+    for _ in range(2):
+        cache.refresh('valuation-ruler', background=False)
+        assert entry(cache, 'valuation-ruler')['progress']['status'] == 'complete'
+        service = service_for(cache, 'valuation-ruler')
+        latest = service.history(MOMENT)['latest']
+        assert latest['member_count'] == 300 and latest['missing_pe_count'] == 1
+        assert latest['positive_count'] == 299 and latest['loss_count'] == 0
+        assert latest['mean_pe_ttm'] == 10
+        with service.db() as db:
+            assert db.execute('SELECT COUNT(*) FROM members').fetchone()[0] == 300
+            assert db.execute('SELECT COUNT(*) FROM members WHERE pe_ttm IS NULL').fetchone()[0] == 1
+
+
 def digest(path):
     return hashlib.sha256(path.read_bytes()).hexdigest()
 

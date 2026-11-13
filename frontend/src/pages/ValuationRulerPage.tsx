@@ -194,7 +194,7 @@ export function ValuationRulerPage() {
           label="成分股平均PE-TTM"
           value={valuationNumber(latest?.mean_pe_ttm)}
           suffix="倍"
-          note={`正PE ${latest?.positive_count ?? '—'} 只 · 亏损剔除 ${latest?.loss_count ?? '—'} 只`}
+          note={`有效正PE ${latest?.positive_count ?? '—'} 只 · 负PE ${latest?.loss_count ?? '—'} 只 · 缺失PE ${latest?.missing_pe_count ?? (latest ? 0 : '—')} 只`}
           icon={<Gauge size={18} />}
           accent
         />
@@ -260,7 +260,7 @@ export function ValuationRulerPage() {
         <h2>统计口径与覆盖</h2>
         <p>
           按每个交易日实际沪深300成分名单，正 PE-TTM
-          等权算术平均；负PE作为亏损剔除，缺失与零PE单独报错，不当作亏损处理。完整日才进入分位样本，缺口保持空值，不插值、不跨缺口连线。
+          等权算术平均；负PE与缺失PE分别统计，均不参与均值。保留300只成分，存在有效正PE的日期进入分位样本；缺失交易日不填充、不跨缺口连线。
         </p>
         <p>
           请求起点 {data?.coverage.requested_start ?? '2010-01-01'}；实际完整记录{' '}

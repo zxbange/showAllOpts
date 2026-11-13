@@ -15,7 +15,8 @@ const point = {
   mean_pe_ttm: 24.5,
   member_count: 300,
   positive_count: 280,
-  loss_count: 20,
+  loss_count: 19,
+  missing_pe_count: 1,
   source: 'joinquant',
 }
 const history: ValuationHistory = {
@@ -70,6 +71,7 @@ test('valuation tab, ranges, real quantiles and disclosure render without overfl
   )
   await page.goto('/valuation-ruler')
   await expect(page.getByRole('heading', { name: '市场情绪 估值标尺' })).toBeVisible()
+  await expect(page.getByText('有效正PE 280 只 · 负PE 19 只 · 缺失PE 1 只')).toBeVisible()
   await expect(
     page
       .getByRole('navigation', { name: '市场情绪模块切换' })

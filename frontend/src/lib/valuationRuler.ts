@@ -56,7 +56,7 @@ export function valuationChartOption(data: ValuationHistory, days: number) {
               `平均PE-TTM：${valuationNumber(p.mean_pe_ttm)}`,
               p.gap
                 ? '缺失交易日，未填充'
-                : `正PE ${p.positive_count ?? '—'} / 亏损剔除 ${p.loss_count ?? '—'} / 成分 ${p.member_count ?? '—'}`,
+                : `有效正PE ${p.positive_count ?? '—'} / 负PE ${p.loss_count ?? '—'} / 缺失PE ${p.missing_pe_count ?? 0} / 成分 ${p.member_count ?? '—'}`,
             ].join('\n')
           : ''
       },

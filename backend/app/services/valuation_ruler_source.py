@@ -58,7 +58,7 @@ def get_bytes(client, url, *, params=None, limit=2_000_000, check_cancel=lambda:
 
 def json_payload(raw):
     try:
-        payload = json.loads(raw,parse_float=Decimal,parse_constant=lambda _:None)
+        payload = json.loads(raw,parse_float=Decimal,parse_constant=lambda value:Decimal(value))
     except (ValueError,UnicodeError):
         raise SourceError('invalid_response') from None
     if not isinstance(payload,dict):
@@ -124,7 +124,7 @@ def parse_pe_page(payload, day, page, *, expected=None):
         code,secucode=row.get('SECURITY_CODE'),row.get('SECUCODE')
         if (not isinstance(code,str) or len(code)!=6 or not code.isdigit() or
                 not isinstance(secucode,str) or secucode not in (code+'.SH',code+'.SZ',code+'.BJ') or
-                row.get('TRADE_DATE')!=str(day)+' 00:00:00' or code in values):
+                row.get('TRADE_DATE')!=str(day)+' 00:00:00' or code in values or 'PE_TTM' not in row):
             raise SourceError('invalid_response')
         suffix={'.SH':'.XSHG','.SZ':'.XSHE','.BJ':'.XBSE'}[secucode[-3:]]
         values[code]=(code+suffix,row.get('PE_TTM'))
@@ -198,7 +198,7 @@ class PublicSource:
         signed={}
         for code in members:
             found=values.get(code[:6])
-            if found is None or found[0]!=code or found[1] is None:
+            if found is None or found[0]!=code:
                 raise SourceError('incomplete',retryable=True)
             signed[code]=found[1]
         raw=self.request(CLOSE_URL,limit=200_000,params={

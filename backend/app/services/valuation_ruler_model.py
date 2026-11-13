@@ -47,7 +47,7 @@ def validate_day(day, index_close, members, source, expected=None):
     if not isinstance(members, dict) or len(members) != 300 or any(not valid_code(code) for code in members):
         raise ValuationError('须有当日完整的 300 只唯一沪深成分股。')
     close = decimal_value(index_close, 24, 8, positive=True)
-    values = [decimal_value(value, 30, 12) for value in members.values()]
+    values = [decimal_value(value, 30, 12) for value in members.values() if value is not None]
     positives = [value for value in values if value > 0]
     if not positives:
         raise ValuationError('当日没有可计算平均值的正 PE 成分股。')
@@ -57,7 +57,8 @@ def validate_day(day, index_close, members, source, expected=None):
         mean = (total/len(positives)).quantize(Decimal('1e-12'), rounding=ROUND_HALF_EVEN)
         result = dict(trade_date=str(day), index_code=INDEX, method_version=METHOD,
             index_close=format(close, '.8f'), mean_pe_ttm=format(mean, '.12f'), pe_sum=format(total, '.12f'),
-            member_count=300, positive_count=len(positives), loss_count=300-len(positives),
+            member_count=300, positive_count=len(positives), loss_count=sum(value < 0 for value in values),
+            missing_pe_count=300-len(values),
             members_sha256=hashlib.sha256('\n'.join(sorted(members)).encode()).hexdigest(), source=source)
     if expected is not None:
         for key in ('index_code', 'method_version', 'members_sha256', 'source'):
@@ -66,6 +67,9 @@ def validate_day(day, index_close, members, source, expected=None):
         for key in ('member_count', 'positive_count', 'loss_count'):
             if type(expected.get(key)) is not int or expected[key] != result[key]:
                 raise ValuationError('日汇总成分股数量与明细不一致。')
+        if 'missing_pe_count' in expected and (type(expected['missing_pe_count']) is not int
+                or expected['missing_pe_count'] != result['missing_pe_count']):
+            raise ValuationError('日汇总缺失PE数量与明细不一致。')
         for key, precision, scale in [('index_close',24,8),('mean_pe_ttm',30,12),('pe_sum',38,12)]:
             if decimal_value(expected.get(key),precision,scale,positive=True) != Decimal(result[key]):
                 raise ValuationError('日汇总数值与成分股明细不一致。')

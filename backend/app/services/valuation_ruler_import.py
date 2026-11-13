@@ -34,7 +34,7 @@ DAILY = Table('valuation_ruler_daily', metadata, *_keys(),
     Column('members_sha256', String(64), nullable=False), Column('source', String(48), nullable=False),
     Column('updated_at', DateTime, nullable=False))
 MEMBER = Table('valuation_ruler_member', metadata, *_keys(), Column('code', String(16), primary_key=True),
-    Column('pe_ttm', Numeric(30, 12), nullable=False), Column('source', String(48), nullable=False),
+    Column('pe_ttm', Numeric(30, 12), nullable=True), Column('source', String(48), nullable=False),
     Column('updated_at', DateTime, nullable=False))
 CALENDAR = Table('valuation_ruler_trading_day', metadata, Column('trade_date', Date, primary_key=True),
     Column('source', String(48), nullable=False), Column('updated_at', DateTime, nullable=False))
@@ -58,7 +58,9 @@ def check_schema(connection):
                 incompatible = True
                 continue
             typ = actual['type']
-            incompatible |= typ._type_affinity is not expected.type._type_affinity or actual.get('nullable', True)
+            # Both old NOT NULL and upgraded nullable PE columns are readable.
+            incompatible |= typ._type_affinity is not expected.type._type_affinity or (
+                actual.get('nullable', True) and not expected.nullable)
             incompatible |= bool(getattr(typ, 'unsigned', False))
             if isinstance(expected.type, Numeric):
                 incompatible |= (getattr(typ, 'precision', None), getattr(typ, 'scale', None)) != (expected.type.precision, expected.type.scale)

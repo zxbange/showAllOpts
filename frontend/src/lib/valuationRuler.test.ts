@@ -39,6 +39,11 @@ const data: ValuationHistory = {
   sources: ['joinquant', 'csi_em'],
 }
 describe('valuation chart truthfulness', () => {
+  it('shows missing PE separately from negative PE and retains the complete member count', () => {
+    const option = valuationChartOption({ ...data, points: [{ ...data.points[0], loss_count: 29, missing_pe_count: 1 }] }, 0)
+    const tooltip = option.tooltip.formatter([{ dataIndex: 0 }])
+    expect(tooltip).toContain('有效正PE 270 / 负PE 29 / 缺失PE 1 / 成分 300')
+  })
   it('uses server full-history quantiles on the right axis regardless of selected viewport', () => {
     for (const days of [0, 365, 1095]) {
       const option = valuationChartOption(data, days)

@@ -86,7 +86,7 @@ class ValuationRuler:
                 CREATE TABLE IF NOT EXISTS calendar (trade_date TEXT PRIMARY KEY, source TEXT NOT NULL);
                 CREATE TABLE IF NOT EXISTS points (trade_date TEXT PRIMARY KEY, payload TEXT NOT NULL);
                 CREATE TABLE IF NOT EXISTS members (trade_date TEXT NOT NULL, code TEXT NOT NULL,
-                    pe_ttm TEXT NOT NULL, PRIMARY KEY(trade_date,code));
+                    pe_ttm TEXT, PRIMARY KEY(trade_date,code));
                 CREATE TABLE IF NOT EXISTS proofs (trade_date TEXT PRIMARY KEY, payload TEXT NOT NULL);
                 CREATE TABLE IF NOT EXISTS snapshots (trade_date TEXT PRIMARY KEY, members TEXT NOT NULL,
                     proof TEXT NOT NULL, workbook BLOB NOT NULL);
@@ -98,6 +98,14 @@ class ValuationRuler:
                 CREATE TABLE IF NOT EXISTS state (id INTEGER PRIMARY KEY CHECK(id=1), payload TEXT NOT NULL);
                 INSERT OR IGNORE INTO state VALUES(1,'{}');
             ''')
+            # SQLite cannot drop NOT NULL in place. Rebuild atomically, preserving rows.
+            db.execute('BEGIN IMMEDIATE')
+            if any(row['name']=='pe_ttm' and row['notnull'] for row in db.execute('PRAGMA table_info(members)')):
+                db.execute('CREATE TABLE members_nullable (trade_date TEXT NOT NULL, code TEXT NOT NULL, '
+                           'pe_ttm TEXT, PRIMARY KEY(trade_date,code))')
+                db.execute('INSERT INTO members_nullable SELECT trade_date,code,pe_ttm FROM members')
+                db.execute('DROP TABLE members')
+                db.execute('ALTER TABLE members_nullable RENAME TO members')
 
     @contextmanager
     def db(self):
@@ -184,10 +192,15 @@ class ValuationRuler:
         if old:
             previous=json.loads(old[0])
             old_members={r['code']:r['pe_ttm'] for r in db.execute('SELECT code,pe_ttm FROM members WHERE trade_date=?',(day,))}
-            changed=[dict(code=code,published=old_members.get(code),candidate=str(members[code]) if code in members else None)
+            changed=[dict(code=code,published=old_members.get(code),
+                          candidate=str(members[code]) if members.get(code) is not None else None)
                 for code in sorted(set(old_members)|set(members))
-                if code not in old_members or code not in members or Decimal(old_members[code])!=Decimal(str(members[code]))]
-            fields=('index_close','mean_pe_ttm','pe_sum','member_count','positive_count','loss_count','members_sha256')
+                if code not in old_members or code not in members
+                or (old_members[code] is None)!=(members[code] is None)
+                or (old_members[code] is not None and members[code] is not None
+                    and Decimal(old_members[code])!=Decimal(str(members[code])))]
+            previous.setdefault('missing_pe_count',previous['member_count']-previous['positive_count']-previous['loss_count'])
+            fields=('index_close','mean_pe_ttm','pe_sum','member_count','positive_count','loss_count','missing_pe_count','members_sha256')
             differences={key:dict(published=previous[key],candidate=checked[key]) for key in fields if previous[key]!=checked[key]}
             if previous['source']!=checked['source'] or changed or differences:
                 report=dict(date=day,published_source=previous['source'],candidate_source=checked['source'],
@@ -195,18 +208,19 @@ class ValuationRuler:
                     added_members=sorted(set(members)-set(old_members)),removed_members=sorted(set(old_members)-set(members)),
                     changed_member_count=len(changed),changed_members=changed,
                     max_abs_pe_delta=str(max((exact_delta(old_members[c],members[c]).copy_abs()
-                        for c in set(old_members)&set(members)),default=Decimal(0))),
+                        for c in set(old_members)&set(members)
+                        if old_members[c] is not None and members[c] is not None),default=Decimal(0))),
                     mean_pe_delta=str(exact_delta(checked['mean_pe_ttm'],previous['mean_pe_ttm'])),
                     index_close_delta=str(exact_delta(checked['index_close'],previous['index_close'])),
                     differences=differences,candidate_proof=proof,
-                    candidate_members={code:str(value) for code,value in members.items()})
+                    candidate_members={code:None if value is None else str(value) for code,value in members.items()})
                 db.execute('INSERT INTO comparisons(trade_date,payload) VALUES (?,?)',(day,json.dumps(report)))
             if changed or differences:
                 raise ValuationConflict('同日数据与已发布记录不同，已保留原值并记录对照结果。')
             db.execute('DELETE FROM failures WHERE trade_date=?',(day,))
             return False
         db.execute('INSERT INTO points VALUES (?,?)',(day,json.dumps(checked)))
-        db.executemany('INSERT INTO members VALUES (?,?,?)',[(day,code,format(Decimal(str(value)),'.12f')) for code,value in members.items()])
+        db.executemany('INSERT INTO members VALUES (?,?,?)',[(day,code,None if value is None else format(Decimal(str(value)),'.12f')) for code,value in members.items()])
         db.execute('INSERT INTO proofs VALUES (?,?)',(day,json.dumps(proof)))
         db.execute('INSERT OR IGNORE INTO calendar VALUES (?,?)',(day,checked['source']))
         db.execute('DELETE FROM failures WHERE trade_date=?',(day,))
@@ -265,11 +279,12 @@ class ValuationRuler:
             days={row[0] for row in db.execute('SELECT trade_date FROM calendar WHERE trade_date>=? AND trade_date<=?',(str(START),str(cutoff)))}
         def point(row):
             return dict(date=row['trade_date'],index_close=float(row['index_close']),mean_pe_ttm=float(row['mean_pe_ttm']),
-                member_count=row['member_count'],positive_count=row['positive_count'],loss_count=row['loss_count'],source=row['source'])
+                member_count=row['member_count'],positive_count=row['positive_count'],loss_count=row['loss_count'],
+                missing_pe_count=row.get('missing_pe_count',row['member_count']-row['positive_count']-row['loss_count']),source=row['source'])
         actual={row['trade_date']:point(row) for row in rows}
         days|=set(actual);gaps=sorted(days-set(actual))
         points=[actual.get(day,dict(date=day,index_close=None,mean_pe_ttm=None,member_count=None,
-            positive_count=None,loss_count=None,source=None,gap=True)) for day in sorted(days)] if actual else []
+            positive_count=None,loss_count=None,missing_pe_count=None,source=None,gap=True)) for day in sorted(days)] if actual else []
         first,last=(rows[0]['trade_date'],rows[-1]['trade_date']) if rows else (None,None)
         complete=state.get('calendar_through','')>=str(cutoff)
         return dict(points=points,latest=actual.get(last),method=METHOD,

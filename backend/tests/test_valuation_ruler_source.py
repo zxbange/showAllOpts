@@ -168,15 +168,19 @@ def test_whole_public_flow_synthetic_300_signed_values_and_proof(monkeypatch):
     assert len(members)==300 and len(proof['pe_page_sha256'])==1 and len(calls)==3
 
 
-def test_absent_pe_not_silently_excluded_and_close_not_requested(monkeypatch):
+def test_null_pe_is_retained_and_counted_separately(monkeypatch):
     install_book(monkeypatch);rows=pe_rows();rows[0]['PE_TTM']=None;calls=[]
     class Store:
         def load_snapshot(self,day):
             _,members,proof=s.parse_snapshot(RAW);return members,proof
-    def response(request):calls.append(request);return httpx.Response(200,json=envelope(rows))
+    def response(request):
+        calls.append(request)
+        return httpx.Response(200,json=envelope(rows) if request.url.host=='datacenter-web.eastmoney.com' else close_payload())
     with httpx.Client(transport=httpx.MockTransport(response)) as client:
-        with pytest.raises(s.SourceError) as error:s.PublicSource(client,Store(),lambda:None).collect(DAY)
-    assert error.value.code=='incomplete' and len(calls)==1
+        daily,members,_=s.PublicSource(client,Store(),lambda:None).collect(DAY)
+    assert len(members)==300 and len(calls)==2
+    assert list(members.values()).count(None)==1 and daily['missing_pe_count']==1
+    assert daily['positive_count']+daily['loss_count']==299
 
 
 def test_full_flow_duplicate_cross_page_rejected(monkeypatch):
@@ -198,3 +202,14 @@ def test_decimal_json_parsing_never_converts_pe_via_binary_float():
     payload=s.json_payload(b'{"value":999999999999999999.999999999999}')
     assert payload['value']==Decimal('999999999999999999.999999999999')
     with pytest.raises(s.SourceError):s.json_payload(b'not json')
+
+
+def test_missing_field_is_not_treated_as_explicit_null_pe():
+    rows = pe_rows()
+    del rows[0]['PE_TTM']
+    with pytest.raises(s.SourceError):
+        s.parse_pe_page(envelope(rows), DAY, 1)
+    # Nonstandard nonfinite JSON tokens must not become missing-value NULLs.
+    for raw in [b'{"value":Infinity}', b'{"value":NaN}']:
+        value = s.json_payload(raw)['value']
+        assert value is not None and not value.is_finite()

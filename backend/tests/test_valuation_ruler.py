@@ -219,7 +219,7 @@ def test_all_history_linear_quantiles_not_viewport_or_crosssection(monitor):
     assert m.exact_delta('999999999999999999.999999999999','999999999999999999.999999999998')==Decimal('1e-12')
 
 
-@pytest.mark.parametrize('value',[None,0,True,'NaN','Infinity','-Infinity','0.0000000000001'])
+@pytest.mark.parametrize('value',[0,True,'NaN','Infinity','-Infinity','0.0000000000001'])
 def test_invalid_pe_is_not_a_loss_exclusion(value):
     signed=members();signed['000001.XSHE']=value
     with pytest.raises(ValuationError):validate_day(date(2026,11,10),'4059.11',signed,PUBLIC_SOURCE)

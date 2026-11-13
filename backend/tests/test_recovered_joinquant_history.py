@@ -52,7 +52,7 @@ def test_valuation_signed_members_and_precision(monkeypatch):
     assert daily['mean_pe_ttm'] == Decimal('10') and daily['pe_sum'] == Decimal('2990')
     assert raw[0]['pe_ttm'] == Decimal('-2')
     assert cal['source'] == m.CALENDAR_SOURCE
-    for invalid in ['0', None, 'NaN', '1.0000000000001']:
+    for invalid in ['0', 'NaN', '1.0000000000001']:
         with pytest.raises(ValueError):
             m.summarize(day, '1234', [(members[0][0], invalid)] + members[1:])
     with pytest.raises(ValueError):
@@ -106,8 +106,9 @@ def test_valuation_dated_collector_to_importer_to_sqlite_contract(monkeypatch, t
         assert query == 'dated-query' and date == day
         calls.append(('pe', date))
         return pd.DataFrame({'code': codes, 'day': [day]*300,
-                             'pe_ratio': [-3.5000000000000004 if float_tail else -3.5]+
-                                         [12.250000000000002 if float_tail else 12.25]*299})
+                             'pe_ratio': [-3.5000000000000004 if float_tail else -3.5,
+                                          float('nan') if float_tail else 12.25]+
+                                         [12.250000000000002 if float_tail else 12.25]*298})
     def price(index, **kwargs):
         assert index == m.INDEX
         assert kwargs['start_date'] == kwargs['end_date'] == day and kwargs['fq'] is None
@@ -136,7 +137,9 @@ def test_valuation_dated_collector_to_importer_to_sqlite_contract(monkeypatch, t
     history = service.history(moment)
     assert service.read_state()['phase'] == 'complete'
     assert history['latest']['member_count'] == 300
-    assert history['latest']['positive_count'] == 299 and history['latest']['loss_count'] == 1
+    assert history['latest']['positive_count'] == (298 if float_tail else 299)
+    assert history['latest']['loss_count'] == 1
+    assert history['latest']['missing_pe_count'] == int(float_tail)
     assert history['latest']['mean_pe_ttm'] == 12.25
     assert history['latest']['index_close'] == 4000.125
     assert history['benchmarks']['p20'] == history['benchmarks']['p80'] == 12.25
@@ -144,6 +147,9 @@ def test_valuation_dated_collector_to_importer_to_sqlite_contract(monkeypatch, t
         actual = {row['code']: row['pe_ttm'] for row in db.execute('SELECT code,pe_ttm FROM members')}
     assert set(actual) == set(codes)
     assert Decimal(actual[codes[0]]) == Decimal('-3.5')
+    assert actual[codes[1]] is None if float_tail else Decimal(actual[codes[1]]) == Decimal('12.25')
+    assert m.run(start_date=day, end_date=day) == []
+    assert calls == [('members', day), ('pe', day)]
 
 
 def test_valuation_source_precision_explicit_rounding_and_safety(monkeypatch):
@@ -158,6 +164,25 @@ def test_valuation_source_precision_explicit_rounding_and_safety(monkeypatch):
                         ('999999999999999999.9999999999999', '越界')]:
         with pytest.raises(m.HistoryError, match='600000.XSHG pe_ratio.*'+reason):
             m.number(raw, 30, 12, '600000.XSHG pe_ratio', round_source=True)
+
+
+def test_valuation_old_mysql_pe_nullable_upgrade_only_once(monkeypatch):
+    from contextlib import contextmanager
+    m = load('估值标尺历史补采_聚宽研究版.py', monkeypatch)
+    column = dict(name='pe_ttm', nullable=False)
+    sql = []
+    class Engine:
+        dialect = types.SimpleNamespace(name='mysql')
+        @contextmanager
+        def begin(self):
+            yield self
+        def execute(self, statement):
+            sql.append(str(statement))
+            column['nullable'] = True
+    monkeypatch.setattr(m, 'inspect', lambda engine: types.SimpleNamespace(get_columns=lambda name: [column]))
+    m.upgrade_nullable_pe(Engine())
+    m.upgrade_nullable_pe(Engine())
+    assert sql == ['ALTER TABLE valuation_ruler_member MODIFY COLUMN pe_ttm DECIMAL(30,12) NULL']
 
 
 def test_valuation_notebook_builtin_shadowing(monkeypatch):
@@ -339,6 +364,57 @@ def test_source_failure_commits_only_prior_days(monkeypatch, tmp_path):
     assert m.existing_day(session, days[0])
     assert not m.existing_day(session, days[1])
     session.close(); engine.dispose()
+    calls = []
+    def retry_source(day):
+        calls.append(day)
+        return m.summarize(day, '100', [('{:06d}.XSHG'.format(600000+i), '10') for i in range(300)])
+    m.source_day = retry_source
+    assert len(m.run()) == 1
+    assert calls == [days[1]]
+
+
+def test_valuation_resume_reads_only_latest_boundary_not_older_holes(monkeypatch, tmp_path):
+    m = load('估值标尺历史补采_聚宽研究版.py', monkeypatch)
+    db = str(tmp_path/'resume.db')
+    config = types.ModuleType('mysql_connector')
+    config.create_mysql_engine = lambda: create_engine('sqlite:///' + db)
+    monkeypatch.setitem(sys.modules, 'mysql_connector', config)
+    days = list(pd.bdate_range('2020-01-02', periods=5).date)
+    m.range_days = lambda *a: days
+    calls = []
+    def source(day):
+        calls.append(day)
+        return m.summarize(day, '100', [('{:06d}.XSHG'.format(600000+i), '10') for i in range(300)])
+    m.source_day = source
+    assert len(m.run(max_days=3)) == 3
+    engine = create_engine('sqlite:///' + db)
+    with engine.begin() as connection:
+        # Older missing/inconsistent data is deliberately not scanned by resume mode.
+        connection.execute(m.ValuationDaily.__table__.delete().where(m.ValuationDaily.trade_date == days[0]))
+        connection.execute(m.ValuationMember.__table__.delete().where(m.ValuationMember.trade_date == days[1]))
+        # Another index/version must not advance this collector's cursor.
+        row = source(days[-1])[0]
+        connection.execute(m.ValuationDaily.__table__.insert(), [dict(row, index_code='000905.XSHG'),
+            dict(row, method_version='other_version')])
+    checked = []
+    original = m.existing_day
+    def check(session, day):
+        checked.append(day)
+        return original(session, day)
+    m.existing_day = check
+    calls.clear()
+    assert len(m.run()) == 2
+    assert calls == days[3:]
+    assert checked == days[2:]
+    calls.clear(); checked.clear()
+    assert m.run() == []
+    assert calls == [] and checked == [days[-1]]
+    with engine.begin() as connection:
+        connection.execute(m.ValuationMember.__table__.delete().where(m.ValuationMember.trade_date == days[-1]))
+    with pytest.raises(m.HistoryError, match='已有单日数据不完整'):
+        m.run()
+    assert calls == []
+    engine.dispose()
 
 def test_market_heat_paused_new_listing_and_missing(monkeypatch):
     m = load('市场情绪历史补采_聚宽研究版.py', monkeypatch)
@@ -452,8 +528,14 @@ def test_valuation_real_source_path(monkeypatch, fault):
         assert index == m.INDEX and kw['fq'] is None and kw['start_date'] == day and kw['end_date'] == day
         return None if fault == 'index_missing' else pd.DataFrame({'close': [100]}, index=[day-dt.timedelta(days=1) if fault == 'index_day' else day])
     m.jq.get_price = price
-    with pytest.raises(ValueError):
-        m.source_day(day)
+    if fault in ('pe_missing', 'pe_nan'):
+        daily, rows, _ = m.source_day(day)
+        assert len(rows) == 300 and rows[0]['pe_ttm'] is None
+        assert daily['positive_count'] == 299 and daily['loss_count'] == 0
+        assert daily['mean_pe_ttm'] == Decimal('10')
+    else:
+        with pytest.raises(ValueError):
+            m.source_day(day)
 
 @pytest.mark.parametrize('fault', ['source', 'calendar_source', 'hash', 'mean', 'partial', 'null_pe'])
 def test_existing_valuation_corruption_not_skipped(monkeypatch, fault):
@@ -469,7 +551,7 @@ def test_existing_valuation_corruption_not_skipped(monkeypatch, fault):
     if fault == 'partial': rows.pop()
     session.add(m.ValuationDaily(**daily)); session.add(m.ValuationCalendar(**cal)); session.add_all([m.ValuationMember(**r) for r in rows]); session.commit()
     if fault == 'null_pe':
-        # Deliberately avoid flush: simulate a corrupt external row despite NOT NULL.
+        # Missing PE is supported, but changing it without updating counts is corruption.
         session.query(m.ValuationMember).first().pe_ttm = None
     with session.no_autoflush:
         with pytest.raises(ValueError):

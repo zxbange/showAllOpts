@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""聚宽平台独立历史补采。仅写入缺口，不覆盖已存在结果。历史值为平台当前可见修订版本。"""
+"""聚宽平台独立历史补采。从最后完成日期继续，不扫描旧日期。历史值为平台当前可见修订版本。"""
 from __future__ import print_function, division
 import datetime as dt
 import builtins as _builtins
@@ -13,7 +13,7 @@ from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
 
 WRITE_DATABASE = True
-MAX_DAYS = None  # 默认一次补齐请求区间的全部缺失交易日；可设整数限制本轮天数。
+MAX_DAYS = None  # 默认一次补完最后完成日期之后的交易日；可设整数限制本轮天数。
 END_DATE = None
 Base = declarative_base()
 
@@ -150,7 +150,7 @@ def range_days(start, end, max_days):
     return calendar(start, end)
 
 
-def validate_schema(engine, models):
+def validate_schema(engine, models, allow_legacy_pe=False):
     inspector = inspect(engine)
     for model in models:
         table = model.__table__
@@ -163,7 +163,9 @@ def validate_schema(engine, models):
             raise HistoryError('历史表必须使用 InnoDB。')
         for col in table.columns:
             actual = cols.get(col.name)
-            if actual is None or actual['nullable'] != col.nullable:
+            legacy_pe = (allow_legacy_pe and table.name == 'valuation_ruler_member'
+                         and col.name == 'pe_ttm' and actual is not None and not actual['nullable'])
+            if actual is None or (actual['nullable'] != col.nullable and not legacy_pe):
                 raise HistoryError('数据库字段或可空约束不一致。')
             typ = actual['type']
             if _builtins.getattr(typ, 'unsigned', False):
@@ -178,6 +180,17 @@ def validate_schema(engine, models):
                 raise HistoryError('数据库字段类型不一致。')
 
 
+def upgrade_nullable_pe(engine):
+    pe_column = _builtins.next(c for c in inspect(engine).get_columns('valuation_ruler_member') if c['name'] == 'pe_ttm')
+    if pe_column['nullable']:
+        return
+    if engine.dialect.name != 'mysql':
+        raise HistoryError('旧成分表 pe_ttm 需要允许 NULL；自动升级仅支持 MySQL。')
+    _builtins.print('\n升级成分表：pe_ttm 允许 NULL，以保留缺失PE；已有数值不变。')
+    with engine.begin() as connection:
+        connection.execute(_journal_text('ALTER TABLE valuation_ruler_member MODIFY COLUMN pe_ttm DECIMAL(30,12) NULL'))
+
+
 def database(models, module):
     # Configuration import and credentials are deliberately deferred until write mode.
     from mysql_connector import create_mysql_engine
@@ -187,6 +200,9 @@ def database(models, module):
         engine.hide_parameters = True
     try:
         Base.metadata.create_all(engine)
+        # The only supported old-schema upgrade preserves every historical PE value.
+        validate_schema(engine, models, allow_legacy_pe=True)
+        upgrade_nullable_pe(engine)
         validate_schema(engine, models)
         Session = sessionmaker(bind=engine)
         _install_result_journal(Session, _builtins.tuple(m for m in models if m.__tablename__ != 'market_crowding'), module)
@@ -204,7 +220,7 @@ def complete(row, model):
         value = _builtins.getattr(row, col.name)
         if not col.nullable and value is None:
             raise HistoryError('已有记录不完整，需人工核实；不会覆盖。')
-        if _builtins.isinstance(col.type, Numeric):
+        if value is not None and _builtins.isinstance(col.type, Numeric):
             number(value, col.type.precision, col.type.scale, model.__tablename__+'.'+col.name)
     return True
 
@@ -370,7 +386,7 @@ class ValuationMember(Base):
     index_code = Column(String(16), primary_key=True)
     method_version = Column(String(48), primary_key=True)
     code = Column(String(16), primary_key=True)
-    pe_ttm = Column(Numeric(30, 12), nullable=False)
+    pe_ttm = Column(Numeric(30, 12), nullable=True)
     source = Column(String(48), nullable=False)
     updated_at = Column(DateTime, nullable=False)
 
@@ -399,11 +415,11 @@ def summarize(day, close, members):
     close = number(close, 24, 8, INDEX+' close')
     if close <= 0:
         raise HistoryError('指数原始收盘价无效。')
-    checked = [(code, number(pe, 30, 12, code+' pe_ratio')) for code, pe in members]
+    checked = [(code, None if pe is None else number(pe, 30, 12, code+' pe_ratio')) for code, pe in members]
     for code, pe in checked:
         if pe == 0:
             raise HistoryError('{} pe_ratio：PE-TTM为零，不能视作亏损或缺失。'.format(code))
-    positive = [pe for code, pe in checked if pe > 0]
+    positive = [pe for code, pe in checked if pe is not None and pe > 0]
     if not positive:
         raise HistoryError('没有正PE样本。')
     with localcontext() as ctx:
@@ -414,10 +430,22 @@ def summarize(day, close, members):
     stamp = china_now()
     key = _builtins.dict(trade_date=day, index_code=INDEX, method_version=METHOD, source=SOURCE, updated_at=stamp)
     daily = _builtins.dict(key, index_close=close, mean_pe_ttm=mean, pe_sum=total, member_count=300,
-                 positive_count=_builtins.len(positive), loss_count=300-_builtins.len(positive), members_sha256=digest)
+                 positive_count=_builtins.len(positive),
+                 loss_count=_builtins.sum(pe is not None and pe < 0 for code, pe in checked), members_sha256=digest)
     rows = [_builtins.dict(key, code=code, pe_ttm=pe) for code, pe in _builtins.sorted(checked)]
     cal = _builtins.dict(trade_date=day, source=CALENDAR_SOURCE, updated_at=stamp)
     return daily, rows, cal
+
+
+def source_pe(value, code):
+    if value is None:
+        return None
+    try:
+        if Decimal(_builtins.str(value)).is_nan():
+            return None
+    except (InvalidOperation, ValueError):
+        pass
+    return number(value, 30, 12, code+' pe_ratio', round_source=True)
 
 
 def source_day(day):
@@ -437,7 +465,7 @@ def source_day(day):
         raise HistoryError('指数原始收盘行情缺失或日期不匹配。')
     # Normalize only fresh source values, before aggregation. Stored rows remain strict.
     close = number(prices.iloc[0]['close'], 24, 8, INDEX+' close', round_source=True)
-    members = [(code, number(pe, 30, 12, code+' pe_ratio', round_source=True))
+    members = [(code, source_pe(pe, code))
                for code, pe in _builtins.zip(frame['code'], frame['pe_ratio'])]
     return summarize(day, close, members)
 
@@ -469,7 +497,7 @@ def run(start_date=START_DATE, end_date=END_DATE, write_database=WRITE_DATABASE,
         raise HistoryError('估值标尺历史起点不得早于2010年。')
     if not _builtins.isinstance(write_database, _builtins.bool):
         raise HistoryError('write_database 必须为 True 或 False。')
-    _builtins.print('源数据按 HALF_EVEN 舍入：PE 保留12位小数，指数收盘价保留8位；汇总按入库后的成分值计算。')
+    _builtins.print('源数据按 HALF_EVEN 舍入：PE 保留12位小数，指数收盘价保留8位；缺失PE保留NULL，仅有效正PE参与均值。')
     engine = Session = None
     current_day = None
     stage = '读取交易日历'
@@ -484,15 +512,19 @@ def run(start_date=START_DATE, end_date=END_DATE, write_database=WRITE_DATABASE,
             engine, Session = database(MODELS, 'valuation-ruler')
             session = Session()
             try:
-                # Every requested date is checked, including gaps before MAX(date).
-                stage = '检查已有记录'
-                pending = []
-                for index, day in enumerate(days):
-                    current_day = day
-                    progress.update(stage, index, _builtins.len(days), day)
-                    if not existing_day(session, day):
-                        pending.append(day)
-                    progress.update(stage, index+1, _builtins.len(days), day)
+                stage = '读取最后完成日期'
+                progress.update(stage)
+                latest = session.query(ValuationDaily.trade_date).filter_by(
+                    index_code=INDEX, method_version=METHOD).order_by(
+                    ValuationDaily.trade_date.desc()).first()
+                if latest is not None:
+                    current_day = latest[0]
+                    # Validate only the resume boundary, never all historical members.
+                    stage = '核对最后完成日 {}'.format(current_day)
+                    progress.update(stage, day=current_day)
+                    if not existing_day(session, current_day):
+                        raise HistoryError('最后完成日期在检查期间发生变化，请重新运行。')
+                    pending = [day for day in days if day > current_day]
             finally:
                 session.close()
         results = []
@@ -504,7 +536,8 @@ def run(start_date=START_DATE, end_date=END_DATE, write_database=WRITE_DATABASE,
             progress.update(stage, index, _builtins.len(selected), day)
             daily, members, cal = source_day(day)
             if write_database:
-                stage = '写入单日结果'
+                stage = '写入单日结果（正PE {} / 负PE {} / 缺失 {}）'.format(daily['positive_count'],
+                    daily['loss_count'], daily['member_count']-daily['positive_count']-daily['loss_count'])
                 progress.update(stage, index, _builtins.len(selected), day)
                 session = Session()
                 try:
@@ -528,7 +561,9 @@ def run(start_date=START_DATE, end_date=END_DATE, write_database=WRITE_DATABASE,
             results.append(daily)
             progress.update(stage, index+1, _builtins.len(selected), day)
         progress.finish(('本轮完成' if write_database else '预览完成（未入库）') if selected else '无需补采')
-        _builtins.print('本轮处理 {} 日，剩余 {} 日；重复运行继续扫描全部缺口。'.format(_builtins.len(results), _builtins.max(0, _builtins.len(pending)-_builtins.len(results))))
+        _builtins.print('本轮处理 {} 日，剩余 {} 日；{}'.format(_builtins.len(results),
+            _builtins.max(0, _builtins.len(pending)-_builtins.len(results)),
+            '重复运行从最后完成日期继续。' if write_database else '仅预览，未连接数据库。'))
         return results
     except HistoryError as exc:
         progress.finish('失败：本日未提交')

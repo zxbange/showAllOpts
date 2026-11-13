@@ -5,6 +5,7 @@ export interface ValuationPoint {
   member_count: number | null
   positive_count: number | null
   loss_count: number | null
+  missing_pe_count?: number | null
   source: string | null
   gap?: boolean
 }
