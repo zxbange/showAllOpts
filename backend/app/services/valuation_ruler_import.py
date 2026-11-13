@@ -1,6 +1,7 @@
 """Read-only consistent MySQL snapshot, disk staging, atomic append-only publication."""
 from contextlib import contextmanager
 from datetime import date, datetime
+import hashlib
 import json
 from pathlib import Path
 import sqlite3
@@ -78,8 +79,10 @@ def check_schema(connection):
                 raise ImportError(table.name + ' 必须使用 InnoDB 一致快照。')
 
 
-def _rows(connection, table, limit, check):
+def _rows(connection, table, limit, check, days=None):
     statement = select(table).order_by(*table.primary_key.columns).limit(limit + 1)
+    if days is not None:
+        statement = statement.where(table.c.trade_date.in_(days))
     result = connection.execution_options(stream_results=True, max_row_buffer=CHUNK_SIZE).execute(statement).mappings()
     count = 0
     try:
@@ -107,6 +110,20 @@ def _identity(row, cutoff, calendar=False):
     return str(day)
 
 
+def fingerprint(value):
+    return hashlib.sha256(json.dumps(value, default=str, sort_keys=True).encode()).hexdigest()
+
+
+def read_receipts(service):
+    """Only reuse validation when the currently published local day still matches."""
+    with service.db() as db:
+        if not db.execute("SELECT 1 FROM sqlite_master WHERE name='valuation_sync_receipt_v1'").fetchone():
+            return {}
+        return {day: (source, conflict) for day, source, local, conflict, payload in db.execute(
+            'SELECT r.day,r.source_hash,r.local_hash,r.conflict,p.payload FROM valuation_sync_receipt_v1 r '
+            'JOIN points p ON p.trade_date=r.day') if local == fingerprint(json.loads(payload))}
+
+
 class StagedSource:
     def __init__(self, db):
         self.db = db
@@ -118,9 +135,15 @@ class StagedSource:
         for daily, members in self.db.execute('SELECT daily,members FROM validated ORDER BY day'):
             yield json.loads(daily), json.loads(members)
 
+    def signature(self, day):
+        return fingerprint(json.loads(self.db.execute('SELECT payload FROM raw WHERE day=?', (day,)).fetchone()[0]))
+
+    def skipped(self):
+        return self.db.execute('SELECT COUNT(*),COALESCE(SUM(conflict),0) FROM skipped').fetchone()
+
 
 @contextmanager
-def read_source(engine, cutoff, check_cancel, *, stage_dir=None):
+def read_source(engine, cutoff, check_cancel, *, stage_dir=None, receipts=None, progress=None):
     """Only expose completely validated snapshots, with bounded memory and cleanup."""
     started = time.monotonic()
     def check():
@@ -131,7 +154,7 @@ def read_source(engine, cutoff, check_cancel, *, stage_dir=None):
     with tempfile.TemporaryDirectory(prefix='valuation-import-', dir=stage_dir) as folder:
         db = sqlite3.connect(str(Path(folder) / 'stage.sqlite3'))
         try:
-            db.executescript('CREATE TABLE calendar(day TEXT PRIMARY KEY); CREATE TABLE raw(day TEXT PRIMARY KEY,payload TEXT); CREATE TABLE validated(day TEXT PRIMARY KEY,daily TEXT,members TEXT);')
+            db.executescript('CREATE TABLE calendar(day TEXT PRIMARY KEY); CREATE TABLE raw(day TEXT PRIMARY KEY,payload TEXT); CREATE TABLE validated(day TEXT PRIMARY KEY,daily TEXT,members TEXT); CREATE TABLE skipped(day TEXT PRIMARY KEY,conflict INTEGER);')
             with engine.connect() as connection:
                 if connection.dialect.name == 'mysql':
                     connection = connection.execution_options(isolation_level='REPEATABLE READ')
@@ -148,8 +171,18 @@ def read_source(engine, cutoff, check_cancel, *, stage_dir=None):
                         if not db.execute('SELECT 1 FROM calendar WHERE day=?', (day,)).fetchone():
                             raise ImportError('估值标尺日线日期不在源交易日历中。')
                         db.execute('INSERT INTO raw VALUES (?,?)', (day, json.dumps(dict(row), default=str)))
+                        receipt = (receipts or {}).get(day)
+                        if receipt and receipt[0] == fingerprint(dict(row)):
+                            db.execute('INSERT INTO skipped VALUES (?,?)', (day, receipt[1]))
+                    needed = [date.fromisoformat(r[0]) for r in db.execute(
+                        'SELECT day FROM raw WHERE day NOT IN (SELECT day FROM skipped) ORDER BY day')]
+                    skipped = db.execute('SELECT COUNT(*) FROM skipped').fetchone()[0]
+                    if progress:
+                        progress('估值历史：跳过 {} 天，需读取 {} 天明细'.format(skipped, len(needed)), 20)
                     current, members = None, {}
+                    completed = 0
                     def finish():
+                        nonlocal completed
                         if current is None:
                             return
                         check()
@@ -159,19 +192,27 @@ def read_source(engine, cutoff, check_cancel, *, stage_dir=None):
                         expected = json.loads(raw[0])
                         daily = validate_day(date.fromisoformat(current), expected['index_close'], members, SOURCE, expected=expected)
                         db.execute('INSERT INTO validated VALUES (?,?,?)', (current, json.dumps(daily, default=str), json.dumps(members, default=str)))
-                    for row in _rows(connection, MEMBER, MAX_MEMBERS, check):
-                        day = _identity(row, cutoff)
-                        if day != current:
-                            finish()
-                            current, members = day, {}
-                        code = row['code']
-                        if code in members or len(members) >= 300:
-                            raise ImportError('估值标尺成分股重复或超过300只。')
-                        members[code] = row['pe_ttm']
+                        completed += 1
+                        if progress:
+                            progress('校验估值明细 {}/{} 天；跳过 {} 天'.format(completed, len(needed), skipped),
+                                     20 + int(40 * completed / max(1, len(needed))))
+                    # First/full sync checks the complete source (including orphan rows).
+                    # Incremental queries use the primary-key date prefix, at most 50 days each.
+                    batches = [None] if not receipts else [needed[i:i+50] for i in range(0, len(needed), 50)]
+                    for batch in batches:
+                        for row in _rows(connection, MEMBER, MAX_MEMBERS, check, days=batch):
+                            day = _identity(row, cutoff)
+                            if day != current:
+                                finish()
+                                current, members = day, {}
+                            code = row['code']
+                            if code in members or len(members) >= 300:
+                                raise ImportError('估值标尺成分股重复或超过300只。')
+                            members[code] = row['pe_ttm']
                     finish()
-                    if not db.execute('SELECT 1 FROM validated LIMIT 1').fetchone():
+                    if not db.execute('SELECT 1 FROM validated LIMIT 1').fetchone() and not skipped:
                         raise ImportError('源库尚无有效估值标尺历史。')
-                    if db.execute('SELECT 1 FROM raw WHERE day NOT IN (SELECT day FROM validated) LIMIT 1').fetchone():
+                    if db.execute('SELECT 1 FROM raw WHERE day NOT IN (SELECT day FROM validated UNION SELECT day FROM skipped) LIMIT 1').fetchone():
                         raise ImportError('估值标尺日线缺少完整成分股。')
                     check()
             db.commit()
@@ -181,20 +222,29 @@ def read_source(engine, cutoff, check_cancel, *, stage_dir=None):
 
 
 def publish(service, state, moment, staged, check_cancel):
-    added = conflicts = total = 0
+    added = 0
+    total, conflicts = staged.skipped()
+    skipped = total
     next_state = dict(state)
     with service.db() as db:
         db.execute('BEGIN IMMEDIATE')
+        db.execute('CREATE TABLE IF NOT EXISTS valuation_sync_receipt_v1 '
+                   '(day TEXT PRIMARY KEY,source_hash TEXT NOT NULL,local_hash TEXT NOT NULL,conflict INTEGER NOT NULL)')
         source_days = staged.days()
         service.save_calendar(db, source_days, CALENDAR_SOURCE)
         for daily, members in staged.points():
             check_cancel()
             total += 1
+            conflict = 0
             try:
                 added += bool(service.publish_day(db, daily, members, {'source': SOURCE, 'validated': True}))
             except ValuationConflict:
                 # publish_day has already recorded the full comparison in this transaction.
                 conflicts += 1
+                conflict = 1
+            payload = json.loads(db.execute('SELECT payload FROM points WHERE trade_date=?', (daily['trade_date'],)).fetchone()[0])
+            db.execute('INSERT OR REPLACE INTO valuation_sync_receipt_v1 VALUES (?,?,?,?)',
+                       (daily['trade_date'], staged.signature(daily['trade_date']), fingerprint(payload), conflict))
         missing = 0
         for day in source_days:
             check_cancel()
@@ -208,7 +258,8 @@ def publish(service, state, moment, staged, check_cancel):
         next_state.update(completed_days=total, imported_days=added, conflict_days=conflicts,
             processed=total, total=total, percent=100, error=error, joinquant_missing_days=missing,
             stage='聚宽历史同步完成，新增 {} 天；冲突 {} 天已保留原数据'.format(added, conflicts),
-            joinquant_import_at=moment.isoformat(), joinquant_imported=added, joinquant_conflicts=conflicts)
+            joinquant_import_at=moment.isoformat(), joinquant_imported=added, joinquant_conflicts=conflicts,
+            joinquant_skipped_days=skipped)
         service.write_state(next_state, db)
     state.update(next_state)
 

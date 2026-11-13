@@ -114,15 +114,21 @@ def copy_history(cache, module, full=False):
             else:
                 from app.services import valuation_ruler_import as importer
                 from app.services.valuation_ruler import close_cutoff
-                with importer.read_source(source, close_cutoff(moment), check, stage_dir=staged.root) as data:
+                receipts = (importer.read_receipts(staged) if not full and snapshot_matches(path, identity) else None)
+                def valuation_progress(message, percent):
+                    stage[0] = message
+                    report(message, percent=percent)
+                with importer.read_source(source, close_cutoff(moment), check, stage_dir=staged.root,
+                                          receipts=receipts, progress=valuation_progress) as data:
                     stage[0] = '追加缺失估值历史，保留已有值'
                     report(stage[0], percent=65)
                     importer.publish(staged, state, moment, data, check)
                 sync_metadata = {key: state[key] for key in (
-                    'joinquant_import_at', 'joinquant_imported', 'joinquant_conflicts', 'joinquant_missing_days')}
+                    'joinquant_import_at', 'joinquant_imported', 'joinquant_conflicts', 'joinquant_missing_days',
+                    'joinquant_skipped_days')}
                 sync_metadata['joinquant_import_warning'] = state.get('error')
-                note = '新增 {} 天；冲突 {} 天未覆盖；源日历缺失 {} 天。'.format(
-                    state['imported_days'], state['conflict_days'], state['joinquant_missing_days'])
+                note = '新增 {} 天；跳过未变化 {} 天；冲突 {} 天未覆盖；源日历缺失 {} 天。'.format(
+                    state['imported_days'], state['joinquant_skipped_days'], state['conflict_days'], state['joinquant_missing_days'])
             # A validated database import is not a successful public collection,
             # nor proof of complete historical coverage. Preserve all public run
             # state, including its previous success timestamp, errors and phase.
