@@ -22,7 +22,12 @@ concurrency:
 
 jobs:
   backend:
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3]
     outputs:
+      # All shards classify the same commit range and produce the same value.
       deploy_required: ${{ steps.impact.outputs.deploy_required }}
     if: github.repository == 'zxbange/showAllOpts' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04
@@ -49,9 +54,13 @@ jobs:
         working-directory: backend
         run: |
           python -m pip check
-          python -m pytest -q
+          python -m pytest -q -p ci_shard --ci-shard=${{ matrix.shard }}/3 --durations=20
 
   frontend:
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2]
     if: github.repository == 'zxbange/showAllOpts' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04
     timeout-minutes: 30
@@ -82,13 +91,13 @@ jobs:
         run: |
           node --test scripts/verify-ci-browser.test.mjs
           node scripts/verify-ci-browser.mjs
-      - run: npm run test:e2e
+      - run: npm run test:e2e -- --shard=${{ matrix.shard }}/2
         id: frontend_e2e
       - name: Retain synthetic browser failure evidence
         if: failure() && steps.frontend_e2e.conclusion == 'failure'
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: frontend-e2e-failure-${{ github.run_id }}-${{ github.run_attempt }}
+          name: frontend-e2e-failure-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.shard }}
           # CI runs mocked browser tests only; live.spec.ts requires E2E_REAL_DATA=1.
           # Never include runtime folders, environment files, configs or credentials.
           path: |
