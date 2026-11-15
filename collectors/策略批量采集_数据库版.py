@@ -713,12 +713,15 @@ def _source_pages(fetch_page, key='id', start=-1, label='数据接口', progress
     while True:
         if progress is not None:
             progress('{}：已读取 {} 条，正在请求下一页'.format(label, count))
+        retry = False
         try:
             frame = fetch_page(cursor)
         except OSError as exc:
             if exc.errno != 24:
                 raise
-            # A read-only page can retry the same cursor after releasing unreachable objects.
+            retry = True
+        if retry:
+            # Retry outside except: the failed traceback must not retain SDK objects.
             # Never close arbitrary descriptors owned by the notebook or the platform SDK.
             gc.collect()
             try:
@@ -3003,16 +3006,38 @@ def _etf_heat_strategy(_apis, _config):
                                 target_source=source, classification_reason=reason))
         return records
 
+    def load_navs(codes, days):
+        # bcolz may open several files per fund; keep each request small.
+        frames = []
+        for offset in range(0, len(codes), 10):
+            batch = codes[offset:offset + 10]
+            print('ETF单位净值：{}/{} 只'.format(offset + len(batch), len(codes)), flush=True)
+            gc.collect()
+            for attempt in range(2):
+                try:
+                    frame = api('get_extras')('unit_net_value', batch,
+                        start_date=days[0], end_date=days[-1], df=True)
+                except OSError as exc:
+                    if exc.errno != 24 or attempt:
+                        raise
+                else:
+                    break
+                # Leave except first so its traceback no longer holds SDK objects.
+                gc.collect()
+                print('ETF单位净值：句柄回收后重试当前 {} 只；仅重试一次'.format(len(batch)), flush=True)
+            if frame is None:
+                raise ValueError('单位净值接口返回 None')
+            frames.append(frame.copy())
+            del frame
+        return pd.concat(frames, axis=1) if frames else pd.DataFrame()
+
     def load_sizes(codes, days):
         table, output = finance.FUND_SHARE_DAILY, {}
         for offset in range(0, len(codes), BATCH_SIZE):
             batch = codes[offset:offset + BATCH_SIZE]
             print('规模采集：{}/{} ETF'.format(builtins.min(offset + len(batch), len(codes)), len(codes)), flush=True)
             shares = read_pages(table, (table.code.in_(batch), table.date >= days[0], table.date <= days[-1]))
-            navs = api('get_extras')('unit_net_value', batch, start_date=days[0], end_date=days[-1], df=True)
-            if navs is None:
-                raise ValueError('单位净值接口返回 None')
-            navs = navs.copy()
+            navs = load_navs(batch, days)
             navs.index = pd.Index(pd.to_datetime(navs.index).date)
             if navs.index.has_duplicates:
                 raise ValueError('单位净值日期重复')
@@ -5107,13 +5132,36 @@ def _growth_dividend_strategy(_apis, _config):
     def database():
         return connect_database(_config)
 
+    def diagnostic(exc, stage):
+        """Only report phase, type, numeric codes and function locations; never SQL or credentials."""
+        original = getattr(exc, 'orig', exc)
+        kind = type(original).__name__
+        if not re.match(r'^[A-Za-z_][A-Za-z_0-9]{0,63}$', kind):
+            kind = 'Exception'
+        args = getattr(original, 'args', ())
+        code = args[0] if args and type(args[0]) is int and 1000 <= args[0] <= 9999 else None
+        number = getattr(original, 'errno', None)
+        details = '；数据库错误码={}'.format(code) if code is not None else ''
+        if isinstance(original, OSError) and type(number) is int:
+            details += '；系统错误码={}'.format(number)
+        frames, trace = [], exc.__traceback__
+        while trace is not None:
+            frames.append('{}:{}'.format(trace.tb_frame.f_code.co_name, trace.tb_lineno))
+            trace = trace.tb_next
+        return '阶段={}；异常={}{}；位置={}'.format(stage, kind, details, ' > '.join(frames[-6:]))
+
     def collect(start_date=DEFAULT_START_DATE, end_date=None, preview=True, max_days=20000,
             max_windows=1000, window_days=250, check_cancel=None,
             api_namespace=None, engine_factory=None, progress=None, retry_earlier_missing=True):
         """先预览。写库 run(preview=False)，取消回调抛异常；逐日提交，可重复补洞。"""
         get_trade_days, get_price = api('get_trade_days', api_namespace), api('get_price', api_namespace)
         check_cancel = check_cancel or (lambda: None)
-        progress = progress or (lambda message: None)
+        notify = progress or (lambda message: None)
+        stage = '初始化'
+        def update(message):
+            nonlocal stage
+            stage = message
+            notify(message)
         if any(type(n) is not int or n <= 0 for n in (max_days, max_windows, window_days)):
             raise ValueError('运行上限必须为正整数')
         if not isinstance(retry_earlier_missing, bool):
@@ -5126,7 +5174,7 @@ def _growth_dividend_strategy(_apis, _config):
         start = as_day(DEFAULT_START_DATE if start_date is None else start_date)
         if start > end:
             raise ValueError('开始日期不能晚于结束日期')
-        progress('创红比：读取 {} 至 {} 交易日历'.format(start, end))
+        update('创红比：读取 {} 至 {} 交易日历'.format(start, end))
         raw_days = get_trade_days(start_date=start, end_date=end)
         if raw_days is None or any(d is None for d in raw_days):
             raise ValueError('创红比交易日历返回空值，未开始写入；请重试聚宽日历接口')
@@ -5142,24 +5190,24 @@ def _growth_dividend_strategy(_apis, _config):
         engine = None
         try:
             if not preview:
-                progress('连接数据库并核对指数历史')
+                update('连接数据库并核对指数历史')
                 engine = (engine_factory or database)()
                 engine.echo = False
                 engine.hide_parameters = True
                 with engine.connect() as conn:
-                    progress('数据库已连接：检查创红比表结构')
+                    update('数据库已连接：检查创红比表结构')
                     metadata.create_all(conn)
                     check_schema(conn)
             stored = {code: set() for code in CODES}
             if engine:
-                progress('创红比：读取已有指数日期')
+                update('创红比：读取已有指数日期')
                 with engine.connect() as conn:
                     keys = select([PRICES.c.index_code, PRICES.c.trade_date]) if sqlalchemy.__version__.startswith('1.') else select(PRICES.c.index_code, PRICES.c.trade_date)
                     for code, day in conn.execute(keys.where((PRICES.c.trade_date >= days[0]) & (PRICES.c.trade_date <= days[-1]))):
                         if code in stored:
                             stored[code].add(day)
             if engine:
-                progress('创红比：读取已保存交易日历')
+                update('创红比：读取已保存交易日历')
                 calendar_keys = CALENDAR.select().with_only_columns(
                     [CALENDAR.c.trade_date] if sqlalchemy.__version__.startswith('1.') else CALENDAR.c.trade_date)
                 with engine.connect() as conn:
@@ -5169,7 +5217,7 @@ def _growth_dividend_strategy(_apis, _config):
                 for offset in range(0, len(pending_days), 250):
                     check_cancel()
                     target_days = pending_days[offset:offset + 250]
-                    progress('创红比：补写交易日历 {}/{} 日'.format(offset, len(pending_days)))
+                    update('创红比：补写交易日历 {}/{} 日'.format(offset, len(pending_days)))
                     with engine.begin() as conn:
                         # 重读本批键，保留其他任务已写入的日历；每批一起提交。
                         existing = {row[0] for row in conn.execute(calendar_keys.where(CALENDAR.c.trade_date.in_(target_days)))}
@@ -5178,7 +5226,7 @@ def _growth_dividend_strategy(_apis, _config):
                                 for day in target_days if day not in existing]
                         if rows:
                             conn.execute(CALENDAR.insert(), rows)
-                    progress('创红比：补写交易日历 {}/{} 日'.format(offset + len(target_days), len(pending_days)))
+                    update('创红比：补写交易日历 {}/{} 日'.format(offset + len(target_days), len(pending_days)))
             windows = 0
             for code in CODES:
                 observed = []
@@ -5186,15 +5234,25 @@ def _growth_dividend_strategy(_apis, _config):
                 missing = [d for d in days if d not in stored[code]
                            and (retry_earlier_missing or first_saved is None or d >= first_saved)]
                 report['skipped'] += len(stored[code])
-                progress('{}：已有 {} 日，待查询 {} 日'.format(code, len(stored[code]), len(missing)))
+                update('{}：已有 {} 日，待查询 {} 日'.format(code, len(stored[code]), len(missing)))
                 for offset in range(0, len(missing), window_days):
                     check_cancel()
                     windows += 1
                     if windows > max_windows:
                         raise ValueError('超过查询窗口上限，已保存数据保留')
                     target = missing[offset:offset + window_days]
-                    progress('{}：读取 {} 至 {}'.format(code, target[0], target[-1]))
-                    frame = get_price(code, start_date=target[0], end_date=target[-1], frequency='daily', fields=['close'], skip_paused=False, fq=None)
+                    update('{}：读取 {} 至 {}'.format(code, target[0], target[-1]))
+                    for attempt in range(2):
+                        try:
+                            frame = get_price(code, start_date=target[0], end_date=target[-1], frequency='daily', fields=['close'], skip_paused=False, fq=None)
+                        except OSError as exc:
+                            if exc.errno != 24 or attempt:
+                                raise
+                        else:
+                            break
+                        gc.collect()
+                        update('{}：读取 {} 至 {}（句柄回收后重试一次）'.format(code, target[0], target[-1]))
+                    update('{}：校验 {} 至 {} 行情'.format(code, target[0], target[-1]))
                     quotes = {}
                     if frame is not None and not frame.empty:
                         for stamp, row in frame.iterrows():
@@ -5209,7 +5267,7 @@ def _growth_dividend_strategy(_apis, _config):
                             quotes[day] = positive(row['close'])
                     observed.extend(quotes)
                     if engine:
-                        progress('{}：写入 {} 至 {} 行情（{} 条）'.format(code, target[0], target[-1], len(quotes)))
+                        update('{}：写入 {} 至 {} 行情（{} 条）'.format(code, target[0], target[-1], len(quotes)))
                     for day in target:
                         check_cancel()
                         if engine:
@@ -5225,8 +5283,8 @@ def _growth_dividend_strategy(_apis, _config):
                 report['gaps'].extend((code, str(day)) for day in days
                                       if day not in known and (not known or day >= min(known)))
             return report
-        except Exception:
-            raise RuntimeError('聚宽历史采集未完成，请检查平台权限、源表结构和连接配置；已提交数据保留。') from None
+        except Exception as exc:
+            raise RuntimeError('创红比采集中止；{}；已提交数据保留。'.format(diagnostic(exc, stage))) from None
         finally:
             if engine:
                 engine.dispose()

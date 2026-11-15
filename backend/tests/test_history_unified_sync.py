@@ -64,6 +64,24 @@ def count(service):
         return db.execute('SELECT COUNT(*) FROM points').fetchone()[0]
 
 
+def test_empty_growth_prices_explain_missing_collection_and_keep_cached_page(setup, engine):
+    _, cache = setup
+    module = 'growth-dividend'
+    cache.refresh(module, background=False)
+    previous = dict(cache.read_state()['modules'][module])
+    service = history_sync.service_for(cache, module)
+    saved_count = count(service)
+    with engine.begin() as conn:
+        conn.execute(growth.PRICES.delete())
+    cache.refresh(module, background=False)
+    after = cache.read_state()['modules'][module]
+    assert after['file'] == previous['file'] and after['updated_at'] == previous['updated_at']
+    assert after['progress']['status'] == 'failed'
+    assert 'SOURCE_DATA_INCOMPLETE' in after['error']
+    assert '仅写入交易日历不能同步' in after['error']
+    assert count(service) == saved_count and entry(cache, module)['ready']
+
+
 @pytest.mark.parametrize('full', [False, True])
 def test_global_api_sync_publishes_to_both_page_apis(setup, engine, full):
     settings, _ = setup

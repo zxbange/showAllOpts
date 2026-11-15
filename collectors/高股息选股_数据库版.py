@@ -262,12 +262,15 @@ def _source_pages(fetch_page, key='id', start=-1, label='数据接口', progress
     while True:
         if progress is not None:
             progress('{}：已读取 {} 条，正在请求下一页'.format(label, count))
+        retry = False
         try:
             frame = fetch_page(cursor)
         except OSError as exc:
             if exc.errno != 24:
                 raise
-            # A read-only page can retry the same cursor after releasing unreachable objects.
+            retry = True
+        if retry:
+            # Retry outside except: the failed traceback must not retain SDK objects.
             # Never close arbitrary descriptors owned by the notebook or the platform SDK.
             gc.collect()
             try:

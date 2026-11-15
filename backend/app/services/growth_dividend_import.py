@@ -7,6 +7,7 @@ import time
 import uuid
 from sqlalchemy import MetaData, Table, Column, String, Date, DateTime, Float, inspect, select
 from app.core.database import build_engine
+from app.core.cache_errors import SnapshotDataError
 from app.services.growth_dividend import now, close_cutoff, CollectionCancelled
 
 CODES = ('399006.XSHE', '000922.XSHG', '000688.XSHG')
@@ -86,7 +87,7 @@ def read_source(engine, cutoff, check):
                 points.append((code.split('.')[0], str(day), number, '聚宽（当前平台可见历史）',
                     'https://www.joinquant.com/help/api/help#name:get_price', row['updated_at'].isoformat()))
     if not points:
-        raise ValueError('源行情为空')
+        raise SnapshotDataError('创红比源库尚无指数行情。请先运行创红比采集；仅写入交易日历不能同步。')
     return days, points
 
 

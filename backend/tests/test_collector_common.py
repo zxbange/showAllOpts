@@ -115,6 +115,30 @@ def test_file_error_recovery_is_bounded_and_does_not_hide_other_errors(batch, mo
     assert failure.value.errno == number and calls == [-1] * attempts
 
 
+def test_page_retry_releases_objects_retained_by_failed_traceback(batch, monkeypatch):
+    import weakref
+    collect = batch.gc.collect
+    refs, calls = [], []
+    class Resource:
+        pass
+    def reclaim():
+        assert sys.exc_info()[0] is None
+        collect()
+        assert refs[0]() is None
+    def fetch(cursor):
+        calls.append(cursor)
+        if len(calls) == 1:
+            resource = Resource()
+            resource.cycle = resource
+            refs.append(weakref.ref(resource))
+            raise OSError(24, 'synthetic descriptor exhaustion')
+        assert refs[0]() is None
+        return pd.DataFrame({'id': []})
+    monkeypatch.setattr(batch.gc, 'collect', reclaim)
+    assert list(batch._source_pages(fetch)) == []
+    assert calls == [-1, -1]
+
+
 def test_numeric_policies_keep_decimal_precision_and_reject_bad_holdings(batch):
     micro = batch._microcap_strategy({}, batch.DB_CONFIG)
     dividend = batch._dividend_strategy({}, batch.DB_CONFIG)

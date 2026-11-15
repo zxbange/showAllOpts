@@ -120,6 +120,65 @@ def test_growth_mid_history_gap_is_partial_then_filled_without_rereading_good_da
     assert c.calls == [('price', '399006.XSHE', DAYS[1], DAYS[1])]
 
 
+def growth_runner(c, entry):
+    if entry == 'standalone':
+        module = load(ROOT / 'collectors/创红比历史补采_聚宽研究版.py', 'growth_recovery_test')
+        return lambda: module.run(start_date=DAYS[0], end_date=DAYS[-1], preview=False,
+                                 api_namespace=c.apis, engine_factory=lambda: c.engine)
+    return lambda: c.batch._growth_dividend_strategy(c.apis, CONFIG).collect(
+        start_date=DAYS[0], end_date=DAYS[-1], preview=False, api_namespace=c.apis, engine_factory=lambda: c.engine)
+
+
+@pytest.mark.parametrize('entry', ['standalone', 'batch'])
+def test_growth_failure_preserves_commits_and_reports_safe_original_error(collectors, entry):
+    c = collectors
+    original, calls = c.apis['get_price'], []
+    def failing_price(code, **kwargs):
+        calls.append(code)
+        if len(calls) == 2:
+            raise ValueError('SECRET SQL user:password@private-host')
+        return original(code, **kwargs)
+    c.apis['get_price'] = failing_price
+    with pytest.raises(RuntimeError) as error:
+        growth_runner(c, entry)()
+    message = str(error.value)
+    assert '异常=ValueError' in message and 'failing_price:' in message
+    assert calls[-1] in message and str(DAYS[0]) in message and str(DAYS[-1]) in message
+    assert 'SECRET' not in message and 'private-host' not in message
+    with c.engine.connect() as conn:
+        assert conn.scalar(select(func.count()).select_from(growth.PRICES)) == 3
+        assert conn.scalar(select(func.count()).select_from(growth.CALENDAR)) == 3
+    c.apis['get_price'] = original
+    c.calls.clear()
+    assert growth_runner(c, entry)()['added'] == 6
+    assert calls[0] not in [call[1] for call in c.calls]
+    assert growth_runner(c, entry)()['added'] == 0
+
+
+@pytest.mark.parametrize('entry', ['standalone', 'batch'])
+@pytest.mark.parametrize('errno,transient,attempts', [(24, True, 2), (24, False, 2), (13, False, 1)])
+def test_growth_price_retry_is_bounded_and_preserves_query(collectors, entry, errno, transient, attempts):
+    c = collectors
+    original, calls = c.apis['get_price'], []
+    def price(code, **kwargs):
+        calls.append((code, kwargs))
+        if not transient or len(calls) == 1:
+            raise OSError(errno, 'SECRET source path')
+        return original(code, **kwargs)
+    c.apis['get_price'] = price
+    if transient:
+        assert growth_runner(c, entry)()['added'] == 9
+        assert calls[0] == calls[1] and len(calls) == 4
+    else:
+        with pytest.raises(RuntimeError) as error:
+            growth_runner(c, entry)()
+        assert len(calls) == attempts and all(call == calls[0] for call in calls)
+        assert '系统错误码={}'.format(errno) in str(error.value)
+        assert 'SECRET' not in str(error.value)
+        with c.engine.connect() as conn:
+            assert conn.scalar(select(func.count()).select_from(growth.PRICES)) == 0
+
+
 def test_growth_unknown_prefix_is_visible_but_not_queried_each_daily_run(collectors):
     c = collectors
     c.failure['399006.XSHE'] = DAYS[0]

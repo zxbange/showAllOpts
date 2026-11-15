@@ -263,12 +263,13 @@ def test_missing_dividend_report_year_is_not_silently_used(module):
         ns.dividends(['a'],DAY)
 
 
-def test_rule_upgrade_replaces_old_yields_even_on_same_day(ns):
+@pytest.mark.parametrize('old_rule', ['dividend_split_bank_v3', 'dividend_static_3pct_v5'])
+def test_rule_upgrade_replaces_old_yields_even_on_same_day(ns, old_rule):
     engine=create_engine('sqlite://')
     ns.Base.metadata.create_all(engine)
     Session=sessionmaker(bind=engine)
     try:
-        old=meta(rule_version='dividend_split_bank_v3')
+        old=meta(rule_version=old_rule)
         ns.save_latest(Session,old,[row(),row('bank')])
         current=meta(value_count=1,value_candidates=1)
         assert ns.save_latest(Session,current,[row(dividend_yield_1y=Decimal('3.51'))])

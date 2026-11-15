@@ -55,6 +55,47 @@ def test_same_factory_embedded_and_python36_syntax():
     assert ast.dump(factory(SOURCE)) == ast.dump(factory(ROOT/'collectors'/'策略批量采集_数据库版.py'))
 
 
+def test_nav_requests_limit_open_resources_and_retry_only_failed_batch(mod, monkeypatch):
+    import weakref
+    codes = ['{:06d}.XSHG'.format(510000 + i) for i in range(23)]
+    days = [dt.date(2026, 1, 5), dt.date(2026, 1, 6)]
+    calls, refs = [], []
+    collect = mod.gc.collect
+    class Resource:
+        pass
+    def reclaim():
+        assert sys.exc_info()[0] is None
+        collect()
+        assert not refs or refs[0]() is None
+    def nav(info, batch, start_date, end_date, df):
+        assert (info, start_date, end_date, df) == ('unit_net_value', days[0], days[-1], True)
+        calls.append(batch)
+        if len(calls) == 2:
+            resource = Resource()
+            resource.cycle = resource
+            refs.append(weakref.ref(resource))
+            raise OSError(24, 'synthetic descriptor exhaustion')
+        return pd.DataFrame({code: [codes.index(code) + 1., codes.index(code) + 2.] for code in batch}, index=days)
+    monkeypatch.setattr(mod.gc, 'collect', reclaim)
+    strategy = mod._etf_heat_strategy({'get_extras': nav}, mod.DB_CONFIG)
+    result = strategy.load_navs(codes, days)
+    assert calls == [codes[:10], codes[10:20], codes[10:20], codes[20:]]
+    expected = pd.DataFrame({code: [i + 1., i + 2.] for i, code in enumerate(codes)}, index=days)
+    pd.testing.assert_frame_equal(result, expected)
+
+
+@pytest.mark.parametrize('errno,attempts', [(24, 2), (13, 1)])
+def test_nav_read_failure_does_not_produce_partial_sizes(mod, errno, attempts):
+    calls = []
+    def failed(*args, **kwargs):
+        calls.append(args)
+        raise OSError(errno, 'synthetic source failure')
+    strategy = mod._etf_heat_strategy({'get_extras': failed}, mod.DB_CONFIG)
+    with pytest.raises(OSError) as error:
+        strategy.load_navs(['518880.XSHG'], [dt.date(2026, 1, 5)])
+    assert error.value.errno == errno and len(calls) == attempts
+
+
 @pytest.mark.parametrize('legacy_empty', [False, True])
 @pytest.mark.parametrize('retention', [180, 3])
 def test_full_run_repeat_and_partial_latest_preserve_head(mod, monkeypatch, tmp_path, legacy_empty, retention):
@@ -145,7 +186,7 @@ def test_selector_logic_is_shared_with_research_script():
     collector=ast.parse(SOURCE.read_text(encoding='utf-8'))
     factory=next(n for n in collector.body if isinstance(n,ast.FunctionDef) and n.name=='_etf_heat_strategy')
     originals={n.name:n for n in research.body if isinstance(n,ast.FunctionDef)}
-    for name in ['classify','permitted','commodity_direction','target_catalog','load_sizes','load_lof_reports','select_largest','lof_catalog']:
+    for name in ['classify','permitted','commodity_direction','target_catalog','load_navs','load_sizes','load_lof_reports','select_largest','lof_catalog']:
         actual=next(n for n in factory.body if isinstance(n,ast.FunctionDef) and n.name==name)
         # The research version returns diagnostics and losing candidates; collection
         # consumes selections only. Compare every remaining condition and calculation.

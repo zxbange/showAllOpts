@@ -222,12 +222,15 @@ def _source_pages(fetch_page, key='id', start=-1, label='数据接口', progress
     while True:
         if progress is not None:
             progress('{}：已读取 {} 条，正在请求下一页'.format(label, count))
+        retry = False
         try:
             frame = fetch_page(cursor)
         except OSError as exc:
             if exc.errno != 24:
                 raise
-            # A read-only page can retry the same cursor after releasing unreachable objects.
+            retry = True
+        if retry:
+            # Retry outside except: the failed traceback must not retain SDK objects.
             # Never close arbitrary descriptors owned by the notebook or the platform SDK.
             gc.collect()
             try:
@@ -791,16 +794,38 @@ def _etf_heat_strategy(_apis, _config):
                                 target_source=source, classification_reason=reason))
         return records
 
+    def load_navs(codes, days):
+        # bcolz may open several files per fund; keep each request small.
+        frames = []
+        for offset in range(0, len(codes), 10):
+            batch = codes[offset:offset + 10]
+            print('ETF单位净值：{}/{} 只'.format(offset + len(batch), len(codes)), flush=True)
+            gc.collect()
+            for attempt in range(2):
+                try:
+                    frame = api('get_extras')('unit_net_value', batch,
+                        start_date=days[0], end_date=days[-1], df=True)
+                except OSError as exc:
+                    if exc.errno != 24 or attempt:
+                        raise
+                else:
+                    break
+                # Leave except first so its traceback no longer holds SDK objects.
+                gc.collect()
+                print('ETF单位净值：句柄回收后重试当前 {} 只；仅重试一次'.format(len(batch)), flush=True)
+            if frame is None:
+                raise ValueError('单位净值接口返回 None')
+            frames.append(frame.copy())
+            del frame
+        return pd.concat(frames, axis=1) if frames else pd.DataFrame()
+
     def load_sizes(codes, days):
         table, output = finance.FUND_SHARE_DAILY, {}
         for offset in range(0, len(codes), BATCH_SIZE):
             batch = codes[offset:offset + BATCH_SIZE]
             print('规模采集：{}/{} ETF'.format(builtins.min(offset + len(batch), len(codes)), len(codes)), flush=True)
             shares = read_pages(table, (table.code.in_(batch), table.date >= days[0], table.date <= days[-1]))
-            navs = api('get_extras')('unit_net_value', batch, start_date=days[0], end_date=days[-1], df=True)
-            if navs is None:
-                raise ValueError('单位净值接口返回 None')
-            navs = navs.copy()
+            navs = load_navs(batch, days)
             navs.index = pd.Index(pd.to_datetime(navs.index).date)
             if navs.index.has_duplicates:
                 raise ValueError('单位净值日期重复')

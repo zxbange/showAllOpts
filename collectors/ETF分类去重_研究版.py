@@ -3,6 +3,7 @@
 不下单、不连接数据库。分类是关键词规则，须审阅；未识别项目单列。
 """
 import builtins
+import gc
 import datetime as dt
 import re
 from decimal import Decimal, InvalidOperation
@@ -240,16 +241,39 @@ def target_catalog(universe, day):
     return records, audit
 
 
+def load_navs(codes, days):
+    # bcolz may open several files per fund; keep each request small.
+    frames = []
+    for offset in range(0, len(codes), 10):
+        batch = codes[offset:offset + 10]
+        print('ETF单位净值：{}/{} 只'.format(offset + len(batch), len(codes)), flush=True)
+        gc.collect()
+        for attempt in range(2):
+            try:
+                frame = api('get_extras')('unit_net_value', batch,
+                    start_date=days[0], end_date=days[-1], df=True)
+            except OSError as exc:
+                if exc.errno != 24 or attempt:
+                    raise
+            else:
+                break
+            # Leave except first so its traceback no longer holds SDK objects.
+            gc.collect()
+            print('ETF单位净值：句柄回收后重试当前 {} 只；仅重试一次'.format(len(batch)), flush=True)
+        if frame is None:
+            raise ValueError('单位净值接口返回 None')
+        frames.append(frame.copy())
+        del frame
+    return pd.concat(frames, axis=1) if frames else pd.DataFrame()
+
+
 def load_sizes(codes, days):
     table, output = finance.FUND_SHARE_DAILY, {}
     for offset in range(0, len(codes), BATCH_SIZE):
         batch = codes[offset:offset + BATCH_SIZE]
         print('规模采集：{}/{} ETF'.format(builtins.min(offset + len(batch), len(codes)), len(codes)), flush=True)
         shares = read_pages(table, (table.code.in_(batch), table.date >= days[0], table.date <= days[-1]))
-        navs = api('get_extras')('unit_net_value', batch, start_date=days[0], end_date=days[-1], df=True)
-        if navs is None:
-            raise ValueError('单位净值接口返回 None')
-        navs = navs.copy()
+        navs = load_navs(batch, days)
         navs.index = pd.Index(pd.to_datetime(navs.index).date)
         if navs.index.has_duplicates:
             raise ValueError('单位净值日期重复')
