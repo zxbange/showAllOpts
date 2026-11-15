@@ -151,6 +151,7 @@ def test_local_failure_after_mysql_commit_recovers_without_duplicate_writes(serv
     monkeypatch.setattr(collection, 'init_store', fail)
     attach(monitor); monitor.refresh(background=False, moment=MOMENT)
     assert monitor.status()['status'] == 'failed'
+    assert '数据库已保存' in monitor.status()['error']
     with engine.connect() as db:
         assert len(db.execute(select(collection.DAILY)).all()) == 3
         assert db.execute(select(collection.HEAD.c.revision)).scalar_one() == 1

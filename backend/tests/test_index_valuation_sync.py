@@ -90,7 +90,7 @@ def test_increment_reads_three_recent_sessions_and_new_rows_only(synced):
     assert all('trade_date >=' in statement and '2026-01-07' in params for statement, params in seen)
 
 
-@pytest.mark.parametrize('bad', ['counts', 'basis', 'null_mean', 'overall_partial', 'hash'])
+@pytest.mark.parametrize('bad', ['counts', 'basis', 'null_mean', 'overall_partial', 'hash', 'source_basis'])
 def test_invalid_contract_rejected(synced, bad):
     c, _, _, _ = synced
     with c.engine.connect() as db:
@@ -101,6 +101,7 @@ def test_invalid_contract_rejected(synced, bad):
     if bad == 'null_mean': row['mean_pe_ttm'] = None
     if bad == 'overall_partial': stats['ttm'].update(overall_valid=299, overall_missing=1)
     if bad == 'hash': row['members_sha256'] = 'bad'
+    if bad == 'source_basis': row['source'] = index_valuation.PUBLIC_SOURCE
     row['statistics'] = json.dumps(stats)
     with pytest.raises(index_valuation.SnapshotDataError):
         index_valuation.checked(row, DAYS[-1])

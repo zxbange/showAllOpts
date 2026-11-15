@@ -44,6 +44,8 @@ def checked(row, cutoff):
                 or stats['ordinary_trading_suspension_excluded'] is not False
                 or stats['listing_status_basis'] not in ('historical_index_members', 'jy_listing_history', 'eastmoney_current_members')):
             reject()
+        if (row['source'] == PUBLIC_SOURCE) != (stats['listing_status_basis'] == 'eastmoney_current_members'):
+            reject()
         result = {k: row[k] for k in ('index_code', 'method_version', 'member_count', 'members_sha256', 'source')}
         result.update(trade_date=str(day), updated_at=row['updated_at'].isoformat(), statistics=stats)
         for field in ('index_close',)+METRICS:

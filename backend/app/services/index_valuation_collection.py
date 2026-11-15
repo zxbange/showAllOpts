@@ -103,6 +103,7 @@ def collect(monitor, source, state, check, moment, cutoff):
     engine = build_engine(monitor.settings, configuration=config)
     try:
         published = write_records(engine, records, check)
+        state['phase'] = 'publishing'
         # A config change must not mix an old database into the new target's local cache.
         if database_config(monitor.settings) != config:
             raise ValuationError('数据库配置已变化；原库写入已保留，请重新采集。')

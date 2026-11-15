@@ -32,12 +32,13 @@ def collectors(monkeypatch, engine):
     codes = ['{:06d}.XSHG'.format(600000+i) for i in range(300)]
     failure = {}
     def fundamentals(query, date):
-        calls.append(('pe', date))
+        calls.append(('pe', date, len(query)))
         if failure.get('pe') == date:
             raise RuntimeError('synthetic PE provider failure')
-        return pd.DataFrame({'code': codes, 'day': [date]*300,
+        frame = pd.DataFrame({'code': codes, 'day': [date]*300,
                              'pe_ratio': [None, -2] + [10]*298,
                              'pe_ratio_lyr': [20]*300, 'market_cap': [100]*300})
+        return frame[frame['code'].isin(query)].copy()
     def prices(code, start_date, end_date, **kwargs):
         assert kwargs['fq'] is None and kwargs['fields'] == ['close']
         calls.append(('price', code, start_date, end_date))
@@ -48,7 +49,7 @@ def collectors(monkeypatch, engine):
                 get_index_stocks=lambda index, date: codes,
                 valuation=SimpleNamespace(code=SimpleNamespace(in_=lambda codes: codes), day=object(), pe_ratio=object(),
                                           pe_ratio_lyr=object(), market_cap=object()),
-                query=lambda *args: SimpleNamespace(filter=lambda _: 'dated PE'),
+                query=lambda *args: SimpleNamespace(filter=lambda codes: codes),
                 get_fundamentals=fundamentals, get_price=prices)
     options = {name: dict(start_date=str(DAYS[0]), end_date=str(DAYS[-1])) for name in ('估值标尺', '创红比')}
     options['估值标尺']['indices'] = ['000300.XSHG']
@@ -91,7 +92,7 @@ def test_valuation_limit_reports_pending_and_next_run_continues(collectors):
     c.calls.clear()
     result = run(c, ['估值标尺'])[0]
     assert (result['status'], result['rows'], result['skipped']) == ('SUCCESS', 2, 1)
-    assert [call[1] for call in c.calls if call[0] == 'pe'] == DAYS[1:]
+    assert [(call[1], call[2]) for call in c.calls if call[0] == 'pe'] == [(day, size) for day in DAYS[1:] for size in (200, 100)]
 
 
 def test_failed_valuation_keeps_committed_day_and_batch_continues(collectors):
@@ -104,7 +105,7 @@ def test_failed_valuation_keeps_committed_day_and_batch_continues(collectors):
     c.failure.clear()
     c.calls.clear()
     assert run(c, ['估值标尺'])[0]['rows'] == 2
-    assert [call[1] for call in c.calls if call[0] == 'pe'] == DAYS[1:]
+    assert [(call[1], call[2]) for call in c.calls if call[0] == 'pe'] == [(day, size) for day in DAYS[1:] for size in (200, 100)]
 
 
 def test_growth_mid_history_gap_is_partial_then_filled_without_rereading_good_dates(collectors):

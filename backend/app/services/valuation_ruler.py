@@ -347,7 +347,10 @@ class ValuationRuler:
         except CollectionCancelled:state.update(phase='cancelled',error=None)
         except Exception as exc:
             LOG.error('Valuation run failed source=valuation_ruler target=%s %s',state.get('target_date'),diagnostic_details(exc))
-            state.update(phase='failed',error=str(exc) if isinstance(exc,ValuationError) else '估值标尺更新失败，已保存数据保留。')
+            message = {'saving': '估值数据库写入失败，请检查连接及写入权限；已有数据保留。',
+                       'publishing': '估值数据库已保存，本地更新失败；请重试或同步数据库。'}.get(
+                           state.get('phase'), '估值标尺更新失败，已保存数据保留。')
+            state.update(phase='failed',error=str(exc) if isinstance(exc,ValuationError) else message)
         finally:
             try:
                 state['active']=False
