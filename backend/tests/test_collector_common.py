@@ -117,18 +117,16 @@ def test_file_error_recovery_is_bounded_and_does_not_hide_other_errors(batch, mo
 
 def test_numeric_policies_keep_decimal_precision_and_reject_bad_holdings(batch):
     micro = batch._microcap_strategy({}, batch.DB_CONFIG)
-    growth = batch._growth_strategy({}, batch.DB_CONFIG)
     dividend = batch._dividend_strategy({}, batch.DB_CONFIG)
     heat = batch._etf_heat_strategy({}, batch.DB_CONFIG)
     ownership = batch._ownership_strategy({}, batch.DB_CONFIG)
     assert micro.number('-0.123456789123456789') == Decimal('-0.123456789123456789')
     assert micro.rounded(Decimal('1.00000000005')) == Decimal('1.0000000000')
-    for strategy in (growth, dividend):
-        assert strategy.rounded('1.2345675') == Decimal('1.234568')
-        assert strategy.rounded('-1.2345675') == Decimal('-1.234568')
-        assert strategy.number('Infinity') is None
-        assert strategy.number('NaN') is None
-    assert growth.rounded('1.234567895', 8) == Decimal('1.23456790')
+    assert dividend.rounded('1.2345675') == Decimal('1.234568')
+    assert dividend.rounded('-1.2345675') == Decimal('-1.234568')
+    assert dividend.number('Infinity') is None
+    assert dividend.number('NaN') is None
+    assert batch._round_decimal('1.234567895', 8) == Decimal('1.23456790')
     assert heat.positive('-1') is None
     assert ownership.number(None) is None
     with pytest.raises(ValueError):
