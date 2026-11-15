@@ -63,6 +63,45 @@ const idle: ValuationStatus = {
   last_success_at: null,
 }
 
+test('v2 switches indices and static/rolling metrics without showing old collection actions', async ({
+  page,
+}) => {
+  await page.route('**/api/v1/valuation-ruler/**', (route) => {
+    const url = new URL(route.request().url())
+    if (url.pathname.endsWith('/status')) return route.fulfill({ json: idle })
+    const code = url.searchParams.get('index_code') ?? '000300.XSHG'
+    const basis = url.searchParams.get('basis') ?? 'ttm'
+    const names: Record<string, string> = {
+      '000300.XSHG': '沪深300',
+      '000016.XSHG': '上证50',
+      '000852.XSHG': '中证1000',
+    }
+    const current = { ...point, mean_pe: basis === 'lyr' ? 20 : 10, overall_pe: 12, median_pe: 18 }
+    return route.fulfill({
+      json: {
+        ...history,
+        basis,
+        index_code: code,
+        index_name: names[code],
+        method: 'index_pe_lyr_ttm_cap300_v2',
+        points: [current],
+        latest: current,
+        benchmarks: { ...history.benchmarks, p50: 20 },
+      },
+    })
+  })
+  await page.goto('/valuation-ruler')
+  await expect(statisticValue(page, '滚动等权PE')).toHaveText('10.00倍')
+  await page.getByRole('combobox', { name: '估值指数' }).selectOption('000016.XSHG')
+  await expect(statisticValue(page, '上证50指数')).toHaveText('4,100.00')
+  await page.getByRole('button', { name: '静态市盈率', exact: true }).click()
+  await expect(statisticValue(page, '静态等权PE')).toHaveText('20.00倍')
+  await page.getByRole('combobox', { name: '估值指数' }).selectOption('000852.XSHG')
+  await expect(statisticValue(page, '中证1000指数')).toBeVisible()
+  await expect(page.getByRole('button', { name: '采集并补数据' })).toHaveCount(0)
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
+})
+
 test('valuation tab, ranges, real quantiles and disclosure render without overflow', async ({
   page,
 }) => {

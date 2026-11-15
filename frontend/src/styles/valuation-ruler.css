@@ -106,3 +106,15 @@
     max-width: 100%;
   }
 }
+.valuation-filters {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 16px;
+  margin-bottom: 20px;
+}
+.valuation-filters label {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}

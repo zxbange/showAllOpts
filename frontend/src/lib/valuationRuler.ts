@@ -6,12 +6,21 @@ export const valuationNumber = (value: number | null | undefined) =>
     : value.toLocaleString('zh-CN', { maximumFractionDigits: 2, minimumFractionDigits: 2 })
 export function valuationSource(source: string | null | undefined) {
   if (!source) return '来源未记录'
-  if (source === 'joinquant' || source === 'JQ_PLATFORM.PE_TTM.V1') return '聚宽历史'
+  if (
+    source === 'joinquant' ||
+    source === 'JQ_PLATFORM.PE_TTM.V1' ||
+    source === 'JQ_PLATFORM.VALUATION.V2'
+  )
+    return '聚宽历史'
   if (source === 'csi_em' || source === 'CSI_EM.PE_TTM.V1') return '中证成分 / 东方财富'
   return source
 }
 export function valuationChartOption(data: ValuationHistory, days: number) {
   const points = data.points
+  const v2 = !!data.basis
+  const indexName = data.index_name ?? '沪深300'
+  const mean = (p: ValuationPoint) => (v2 ? (p.mean_pe ?? null) : p.mean_pe_ttm)
+  const label = data.basis === 'lyr' ? '静态' : '滚动'
   const last = points.at(-1)?.date
   const cutoff =
     last && days
@@ -19,9 +28,14 @@ export function valuationChartOption(data: ValuationHistory, days: number) {
       : null
   const segments: { start: number; end: number }[] = []
   points.forEach((point, index) => {
-    if (point.gap || point.mean_pe_ttm == null) return
+    if (point.gap || (v2 ? point.index_close == null : point.mean_pe_ttm == null)) return
     const prev = points[index - 1]
-    if (!prev || prev.gap || prev.mean_pe_ttm == null || prev.source !== point.source)
+    if (
+      !prev ||
+      prev.gap ||
+      (v2 ? prev.index_close == null : prev.mean_pe_ttm == null) ||
+      prev.source !== point.source
+    )
       segments.push({ start: index, end: index })
     else segments[segments.length - 1].end = index
   })
@@ -52,8 +66,15 @@ export function valuationChartOption(data: ValuationHistory, days: number) {
           ? [
               p.date,
               valuationSource(p.source),
-              `沪深300：${valuationNumber(p.index_close)}`,
-              `平均PE-TTM：${valuationNumber(p.mean_pe_ttm)}`,
+              `${indexName}：${valuationNumber(p.index_close)}`,
+              `${v2 ? label + '等权PE' : '平均PE-TTM'}：${valuationNumber(mean(p))}`,
+              ...(v2
+                ? [
+                    `整体PE：${valuationNumber(p.overall_pe)}`,
+                    `中位数PE：${valuationNumber(p.median_pe)}`,
+                    `PE>300剔除 ${p.excluded_high_pe_count ?? 0} 只`,
+                  ]
+                : []),
               p.gap
                 ? '缺失交易日，未填充'
                 : `有效正PE ${p.positive_count ?? '—'} / 负PE ${p.loss_count ?? '—'} / 缺失PE ${p.missing_pe_count ?? 0} / 成分 ${p.member_count ?? '—'}`,
@@ -70,11 +91,16 @@ export function valuationChartOption(data: ValuationHistory, days: number) {
     yAxis: [
       {
         type: 'value',
-        name: '沪深300指数',
+        name: indexName + '指数',
         scale: true,
         splitLine: { lineStyle: { color: chartColors.grid } },
       },
-      { type: 'value', name: '平均PE-TTM（倍）', scale: true, splitLine: { show: false } },
+      {
+        type: 'value',
+        name: v2 ? label + 'PE（倍）' : '平均PE-TTM（倍）',
+        scale: true,
+        splitLine: { show: false },
+      },
     ],
     dataZoom: [
       {
@@ -88,7 +114,7 @@ export function valuationChartOption(data: ValuationHistory, days: number) {
     series: [
       ...segments.map((segment, index) => ({
         ...line(
-          '沪深300指数',
+          indexName + '指数',
           '#3568d4',
           points.map((p, i) => (i >= segment.start && i <= segment.end ? p.index_close : null)),
           0,
@@ -98,14 +124,39 @@ export function valuationChartOption(data: ValuationHistory, days: number) {
       })),
       ...segments.map((segment, index) => ({
         ...line(
-          '成分股平均PE-TTM',
+          v2 ? label + '等权PE' : '成分股平均PE-TTM',
           chartColors.gold,
-          points.map((p, i) => (i >= segment.start && i <= segment.end ? p.mean_pe_ttm : null)),
+          points.map((p, i) => (i >= segment.start && i <= segment.end ? mean(p) : null)),
           1,
         ),
         id: `pe-${index}`,
         showSymbol: segment.start === segment.end,
       })),
+      ...(v2
+        ? [
+            line(
+              label + '整体PE',
+              '#c34b36',
+              points.map((p) => p.overall_pe ?? null),
+              1,
+            ),
+            line(
+              label + '中位数PE',
+              '#7a57a3',
+              points.map((p) => p.median_pe ?? null),
+              1,
+            ),
+            {
+              ...line(
+                '历史P50',
+                '#7b858f',
+                points.map(() => data.benchmarks.p50 ?? null),
+                1,
+              ),
+              lineStyle: { type: 'dashed', width: 1.5 },
+            },
+          ]
+        : []),
       ...(
         [
           { key: 'p20', name: '历史P20', color: chartColors.jade },

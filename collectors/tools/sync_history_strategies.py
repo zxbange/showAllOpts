@@ -63,10 +63,10 @@ def factory(filename, name, label):
     blocks += ["settings = strategy_settings('{}')".format(label)]
     if label == '估值标尺':
         blocks.append('''def run(start_date=settings['start_date'], end_date=settings['end_date'],
-        max_days=settings['max_days'], skip_existing=True):
+        max_days=settings['max_days'], indices=settings['indices'], skip_existing=True):
     _require_append(skip_existing)
     return collect(start_date=start_date, end_date=end_date, write_database=True,
-                   max_days=max_days, return_report=True)''')
+                   max_days=max_days, indices=indices, return_report=True)''')
     else:
         blocks += ['Base = SimpleNamespace(metadata=metadata)', '''def run(start_date=settings['start_date'], end_date=settings['end_date'],
         window_days=settings['window_days'], max_days=settings['max_days'],

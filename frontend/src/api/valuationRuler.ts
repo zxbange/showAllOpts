@@ -16,8 +16,17 @@ async function request<T>(path: string, method: 'GET' | 'POST', signal?: AbortSi
   }
   return response.json() as Promise<T>
 }
-export const getValuationHistory = (signal?: AbortSignal) =>
-  request<ValuationHistory>('history', 'GET', signal)
+export const getValuationHistory = (
+  signal?: AbortSignal,
+  indexCode?: string,
+  basis?: 'ttm' | 'lyr',
+) =>
+  request<ValuationHistory>(
+    'history' +
+      (indexCode ? `?index_code=${encodeURIComponent(indexCode)}&basis=${basis ?? 'ttm'}` : ''),
+    'GET',
+    signal,
+  )
 export const getValuationStatus = (signal?: AbortSignal) =>
   request<ValuationStatus>('status', 'GET', signal)
 // Never retry mutations automatically: a lost response may still have started a job.

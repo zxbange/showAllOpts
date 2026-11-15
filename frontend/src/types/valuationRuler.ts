@@ -2,6 +2,10 @@ export interface ValuationPoint {
   date: string
   index_close: number | null
   mean_pe_ttm: number | null
+  overall_pe?: number | null
+  mean_pe?: number | null
+  median_pe?: number | null
+  excluded_high_pe_count?: number
   member_count: number | null
   positive_count: number | null
   loss_count: number | null
@@ -13,8 +17,12 @@ export interface ValuationHistory {
   points: ValuationPoint[]
   latest: ValuationPoint | null
   method: string
+  index_code?: string
+  index_name?: string
+  basis?: 'ttm' | 'lyr'
   benchmarks: {
     p20: number | null
+    p50?: number | null
     p80: number | null
     sample_days: number
     start_date: string | null

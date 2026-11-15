@@ -39,8 +39,29 @@ const data: ValuationHistory = {
   sources: ['joinquant', 'csi_em'],
 }
 describe('valuation chart truthfulness', () => {
+  it('uses selected static values, three PE curves and all three reference levels', () => {
+    const option = valuationChartOption(
+      {
+        ...data,
+        basis: 'lyr',
+        index_name: '上证50',
+        points: [{ ...data.points[0], mean_pe: 20, overall_pe: 12, median_pe: 18 }],
+        benchmarks: { ...data.benchmarks, p50: 25 },
+      },
+      365,
+    )
+    expect(option.series.find((s) => s.name === '静态等权PE')?.data).toEqual([20])
+    expect(option.series.find((s) => s.name === '静态整体PE')?.data).toEqual([12])
+    expect(option.series.find((s) => s.name === '静态中位数PE')?.data).toEqual([18])
+    expect(option.series.find((s) => s.name === '历史P50')?.data).toEqual([25])
+    expect(option.series.find((s) => s.name === '上证50指数')?.yAxisIndex).toBe(0)
+    expect(option.dataZoom.map((x) => x.type)).toEqual(['inside', 'slider'])
+  })
   it('shows missing PE separately from negative PE and retains the complete member count', () => {
-    const option = valuationChartOption({ ...data, points: [{ ...data.points[0], loss_count: 29, missing_pe_count: 1 }] }, 0)
+    const option = valuationChartOption(
+      { ...data, points: [{ ...data.points[0], loss_count: 29, missing_pe_count: 1 }] },
+      0,
+    )
     const tooltip = option.tooltip.formatter([{ dataIndex: 0 }])
     expect(tooltip).toContain('有效正PE 270 / 负PE 29 / 缺失PE 1 / 成分 300')
   })

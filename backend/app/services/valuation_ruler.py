@@ -271,8 +271,12 @@ class ValuationRuler:
             joinquant_missing_days=state.get('joinquant_missing_days'),joinquant_import_warning=state.get('joinquant_import_warning'),
             last_success_at=state.get('last_success_at'))
 
-    def history(self,moment=None):
+    def history(self,moment=None,*,index_code=INDEX,basis='ttm'):
         cutoff=close_cutoff(moment or now())
+        from app.services.index_valuation import history as index_history
+        current = index_history(self,cutoff,index_code,basis)
+        if current is not None:
+            return current
         with self.db() as db:
             state=self.read_state(db)
             rows=[json.loads(row[0]) for row in db.execute('SELECT payload FROM points WHERE trade_date>=? AND trade_date<=? ORDER BY trade_date',(str(START),str(cutoff)))]
@@ -349,6 +353,11 @@ class ValuationRuler:
             finally:lock.release()
 
     def refresh(self,background=True,*,moment=None,slot=None,cutoff=None):
+        with self.db() as db:
+            from app.services.index_valuation import init_store
+            init_store(db)
+            if db.execute('SELECT 1 FROM index_points_v2 LIMIT 1').fetchone():
+                return False  # V2 is calculated in JoinQuant and updated via database sync.
         def runner(monitor,state,check_cancel,moment):
             monitor._collect(state,check_cancel,moment,cutoff=cutoff,automatic=slot is not None)
         return self.start_job('public',runner,background=background,moment=moment,slot=slot)

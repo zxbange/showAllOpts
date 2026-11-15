@@ -1,4 +1,5 @@
 from fastapi import APIRouter, Depends, Request, Response
+from typing import Literal
 
 router=APIRouter(prefix='/valuation-ruler',tags=['估值标尺'])
 
@@ -8,9 +9,11 @@ def service(request: Request):
 
 
 @router.get('/history')
-def history(response: Response,monitor=Depends(service)):
+def history(response: Response,monitor=Depends(service),
+            index_code: Literal['000300.XSHG','000016.XSHG','000852.XSHG']='000300.XSHG',
+            basis: Literal['ttm','lyr']='ttm'):
     response.headers['Cache-Control']='no-store'
-    return monitor.history()
+    return monitor.history(index_code=index_code,basis=basis)
 
 
 @router.get('/status')

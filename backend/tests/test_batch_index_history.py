@@ -6,11 +6,10 @@ from types import ModuleType, SimpleNamespace
 
 import pandas as pd
 import pytest
-from sqlalchemy import func, select
+from sqlalchemy import func, select, text
 
 from test_collector_batch import CONFIG, load
 from app.services import growth_dividend_import as growth
-from app.services import valuation_ruler_import as valuation
 
 ROOT = Path(__file__).resolve().parents[2]
 DAYS = [dt.date(2026, 1, day) for day in (5, 6, 7)]
@@ -37,7 +36,8 @@ def collectors(monkeypatch, engine):
         if failure.get('pe') == date:
             raise RuntimeError('synthetic PE provider failure')
         return pd.DataFrame({'code': codes, 'day': [date]*300,
-                             'pe_ratio': [None, -2] + [10]*298})
+                             'pe_ratio': [None, -2] + [10]*298,
+                             'pe_ratio_lyr': [20]*300, 'market_cap': [100]*300})
     def prices(code, start_date, end_date, **kwargs):
         assert kwargs['fq'] is None and kwargs['fields'] == ['close']
         calls.append(('price', code, start_date, end_date))
@@ -46,10 +46,12 @@ def collectors(monkeypatch, engine):
     apis = dict(get_all_trade_days=lambda: DAYS,
                 get_trade_days=lambda end_date, start_date=DAYS[0]: [d for d in DAYS if start_date <= d <= end_date],
                 get_index_stocks=lambda index, date: codes,
-                valuation=SimpleNamespace(code=SimpleNamespace(in_=lambda codes: codes), day=object(), pe_ratio=object()),
+                valuation=SimpleNamespace(code=SimpleNamespace(in_=lambda codes: codes), day=object(), pe_ratio=object(),
+                                          pe_ratio_lyr=object(), market_cap=object()),
                 query=lambda *args: SimpleNamespace(filter=lambda _: 'dated PE'),
                 get_fundamentals=fundamentals, get_price=prices)
     options = {name: dict(start_date=str(DAYS[0]), end_date=str(DAYS[-1])) for name in ('估值标尺', '创红比')}
+    options['估值标尺']['indices'] = ['000300.XSHG']
     return SimpleNamespace(batch=batch, apis=apis, options=options, calls=calls, failure=failure,
                            connections=connections, engine=engine)
 
@@ -65,17 +67,17 @@ def test_both_collectors_commit_existing_schema_and_noop_without_price_reads(col
     assert [(r['strategy'], r['status'], r['rows']) for r in first] == [('估值标尺', 'SUCCESS', 3), ('创红比', 'SUCCESS', 9)]
     assert c.connections == [CONFIG, CONFIG]
     with c.engine.connect() as conn:
-        assert conn.scalar(select(func.count()).select_from(valuation.MEMBER)) == 900
+        assert conn.scalar(text('SELECT COUNT(*) FROM valuation_ruler_member_v2')) == 3
         assert conn.scalar(select(func.count()).select_from(growth.PRICES)) == 9
-        assert conn.scalar(select(valuation.DAILY.c.positive_count).limit(1)) == 298
-        assert conn.scalar(select(valuation.DAILY.c.loss_count).limit(1)) == 1
+        import json
+        stats = json.loads(conn.scalar(text('SELECT statistics FROM valuation_ruler_daily_v2 LIMIT 1')))
+        assert stats['ttm']['eligible'] == 298
+        assert stats['ttm']['loss'] == 1
     c.calls.clear()
     second = run(c)
     assert [(r['status'], r['rows']) for r in second] == [('SUCCESS', 0), ('SUCCESS', 0)]
     assert not c.calls
-    # The backend's actual read-only importers accept the generated records.
-    with valuation.read_source(c.engine, DAYS[-1], lambda: None) as data:
-        assert len(list(data.points())) == 3
+    # V2 lives in separate tables: the legacy importer cannot mix methodologies.
     days, points = growth.read_source(c.engine, DAYS[-1], lambda: None)
     assert days == DAYS and len(points) == 9
 
@@ -98,7 +100,7 @@ def test_failed_valuation_keeps_committed_day_and_batch_continues(collectors):
     result = run(c)
     assert [r['status'] for r in result] == ['FAILED', 'SUCCESS']
     with c.engine.connect() as conn:
-        assert conn.execute(select(valuation.DAILY.c.trade_date)).scalars().all() == DAYS[:1]
+        assert str(conn.scalar(text('SELECT trade_date FROM valuation_ruler_daily_v2'))) == str(DAYS[0])
     c.failure.clear()
     c.calls.clear()
     assert run(c, ['估值标尺'])[0]['rows'] == 2

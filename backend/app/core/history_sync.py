@@ -82,6 +82,7 @@ def copy_history(cache, module, full=False):
     budget = 1800
     if module == 'valuation-ruler':
         from app.services import valuation_ruler_import as importer
+        from app.services import index_valuation
         budget = importer.MAX_SECONDS
         checkpoint = service.root / importer.CHECKPOINT_FILE
 
@@ -121,6 +122,17 @@ def copy_history(cache, module, full=False):
                     summary['inserted'], summary['conflicts'], missing)
                 summary['imported_at'] = moment.isoformat()
                 sync_metadata = dict(sync_summary=summary)
+            elif index_valuation.available(source):
+                from app.services.valuation_ruler import close_cutoff
+                def valuation_progress(message, percent):
+                    stage[0] = message
+                    report(message, percent=percent)
+                summary = index_valuation.sync(source, staged, close_cutoff(moment), check, valuation_progress,
+                    full=full, same_source=snapshot_matches(path, identity))
+                sync_metadata = dict(joinquant_import_at=moment.isoformat(), joinquant_imported=summary['inserted'],
+                    joinquant_conflicts=0, joinquant_missing_days=None, joinquant_skipped_days=0,
+                    joinquant_import_warning=None)
+                note = '新增 {} 个指数日；更新 {} 个指数日；只同步日汇总。'.format(summary['inserted'], summary['updated'])
             else:
                 from app.services.valuation_ruler import close_cutoff
                 receipts = (importer.read_receipts(staged) if not full and snapshot_matches(path, identity) else None)
@@ -155,6 +167,9 @@ def copy_history(cache, module, full=False):
                 db.execute('INSERT INTO history_cache_source_v1 VALUES (1,?) '
                            'ON CONFLICT(id) DO UPDATE SET identity=excluded.identity', (identity,))
                 rows = db.execute('SELECT COUNT(*) FROM points').fetchone()[0]
+                if module == 'valuation-ruler' and db.execute(
+                        "SELECT 1 FROM sqlite_master WHERE name='index_points_v2'").fetchone():
+                    rows += db.execute('SELECT COUNT(*) FROM index_points_v2').fetchone()[0]
                 if db.execute('PRAGMA quick_check').fetchone()[0] != 'ok':
                     raise SnapshotDataError('历史快照校验失败，已有数据未修改。')
             stage[0] = '发布已校验的本地历史'

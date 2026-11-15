@@ -1,5 +1,10 @@
 # -*- coding: utf-8 -*-
-"""聚宽平台独立历史补采。从最后完成日期继续，不扫描旧日期。历史值为平台当前可见修订版本。"""
+"""聚宽指数估值采集：三指数的静态/滚动整体、等权、中位数PE。
+配置日期和指数后整段运行即入库；按各指数最后完成日续采，仅依赖mysql_connector。
+新口径写入valuation_ruler_daily_v2/member_v2，不改旧表。历史为平台当前可见修订值。
+整体PE以总市值/个股PE反推利润；等权与中位数只取0<PE<=300，普通停牌不剔除。
+暂停上市目前以当日指数成分名单为基础，状态来源随结果保存，不声称完全复刻乐咕。
+"""
 from __future__ import print_function, division
 import datetime as dt
 import builtins as _builtins
@@ -50,7 +55,7 @@ class Progress:
         else:
             ratio = done/total if total else 1
             filled = _builtins.int(20*ratio)
-            bar = '[{}{}] {}/{} 日 {:.0f}%'.format('#'*filled, '-'*(20-filled), done, total, 100*ratio)
+            bar = '[{}{}] {}/{} 指数日 {:.0f}%'.format('#'*filled, '-'*(20-filled), done, total, 100*ratio)
         line = '估值历史补采 | {} | {} | {} | 已用 {:.0f}s'.format(stage, bar, day or '--', now-self.started)
         _builtins.print('\r'+line+' '*_builtins.max(0, self.width-_builtins.len(line)), end='', flush=True)
         self.width, self.last_draw = _builtins.len(line), now
@@ -159,7 +164,7 @@ def range_days(start, end, max_days):
     return calendar(start, end)
 
 
-def validate_schema(engine, models, allow_legacy_pe=False):
+def validate_schema(engine, models):
     inspector = inspect(engine)
     for model in models:
         table = model.__table__
@@ -172,9 +177,7 @@ def validate_schema(engine, models, allow_legacy_pe=False):
             raise HistoryError('历史表必须使用 InnoDB。')
         for col in table.columns:
             actual = cols.get(col.name)
-            legacy_pe = (allow_legacy_pe and table.name == 'valuation_ruler_member'
-                         and col.name == 'pe_ttm' and actual is not None and not actual['nullable'])
-            if actual is None or (actual['nullable'] != col.nullable and not legacy_pe):
+            if actual is None or actual['nullable'] != col.nullable:
                 raise HistoryError('数据库字段或可空约束不一致。')
             typ = actual['type']
             if _builtins.getattr(typ, 'unsigned', False):
@@ -189,17 +192,6 @@ def validate_schema(engine, models, allow_legacy_pe=False):
                 raise HistoryError('数据库字段类型不一致。')
 
 
-def upgrade_nullable_pe(engine):
-    pe_column = _builtins.next(c for c in inspect(engine).get_columns('valuation_ruler_member') if c['name'] == 'pe_ttm')
-    if pe_column['nullable']:
-        return
-    if engine.dialect.name != 'mysql':
-        raise HistoryError('旧成分表 pe_ttm 需要允许 NULL；自动升级仅支持 MySQL。')
-    _builtins.print('\n升级成分表：pe_ttm 允许 NULL，以保留缺失PE；已有数值不变。')
-    with engine.begin() as connection:
-        connection.execute(sql_text('ALTER TABLE valuation_ruler_member MODIFY COLUMN pe_ttm DECIMAL(30,12) NULL'))
-
-
 def database(models, module):
     # Configuration import and credentials are deliberately deferred until write mode.
     from mysql_connector import create_mysql_engine
@@ -209,9 +201,6 @@ def database(models, module):
         engine.hide_parameters = True
     try:
         Base.metadata.create_all(engine)
-        # The only supported old-schema upgrade preserves every historical PE value.
-        validate_schema(engine, models, allow_legacy_pe=True)
-        upgrade_nullable_pe(engine)
         validate_schema(engine, models)
         Session = sessionmaker(bind=engine)
         _install_result_journal(Session, _builtins.tuple(m for m in models if m.__tablename__ != 'market_crowding'), module)
@@ -359,86 +348,65 @@ def _result_bulk(query, values=None):
 
 # END SHARED RESULT JOURNAL
 START_DATE = '2010-01-01'
-METHOD = 'csi300_equal_positive_pe_ttm_v1'
 INDEX = '000300.XSHG'
-SOURCE = 'JQ_PLATFORM.PE_TTM.V1'
+INDEXES = {
+    '000300.XSHG': ('沪深300', 300, '2010-01-01'),
+    '000016.XSHG': ('上证50', 50, '2010-01-01'),
+    '000852.XSHG': ('中证1000', 1000, '2014-10-17'),
+}
+INDICES = ('000300.XSHG', '000016.XSHG', '000852.XSHG')
+METHOD = 'index_pe_lyr_ttm_cap300_v2'
+SOURCE = 'JQ_PLATFORM.VALUATION.V2'
 CALENDAR_SOURCE = 'JQDATA.GET_TRADE_DAYS'
 
+
 class ValuationDaily(Base):
-    __tablename__ = 'valuation_ruler_daily'
+    __tablename__ = 'valuation_ruler_daily_v2'
     __table_args__ = {'mysql_engine': 'InnoDB', 'mysql_charset': 'utf8mb4'}
     trade_date = Column(Date, primary_key=True)
     index_code = Column(String(16), primary_key=True)
     method_version = Column(String(48), primary_key=True)
     index_close = Column(Numeric(24, 8), nullable=False)
-    mean_pe_ttm = Column(Numeric(30, 12), nullable=False)
-    pe_sum = Column(Numeric(38, 12), nullable=False)
+    overall_pe_ttm = Column(Numeric(30, 12))
+    mean_pe_ttm = Column(Numeric(30, 12))
+    median_pe_ttm = Column(Numeric(30, 12))
+    overall_pe_lyr = Column(Numeric(30, 12))
+    mean_pe_lyr = Column(Numeric(30, 12))
+    median_pe_lyr = Column(Numeric(30, 12))
     member_count = Column(Integer, nullable=False)
-    positive_count = Column(Integer, nullable=False)
-    loss_count = Column(Integer, nullable=False)
+    statistics = Column(Text, nullable=False)
     members_sha256 = Column(String(64), nullable=False)
     source = Column(String(48), nullable=False)
     updated_at = Column(DateTime, nullable=False)
 
+
 class ValuationMember(Base):
-    __tablename__ = 'valuation_ruler_member'
+    # One auditable payload per index/day, not millions of individual stock rows.
+    __tablename__ = 'valuation_ruler_member_v2'
     __table_args__ = {'mysql_engine': 'InnoDB', 'mysql_charset': 'utf8mb4'}
     trade_date = Column(Date, primary_key=True)
     index_code = Column(String(16), primary_key=True)
     method_version = Column(String(48), primary_key=True)
-    code = Column(String(16), primary_key=True)
-    pe_ttm = Column(Numeric(30, 12), nullable=True)
+    payload = Column(Text().with_variant(LONGTEXT(), 'mysql'), nullable=False)
     source = Column(String(48), nullable=False)
     updated_at = Column(DateTime, nullable=False)
 
-class ValuationCalendar(Base):
-    __tablename__ = 'valuation_ruler_trading_day'
-    __table_args__ = {'mysql_engine': 'InnoDB', 'mysql_charset': 'utf8mb4'}
-    trade_date = Column(Date, primary_key=True)
-    source = Column(String(48), nullable=False)
-    updated_at = Column(DateTime, nullable=False)
 
-MODELS = (ValuationDaily, ValuationMember, ValuationCalendar)
+MODELS = (ValuationDaily, ValuationMember)
 
 
 def valid_code(code):
-    # Same stock identity contract as the backend importer, including 302/689 CDRs.
-    return (_builtins.isinstance(code, _builtins.str) and re.match(r'^[036]\d{5}\.(?:XSHG|XSHE)\Z', code) is not None
+    return (_builtins.isinstance(code, _builtins.str)
+            and re.match(r'^[036]\d{5}\.(?:XSHG|XSHE)\Z', code) is not None
             and ((code.startswith('6') and code.endswith('.XSHG'))
                  or (code.startswith(('0', '3')) and code.endswith('.XSHE'))))
 
 
-def summarize(day, close, members):
-    if _builtins.len(members) != 300 or _builtins.len(_builtins.set(code for code, pe in members)) != 300:
-        raise HistoryError('沪深300必须恰好300个唯一当日成分。')
-    if _builtins.any(not valid_code(code) for code, pe in members):
-        raise HistoryError('成分代码格式无效。')
-    close = number(close, 24, 8, INDEX+' close')
-    if close <= 0:
-        raise HistoryError('指数原始收盘价无效。')
-    checked = [(code, None if pe is None else number(pe, 30, 12, code+' pe_ratio')) for code, pe in members]
-    for code, pe in checked:
-        if pe == 0:
-            raise HistoryError('{} pe_ratio：PE-TTM为零，不能视作亏损或缺失。'.format(code))
-    positive = [pe for code, pe in checked if pe is not None and pe > 0]
-    if not positive:
-        raise HistoryError('没有正PE样本。')
-    with localcontext() as ctx:
-        ctx.prec = 80
-        total = number(_builtins.sum(positive, Decimal(0)), 38, 12)
-        mean = number(derived(total/Decimal(_builtins.len(positive)), 12), 30, 12)
-    digest = hashlib.sha256('\n'.join(_builtins.sorted(code for code, pe in checked)).encode('utf-8')).hexdigest()
-    stamp = china_now()
-    key = _builtins.dict(trade_date=day, index_code=INDEX, method_version=METHOD, source=SOURCE, updated_at=stamp)
-    daily = _builtins.dict(key, index_close=close, mean_pe_ttm=mean, pe_sum=total, member_count=300,
-                 positive_count=_builtins.len(positive),
-                 loss_count=_builtins.sum(pe is not None and pe < 0 for code, pe in checked), members_sha256=digest)
-    rows = [_builtins.dict(key, code=code, pe_ttm=pe) for code, pe in _builtins.sorted(checked)]
-    cal = _builtins.dict(trade_date=day, source=CALENDAR_SOURCE, updated_at=stamp)
-    return daily, rows, cal
+def json_text(value):
+    return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(',', ':'), allow_nan=False)
 
 
-def source_pe(value, code):
+def source_number(value, field):
     if value is None:
         return None
     try:
@@ -446,146 +414,209 @@ def source_pe(value, code):
             return None
     except (InvalidOperation, ValueError):
         pass
-    return number(value, 30, 12, code+' pe_ratio', round_source=True)
+    return number(value, 30, 12, field, round_source=True)
 
 
-def source_day(day):
-    codes = api('get_index_stocks')(INDEX, date=day)
-    if codes is None or _builtins.len(codes) != 300 or _builtins.len(_builtins.set(codes)) != 300:
-        raise HistoryError('当日沪深300成分缺失或重复。')
-    valuation = api('valuation')
-    query = api('query')(valuation.code, valuation.day, valuation.pe_ratio).filter(valuation.code.in_(codes))
-    frame = api('get_fundamentals')(query, date=day)
-    if (frame is None or not {'code', 'day', 'pe_ratio'}.issubset(frame.columns)
-            or _builtins.len(frame) != 300 or _builtins.set(frame['code']) != _builtins.set(codes)
-            or _builtins.any(as_date(x) != day for x in frame['day'])):
-        raise HistoryError('当日PE-TTM数据缺失、重复或日期不匹配。')
-    prices = api('get_price')(INDEX, start_date=day, end_date=day, frequency='daily',
-                          fields=['close'], fq=None, skip_paused=False)
+def aggregate(members, field):
+    """Separate samples for each PE basis; never apply the 300 cap to overall PE."""
+    active = [row for row in members if row['suspended_listing'] is not True]
+    values = [Decimal(row[field]) for row in active if row[field] is not None]
+    selected = _builtins.sorted(value for value in values if 0 < value <= 300)
+    valid = [row for row in active if row[field] is not None and row['market_cap'] is not None]
+    counts = dict(eligible=_builtins.len(selected), loss=_builtins.sum(v < 0 for v in values),
+                  over_limit=_builtins.sum(v > 300 for v in values), missing_pe=_builtins.len(active)-_builtins.len(values),
+                  suspended_listing=_builtins.len(members)-_builtins.len(active),
+                  listing_status_unverified=_builtins.sum(row['suspended_listing'] is None for row in members),
+                  overall_valid=_builtins.len(valid), overall_missing=_builtins.len(active)-_builtins.len(valid))
+    with localcontext() as ctx:
+        ctx.prec = 80
+        mean = derived(_builtins.sum(selected, Decimal(0))/_builtins.len(selected), 12) if selected else None
+        middle = _builtins.len(selected)//2
+        median = (selected[middle] if _builtins.len(selected)%2 else
+                  derived((selected[middle-1]+selected[middle])/2, 12)) if selected else None
+        cap = _builtins.sum((Decimal(r['market_cap']) for r in valid), Decimal(0))
+        profit = _builtins.sum((Decimal(r['market_cap'])/Decimal(r[field]) for r in valid), Decimal(0))
+        # Missing/zero-profit PE must not produce a misleading whole-index ratio.
+        overall = derived(cap/profit, 12) if valid and _builtins.len(valid) == _builtins.len(active) and profit > 0 else None
+        counts.update(market_cap_yi=format(cap, 'f'), implied_profit_yi=format(derived(profit, 12), 'f'))
+    return overall, mean, median, counts
+
+
+def summarize(day, close, members, index_code=INDEX):
+    if index_code not in INDEXES:
+        raise HistoryError('指数不在支持范围。')
+    name, expected, _ = INDEXES[index_code]
+    codes = [row['code'] for row in members]
+    if (_builtins.len(codes) != expected or _builtins.len(_builtins.set(codes)) != expected
+            or not _builtins.all(valid_code(code) for code in codes)):
+        raise HistoryError('{}须有{}个唯一当日成分。'.format(name, expected))
+    close = number(close, 24, 8, index_code+' close')
+    if close <= 0:
+        raise HistoryError('指数收盘价必须为正。')
+    checked = []
+    for row in _builtins.sorted(members, key=lambda r: r['code']):
+        status = row.get('suspended_listing')
+        if status is not None and _builtins.type(status) is not _builtins.bool:
+            raise HistoryError('暂停上市标记必须为布尔值或未独立核验的NULL。')
+        item = dict(code=row['code'], suspended_listing=status)
+        for field in ('pe_ttm', 'pe_lyr', 'market_cap'):
+            value = row[field]
+            if value is not None:
+                value = number(value, 30, 12, row['code']+' '+field)
+                if value == 0 or (field == 'market_cap' and value < 0):
+                    raise HistoryError('{} {}：零值或负市值无效。'.format(row['code'], field))
+            item[field] = None if value is None else format(value, '.12f')
+        checked.append(item)
+    key = dict(trade_date=day, index_code=index_code, method_version=METHOD, source=SOURCE, updated_at=china_now())
+    daily = dict(key, index_close=close, member_count=expected)
+    stats = dict(listing_status_basis='historical_index_members', profit_basis='market_cap_divided_by_pe',
+                 market_cap_unit='亿元', ordinary_trading_suspension_excluded=False)
+    for basis in ('ttm', 'lyr'):
+        overall, mean, median, stats[basis] = aggregate(checked, 'pe_'+basis)
+        for metric, value in (('overall', overall), ('mean', mean), ('median', median)):
+            daily[metric+'_pe_'+basis] = None if value is None else number(value, 30, 12)
+    payload = json_text(checked)
+    daily.update(statistics=json_text(stats), members_sha256=hashlib.sha256(payload.encode('utf-8')).hexdigest())
+    return daily, dict(key, payload=payload)
+
+
+def source_day(day, index_code=INDEX):
+    codes = api('get_index_stocks')(index_code, date=day)
+    expected = INDEXES[index_code][1]
+    if (codes is None or _builtins.len(codes) != expected or _builtins.len(_builtins.set(codes)) != expected
+            or not _builtins.all(valid_code(code) for code in codes)):
+        raise HistoryError('{} 当日成分缺失、重复或无效。'.format(INDEXES[index_code][0]))
+    v = api('valuation')
+    fields = ('code', 'day', 'pe_ratio', 'pe_ratio_lyr', 'market_cap')
+    if not _builtins.all(_builtins.hasattr(v, field) for field in fields):
+        raise HistoryError('聚宽valuation缺少静态PE或总市值字段，拒绝用TTM代替。')
+    q = api('query')(*[_builtins.getattr(v, field) for field in fields]).filter(v.code.in_(codes))
+    frame = api('get_fundamentals')(q, date=day)
+    if (frame is None or not _builtins.set(fields).issubset(frame.columns)
+            or _builtins.len(frame) != expected or _builtins.set(frame['code']) != _builtins.set(codes)
+            or _builtins.any(as_date(d) != day for d in frame['day'])):
+        raise HistoryError('当日估值缺失、重复或日期不匹配。')
+    prices = api('get_price')(index_code, start_date=day, end_date=day, frequency='daily',
+                              fields=['close'], fq=None, skip_paused=False)
     if prices is None or _builtins.len(prices) != 1 or 'close' not in prices.columns or as_date(prices.index[0]) != day:
-        raise HistoryError('指数原始收盘行情缺失或日期不匹配。')
-    # Normalize only fresh source values, before aggregation. Stored rows remain strict.
-    close = number(prices.iloc[0]['close'], 24, 8, INDEX+' close', round_source=True)
-    members = [(code, source_pe(pe, code))
-               for code, pe in _builtins.zip(frame['code'], frame['pe_ratio'])]
-    return summarize(day, close, members)
+        raise HistoryError('指数收盘行情缺失或日期不匹配。')
+    close = number(prices.iloc[0]['close'], 24, 8, index_code+' close', round_source=True)
+    members = [dict(code=code, pe_ttm=source_number(ttm, code+' pe_ratio'),
+                    pe_lyr=source_number(lyr, code+' pe_ratio_lyr'),
+                    market_cap=source_number(cap, code+' market_cap'), suspended_listing=None)
+               for code, ttm, lyr, cap in _builtins.zip(frame['code'], frame['pe_ratio'], frame['pe_ratio_lyr'], frame['market_cap'])]
+    return summarize(day, close, members, index_code)
 
 
-def existing_day(session, day):
-    daily = session.query(ValuationDaily).filter_by(trade_date=day, index_code=INDEX, method_version=METHOD).one_or_none()
-    members = session.query(ValuationMember).filter_by(trade_date=day, index_code=INDEX, method_version=METHOD).all()
-    cal = session.query(ValuationCalendar).filter_by(trade_date=day).one_or_none()
-    if daily is None and not members and cal is None:
+def existing_day(session, day, index_code=INDEX):
+    key = dict(trade_date=day, index_code=index_code, method_version=METHOD)
+    daily = session.query(ValuationDaily).filter_by(**key).one_or_none()
+    raw = session.query(ValuationMember).filter_by(**key).one_or_none()
+    if daily is None and raw is None:
         return False
-    if daily is None or _builtins.len(members) != 300 or cal is None:
-        raise HistoryError('已有单日数据不完整，禁止覆盖或拼接；请先人工核实。')
+    if daily is None or raw is None:
+        raise HistoryError('已有单日数据不完整；不会覆盖。')
     complete(daily, ValuationDaily)
-    complete(cal, ValuationCalendar)
-    if cal.source != CALENDAR_SOURCE or daily.source != SOURCE:
+    complete(raw, ValuationMember)
+    if daily.source != SOURCE or raw.source != SOURCE:
         raise HistoryError('已有记录来源不匹配。')
-    for member in members:
-        complete(member, ValuationMember)
-        if member.source != SOURCE:
-            raise HistoryError('已有成分来源不匹配。')
-    computed, _, _ = summarize(day, daily.index_close, [(m.code, m.pe_ttm) for m in members])
-    if _builtins.any(_builtins.getattr(daily, key) != value for key, value in computed.items() if key != 'updated_at'):
-        raise HistoryError('已有汇总与原始成分不一致，禁止覆盖。')
+    computed, archive = summarize(day, daily.index_close, json.loads(raw.payload), index_code)
+    if (archive['payload'] != raw.payload or _builtins.any(_builtins.getattr(daily, k) != v
+            for k, v in computed.items() if k != 'updated_at')):
+        raise HistoryError('已有汇总、指纹与成分原值不一致；不会覆盖。')
     return True
 
 
 def run(start_date=START_DATE, end_date=END_DATE, write_database=WRITE_DATABASE, max_days=MAX_DAYS,
-        return_report=False):
-    if as_date(start_date) < dt.date(2010, 1, 1):
-        raise HistoryError('估值标尺历史起点不得早于2010年。')
+        return_report=False, indices=INDICES):
     if not _builtins.isinstance(write_database, _builtins.bool):
         raise HistoryError('write_database 必须为 True 或 False。')
-    _builtins.print('源数据按 HALF_EVEN 舍入：PE 保留12位小数，指数收盘价保留8位；缺失PE保留NULL，仅有效正PE参与均值。')
+    if (not _builtins.isinstance(indices, (list, tuple)) or not indices
+            or _builtins.len(_builtins.set(indices)) != _builtins.len(indices)
+            or _builtins.any(code not in INDEXES for code in indices)):
+        raise HistoryError('indices须为不重复的受支持指数代码列表。')
+    if as_date(start_date) < dt.date(2010, 1, 1):
+        raise HistoryError('起点不得早于2010年。')
+    _builtins.print('估值采集v2：静态/滚动整体PE、等权PE及中位数；等权/中位数仅取0<PE≤300。')
     engine = Session = None
-    current_day = None
-    stage = '读取交易日历'
+    current_day, stage = None, '读取交易日历'
     progress = Progress()
     progress.update(stage, force=True)
     try:
         days = range_days(start_date, end_date, max_days)
-        pending = _builtins.list(days)
         if write_database:
             stage = '连接数据库/校验表结构'
             progress.update(stage)
-            engine, Session = database(MODELS, 'valuation-ruler')
-            session = Session()
-            try:
-                stage = '读取最后完成日期'
-                progress.update(stage)
-                latest = session.query(ValuationDaily.trade_date).filter_by(
-                    index_code=INDEX, method_version=METHOD).order_by(
-                    ValuationDaily.trade_date.desc()).first()
-                if latest is not None:
-                    current_day = latest[0]
-                    # Validate only the resume boundary, never all historical members.
-                    stage = '核对最后完成日 {}'.format(current_day)
-                    progress.update(stage, day=current_day)
-                    if not existing_day(session, current_day):
-                        raise HistoryError('最后完成日期在检查期间发生变化，请重新运行。')
-                    pending = [day for day in days if day > current_day]
-            finally:
-                session.close()
-        results, added = [], 0
-        selected = pending[:max_days]
-        progress.update('待采集' if write_database else '预览采集', 0, _builtins.len(selected), force=True)
-        for index, day in enumerate(selected):
-            current_day = day
-            stage = '读取成分、PE和指数行情'
-            progress.update(stage, index, _builtins.len(selected), day)
-            daily, members, cal = source_day(day)
+            engine, Session = database(MODELS, 'valuation-ruler-v2')
+        pending, skipped = {}, 0
+        for code in indices:
+            candidates = [d for d in days if d >= as_date(INDEXES[code][2])]
+            latest = None
             if write_database:
-                stage = '写入单日结果（正PE {} / 负PE {} / 缺失 {}）'.format(daily['positive_count'],
-                    daily['loss_count'], daily['member_count']-daily['positive_count']-daily['loss_count'])
-                progress.update(stage, index, _builtins.len(selected), day)
                 session = Session()
                 try:
-                    inserted = False
+                    latest = session.query(ValuationDaily.trade_date).filter_by(index_code=code, method_version=METHOD).order_by(
+                        ValuationDaily.trade_date.desc()).first()
+                    if latest:
+                        stage = '核对{}最后完成日'.format(INDEXES[code][0])
+                        progress.update(stage, day=latest[0])
+                        existing_day(session, latest[0], code)
+                finally:
+                    session.close()
+            pending[code] = [d for d in candidates if latest is None or d > latest[0]]
+            skipped += _builtins.len(candidates)-_builtins.len(pending[code])
+        selected_days = _builtins.sorted(_builtins.set(d for values in pending.values() for d in values))[:max_days]
+        pending = {code: _builtins.set(values) for code, values in pending.items()}
+        total = _builtins.sum(_builtins.len(values) for values in pending.values())
+        selected = [(day, code) for day in selected_days for code in indices if day in pending[code]]
+        results, added = [], 0
+        for offset, (day, code) in enumerate(selected):
+            current_day = day
+            stage = '{}：读取成分与估值'.format(INDEXES[code][0])
+            progress.update(stage, offset, _builtins.len(selected), day)
+            daily, raw = source_day(day, code)
+            if write_database:
+                stage = '{}：写入结果'.format(INDEXES[code][0])
+                progress.update(stage, offset, _builtins.len(selected), day)
+                session = Session()
+                try:
                     session.info['_result_journal_callbacks'][1](session)
-                    if existing_day(session, day):
-                        old = session.query(ValuationDaily).filter_by(trade_date=day, index_code=INDEX, method_version=METHOD).one()
-                        saved_members = session.query(ValuationMember).filter_by(trade_date=day, index_code=INDEX, method_version=METHOD).all()
-                        if (_builtins.any(_builtins.getattr(old, k) != v for k, v in daily.items() if k != 'updated_at')
-                                or {m.code: m.pe_ttm for m in saved_members} != {m['code']: m['pe_ttm'] for m in members}):
-                            raise HistoryError('并发已有结果冲突，单日事务取消。')
+                    if existing_day(session, day, code):
+                        old = session.query(ValuationDaily).filter_by(trade_date=day, index_code=code, method_version=METHOD).one()
+                        if _builtins.any(_builtins.getattr(old, k) != v for k, v in daily.items() if k != 'updated_at'):
+                            raise HistoryError('并发已有结果冲突，本次事务取消。')
                     else:
                         session.add(ValuationDaily(**daily))
-                        session.add_all([ValuationMember(**m) for m in members])
-                        session.add(ValuationCalendar(**cal))
-                        inserted = True
+                        session.add(ValuationMember(**raw))
+                        added += 1
                     session.commit()
-                    added += _builtins.int(inserted)
                 except Exception:
                     session.rollback()
                     raise
                 finally:
                     session.close()
             results.append(daily)
-            progress.update(stage, index+1, _builtins.len(selected), day)
-        progress.finish(('本轮完成' if write_database else '预览完成（未入库）') if selected else '无需补采')
-        _builtins.print('本轮处理 {} 日，剩余 {} 日；{}'.format(_builtins.len(results),
-            _builtins.max(0, _builtins.len(pending)-_builtins.len(results)),
-            '重复运行从最后完成日期继续。' if write_database else '仅预览，未连接数据库。'))
+            progress.update(stage, offset+1, _builtins.len(selected), day)
+        progress.finish('完成' if selected else '无需补采')
+        _builtins.print('处理 {} 个指数日，剩余 {}；{}'.format(_builtins.len(results), total-_builtins.len(results),
+            '重复运行按各指数最后完成日继续。' if write_database else '仅预览，未连接数据库。'))
         if return_report:
-            return dict(added=added, skipped=_builtins.len(days)-_builtins.len(pending)+_builtins.len(selected)-added,
-                        remaining=_builtins.len(pending)-_builtins.len(selected), gaps=[], unit='日')
+            return dict(added=added, skipped=skipped+_builtins.len(selected)-added,
+                        remaining=total-_builtins.len(selected), gaps=[], unit='指数日')
         return results
     except HistoryError as exc:
-        progress.finish('失败：本日未提交')
-        raise HistoryError('{}：{} 本日未提交；之前完成日期保留。'.format(current_day or '初始化', exc)) from None
+        progress.finish('失败：本次事务未提交')
+        raise HistoryError('{}：{} 之前完成日期保留。'.format(current_day or '初始化', exc)) from None
     except Exception as exc:
-        progress.finish('失败：本日未提交')
-        raise RuntimeError('{}：估值历史采集中止；{}；本日未提交，之前完成日期保留。'.format(
-            current_day or '初始化', diagnostic(exc, stage))) from None
+        progress.finish('失败：本次事务未提交')
+        raise RuntimeError('{}：{}；之前完成日期保留。'.format(current_day or '初始化', diagnostic(exc, stage))) from None
     except KeyboardInterrupt:
         progress.finish('已中断')
         raise
     finally:
         if engine is not None:
             engine.dispose()
+
 
 if __name__ == '__main__':
     run()
