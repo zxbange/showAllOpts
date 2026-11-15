@@ -3537,7 +3537,7 @@ def _dividend_strategy(_apis, _config):
     if BATCH_SIZE > 3000 or PAGE_SIZE > 3000:
         raise ValueError('batch_size 和 page_size 不得超过 3000。')
     END_DATE = settings['end_date']
-    RULE_VERSION = 'dividend_split_bank_v3'
+    RULE_VERSION = 'dividend_static_fy_v4'
     METHODS = ('classic', 'value', 'bank')
     LIMITS = dict(classic=25, value=25, bank=10)
     Base = declarative_base()
@@ -3656,15 +3656,17 @@ def _dividend_strategy(_apis, _config):
 
     def dividends(codes, day):
         table = finance.STK_XR_XD
-        start3, start1 = day-datetime.timedelta(days=1095), day-datetime.timedelta(days=365)
+        start3 = day-datetime.timedelta(days=1095)
+        fiscal_start, fiscal_end = datetime.date(day.year-1, 1, 1), datetime.date(day.year-1, 12, 31)
         total = {}
-        for offset in _progress_items(range(0, len(codes), BATCH_SIZE), '分红批次'):
+        for offset in _progress_items(range(0, len(codes), BATCH_SIZE), '{}财年分红批次'.format(day.year-1)):
             batch = codes[offset:offset+BATCH_SIZE]
-            fields = ('id', 'code', 'a_registration_date', 'a_xr_date', 'bonus_amount_rmb')
+            fields = ('id', 'code', 'report_date', 'a_registration_date', 'a_xr_date', 'bonus_amount_rmb')
             selection = query(*[getattr(table, f) for f in fields]).filter(
                 table.code.in_(batch),
                 or_(and_(table.a_registration_date >= start3, table.a_registration_date <= day),
-                    and_(table.a_xr_date > start1, table.a_xr_date <= day)))
+                    and_(table.report_date >= fiscal_start, table.report_date <= fiscal_end,
+                         table.a_xr_date <= day)))
             fetch_page = lambda cursor: finance.run_query(selection.filter(table.id > cursor).order_by(table.id).limit(PAGE_SIZE))
             for frame in _source_pages(fetch_page, label='分红明细', progress=_progress_note, fields=fields, page_size=PAGE_SIZE):
                 page = frame.to_dict('records')
@@ -3674,11 +3676,15 @@ def _dividend_strategy(_apis, _config):
                         raise ValueError('分红代码越界。')
                     registration = optional_date(row['a_registration_date'])
                     ex_date = optional_date(row['a_xr_date'])
+                    period = optional_date(row['report_date'])
+                    if period is None or period > day:
+                        raise ValueError('{} 分红报告期缺失或晚于选股日，无法确认所属财年。'.format(code))
                     in3 = registration is not None and start3 <= registration <= day
-                    in1 = ex_date is not None and start1 < ex_date <= day
-                    if not (in3 or in1):
+                    annual = fiscal_start <= period <= fiscal_end and ex_date is not None and ex_date <= day
+                    if not (in3 or annual):
                         raise ValueError('分红日期越界。')
-                    # 只有登记/除息日期已发生的记录；空派现金额沿用原程序按 0 处理。
+                    # 按报告期归属合计上一财年各次分红，不将本年中期或更早财年的派息混入。
+                    # 只计选股日已实施分红，不读取未来方案；cash_1y/数据库同名列保留以兼容旧表。
                     cash = Decimal(0) if pd.isna(row['bonus_amount_rmb']) else number(row['bonus_amount_rmb'])
                     if cash is None or cash < 0:
                         raise ValueError('派现金额无效。')
@@ -3686,7 +3692,7 @@ def _dividend_strategy(_apis, _config):
                     if in3:
                         item['cash_3y'] += cash
                         item['has_3y'] = True
-                    if in1:
+                    if annual:
                         item['cash_1y'] += cash
         return total
 

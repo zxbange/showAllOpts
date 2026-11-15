@@ -25,9 +25,9 @@ class DividendItem(BaseModel):
     industry_code: str | None
     industry_name: str | None
     industry_level: str | None
-    dividend_yield_1y: float
+    dividend_yield_static: float = Field(validation_alias='dividend_yield_1y')
     dividend_ratio_3y: float
-    dividend_cash_1y: float
+    dividend_cash_annual: float = Field(validation_alias='dividend_cash_1y')
     dividend_cash_3y: float
     pe_ttm: float
     pb: float | None

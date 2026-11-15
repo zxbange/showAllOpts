@@ -30,6 +30,7 @@ class DividendStock(Base):
     industry_code = Column(String(32), nullable=True)
     industry_name = Column(String(128), nullable=True)
     industry_level = Column(String(16), nullable=True)
+    # v4 起 *_1y 兼容列存上一财年已实施分红及静态股息率，由快照 rule_version 区分。
     dividend_yield_1y = Column(Numeric(24, 6), nullable=False)
     dividend_ratio_3y = Column(Numeric(24, 6), nullable=False)
     dividend_cash_1y = Column(Numeric(28, 6), nullable=False)

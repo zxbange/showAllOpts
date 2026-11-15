@@ -30,7 +30,7 @@ export function DividendPage() {
   )
   const classic = method === 'classic'
   const limit = method === 'bank' ? 10 : 25
-  const metric = (s: DividendItem) => (classic ? s.dividend_ratio_3y : s.dividend_yield_1y)
+  const metric = (s: DividendItem) => (classic ? s.dividend_ratio_3y : s.dividend_yield_static)
   const maxYield = Math.max(1, ...(group?.items ?? []).map(metric))
   return (
     <div className="page-enter dividend-page">
@@ -69,7 +69,7 @@ export function DividendPage() {
         <>
           {data.requires_refresh && (
             <p role="status" className="method-card">
-              当前为旧版混合名单。请运行新版高股息采集脚本并同步，生成银行与非银行的独立排名。
+              股息率口径已更新，请运行新版高股息采集脚本并同步。
             </p>
           )}
           <div className="stats-grid">
@@ -86,10 +86,14 @@ export function DividendPage() {
               accent
             />
             <StatCard
-              label={classic ? '最高三年累计分红比例' : '最高近一年股息率'}
+              label={classic ? '最高三年累计分红比例' : '最高静态股息率'}
               value={number(group?.items[0] ? metric(group.items[0]) : null)}
               suffix="%"
-              note={classic ? '累计比例，未年化' : '已除息现金分红 / 总市值'}
+              note={
+                classic
+                  ? '累计比例，未年化'
+                  : `${Number(data.snapshot.trade_date.slice(0, 4)) - 1} 财年分红 / 当前市值`
+              }
               icon={<Coins size={18} />}
             />
             <StatCard
@@ -114,7 +118,7 @@ export function DividendPage() {
                   {group?.name} · 前 {limit} 名
                 </h2>
                 <p>
-                  {classic ? '按三年累计分红比例降序' : '按近一年股息率降序'}，同值按代码排序。不足
+                  {classic ? '按三年累计分红比例降序' : '按静态股息率降序'}，同值按代码排序。不足
                   {limit} 只不放宽条件。
                 </p>
               </div>
@@ -142,10 +146,10 @@ export function DividendPage() {
                 展示 {items.length} / {group?.items.length ?? 0} 只
               </span>
             </div>
-            {data.requires_refresh && !classic ? (
+            {data.requires_refresh ? (
               <EmptyState
-                title="请更新分组名单"
-                description="旧版混合前25只无法还原两组独立排名，请重新采集并同步。"
+                title="请更新静态股息率"
+                description="重新采集后显示上一财年的股息率与选股结果。"
               />
             ) : !group?.items.length ? (
               <EmptyState title="本组暂无符合条件的股票" description="本次无股票满足全部条件。" />
@@ -167,8 +171,8 @@ export function DividendPage() {
                     <tr>
                       <th>排名 / 股票</th>
                       <th>细分行业</th>
-                      <th>{classic ? '三年累计分红比例' : '近一年股息率'}</th>
-                      <th>{classic ? '近一年股息率' : '三年累计分红比例'}</th>
+                      <th>{classic ? '三年累计分红比例' : '静态股息率'}</th>
+                      <th>{classic ? '静态股息率' : '三年累计分红比例'}</th>
                       <th>PE / PB</th>
                       <th>总市值 / 亿元</th>
                       <th>收盘价 / 元</th>
@@ -207,7 +211,9 @@ export function DividendPage() {
                             </span>
                           </div>
                         </td>
-                        <td>{number(classic ? s.dividend_yield_1y : s.dividend_ratio_3y, '%')}</td>
+                        <td>
+                          {number(classic ? s.dividend_yield_static : s.dividend_ratio_3y, '%')}
+                        </td>
                         <td>
                           {number(s.pe_ttm)} / {number(s.pb)}
                         </td>
@@ -245,9 +251,9 @@ export function DividendPage() {
                 4.5%。最后按三年累计分红比例取前 25。
               </p>
               <p>
-                高股息低估值：按除息日统计近 365 天现金分红，要求股息率 &gt; 4%、0 &lt; PE &lt;
+                高股息低估值：上一财年现金分红 / 当前总市值，要求静态股息率 &gt; 4%、0 &lt; PE &lt;
                 8；按当日申万一级行业区分银行与非银行，分别按股息率取前 10 和前 25 只。
-                不附加纯高股息的成长条件。分红比例均以所选交易日总市值为分母，三年累计比例未年化。
+                分红按所属财年合计，仅计选股日已实施部分；三年累计比例未年化。
               </p>
               <span>
                 三组均剔除 4、8 开头、ST 及名称含 ST、*、退的股票，保留科创板、停牌和涨跌停股票。

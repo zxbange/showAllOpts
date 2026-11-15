@@ -35,7 +35,7 @@ def test_latest_order_units_overlap_and_single_read_only_query(client,session,en
     assert response.status_code==200
     data=response.json()
     assert [r['rank'] for r in data['groups'][0]['items']]==[1,2]
-    assert data['groups'][0]['items'][0]['dividend_yield_1y']==5
+    assert data['groups'][0]['items'][0]['dividend_yield_static']==5
     assert data['overlap_codes']==['000001.XSHE']
     assert len(statements)==1 and statements[0].lstrip().startswith('SELECT')
     assert client.post('/api/v1/dividend-selection/latest').status_code==405
@@ -62,12 +62,13 @@ def test_bank_group_and_overlap_with_either_value_group(client,session):
     assert data['groups'][1]['candidates'] is None
 
 
-def test_legacy_mixed_top25_is_not_mislabeled_as_nonbank(client,session):
+@pytest.mark.parametrize('version', ['dividend_top25_v2', 'dividend_split_bank_v3'])
+def test_legacy_yields_are_not_mislabeled_as_static(client,session,version):
     seed(session)
-    session.get(DividendSnapshot, 1).rule_version='dividend_top25_v2'
+    session.get(DividendSnapshot, 1).rule_version=version
     session.commit()
     data=client.get('/api/v1/dividend-selection/latest').json()
     assert data['requires_refresh'] is True
-    assert len(data['groups'][0]['items']) == 1
+    assert not data['groups'][0]['items']
     assert not data['groups'][1]['items'] and not data['groups'][2]['items']
     assert not data['overlap_codes']

@@ -10,9 +10,9 @@ function stock(method: string, i: number) {
     industry_code: 'test',
     industry_name: method === 'bank' ? '银行' : '公用事业',
     industry_level: 'sw_l3',
-    dividend_yield_1y: 8 - i * 0.1,
+    dividend_yield_static: 8 - i * 0.1,
     dividend_ratio_3y: 20 - i * 0.2,
-    dividend_cash_1y: 50000,
+    dividend_cash_annual: 50000,
     dividend_cash_3y: 150000,
     pe_ttm: 6.5,
     pb: 1.1,
@@ -34,7 +34,7 @@ const groups = ['classic', 'value', 'bank'].map((id) => ({
       : id === 'bank'
         ? '高股息低估值（银行业）'
         : '高股息低估值（非银行业）',
-  ranking_field: id === 'classic' ? 'dividend_ratio_3y' : 'dividend_yield_1y',
+  ranking_field: id === 'classic' ? 'dividend_ratio_3y' : 'dividend_yield_static',
   candidates: id === 'classic' ? 60 : null,
   items: Array.from({ length: id === 'bank' ? 10 : 25 }, (_, i) => stock(id, i)),
 }))
@@ -42,7 +42,7 @@ const fixture = {
   snapshot: {
     trade_date: '2026-10-16',
     updated_at: '2026-10-16T17:30:00',
-    rule_version: 'dividend_split_bank_v3',
+    rule_version: 'dividend_static_fy_v4',
     universe_count: 5000,
     eligible_count: 4000,
     classic_candidates: 60,
@@ -79,7 +79,7 @@ test('dividend module switches rules, searches and shows overlap on desktop/mobi
   await expect(page.locator('tbody tr').first()).toContainText('000100.XSHE')
   await page.getByRole('link', { name: /高股息低估值（非银行业）/ }).click()
   await expect(page.locator('tbody tr')).toHaveCount(25)
-  await expect(page.locator('thead th').nth(2)).toHaveText('近一年股息率')
+  await expect(page.locator('thead th').nth(2)).toHaveText('静态股息率')
   await expect(page.locator('tbody tr').first()).toContainText('000010.XSHE')
   await page.getByRole('checkbox', { name: '只看两种口径共同入选' }).check()
   await expect(page.locator('tbody tr')).toHaveCount(16)
@@ -140,20 +140,22 @@ test('dividend uncollected, legitimate zero results and retry states', async ({ 
   await expect(page.locator('tbody tr')).toHaveCount(25)
 })
 
-test('legacy mixed results require collection before bank groups are shown', async ({ page }) => {
+test('legacy trailing yields are hidden until static results are collected', async ({ page }) => {
   await page.route('**/api/v1/dividend-selection/latest', (route) =>
     route.fulfill({
       json: {
         ...fixture,
         requires_refresh: true,
-        groups: groups.map((g) => (g.id === 'classic' ? g : { ...g, items: [] })),
+        groups: groups.map((g) => ({ ...g, items: [] })),
+        overlap_codes: [],
       },
     }),
   )
   await page.goto('/dividend-selection')
-  await expect(page.getByRole('status')).toContainText('当前为旧版混合名单')
-  await expect(page.locator('tbody tr')).toHaveCount(25)
+  await expect(page.getByRole('status')).toContainText('股息率口径已更新')
+  await expect(page.locator('tbody tr')).toHaveCount(0)
+  await expect(page.getByRole('heading', { name: '请更新静态股息率' })).toBeVisible()
   await page.getByRole('link', { name: /高股息低估值（非银行业）/ }).click()
-  await expect(page.getByRole('heading', { name: '请更新分组名单' })).toBeVisible()
+  await expect(page.getByRole('heading', { name: '请更新静态股息率' })).toBeVisible()
   await expect(page.locator('tbody tr')).toHaveCount(0)
 })

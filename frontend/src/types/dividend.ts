@@ -7,9 +7,9 @@ export interface DividendItem {
   industry_code: string | null
   industry_name: string | null
   industry_level: string | null
-  dividend_yield_1y: number
+  dividend_yield_static: number
   dividend_ratio_3y: number
-  dividend_cash_1y: number
+  dividend_cash_annual: number
   dividend_cash_3y: number
   pe_ttm: number
   pb: number | null

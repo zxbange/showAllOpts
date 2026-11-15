@@ -47,7 +47,7 @@ def ns(module):
 
 
 def meta(**changes):
-    return dict(dict(trade_date=DAY, rule_version='dividend_split_bank_v3', universe_count=5000, eligible_count=4000,
+    return dict(dict(trade_date=DAY, rule_version='dividend_static_fy_v4', universe_count=5000, eligible_count=4000,
                 classic_candidates=1, value_candidates=1, classic_count=1, value_count=1), **changes)
 
 
@@ -191,27 +191,102 @@ def test_failed_replacement_rolls_back_both_lists(ns):
 
 def test_dividend_dates_pagination_and_truncation_protection(module):
     table=Table('payout',MetaData(),Column('id',Integer),Column('code',String),Column('a_registration_date',Date),
-                Column('a_xr_date',Date),Column('bonus_amount_rmb',Numeric))
+                Column('a_xr_date',Date),Column('report_date',Date),Column('bonus_amount_rmb',Numeric))
     class Query:
         def filter(self, *conditions): return self
         def order_by(self, *columns): return self
         def limit(self, size): return size
     q = lambda *fields: Query()
-    columns=['id','code','a_registration_date','a_xr_date','bonus_amount_rmb']
-    source=[dict(id=1,code='a',a_registration_date=DAY-dt.timedelta(days=500),a_xr_date=DAY-dt.timedelta(days=499),bonus_amount_rmb=200),
-            dict(id=2,code='a',a_registration_date=DAY-dt.timedelta(days=1),a_xr_date=DAY,bonus_amount_rmb=300),
-            dict(id=3,code='b',a_registration_date=DAY,a_xr_date=DAY+dt.timedelta(days=1),bonus_amount_rmb=400),
-            dict(id=4,code='a',a_registration_date=DAY-dt.timedelta(days=365),a_xr_date=DAY-dt.timedelta(days=365),bonus_amount_rmb=1000)]
+    columns=['id','code','report_date','a_registration_date','a_xr_date','bonus_amount_rmb']
+    source=[dict(id=1,code='a',report_date=dt.date(2024,12,31),a_registration_date=DAY-dt.timedelta(days=500),a_xr_date=DAY-dt.timedelta(days=499),bonus_amount_rmb=200),
+            dict(id=2,code='a',report_date=dt.date(2025,12,31),a_registration_date=DAY-dt.timedelta(days=1),a_xr_date=DAY,bonus_amount_rmb=300),
+            dict(id=3,code='b',report_date=dt.date(2025,12,31),a_registration_date=DAY,a_xr_date=DAY+dt.timedelta(days=1),bonus_amount_rmb=400),
+            dict(id=4,code='a',report_date=dt.date(2025,6,30),a_registration_date=DAY-dt.timedelta(days=365),a_xr_date=DAY-dt.timedelta(days=365),bonus_amount_rmb=1000)]
     calls=[]
     pages=iter([Frame(source[:2],columns),Frame(source[2:],columns),Frame([],columns)])
     def fetch(query):calls.append(query);return next(pages)
     ns=module._dividend_strategy(dict(query=q,finance=SimpleNamespace(STK_XR_XD=table.c,run_query=fetch)),module.DB_CONFIG)
     result=ns.dividends(['a','b'],DAY)
     assert len(calls)==3  # even a short page is followed until confirmed empty
-    assert result['a']['cash_1y']==300 and result['a']['cash_3y']==1500
+    assert result['a']['cash_1y']==1300 and result['a']['cash_3y']==1500
     assert result['b']['cash_1y']==0 and result['b']['cash_3y']==400
     pages=iter([Frame(source[:2],columns),Frame(source[:2],columns)])
     with pytest.raises(ValueError,match='分页'):ns.dividends(['a','b'],DAY)
+
+
+@pytest.mark.parametrize('day,annual_cash', [
+    (dt.date(2026,11,13), Decimal('3103')),
+    (dt.date(2027,1,4), Decimal('1511')),
+])
+def test_static_yield_sums_report_year_not_payment_window(module,day,annual_cash):
+    from sqlalchemy import select
+    metadata=MetaData()
+    table=Table('payout',metadata,Column('id',Integer,primary_key=True),Column('code',String),
+                Column('report_date',Date),Column('a_registration_date',Date),
+                Column('a_xr_date',Date),Column('bonus_amount_rmb',Numeric))
+    engine=create_engine('sqlite://')
+    metadata.create_all(engine)
+    payouts=[
+        # One year contains three payments, but only two belong to FY2025.
+        (1,dt.date(2025,6,30),dt.date(2025,12,15),1414),
+        (2,dt.date(2025,12,31),dt.date(2026,5,13),1689),
+        (3,dt.date(2026,6,30),dt.date(2026,10,21),1511),
+        # A delayed older-year payment must not enter the static numerator.
+        (4,dt.date(2024,12,31),dt.date(2026,6,1),9999),
+        # Future payments / proposals are not observable as implemented dividends.
+        (5,dt.date(2025,12,31),dt.date(2027,2,1),8888),
+        (6,dt.date(2025,12,31),None,7777),
+    ]
+    with engine.begin() as connection:
+        connection.execute(table.insert(), [dict(id=i,code='601398.XSHG',report_date=period,
+            a_registration_date=ex-dt.timedelta(days=1) if ex else None,
+            a_xr_date=ex,bonus_amount_rmb=cash) for i,period,ex,cash in payouts])
+    def fetch(q):
+        with engine.connect() as connection:
+            result=connection.execute(q)
+            columns=list(result.keys())
+            return Frame([dict(zip(columns,r)) for r in result],columns)
+    try:
+        ns=module._dividend_strategy(dict(query=select,finance=SimpleNamespace(
+            STK_XR_XD=table.c,run_query=fetch)),module.DB_CONFIG)
+        cash=ns.dividends(['601398.XSHG'],day)
+        assert cash['601398.XSHG']['cash_1y']==annual_cash
+        selected,ratios,_=ns.select({'601398.XSHG':dict(market_cap=Decimal('8.85'),pe_ratio=7)},
+                                  cash,{}, {'601398.XSHG'})
+        assert ratios['601398.XSHG'][0]==annual_cash/100/Decimal('8.85')
+        assert selected['bank']==[]  # FY2025 is 3.51%, not the 5.21% trailing yield.
+    finally:
+        engine.dispose()
+
+
+def test_missing_dividend_report_year_is_not_silently_used(module):
+    from sqlalchemy import select
+    table=Table('payout',MetaData(),Column('id',Integer),Column('code',String),
+                Column('report_date',Date),Column('a_registration_date',Date),
+                Column('a_xr_date',Date),Column('bonus_amount_rmb',Numeric))
+    record=dict(id=1,code='a',report_date=None,a_registration_date=DAY,
+                a_xr_date=DAY,bonus_amount_rmb=50000)
+    ns=module._dividend_strategy(dict(query=select,finance=SimpleNamespace(
+        STK_XR_XD=table.c,run_query=lambda q:Frame([record]))),module.DB_CONFIG)
+    with pytest.raises(ValueError,match='分红报告期缺失'):
+        ns.dividends(['a'],DAY)
+
+
+def test_rule_upgrade_replaces_old_yields_even_on_same_day(ns):
+    engine=create_engine('sqlite://')
+    ns.Base.metadata.create_all(engine)
+    Session=sessionmaker(bind=engine)
+    try:
+        old=meta(rule_version='dividend_split_bank_v3')
+        ns.save_latest(Session,old,[row(),row('bank')])
+        current=meta(value_count=0,value_candidates=0)
+        assert ns.save_latest(Session,current,[row(dividend_yield_1y=Decimal('3.51'))])
+        with Session() as db:
+            assert db.get(ns.DividendSnapshot,1).rule_version=='dividend_static_fy_v4'
+            assert db.query(ns.DividendStock).count()==1
+            assert db.query(ns.DividendStock).first().dividend_yield_1y==Decimal('3.51')
+    finally:
+        engine.dispose()
 
 
 @pytest.mark.parametrize('preferred', ['000002.XSHE', '000003.XSHE', '000004.XSHE', '688001.XSHG'])
@@ -222,7 +297,7 @@ def test_end_to_end_source_dates_filters_recompute_and_failure_keeps_snapshot(mo
     ind=Table('ind',metadata,Column('code',String),Column('inc_total_revenue_year_on_year',Numeric),
               Column('inc_net_profit_year_on_year',Numeric),Column('inc_return',Numeric),Column('statDate',Date),Column('pubDate',Date))
     payout=Table('payout',metadata,Column('id',Integer),Column('code',String),Column('a_registration_date',Date),
-                 Column('a_xr_date',Date),Column('bonus_amount_rmb',Numeric))
+                 Column('a_xr_date',Date),Column('report_date',Date),Column('bonus_amount_rmb',Numeric))
     codes=['{:06d}.XSHE'.format(i) for i in range(40)]+['688001.XSHG','800001.XBSE']
     class Universe(Frame):
         def iterrows(self):
@@ -247,8 +322,8 @@ def test_end_to_end_source_dates_filters_recompute_and_failure_keeps_snapshot(mo
         params=q.compile().params
         batch=next(v for v in params.values() if isinstance(v,list))
         after=next(v for k,v in params.items() if k.startswith('id_'))
-        columns=['id','code','a_registration_date','a_xr_date','bonus_amount_rmb']
-        return Frame([dict(id=i+1,code=c,a_registration_date=DAY-dt.timedelta(days=1),a_xr_date=DAY,bonus_amount_rmb=100000 if c==preferred else 50000)
+        columns=['id','code','report_date','a_registration_date','a_xr_date','bonus_amount_rmb']
+        return Frame([dict(id=i+1,code=c,report_date=dt.date(2025,12,31),a_registration_date=DAY-dt.timedelta(days=1),a_xr_date=DAY,bonus_amount_rmb=100000 if c==preferred else 50000)
                       for i,c in enumerate(batch) if i+1>after],columns)
     apis=dict(query=select,valuation=val.c,indicator=ind.c,
               finance=SimpleNamespace(STK_XR_XD=payout.c,run_query=dividends),

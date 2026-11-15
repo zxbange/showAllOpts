@@ -46,7 +46,7 @@
 - 微盘温度计：`start_date='2021-01-01'`、`micro_num=1000`、`batch_size=1000`，固定按每日完整交易日采集。
 - 微盘新高新低：首次近 180 个自然日、`micro_num=400`，每天采样，后续只新增并保留历史；配置组包含 `initial_days`、`batch_size`、`price_batch_size`。详见 [微盘新高新低说明](microcap-breadth.md)。
 - 高增长：`end_date=None`、`batch_size=100`、`page_size=2000`；累计归母净利润与基本 EPS 四类报告筛选，规则见 [高增长说明](high-growth.md)。
-- 高股息选股：`end_date=None`、`batch_size=300`、`page_size=2000`；纯高股息25只、低估值非银行25只、银行10只，见 [高股息选股说明](dividend-selection.md)。
+- 高股息选股：`end_date=None`、`batch_size=300`、`page_size=2000`；静态股息率按上一财年已实施分红 / 当前市值计算；纯高股息25只、低估值非银行25只、银行10只，见 [高股息选股说明](dividend-selection.md)。
 - 净利润断层：按上次成功检查日期至本次收盘日的披露增量筛选，报告期为最新已结束季度，`page_size=1000`。零命中也记录检查日期，同日重复运行跳过公告筛选；空库首次只检查最新收盘日。
 - 估值标尺：`start_date='2010-01-01'`、`end_date=None`、`max_days=None`、`indices=('000300.XSHG', '000016.XSHG', '000852.XSHG')`；默认一次补齐，按各指数最后完成日续采。
 - 创红比：`start_date='2018-01-01'`，首次补2018起三条指数的可见历史；传入 None 也使用2018起点。`window_days=250`、`max_days=20000`、`max_windows=1000`。日常补中间缺口及新日期；`retry_earlier_missing=False` 跳过已有起点之前的未知空白，手动复查区间内早期数据可改为 True。
