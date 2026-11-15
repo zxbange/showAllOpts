@@ -6516,27 +6516,39 @@ def _growth_dividend_strategy(_apis, _config):
                 engine = (engine_factory or database)()
                 engine.echo = False
                 engine.hide_parameters = True
-                metadata.create_all(engine)
                 with engine.connect() as conn:
+                    progress('数据库已连接：检查创红比表结构')
+                    metadata.create_all(conn)
                     check_schema(conn)
             stored = {code: set() for code in CODES}
             if engine:
+                progress('创红比：读取已有指数日期')
                 with engine.connect() as conn:
                     keys = select([PRICES.c.index_code, PRICES.c.trade_date]) if sqlalchemy.__version__.startswith('1.') else select(PRICES.c.index_code, PRICES.c.trade_date)
                     for code, day in conn.execute(keys.where((PRICES.c.trade_date >= days[0]) & (PRICES.c.trade_date <= days[-1]))):
                         if code in stored:
                             stored[code].add(day)
             if engine:
+                progress('创红比：读取已保存交易日历')
+                calendar_keys = CALENDAR.select().with_only_columns(
+                    [CALENDAR.c.trade_date] if sqlalchemy.__version__.startswith('1.') else CALENDAR.c.trade_date)
                 with engine.connect() as conn:
-                    saved_days = {row[0] for row in conn.execute(CALENDAR.select().with_only_columns(
-                        [CALENDAR.c.trade_date] if sqlalchemy.__version__.startswith('1.') else CALENDAR.c.trade_date))}
-                for day in days:
-                    if day in saved_days:
-                        continue
+                    saved_days = {row[0] for row in conn.execute(calendar_keys.where(
+                        (CALENDAR.c.trade_date >= days[0]) & (CALENDAR.c.trade_date <= days[-1])))}
+                pending_days = [day for day in days if day not in saved_days]
+                for offset in range(0, len(pending_days), 250):
                     check_cancel()
+                    target_days = pending_days[offset:offset + 250]
+                    progress('创红比：补写交易日历 {}/{} 日'.format(offset, len(pending_days)))
                     with engine.begin() as conn:
-                        if conn.execute(CALENDAR.select().where(CALENDAR.c.trade_date == day)).first() is None:
-                            conn.execute(CALENDAR.insert().values(trade_date=day, source=CALENDAR_SOURCE, updated_at=_growth_datetime.utcnow()))
+                        # 重读本批键，保留其他任务已写入的日历；每批一起提交。
+                        existing = {row[0] for row in conn.execute(calendar_keys.where(CALENDAR.c.trade_date.in_(target_days)))}
+                        now = _growth_datetime.utcnow()
+                        rows = [dict(trade_date=day, source=CALENDAR_SOURCE, updated_at=now)
+                                for day in target_days if day not in existing]
+                        if rows:
+                            conn.execute(CALENDAR.insert(), rows)
+                    progress('创红比：补写交易日历 {}/{} 日'.format(offset + len(target_days), len(pending_days)))
             windows = 0
             for code in CODES:
                 observed = []
@@ -6566,12 +6578,12 @@ def _growth_dividend_strategy(_apis, _config):
                                 continue
                             quotes[day] = positive(row['close'])
                     observed.extend(quotes)
+                    if engine:
+                        progress('{}：写入 {} 至 {} 行情（{} 条）'.format(code, target[0], target[-1], len(quotes)))
                     for day in target:
                         check_cancel()
                         if engine:
                             with engine.begin() as conn:
-                                if conn.execute(CALENDAR.select().where(CALENDAR.c.trade_date == day)).first() is None:
-                                    conn.execute(CALENDAR.insert().values(trade_date=day, source=CALENDAR_SOURCE, updated_at=_growth_datetime.utcnow()))
                                 if day in quotes and conn.execute(PRICES.select().where((PRICES.c.index_code == code) & (PRICES.c.trade_date == day))).first() is None:
                                     conn.execute(PRICES.insert().values(index_code=code, trade_date=day, close=quotes[day], source=SOURCE, updated_at=_growth_datetime.utcnow()))
                                     report['added'] += 1

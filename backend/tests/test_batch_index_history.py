@@ -6,7 +6,7 @@ from types import ModuleType, SimpleNamespace
 
 import pandas as pd
 import pytest
-from sqlalchemy import func, select, text
+from sqlalchemy import event, func, select, text
 
 from test_collector_batch import CONFIG, load
 from app.services import growth_dividend_import as growth
@@ -219,3 +219,77 @@ def test_growth_default_starts_in_2018_and_preserves_older_rows(collectors, entr
         stored = conn.execute(select(growth.CALENDAR.c.trade_date).order_by(growth.CALENDAR.c.trade_date)).scalars().all()
         assert stored == [old_day, first] + DAYS
         assert conn.scalar(select(growth.PRICES.c.close).where(growth.PRICES.c.trade_date == old_day)) == 1234
+
+
+def prepare_growth_calendar_gap(c):
+    """已有行情、缺少日历，验证补日历不会逐日往返或重采行情。"""
+    days = list(pd.bdate_range('2024-01-02', periods=502).date)
+    growth.metadata.create_all(c.engine)
+    with c.engine.begin() as conn:
+        conn.execute(growth.PRICES.insert(), [dict(index_code=code, trade_date=day,
+            close=4000, source=growth.SOURCE, updated_at=dt.datetime(2024, 1, 1))
+            for code in ('399006.XSHE', '000922.XSHG', '000688.XSHG') for day in days])
+        conn.execute(growth.CALENDAR.insert().values(trade_date=days[0],
+            source=growth.CALENDAR_SOURCE, updated_at=dt.datetime(2024, 1, 1)))
+    c.apis['get_trade_days'] = lambda **kwargs: days
+    c.apis['get_price'] = lambda *args, **kwargs: pytest.fail('已有行情不应重采')
+    c.options['创红比'] = dict(start_date=str(days[0]), end_date=str(days[-1]))
+    return days
+
+
+@pytest.mark.parametrize('entry', ['standalone', 'batch'])
+def test_growth_calendar_bulk_fill_preserves_existing_and_reports_actual_stages(collectors, monkeypatch, entry):
+    c = collectors
+    days = prepare_growth_calendar_gap(c)
+    statements, stages = [], []
+    def record(conn, cursor, statement, parameters, context, executemany):
+        statements.append(statement)
+    event.listen(c.engine, 'before_cursor_execute', record)
+    monkeypatch.setattr(c.batch, '_progress_note', stages.append)
+    module = load(ROOT / 'collectors/创红比历史补采_聚宽研究版.py', 'growth_calendar_bulk')
+    def collect():
+        if entry == 'batch':
+            assert run(c, ['创红比'])[0]['status'] == 'SUCCESS'
+        else:
+            module.run(**c.options['创红比'], preview=False, api_namespace=c.apis,
+                       engine_factory=lambda: c.engine, progress=stages.append)
+    try:
+        collect()
+        calendar_sql = [s for s in statements if 'growth_dividend_trading_day' in s
+                        and s.startswith(('SELECT', 'INSERT'))]
+        assert len(calendar_sql) == 7  # 一次清单 + 三批各一次查询和写入。
+        assert stages.index('数据库已连接：检查创红比表结构') < stages.index('创红比：读取已有指数日期')
+        assert '创红比：补写交易日历 501/501 日' in stages
+        statements.clear()
+        collect()
+        assert not any(s.startswith(('INSERT', 'UPDATE', 'DELETE')) for s in statements)
+        with c.engine.connect() as conn:
+            assert conn.scalar(select(func.count()).select_from(growth.CALENDAR)) == len(days)
+            assert conn.scalar(select(growth.CALENDAR.c.updated_at).where(
+                growth.CALENDAR.c.trade_date == days[0])) == dt.datetime(2024, 1, 1)
+    finally:
+        event.remove(c.engine, 'before_cursor_execute', record)
+
+
+@pytest.mark.parametrize('failure', ['cancel', 'write'])
+def test_growth_calendar_partial_run_resumes_without_losing_committed_batches(collectors, failure):
+    c = collectors
+    days = prepare_growth_calendar_gap(c)
+    module = load(ROOT / 'collectors/创红比历史补采_聚宽研究版.py', 'growth_calendar_resume')
+    if failure == 'write':
+        with c.engine.begin() as conn:
+            conn.exec_driver_sql("CREATE TRIGGER fail_calendar BEFORE INSERT ON growth_dividend_trading_day "
+                "WHEN NEW.trade_date = '{}' BEGIN SELECT RAISE(ABORT, 'test failure'); END".format(days[300]))
+    def progress(message):
+        if failure == 'cancel' and message == '创红比：补写交易日历 250/501 日':
+            raise KeyboardInterrupt()
+    kwargs = dict(c.options['创红比'], preview=False, api_namespace=c.apis, engine_factory=lambda: c.engine)
+    with pytest.raises(KeyboardInterrupt if failure == 'cancel' else RuntimeError):
+        module.run(progress=progress, **kwargs)
+    with c.engine.begin() as conn:
+        assert conn.scalar(select(func.count()).select_from(growth.CALENDAR)) == 251
+        if failure == 'write':
+            conn.exec_driver_sql('DROP TRIGGER fail_calendar')
+    module.run(**kwargs)
+    with c.engine.connect() as conn:
+        assert conn.scalar(select(func.count()).select_from(growth.CALENDAR)) == len(days)
