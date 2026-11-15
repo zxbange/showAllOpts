@@ -104,7 +104,7 @@ def create_app(settings: Settings | None = None, engine: Engine | None = None) -
             cci_coal = CCICoal(settings)
             cleanup.push_async_callback(stop_worker, 'cci_coal', cci_coal)
             application.state.cci_coal = cci_coal
-            cash_cow = {years: CashCowScreen(settings, years=years) for years in (3, 5, 10)}
+            cash_cow = {years: CashCowScreen(settings, years=years, cache=cache) for years in (3, 5, 10)}
             for screen in cash_cow.values():
                 cleanup.push_async_callback(stop_worker, f'cash_cow_{screen.years}', screen)
             application.state.cash_cow = cash_cow

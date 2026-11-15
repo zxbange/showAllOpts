@@ -50,6 +50,51 @@ def record(c, period=dt.date(2026, 9, 30), code='600001.XSHG'):
     return result
 
 
+@pytest.mark.parametrize('count', [0, 2, 5])
+def test_incremental_disclosures_use_unsorted_short_query_and_paginate_only_large_windows(c, count):
+    from sqlalchemy import Column, Date, Integer
+    class Disclosure(c.env['Base']):
+        __tablename__ = 'test_incremental_disclosure'
+        id = Column(Integer, primary_key=True)
+        pub_date = Column(Date)
+    c.env['Base'].metadata.create_all(c.engine)
+    day = dt.date(2026, 11, 12)
+    c.env['PAGE_SIZE'] = 3
+    statements = []
+    with c.Session() as session:
+        session.add(Disclosure(id=1, pub_date=day-dt.timedelta(days=1)))
+        session.add_all([Disclosure(id=i+2, pub_date=day) for i in range(count)])
+        session.commit()
+        c.env['query'] = session.query
+        def fetch(q):
+            statements.append(str(q))
+            columns = [col['name'] for col in q.column_descriptions]
+            return Frame([dict(zip(columns, row)) for row in q.all()], columns)
+        rows = list(c.env['paged'](Disclosure, [Disclosure.pub_date >= day], fetch,
+                                  columns=('pub_date',), small_window=True))
+    assert {row['id'] for row in rows} == set(range(2, count+2))
+    assert 'count(' in statements[0] and 'ORDER BY' not in statements[0]
+    if count <= 3:
+        assert len(statements) == (1 if count == 0 else 2)
+        assert all('ORDER BY' not in sql and 'id >' not in sql for sql in statements)
+    else:
+        assert len(statements) == 4  # count, two pages, final empty page
+        assert all('ORDER BY' in sql for sql in statements[1:])
+
+
+@pytest.mark.parametrize('rows', [[{'id': 1}], [{'id': 1}, {'id': 1}]])
+def test_incremental_disclosure_truncation_or_duplicates_cannot_be_accepted(c, rows):
+    from sqlalchemy import Column, Integer
+    class Disclosure(c.env['Base']):
+        __tablename__ = 'test_truncated_disclosure'
+        id = Column(Integer, primary_key=True)
+    with c.Session() as session:
+        c.env['query'] = session.query
+        responses = iter([Frame([{'row_count': 2}]), Frame(rows)])
+        with pytest.raises(ValueError, match='截断或源数据正在变化'):
+            list(c.env['paged'](Disclosure, [], lambda q: next(responses), small_window=True))
+
+
 def test_schema_parity(c):
     for local, web in [(c.env['EarningsStock'], WebStock), (c.env['EarningsRun'], WebRun)]:
         assert [(x.name, str(x.type), x.primary_key, x.nullable) for x in local.__table__.columns] == [

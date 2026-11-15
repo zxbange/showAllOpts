@@ -39,6 +39,7 @@ from app.models.etf import ETFShare
 from app.models.earnings import EarningsRun, EarningsStock
 from app.models.breadth import MicrocapBreadth
 from app.models.dividend import DividendSnapshot, DividendStock
+from app.models.cash_cow import CashCowSnapshot
 
 logger = logging.getLogger(__name__)
 CHINA = timezone(timedelta(hours=8))
@@ -52,6 +53,7 @@ MODULES = {
     'earnings-gap': ('净利润断层', (EarningsRun, EarningsStock)),
     'microcap-breadth': ('微盘新高新低', (MicrocapBreadth,)),
     'dividend-selection': ('高股息选股', (DividendSnapshot, DividendStock)),
+    'cash-cow': ('奶牛股', (CashCowSnapshot,)),
     'high-growth': ('高增长', (GrowthSnapshot, GrowthStock)),
     'etf-momentum': ('ETF动量热度', (Pool, Heat)),
     'institution-ownership': ('个股机构持仓', (OwnershipStock, OwnershipReport, OwnershipHolders)),
@@ -87,7 +89,7 @@ class SnapshotCache:
         initial = settings.database_url
         self.legacy_target_identity = database_identity(dict(host=initial.host, port=initial.port or 3306, database=initial.database))
         schema = [(key, [(m.__tablename__, [(c.name, str(c.type)) for c in m.__table__.columns])
-                         for m in models]) for key, (_, models) in MODULES.items() if key != 'market-sentiment' and key not in HISTORY_MODULES]
+                         for m in models]) for key, (_, models) in MODULES.items() if key not in ('market-sentiment', 'cash-cow') and key not in HISTORY_MODULES]
         # Preserve the pre-existing cache namespace and ownership resume checkpoint.
         # Sentiment owns separate files; removing retired modules must not reset other snapshots.
         source_url = settings.database_url if self.unified_source else source.url
@@ -331,6 +333,9 @@ class SnapshotCache:
             engine.dispose()
 
     def validate_module(self, module, target):
+        if module == 'cash-cow':
+            from app.services.cash_cow_import import validate_snapshot
+            validate_snapshot(target)
         if module == 'etf-momentum':
             from app.core.etf_snapshot import validate_etf_snapshot
             validate_etf_snapshot(target)

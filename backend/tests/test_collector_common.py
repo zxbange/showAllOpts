@@ -84,6 +84,37 @@ def test_source_error_is_not_silently_treated_as_eof(batch):
     assert calls == [-1, 1]
 
 
+def test_file_descriptor_exhaustion_retries_same_read_cursor_once(batch, monkeypatch):
+    calls, recovered, messages = [], [], []
+    monkeypatch.setattr(batch.gc, 'collect', lambda: recovered.append(True))
+    monkeypatch.setattr(batch.os, 'listdir', lambda path: ['1', '2'])
+    def fetch(cursor):
+        calls.append(cursor)
+        if len(calls) == 1:
+            return pd.DataFrame({'id': [1]})
+        if len(calls) == 2:
+            raise OSError(24, 'Too many open files')
+        if len(calls) == 3:
+            return pd.DataFrame({'id': [2]})
+        return pd.DataFrame({'id': []})
+    rows = list(batch._source_pages(fetch, progress=messages.append))
+    assert [i for frame in rows for i in frame['id']] == [1, 2]
+    assert calls == [-1, 1, 1, 2] and recovered == [True]
+    assert any('回收后 2 个' in message for message in messages)
+
+
+@pytest.mark.parametrize('number,attempts', [(24, 2), (13, 1)])
+def test_file_error_recovery_is_bounded_and_does_not_hide_other_errors(batch, monkeypatch, number, attempts):
+    calls = []
+    monkeypatch.setattr(batch.gc, 'collect', lambda: None)
+    def fetch(cursor):
+        calls.append(cursor)
+        raise OSError(number, 'synthetic source file error')
+    with pytest.raises(OSError) as failure:
+        list(batch._source_pages(fetch))
+    assert failure.value.errno == number and calls == [-1] * attempts
+
+
 def test_numeric_policies_keep_decimal_precision_and_reject_bad_holdings(batch):
     micro = batch._microcap_strategy({}, batch.DB_CONFIG)
     growth = batch._growth_strategy({}, batch.DB_CONFIG)

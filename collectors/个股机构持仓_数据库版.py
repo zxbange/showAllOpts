@@ -4,6 +4,8 @@
 依赖和参数集中在开头；共用连接、会话及日期工具。用法见 docs/data/collector-batch.md。
 """
 import builtins
+import gc
+import os
 import datetime
 import uuid
 import unicodedata
@@ -49,7 +51,21 @@ def _source_pages(fetch_page, key='id', start=-1, label='数据接口', progress
     while True:
         if progress is not None:
             progress('{}：已读取 {} 条，正在请求下一页'.format(label, count))
-        frame = fetch_page(cursor)
+        try:
+            frame = fetch_page(cursor)
+        except OSError as exc:
+            if exc.errno != 24:
+                raise
+            # A read-only page can retry the same cursor after releasing unreachable objects.
+            # Never close arbitrary descriptors owned by the notebook or the platform SDK.
+            gc.collect()
+            try:
+                handles = len(os.listdir('/proc/self/fd'))
+            except OSError:
+                handles = '未知'
+            if progress is not None:
+                progress('{}：句柄不足；回收后 {} 个，重试当前页 1 次'.format(label, handles))
+            frame = fetch_page(cursor)
         if frame is None:
             raise ValueError('{} 未返回结果，取消本次入库。'.format(label))
         if not set(fields).issubset(frame.columns):
@@ -284,6 +300,12 @@ def _safe_error(exc, config):
     message = re.sub(r'(?i)[a-z][a-z0-9+.-]*://[^\s]+', '[连接地址已隐藏]', str(exc))
     message = re.sub(r"(?i)(password|passwd|pwd|token|secret)\s*[:=]\s*('.*?'|\".*?\"|[^\s,;]+)",
                       r'\1=[已隐藏]', message)
+    locations, trace = [], exc.__traceback__
+    while trace is not None:
+        locations.append('{}:{}'.format(trace.tb_frame.f_code.co_name, trace.tb_lineno))
+        trace = trace.tb_next
+    if locations:
+        message += '；位置=' + ' > '.join(locations[-6:])
     secrets = set()
     for key in ('host', 'dbname', 'dbuser', 'dbpassword'):
         value = str(config[key])

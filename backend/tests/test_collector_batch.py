@@ -129,7 +129,7 @@ def test_batch_configuration_and_local_entrypoints_have_one_definition():
                            for target in node.targets)]
     assert len(definitions) == 1
     config = ast.literal_eval(definitions[0].value)
-    assert len(config) == 12
+    assert len(config) == 13
     for scope in [tree] + [node for node in ast.walk(tree) if isinstance(node, (ast.FunctionDef, ast.ClassDef))]:
         names = [node.name for node in scope.body if isinstance(node, (ast.FunctionDef, ast.ClassDef))]
         assert len(names) == len(set(names)), names
@@ -151,7 +151,7 @@ def test_pasted_notebook_with_shared_connector_and_no_other_strategy_files(batch
         namespace.update({name: object() for name in
                           ('datetime', 'bool', 'int', 'float', 'str', 'type', 'isinstance', 'any', 'min')})
     exec(compile(source, '<ipython-input-test>', 'exec'), namespace)
-    assert len(namespace['STRATEGIES']) == 12
+    assert len(namespace['STRATEGIES']) == 13
     assert {'估值标尺', '创红比'} <= namespace['STRATEGIES'].keys()
     # Construct every real strategy without accessing any project files.
     for name in namespace['STRATEGY_ORDER']:
@@ -159,7 +159,7 @@ def test_pasted_notebook_with_shared_connector_and_no_other_strategy_files(batch
     events = []
     def factory(name):
         def run(skip_existing=False):
-            assert skip_existing is (name not in ('高股息选股', '高增长'))
+            assert skip_existing is (name not in ('高股息选股', '高增长', '奶牛股'))
             events.append(name)
             return []
         return lambda apis, config: SimpleNamespace(run=run)

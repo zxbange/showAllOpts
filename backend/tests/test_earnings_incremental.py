@@ -149,7 +149,7 @@ def test_empty_express_skips_lazy_mapping_and_reports_source_before_loading(c):
         run_query = None
         @property
         def LC_FSPerformedLetters(self):
-            assert messages[-1] == '聚宽：加载快报接口并查询新增披露'
+            assert messages[-1] == '聚宽：加载快报表结构'
             return SimpleNamespace(EndDate=fields.day, InfoPublDate=fields.day)
         @property
         def SecuMain(self):
@@ -163,6 +163,7 @@ def test_empty_express_skips_lazy_mapping_and_reports_source_before_loading(c):
     c.env.update(jy=Jy(), finance=Finance(), print=messages.append,
         paged=lambda *a, **kw: [], fetch_formal_events=lambda *a: [])
     assert c.env['fetch_events'](['600001.XSHG'], dt.date(2026,9,30), dt.date(2026,10,16), dt.date(2026,10,15)) == []
+    assert '聚宽：快报表结构已就绪，查询新增披露' in messages
     assert len([m for m in messages if '耗时' in m]) == 3
 
 

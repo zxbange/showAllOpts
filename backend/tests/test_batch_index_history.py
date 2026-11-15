@@ -157,6 +157,26 @@ def test_embedded_history_matches_maintained_sources_and_python36():
     sync.sync(check=True)
 
 
+def test_growth_requests_explicit_calendar_bounds_before_database_access(collectors):
+    c = collectors
+    def calendar(start_date, end_date):
+        assert start_date == DAYS[0] and end_date == DAYS[-1]
+        return DAYS
+    c.apis['get_trade_days'] = calendar
+    assert run(c, ['创红比'])[0]['status'] == 'SUCCESS'
+
+
+@pytest.mark.parametrize('raw', [None, [None, None]])
+def test_growth_rejects_missing_calendar_without_none_comparisons_or_database_writes(collectors, raw):
+    c = collectors
+    c.apis['get_trade_days'] = lambda **kwargs: raw
+    result = run(c, ['创红比'])[0]
+    assert result['status'] == 'FAILED' and result['error_type'] == 'ValueError'
+    assert '交易日历返回空值' in result['error']
+    assert 'collect:' in result['error']
+    assert c.connections == []
+
+
 @pytest.mark.parametrize('name', ['估值标尺', '创红比'])
 def test_new_modules_refuse_overwrite_before_connecting(collectors, name):
     c = collectors

@@ -6,6 +6,8 @@
 from jqdata import *
 from jqdata import jy, finance
 import builtins
+import gc
+import os
 import datetime
 import datetime as dt
 import json
@@ -17,7 +19,7 @@ from sqlalchemy import Column, Date, DateTime, Index, Integer, JSON, Numeric, St
 from sqlalchemy.engine.url import URL
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
-from sqlalchemy import MetaData, Table
+from sqlalchemy import MetaData, Table, func
 import uuid
 from sqlalchemy import BigInteger
 from sqlalchemy.schema import CreateTable
@@ -373,7 +375,21 @@ def _source_pages(fetch_page, key='id', start=-1, label='数据接口', progress
     while True:
         if progress is not None:
             progress('{}：已读取 {} 条，正在请求下一页'.format(label, count))
-        frame = fetch_page(cursor)
+        try:
+            frame = fetch_page(cursor)
+        except OSError as exc:
+            if exc.errno != 24:
+                raise
+            # A read-only page can retry the same cursor after releasing unreachable objects.
+            # Never close arbitrary descriptors owned by the notebook or the platform SDK.
+            gc.collect()
+            try:
+                handles = len(os.listdir('/proc/self/fd'))
+            except OSError:
+                handles = '未知'
+            if progress is not None:
+                progress('{}：句柄不足；回收后 {} 个，重试当前页 1 次'.format(label, handles))
+            frame = fetch_page(cursor)
         if frame is None:
             raise ValueError('{} 未返回结果，取消本次入库。'.format(label))
         if not set(fields).issubset(frame.columns):
@@ -500,7 +516,7 @@ def clean(value):
 checked_rows = _checked_records
 
 
-def paged(table, filters, fetch, columns=()):
+def paged(table, filters, fetch, columns=(), small_window=False):
     key = getattr(table, 'id', None)
     if key is None:
         key = getattr(table, 'ID', None)
@@ -512,6 +528,26 @@ def paged(table, filters, fetch, columns=()):
     if columns:
         # 保留源表明确提供的公告原因，不传输其他与筛选无关的大量字段。
         selection.extend(getattr(table, name) for name in ('change_reason', 'profit_change_reason', 'reason') if hasattr(table, name))
+    if small_window:
+        # No primary-key ORDER BY for a tiny disclosure window: it can make the
+        # upstream database walk historical IDs instead of its publication index.
+        print('{}：统计窗口内披露数量'.format(label))
+        counts = checked_rows(fetch(query(func.count(key).label('row_count')).filter(*filters).limit(1)),
+                              ['row_count'], label)
+        if len(counts) != 1 or number(counts[0]['row_count']) is None:
+            raise ValueError('公告数量查询无效，检查日期不推进。')
+        total = number(counts[0]['row_count'])
+        if total < 0 or total != builtins.int(total):
+            raise ValueError('公告数量无效。')
+        if total == 0:
+            return
+        if total <= PAGE_SIZE:
+            print('{}：读取 {} 条新增披露'.format(label, builtins.int(total)))
+            rows = checked_rows(fetch(query(*selection).filter(*filters).limit(PAGE_SIZE)), [key.key], label)
+            if len(rows) != total or len({r[key.key] for r in rows}) != total:
+                raise ValueError('公告返回数量与计数不符，可能截断或源数据正在变化；请重试。')
+            yield from rows
+            return
     fetch_page = lambda cursor: fetch(query(*selection).filter(*filters).filter(key > cursor).order_by(key).limit(PAGE_SIZE))
     for frame in _source_pages(fetch_page, key=key.key, label=label, fields=(key.key,)):
         yield from frame.to_dict('records')
@@ -544,13 +580,14 @@ def fetch_events(codes, period, as_of, start_date=None):
     code_set = set(codes)
     cutoff = as_of + dt.timedelta(days=1)
     started = time.monotonic()
-    print('聚宽：加载快报接口并查询新增披露')
+    print('聚宽：加载快报表结构')
     t = jy.LC_FSPerformedLetters
+    print('聚宽：快报表结构已就绪，查询新增披露')
     filters = [t.EndDate == period, t.InfoPublDate < cutoff]
     if start_date is not None:
         filters.append(t.InfoPublDate >= start_date)
     express = list(paged(t, filters, jy.run_query, columns=(
-        'CompanyCode', 'InfoPublDate', 'EndDate', 'NPParentCompanyOwners', 'NPCOwnersYOY')))
+        'CompanyCode', 'InfoPublDate', 'EndDate', 'NPParentCompanyOwners', 'NPCOwnersYOY'), small_window=start_date is not None))
     print('快报查询 {} 条，耗时 {:.1f}s'.format(len(express), time.monotonic()-started))
     company_codes = sorted({row['CompanyCode'] for row in express})
     companies = {}
@@ -581,7 +618,7 @@ def fetch_events(codes, period, as_of, start_date=None):
     columns = ('code', 'end_date', 'pub_date', 'profit_ratio_min')
     if hasattr(t, 'profit_ratio_max'):
         columns += ('profit_ratio_max',)
-    for row in paged(t, filters, finance.run_query, columns=columns):
+    for row in paged(t, filters, finance.run_query, columns=columns, small_window=start_date is not None):
         if row['code'] in code_set:
             # 原始增幅与可用原因保存在 raw；不猜测金额字段的单位。
             events.append(event(row['code'], 'forecast', row['pub_date'], period, None,

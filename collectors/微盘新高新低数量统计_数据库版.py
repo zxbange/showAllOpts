@@ -290,6 +290,12 @@ def _safe_error(exc, config):
     message = re.sub(r'(?i)[a-z][a-z0-9+.-]*://[^\s]+', '[连接地址已隐藏]', str(exc))
     message = re.sub(r"(?i)(password|passwd|pwd|token|secret)\s*[:=]\s*('.*?'|\".*?\"|[^\s,;]+)",
                       r'\1=[已隐藏]', message)
+    locations, trace = [], exc.__traceback__
+    while trace is not None:
+        locations.append('{}:{}'.format(trace.tb_frame.f_code.co_name, trace.tb_lineno))
+        trace = trace.tb_next
+    if locations:
+        message += '；位置=' + ' > '.join(locations[-6:])
     secrets = set()
     for key in ('host', 'dbname', 'dbuser', 'dbpassword'):
         value = str(config[key])

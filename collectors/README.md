@@ -9,6 +9,8 @@ collectors/
 ├── *.py                    采集、补采和研究入口
 ├── rules/                  公共代码维护源，不在聚宽运行时导入
 │   ├── earnings_followup.py
+│   ├── cash_cow.py
+│   ├── cash_cow_strategy.py
 │   ├── earnings_history.py
 │   ├── earnings_version.py
 │   ├── momentum_threshold.py
@@ -16,6 +18,7 @@ collectors/
 │   └── selection_archive.py
 └── tools/                  仅在本地使用的代码同步工具
     ├── sync_earnings_version.py
+    ├── sync_cash_cow.py
     ├── sync_momentum_threshold.py
     ├── sync_result_journal.py
     └── sync_history_strategies.py
@@ -35,7 +38,8 @@ collectors/
 
 | 用途 | 脚本 | 运行环境 |
 | --- | --- | --- |
-| 12 个策略批量采集、计算并写入数据库 | [策略批量采集_数据库版.py](策略批量采集_数据库版.py) | 聚宽研究环境 |
+| 13 个策略批量采集、计算并写入数据库 | [策略批量采集_数据库版.py](策略批量采集_数据库版.py) | 聚宽研究环境 |
+| 奶牛股 3／5／10 年筛选并入库 | [奶牛股选股_数据库版.py](奶牛股选股_数据库版.py) | 聚宽研究环境；[运行与口径](../docs/data/cash-cow.md#聚宽采集与数据库同步) |
 | ETF 份额与价格日常采集 | [etf_exchange_collector.py](etf_exchange_collector.py) | 项目 Python 环境；[运行说明](../docs/data/etf-exchange-collector.md) |
 | ETF 历史缺口补采 | [ETF历史补采_聚宽研究版.py](ETF历史补采_聚宽研究版.py) | 聚宽研究环境；填写配置后整段运行即入库，缺表自动创建 |
 | ETF 分类、规模筛选及跟踪标的去重研究 | [ETF分类去重_研究版.py](ETF分类去重_研究版.py) | 聚宽研究环境 |
@@ -67,7 +71,7 @@ collectors/
 
 ## 独立策略与公共代码维护
 
-聚宽入口之间不互相调用。批量版内置十二个策略，独立版各自包含策略及辅助函数；运行时统一依赖同目录中的 `mysql_connector.py`，无需上传 `rules/`、`tools/` 或其他策略文件。
+聚宽入口之间不互相调用。批量版内置十三个策略，独立版各自包含策略及辅助函数；运行时统一依赖同目录中的 `mysql_connector.py`，无需上传 `rules/`、`tools/` 或其他策略文件。
 
 `etf_exchange_collector.py` 是项目环境中的交易所采集入口，调用后端服务，不属于聚宽脚本；该命令行入口也使用 `mysql_connector.py` 的连接配置。网页自动采集仍使用网页已保存的目标配置，不受本次脚本配置迁移影响。
 

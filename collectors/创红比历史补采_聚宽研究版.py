@@ -96,10 +96,16 @@ def run(start_date=DEFAULT_START_DATE, end_date=None, preview=True, max_days=200
     end = as_day(end_date) if end_date is not None else closed
     if end > closed:
         raise ValueError('结束日期尚未在北京时间18:00收盘确认')
-    all_days = [as_day(d) for d in get_trade_days(end_date=end)]
+    start = as_day(DEFAULT_START_DATE if start_date is None else start_date)
+    if start > end:
+        raise ValueError('开始日期不能晚于结束日期')
+    progress('创红比：读取 {} 至 {} 交易日历'.format(start, end))
+    raw_days = get_trade_days(start_date=start, end_date=end)
+    if raw_days is None or any(d is None for d in raw_days):
+        raise ValueError('创红比交易日历返回空值，未开始写入；请重试聚宽日历接口')
+    all_days = [as_day(d) for d in raw_days]
     if not all_days or all_days != sorted(set(all_days)) or all_days[-1] > end:
         raise ValueError('平台交易日历无效')
-    start = as_day(DEFAULT_START_DATE if start_date is None else start_date)
     days = [d for d in all_days if start <= d <= end]
     if not days or len(days) > max_days:
         raise ValueError('区间为空或超过交易日上限')
