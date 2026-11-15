@@ -15,7 +15,7 @@ from types import SimpleNamespace
 from urllib.parse import quote, quote_plus
 import jqdata as jq
 import pandas as pd
-from sqlalchemy import Column, Date, DateTime, Index, Integer, Numeric, String, and_, or_, create_engine
+from sqlalchemy import Column, Date, DateTime, Index, Integer, JSON, Numeric, String, and_, or_, create_engine, text as sql_text
 from sqlalchemy.engine.url import URL
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
@@ -544,7 +544,8 @@ def _dividend_strategy(_apis, _config):
     if BATCH_SIZE > 3000 or PAGE_SIZE > 3000:
         raise ValueError('batch_size 和 page_size 不得超过 3000。')
     END_DATE = settings['end_date']
-    RULE_VERSION = 'dividend_static_fy_v4'
+    RULE_VERSION = 'dividend_static_3pct_v5'
+    MIN_YIELD = Decimal('3')
     METHODS = ('classic', 'value', 'bank')
     LIMITS = dict(classic=25, value=25, bank=10)
     Base = declarative_base()
@@ -579,6 +580,7 @@ def _dividend_strategy(_apis, _config):
         dividend_ratio_3y = Column(Numeric(24, 6), nullable=False)
         dividend_cash_1y = Column(Numeric(28, 6), nullable=False)
         dividend_cash_3y = Column(Numeric(28, 6), nullable=False)
+        dividend_yield_history = Column(JSON, nullable=True)
         pe_ttm = Column(Numeric(24, 6), nullable=False)
         pb = Column(Numeric(24, 6), nullable=True)
         market_cap = Column(Numeric(24, 6), nullable=False)
@@ -664,9 +666,9 @@ def _dividend_strategy(_apis, _config):
     def dividends(codes, day):
         table = finance.STK_XR_XD
         start3 = day-datetime.timedelta(days=1095)
-        fiscal_start, fiscal_end = datetime.date(day.year-1, 1, 1), datetime.date(day.year-1, 12, 31)
+        fiscal_start, fiscal_end = datetime.date(day.year-3, 1, 1), datetime.date(day.year-1, 12, 31)
         total = {}
-        for offset in _progress_items(range(0, len(codes), BATCH_SIZE), '{}财年分红批次'.format(day.year-1)):
+        for offset in _progress_items(range(0, len(codes), BATCH_SIZE), '近三个财年分红批次'):
             batch = codes[offset:offset+BATCH_SIZE]
             fields = ('id', 'code', 'report_date', 'a_registration_date', 'a_xr_date', 'bonus_amount_rmb')
             selection = query(*[getattr(table, f) for f in fields]).filter(
@@ -690,17 +692,20 @@ def _dividend_strategy(_apis, _config):
                     annual = fiscal_start <= period <= fiscal_end and ex_date is not None and ex_date <= day
                     if not (in3 or annual):
                         raise ValueError('分红日期越界。')
-                    # 按报告期归属合计上一财年各次分红，不将本年中期或更早财年的派息混入。
+                    # 按报告期分别合计最近三个完整财年；各年均以选股日市值计算股息率。
                     # 只计选股日已实施分红，不读取未来方案；cash_1y/数据库同名列保留以兼容旧表。
                     cash = Decimal(0) if pd.isna(row['bonus_amount_rmb']) else number(row['bonus_amount_rmb'])
                     if cash is None or cash < 0:
                         raise ValueError('派现金额无效。')
-                    item = total.setdefault(code, dict(cash_1y=Decimal(0), cash_3y=Decimal(0), has_3y=False))
+                    item = total.setdefault(code, dict(cash_1y=Decimal(0), cash_3y=Decimal(0), has_3y=False,
+                                                       annual_cash={year: Decimal(0) for year in range(day.year-3, day.year)}))
                     if in3:
                         item['cash_3y'] += cash
                         item['has_3y'] = True
                     if annual:
-                        item['cash_1y'] += cash
+                        item['annual_cash'][period.year] += cash
+                        if period.year == day.year-1:
+                            item['cash_1y'] += cash
         return total
 
     def financials(codes, day, strict_history=False):
@@ -745,7 +750,7 @@ def _dividend_strategy(_apis, _config):
                 if Decimal('.1') < pe/profit < 2:
                     classic.append(code)
         value = sorted((c for c in caps if number(caps[c]['pe_ratio']) is not None
-                        and 0 < number(caps[c]['pe_ratio']) < 8 and ratios[c][0] > 4),
+                        and 0 < number(caps[c]['pe_ratio']) < 8 and ratios[c][0] > MIN_YIELD),
                        key=lambda c: (-ratios[c][0], c))
         nonbank = [code for code in value if code not in banks]
         bank = [code for code in value if code in banks]
@@ -777,7 +782,7 @@ def _dividend_strategy(_apis, _config):
         preliminary, ratios, counts = select(caps, cash, fundamentals, set())
         candidates = sorted(set(preliminary['classic']) | {
             code for code in caps if number(caps[code]['pe_ratio']) is not None
-            and 0 < number(caps[code]['pe_ratio']) < 8 and ratios[code][0] > 4})
+            and 0 < number(caps[code]['pe_ratio']) < 8 and ratios[code][0] > MIN_YIELD})
         industries, banks = industries_for(candidates, day)
         selected, ratios, counts = select(caps, cash, fundamentals, banks)
         _progress_note('生成纯高股息25只、非银行25只、银行10只')
@@ -794,6 +799,9 @@ def _dividend_strategy(_apis, _config):
                     industry_code=industry.get('industry_code'), industry_name=industry.get('industry_name'), industry_level=level,
                     dividend_yield_1y=rounded(ratios[code][0]), dividend_ratio_3y=rounded(ratios[code][1]),
                     dividend_cash_1y=rounded(payout.get('cash_1y', 0)), dividend_cash_3y=rounded(payout.get('cash_3y', 0)),
+                    dividend_yield_history=[dict(fiscal_year=year, yield_pct=float(rounded(
+                        payout.get('annual_cash', {}).get(year, Decimal(0))/100/number(cap['market_cap']))))
+                        for year in range(day.year-1, day.year-4, -1)],
                     pe_ttm=rounded(pe), pb=rounded(cap['pb_ratio']), market_cap=rounded(cap['market_cap']), close=rounded(quotes[code]),
                     revenue_growth=rounded(fin.get('inc_total_revenue_year_on_year')), profit_growth=rounded(profit),
                     adjusted_roe=rounded(fin.get('inc_return')), peg=rounded(pe/profit) if profit and profit > 0 else None,
@@ -819,6 +827,13 @@ def _dividend_strategy(_apis, _config):
 
     def save_latest(Session, meta, records):
         validate_records(meta, records)
+        # 只新增可空字段，不改旧数据；DDL 独立于快照替换事务。
+        with session_scope(Session) as session:
+            engine = session.get_bind()
+        with engine.begin() as connection:
+            columns = {c['name'] for c in inspect(connection).get_columns(DividendStock.__tablename__)}
+            if 'dividend_yield_history' not in columns:
+                connection.execute(sql_text('ALTER TABLE dividend_selection_stock ADD COLUMN dividend_yield_history JSON NULL'))
         _progress_note('事务更新三组最新选股结果')
         return _replace_latest_snapshot(Session, DividendSnapshot, DividendStock, meta, records,
                                         RESULT_COLUMNS, META_COLUMNS, 'trade_date')

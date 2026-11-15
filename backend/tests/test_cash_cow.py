@@ -82,7 +82,9 @@ class Source:
         return {period: self.per_share_dividends(code, end_year - period + 1, end_year) for period in periods}
 
     def current_dividend_yield(self, code):
-        return dict(current_yield=4.5, latest_price=12, latest_price_date='2026-11-09', dividend_ttm_per_share=.54)
+        return dict(current_yield=4.5, latest_price=12, latest_price_date='2026-11-09',
+                    dividend_annual_per_share=.54, dividend_fiscal_year=2025,
+                    dividend_yield_history=[dict(fiscal_year=y, yield_pct=4.5) for y in (2025,2024,2023)])
 
     def prices(self, code, start_year, end_year):
         return year_data()[2]

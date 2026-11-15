@@ -11,6 +11,10 @@ function stock(method: string, i: number) {
     industry_name: method === 'bank' ? '银行' : '公用事业',
     industry_level: 'sw_l3',
     dividend_yield_static: 8 - i * 0.1,
+    dividend_yield_history: [2025, 2024, 2023].map((year, n) => ({
+      fiscal_year: year,
+      yield_pct: 8 - i * 0.1 - n,
+    })),
     dividend_ratio_3y: 20 - i * 0.2,
     dividend_cash_annual: 50000,
     dividend_cash_3y: 150000,
@@ -42,7 +46,7 @@ const fixture = {
   snapshot: {
     trade_date: '2026-10-16',
     updated_at: '2026-10-16T17:30:00',
-    rule_version: 'dividend_static_fy_v4',
+    rule_version: 'dividend_static_3pct_v5',
     universe_count: 5000,
     eligible_count: 4000,
     classic_candidates: 60,
@@ -55,6 +59,30 @@ const fixture = {
     .filter((s) => groups[1].items.some((t) => t.code === s.code))
     .map((s) => s.code),
 }
+
+test('static yield history opens on hover or tap without clipping or changing the row', async ({
+  page,
+}, testInfo) => {
+  await page.route('**/api/v1/dividend-selection/latest', (route) =>
+    route.fulfill({ json: fixture }),
+  )
+  await page.goto('/dividend-selection')
+  for (const group of ['纯高股息', '高股息低估值（非银行业）', '高股息低估值（银行业）']) {
+    await page.getByRole('link', { name: group, exact: true }).click()
+    const marker = page.getByRole('button', { name: '查看近三年股息率' }).first()
+    if (testInfo.project.name === 'desktop') await marker.hover()
+    else await marker.click()
+    const tip = page.getByRole('tooltip')
+    await expect(tip).toContainText('2025 财年')
+    await expect(tip).toContainText('2023 财年')
+    await expect(tip).toContainText('6.00%')
+    const box = await tip.boundingBox()
+    expect(box!.x).toBeGreaterThanOrEqual(0)
+    expect(box!.x + box!.width).toBeLessThanOrEqual(page.viewportSize()!.width)
+    await page.keyboard.press('Escape')
+    await expect(tip).toHaveCount(0)
+  }
+})
 
 test('dividend module switches rules, searches and shows overlap on desktop/mobile', async ({
   page,

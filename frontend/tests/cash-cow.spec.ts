@@ -20,7 +20,12 @@ const stock = {
   current_yield: 5,
   latest_price: 9,
   latest_price_date: '2026-11-09',
-  dividend_ttm_per_share: 0.45,
+  dividend_annual_per_share: 0.45,
+  dividend_fiscal_year: 2025,
+  dividend_yield_history: [2025, 2024, 2023].map((year, i) => ({
+    fiscal_year: year,
+    yield_pct: 5 - i,
+  })),
   average_yield: 4.5,
   payout_min: 35,
   payout_max: 60,
@@ -87,6 +92,10 @@ test('search and ten annual rows work without overflowing mobile viewport', asyn
   await mock(page, saved)
   await page.goto('/cash-cow')
   await expect(page.getByText('测试股份', { exact: true })).toBeVisible()
+  await page.getByRole('button', { name: '查看近三年股息率' }).click()
+  await expect(page.getByRole('tooltip')).toContainText('2023 财年')
+  await expect(page.locator('.cash-cow-stock')).not.toHaveAttribute('open', '')
+  await page.keyboard.press('Escape')
   await page.getByLabel('搜索入选股票').fill('没有')
   await expect(page.getByText('没有匹配的入选股票', { exact: true })).toBeVisible()
   await page.getByLabel('搜索入选股票').fill('600001')
@@ -188,12 +197,12 @@ test('missing current yield is shown as unavailable, not zero', async ({ page })
         current_yield: null,
         latest_price: null,
         latest_price_date: null,
-        dividend_ttm_per_share: null,
+        dividend_annual_per_share: null,
       },
     ],
   })
   await page.goto('/cash-cow')
-  await expect(page.locator('.cash-cow-stock summary')).toContainText('当前股息率（TTM）—')
+  await expect(page.locator('.cash-cow-stock summary')).toContainText('静态股息率—')
   await expect(page.locator('.cash-cow-stock summary [title="当前数据待核验"]')).not.toContainText(
     '0.00%',
   )

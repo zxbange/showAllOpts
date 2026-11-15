@@ -3,7 +3,7 @@
 Free public website endpoints are not contractual APIs. Missing or inconsistent
 responses fail closed. No credential, local-file or paid-service dependency.
 """
-from datetime import date, timedelta
+from datetime import date
 from contextlib import nullcontext
 import json
 import math
@@ -145,7 +145,8 @@ class EastmoneyCashCowSource:
                 return self._get_once(url, params)
             except CashCowSourceError as exc:
                 cause = exc.__cause__
-                retryable = isinstance(cause, httpx.TimeoutException) or (
+                retryable = isinstance(cause, (httpx.TimeoutException, httpx.NetworkError,
+                                               httpx.RemoteProtocolError)) or (
                     isinstance(cause, httpx.HTTPStatusError)
                     and (cause.response.status_code == 429 or cause.response.status_code >= 500))
                 if attempt or not retryable:
@@ -196,7 +197,13 @@ class EastmoneyCashCowSource:
         except Exception as exc:
             # Cancellation raised by caller must not be turned into a retry/error.
             self.check_cancel()
-            raise CashCowSourceError('东方财富数据读取失败，请稍后重试') from exc
+            label = ('股票列表' if url == UNIVERSE else '历史行情' if url == PRICES else '分红与财报')
+            reason = ('请求超时' if isinstance(exc, httpx.TimeoutException) else
+                      '连接被中断' if isinstance(exc, (httpx.NetworkError, httpx.RemoteProtocolError)) else
+                      'HTTP {}'.format(exc.response.status_code) if isinstance(exc, httpx.HTTPStatusError) else
+                      '返回内容不是有效JSON' if isinstance(exc, (ValueError, UnicodeError)) else '读取异常')
+            LOG.warning('Cash cow source failed endpoint=%s details=%s', label, diagnostic_details(exc))
+            raise CashCowSourceError('东方财富{}{}，请稍后重试。'.format(label, reason)) from exc
         if not isinstance(data, dict):
             raise CashCowSourceError('数据源响应格式异常')
         return data
@@ -508,42 +515,17 @@ class EastmoneyCashCowSource:
         return output
 
     def current_dividend_yield(self, code):
-        if code not in self.events:
-            self.per_share_dividends(code, int(self.as_of[:4]) - 2, int(self.as_of[:4]))
+        end_year = int(self.as_of[:4]) - 1
+        annual = self.per_share_dividends(code, end_year - 2, end_year)
         if code not in self.daily:
-            self.prices(code, int(self.as_of[:4]) - 1, int(self.as_of[:4]))
-        today = date.fromisoformat(self.as_of)
-        try:
-            cutoff = str(today.replace(year=today.year - 1))
-        except ValueError:  # February 29 to prior February 28.
-            cutoff = str(today.replace(year=today.year - 1, day=28))
-        total, seen, valid = 0.0, set(), self._capital_stable(code, cutoff)
-        for row in self.events[code]:
-            if row.get('ASSIGN_PROGRESS') != '实施方案':
-                continue
-            text = str(row.get('IMPL_PLAN_PROFILE') or '').strip()
-            rate = cash_rate(text)
-            # Known non-cash/zero-cash plans need no cash payment date. Their
-            # unit-change risk is independently checked by capital history.
-            if (text in ('不分配不转增', '不分配') or rate == 0 or
-                    (corporate_action(text) and '派' not in text and '现金' not in text)):
-                continue
-            paid = str(row.get('PAY_CASH_DATE') or row.get('EX_DIVIDEND_DATE') or '')[:10]
-            if not re.fullmatch(r'\d{4}-\d{2}-\d{2}', paid):
-                valid = False
-                continue
-            if not cutoff < paid <= self.as_of:
-                continue
-            if (rate is None or paid in seen or row.get('ASSIGN_OBJECT') not in
-                    ('全体股东', '全体A股股东', 'A股股东')):
-                valid = False
-            elif rate is not None:
-                total += rate
-            seen.add(paid)
+            self.prices(code, end_year - 2, end_year)
         daily = self.daily[code]
         day, close = daily[-1] if daily else (None, None)
         # A long-suspended quote is not described as a current quote.
         fresh = day and (date.fromisoformat(self.as_of) - date.fromisoformat(day)).days <= 10
-        return dict(current_yield=100 * total / close if valid and fresh and close and close > 0 else None,
+        history = [dict(fiscal_year=year, yield_pct=100 * annual[year] / close
+                        if annual.get(year) is not None and fresh and close and close > 0 else None)
+                   for year in range(end_year, end_year - 3, -1)]
+        return dict(current_yield=history[0]['yield_pct'], dividend_yield_history=history,
                     latest_price=close, latest_price_date=day,
-                    dividend_ttm_per_share=total if valid else None)
+                    dividend_annual_per_share=annual.get(end_year), dividend_fiscal_year=end_year)

@@ -155,7 +155,10 @@ export function CacheControl() {
                         </small>
                       </div>
                     )}
-                    {item.sync_note && <p className="cache-row-error">{item.sync_note}</p>}
+                    {item.sync_note &&
+                      !['waiting', 'running'].includes(item.progress?.status ?? '') && (
+                        <p className="cache-row-note">{item.sync_note}</p>
+                      )}
                     {item.error &&
                       !['waiting', 'running'].includes(item.progress?.status ?? '') && (
                         <p className="cache-row-error">{item.error}</p>
@@ -163,9 +166,17 @@ export function CacheControl() {
                   </div>
                   <div className="cache-row-actions">
                     <span
-                      className={`cache-badge ${item.error || !item.ready ? 'cache-badge-warn' : ''}`}
+                      className={`cache-badge ${!['waiting', 'running'].includes(item.progress?.status ?? '') && (item.error || !item.ready) ? 'cache-badge-warn' : ''}`}
                     >
-                      {item.ready ? (item.error ? '保留旧快照' : '已就绪') : '待同步'}
+                      {item.progress?.status === 'running'
+                        ? '同步中'
+                        : item.progress?.status === 'waiting'
+                          ? '等待同步'
+                          : item.ready
+                            ? item.error
+                              ? '保留旧快照'
+                              : '已就绪'
+                            : '待同步'}
                     </span>
                     {status.refreshing &&
                       ['running', 'waiting'].includes(item.progress?.status ?? '') && (

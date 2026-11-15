@@ -37,6 +37,40 @@ const fixture = {
   })),
 }
 
+test('successful sync notes are neutral and hidden during a new sync', async ({ page }) => {
+  let running = false
+  await page.route('**/api/v1/cache/status', (route) =>
+    route.fulfill({
+      json: {
+        ...fixture,
+        refreshing: running,
+        modules: [
+          {
+            ...fixture.modules[0],
+            sync_note: '新增 4073 天；冲突 1 天未覆盖。',
+            progress: {
+              status: running ? 'running' : 'complete',
+              stage: running ? '读取日汇总' : '同步完成',
+              percent: running ? 5 : 100,
+            },
+          },
+        ],
+      },
+    }),
+  )
+  await page.route('**/api/v1/cache/refresh', (route) => {
+    running = true
+    return route.fulfill({ status: 202, json: { accepted: true } })
+  })
+  await page.goto('/')
+  await page.getByRole('button', { name: '数据同步状态' }).click()
+  await expect(page.locator('.cache-row-note')).toContainText('新增 4073 天')
+  await expect(page.locator('.cache-row-error')).toHaveCount(0)
+  await page.getByRole('button', { name: '立即同步', exact: true }).click()
+  await expect(page.locator('.cache-row-note')).toHaveCount(0)
+  await expect(page.locator('.cache-badge')).toHaveText('同步中')
+})
+
 test('cache panel shows old snapshot and allows module synchronization without credentials', async ({
   page,
 }, testInfo) => {

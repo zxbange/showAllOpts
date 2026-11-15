@@ -47,7 +47,7 @@ def ns(module):
 
 
 def meta(**changes):
-    return dict(dict(trade_date=DAY, rule_version='dividend_static_fy_v4', universe_count=5000, eligible_count=4000,
+    return dict(dict(trade_date=DAY, rule_version='dividend_static_3pct_v5', universe_count=5000, eligible_count=4000,
                 classic_candidates=1, value_candidates=1, classic_count=1, value_count=1), **changes)
 
 
@@ -55,6 +55,7 @@ def row(method='classic', code='000001.XSHE', rank=1, **changes):
     data = dict(method=method,code=code,trade_date=DAY,rank=rank,name='示例股票',industry_code='801010',industry_name='农业',
                 industry_level='sw_l3',dividend_yield_1y=Decimal('5'),dividend_ratio_3y=Decimal('16'),
                 dividend_cash_1y=Decimal('50000'),dividend_cash_3y=Decimal('160000'),
+                dividend_yield_history=[dict(fiscal_year=year,yield_pct=value) for year,value in [(2025,5),(2024,4),(2023,3)]],
                 pe_ttm=Decimal('7'),pb=Decimal('1'),market_cap=Decimal('100'),close=Decimal('10'),
                 revenue_growth=Decimal('10'),profit_growth=Decimal('20'),adjusted_roe=Decimal('8'),peg=Decimal('.35'),
                 report_period=dt.date(2026,6,30),publication_date=dt.date(2026,8,1))
@@ -131,7 +132,7 @@ def test_three_group_write_limits_and_snapshot_replacement(ns):
         engine.dispose()
 
 
-@pytest.mark.parametrize('pe,cash1,accepted', [(0,50000,False),(-1,50000,False),(8,50000,False),(7,40000,False),(7,40001,True)])
+@pytest.mark.parametrize('pe,cash1,accepted', [(0,50000,False),(-1,50000,False),(8,50000,False),(7,30000,False),(7,30001,True)])
 def test_value_strict_boundaries_and_no_growth_requirement(ns,pe,cash1,accepted):
     caps={'a':dict(market_cap=100,pe_ratio=pe)}
     cash={'a':dict(cash_1y=Decimal(cash1),cash_3y=Decimal(0),has_3y=False)}
@@ -157,7 +158,7 @@ def test_latest_replacement_no_duplicates_unchanged_no_dml_and_empty_results(ns)
     statements=[]
     event.listen(engine,'before_cursor_execute',lambda conn,cursor,sql,*args:statements.append(sql))
     assert ns.save_latest(Session,meta(),values) is False
-    assert all(sql.lstrip().upper().startswith('SELECT') for sql in statements)
+    assert all(sql.lstrip().upper().startswith(('SELECT', 'PRAGMA')) for sql in statements)
     revised=[row(pe_ttm=Decimal('6')),row('value',code='000002.XSHE')]
     assert ns.save_latest(Session,meta(),revised)
     with Session() as session:
@@ -186,6 +187,20 @@ def test_failed_replacement_rolls_back_both_lists(ns):
     with Session() as session:
         assert {r.name for r in session.query(ns.DividendStock)}=={'示例股票'}
         assert session.query(ns.DividendStock).count()==2
+    engine.dispose()
+
+
+def test_existing_database_gains_nullable_history_without_dropping_data(ns):
+    from sqlalchemy import text, inspect
+    engine=create_engine('sqlite://'); ns.Base.metadata.create_all(engine); Session=sessionmaker(bind=engine)
+    ns.save_latest(Session,meta(rule_version='dividend_static_fy_v4'),[row(),row('value')])
+    with engine.begin() as connection:
+        connection.execute(text('ALTER TABLE dividend_selection_stock DROP COLUMN dividend_yield_history'))
+    assert ns.save_latest(Session,meta(),[row(),row('value')])
+    assert 'dividend_yield_history' in {col['name'] for col in inspect(engine).get_columns('dividend_selection_stock')}
+    with Session() as session:
+        assert session.query(ns.DividendStock).count() == 2
+        assert session.query(ns.DividendStock).first().dividend_yield_history[0]['yield_pct'] == 5
     engine.dispose()
 
 
@@ -254,7 +269,8 @@ def test_static_yield_sums_report_year_not_payment_window(module,day,annual_cash
         selected,ratios,_=ns.select({'601398.XSHG':dict(market_cap=Decimal('8.85'),pe_ratio=7)},
                                   cash,{}, {'601398.XSHG'})
         assert ratios['601398.XSHG'][0]==annual_cash/100/Decimal('8.85')
-        assert selected['bank']==[]  # FY2025 is 3.51%, not the 5.21% trailing yield.
+        assert selected['bank']==(['601398.XSHG'] if day.year == 2026 else [])
+        assert cash['601398.XSHG']['annual_cash'][day.year-1] == annual_cash
     finally:
         engine.dispose()
 
@@ -282,7 +298,7 @@ def test_rule_upgrade_replaces_old_yields_even_on_same_day(ns):
         current=meta(value_count=0,value_candidates=0)
         assert ns.save_latest(Session,current,[row(dividend_yield_1y=Decimal('3.51'))])
         with Session() as db:
-            assert db.get(ns.DividendSnapshot,1).rule_version=='dividend_static_fy_v4'
+            assert db.get(ns.DividendSnapshot,1).rule_version=='dividend_static_3pct_v5'
             assert db.query(ns.DividendStock).count()==1
             assert db.query(ns.DividendStock).first().dividend_yield_1y==Decimal('3.51')
     finally:

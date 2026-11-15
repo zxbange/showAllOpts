@@ -14,7 +14,7 @@ class DividendService:
             return DividendOverview(groups=groups)
         head = rows[0][0]
         by_id = {g.id: g for g in groups}
-        legacy = head.rule_version != 'dividend_static_fy_v4'
+        legacy = head.rule_version != 'dividend_static_3pct_v5'
         groups[0].candidates = None if legacy else head.classic_candidates
         for _, stock in rows:
             if stock is not None and stock.method in by_id and not legacy:

@@ -1,0 +1,48 @@
+.dividend-history-trigger {
+  display: inline-flex;
+  vertical-align: middle;
+  align-items: center;
+  justify-content: center;
+  padding: 4px;
+  margin-left: 3px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+}
+.dividend-history-trigger:hover,
+.dividend-history-trigger:focus-visible {
+  color: var(--accent);
+  outline: 1px solid currentColor;
+}
+.dividend-history-popup {
+  position: fixed;
+  z-index: 2000;
+  width: 240px;
+  box-sizing: border-box;
+  padding: 14px 16px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface, #fff);
+  color: var(--text);
+  box-shadow: 0 8px 28px #0002;
+  font-size: 13px;
+  font-weight: 400;
+}
+.dividend-history-popup dl {
+  margin: 10px 0;
+}
+.dividend-history-popup dl > div {
+  display: flex;
+  justify-content: space-between;
+  padding: 3px 0;
+}
+.dividend-history-popup dd {
+  margin: 0;
+  font-variant-numeric: tabular-nums;
+}
+.dividend-history-popup small {
+  color: var(--muted);
+  font-size: 12px;
+}

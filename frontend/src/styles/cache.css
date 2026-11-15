@@ -96,11 +96,15 @@
   margin-top: 5px;
   line-height: 1.7;
 }
-.cache-row-error {
+.cache-row-error,
+.cache-row-note {
   font-size: 13px;
   color: var(--accent);
   margin: 5px 0 0;
   line-height: 1.5;
+}
+.cache-row-note {
+  color: var(--muted);
 }
 .cache-badge {
   background: #e7f3ef;
@@ -242,6 +246,7 @@
   margin-top: 12px;
 }
 .cache-row-error,
+.cache-row-note,
 .cache-row small {
   overflow-wrap: anywhere;
 }

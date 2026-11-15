@@ -180,7 +180,7 @@ def test_cancel_between_hops_does_not_fetch_target():
     assert len(calls) == 1
 
 
-@pytest.mark.parametrize('payload,error', [(b'x' * 129, '过大'), (b'not-json', '读取失败'), (b'[]', '格式异常')])
+@pytest.mark.parametrize('payload,error', [(b'x' * 129, '过大'), (b'not-json', '有效JSON'), (b'[]', '格式异常')])
 def test_redirected_content_validation_and_stream_close(monkeypatch, payload, error):
     monkeypatch.setattr(m, 'MAX_BYTES', 128)
     calls, closed, read_redirect = [], [], []

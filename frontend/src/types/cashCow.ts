@@ -33,7 +33,9 @@ export interface CashCowStock {
   current_yield: number | null
   latest_price: number | null
   latest_price_date: string | null
-  dividend_ttm_per_share: number | null
+  dividend_annual_per_share?: number | null
+  dividend_fiscal_year?: number
+  dividend_yield_history?: import('./dividend').AnnualYield[] | null
   average_yield: number
   payout_min: number
   payout_max: number

@@ -18,6 +18,27 @@ from test_earnings_api import seed as earnings_seed
 HISTORY = [('microcap-temperature', lambda day: microcap_row(day, 50), 'score')]
 
 
+def test_dividend_legacy_schema_and_new_history_refresh(cached, session, engine):
+    from sqlalchemy import text
+    from test_dividend_collector import meta, row
+    _, cache = cached
+    session.query(DividendStock).delete()
+    session.query(DividendSnapshot).delete()
+    session.add(DividendSnapshot(id=1,updated_at=datetime(2026,10,16),**meta(rule_version='dividend_static_fy_v4')))
+    session.add(DividendStock(**row())); session.commit()
+    with engine.begin() as connection:
+        connection.execute(text('ALTER TABLE dividend_selection_stock DROP COLUMN dividend_yield_history'))
+    cache.refresh('dividend-selection',background=False)
+    with cache.session('dividend-selection') as local:
+        assert local.query(DividendStock).one().dividend_yield_history is None
+    with engine.begin() as connection:
+        connection.execute(text('ALTER TABLE dividend_selection_stock ADD COLUMN dividend_yield_history JSON'))
+        connection.execute(DividendStock.__table__.update().values(dividend_yield_history=row()['dividend_yield_history']))
+    cache.refresh('dividend-selection',background=False)
+    with cache.session('dividend-selection') as local:
+        assert local.query(DividendStock).one().dividend_yield_history == row()['dividend_yield_history']
+
+
 def assert_matches(cache, session, module):
     assert not next(m for m in cache.status()['modules'] if m['id'] == module)['error']
     count = 0

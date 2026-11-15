@@ -37,7 +37,10 @@ def test_latest_order_units_overlap_and_single_read_only_query(client,session,en
     assert [r['rank'] for r in data['groups'][0]['items']]==[1,2]
     assert data['groups'][0]['items'][0]['dividend_yield_static']==5
     assert data['overlap_codes']==['000001.XSHE']
-    assert len(statements)==1 and statements[0].lstrip().startswith('SELECT')
+    assert len([sql for sql in statements if sql.lstrip().startswith('SELECT')]) == 1
+    assert all(sql.lstrip().startswith(('SELECT', 'PRAGMA')) for sql in statements)
+    assert data['groups'][0]['items'][0]['dividend_yield_history'] == [
+        dict(fiscal_year=year, yield_pct=value) for year, value in [(2025,5),(2024,4),(2023,3)]]
     assert client.post('/api/v1/dividend-selection/latest').status_code==405
 
 
@@ -62,7 +65,7 @@ def test_bank_group_and_overlap_with_either_value_group(client,session):
     assert data['groups'][1]['candidates'] is None
 
 
-@pytest.mark.parametrize('version', ['dividend_top25_v2', 'dividend_split_bank_v3'])
+@pytest.mark.parametrize('version', ['dividend_top25_v2', 'dividend_split_bank_v3', 'dividend_static_fy_v4'])
 def test_legacy_yields_are_not_mislabeled_as_static(client,session,version):
     seed(session)
     session.get(DividendSnapshot, 1).rule_version=version

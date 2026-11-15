@@ -1,5 +1,5 @@
 """Latest selection snapshots, written only by the JoinQuant collector."""
-from sqlalchemy import Column, Date, DateTime, Index, Integer, Numeric, String
+from sqlalchemy import Column, Date, DateTime, Index, Integer, JSON, Numeric, String
 from app.models.base import Base
 
 
@@ -35,6 +35,7 @@ class DividendStock(Base):
     dividend_ratio_3y = Column(Numeric(24, 6), nullable=False)
     dividend_cash_1y = Column(Numeric(28, 6), nullable=False)
     dividend_cash_3y = Column(Numeric(28, 6), nullable=False)
+    dividend_yield_history = Column(JSON, nullable=True)
     pe_ttm = Column(Numeric(24, 6), nullable=False)
     pb = Column(Numeric(24, 6), nullable=True)
     market_cap = Column(Numeric(24, 6), nullable=False)

@@ -6,6 +6,7 @@ import { getDividendOverview } from '../api/client'
 import { useResource } from '../hooks/useResource'
 import { EmptyState, ErrorState, LoadingState } from '../components/States'
 import { StatCard } from '../components/StatCard'
+import { DividendYieldHistory } from '../components/DividendYieldHistory'
 import type { DividendItem } from '../types/dividend'
 import '../styles/dividend.css'
 
@@ -203,7 +204,12 @@ export function DividendPage() {
                         <td>{s.industry_name ?? '暂无行业'}</td>
                         <td>
                           <div className="dividend-yield">
-                            <strong>{number(metric(s), '%')}</strong>
+                            <strong>
+                              {number(metric(s), '%')}
+                              {!classic && (
+                                <DividendYieldHistory history={s.dividend_yield_history} />
+                              )}
+                            </strong>
                             <span>
                               <i
                                 style={{ width: `${Math.max(0, (metric(s) / maxYield) * 100)}%` }}
@@ -213,6 +219,7 @@ export function DividendPage() {
                         </td>
                         <td>
                           {number(classic ? s.dividend_yield_static : s.dividend_ratio_3y, '%')}
+                          {classic && <DividendYieldHistory history={s.dividend_yield_history} />}
                         </td>
                         <td>
                           {number(s.pe_ttm)} / {number(s.pb)}
@@ -251,7 +258,7 @@ export function DividendPage() {
                 4.5%。最后按三年累计分红比例取前 25。
               </p>
               <p>
-                高股息低估值：上一财年现金分红 / 当前总市值，要求静态股息率 &gt; 4%、0 &lt; PE &lt;
+                高股息低估值：上一财年现金分红 / 当前总市值，要求静态股息率 &gt; 3%、0 &lt; PE &lt;
                 8；按当日申万一级行业区分银行与非银行，分别按股息率取前 10 和前 25 只。
                 分红按所属财年合计，仅计选股日已实施部分；三年累计比例未年化。
               </p>

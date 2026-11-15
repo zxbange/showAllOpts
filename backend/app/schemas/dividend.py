@@ -15,6 +15,11 @@ class DividendRun(BaseModel):
     value_count: int
 
 
+class DividendAnnualYield(BaseModel):
+    fiscal_year: int
+    yield_pct: float
+
+
 class DividendItem(BaseModel):
     model_config = ConfigDict(from_attributes=True)
     method: str
@@ -29,6 +34,7 @@ class DividendItem(BaseModel):
     dividend_ratio_3y: float
     dividend_cash_annual: float = Field(validation_alias='dividend_cash_1y')
     dividend_cash_3y: float
+    dividend_yield_history: list[DividendAnnualYield] | None = None
     pe_ttm: float
     pb: float | None
     market_cap: float

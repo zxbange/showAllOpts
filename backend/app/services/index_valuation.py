@@ -2,11 +2,21 @@
 from datetime import date, datetime
 from decimal import Decimal, InvalidOperation
 import json
+import logging
 import re
+import struct
+import time
 
-from sqlalchemy import MetaData, Table, inspect, select
+from sqlalchemy import LargeBinary, MetaData, Table, cast, func, inspect, select
+from sqlalchemy.dialects.mysql import CHAR
+from sqlalchemy.exc import DBAPIError
 
 from app.core.cache_errors import SnapshotDataError
+from app.core.mysql_payload import decompress_json
+from app.core.sync_progress import report
+
+LOG = logging.getLogger(__name__)
+PAGE_SIZE = 500
 
 METHOD = 'index_pe_lyr_ttm_cap300_v2'
 SOURCE = 'JQ_PLATFORM.VALUATION.V2'
@@ -78,9 +88,54 @@ def checked(row, cutoff):
         reject()
 
 
+def packed_query(query):
+    """Compress the whole bounded page, including repeated JSON and field values."""
+    page = query.subquery()
+    values = func.json_array(*[cast(c, CHAR(charset='utf8mb4')) for c in page.c])
+    return select(func.compress(func.json_arrayagg(values), type_=LargeBinary)).select_from(page)
+
+
+def unpack_page(packet, names):
+    if packet is None:
+        return []
+    try:
+        # Bound expansion before decoding; one page normally expands to ~500 KiB.
+        if len(packet) < 4 or struct.unpack('<I', packet[:4])[0] > 8 * 1024 * 1024:
+            raise ValueError()
+        values = json.loads(decompress_json(packet))
+        if not isinstance(values, list) or len(values) > PAGE_SIZE:
+            raise ValueError()
+        rows = []
+        for values_row in values:
+            if not isinstance(values_row, list) or len(values_row) != len(names):
+                raise ValueError()
+            row = dict(zip(names, values_row))
+            row['trade_date'] = date.fromisoformat(row['trade_date'])
+            row['updated_at'] = datetime.fromisoformat(row['updated_at'])
+            row['member_count'] = int(row['member_count'])
+            rows.append(row)
+        # MySQL does not promise JSON_ARRAYAGG order. Restore keyset order locally.
+        rows.sort(key=lambda row: row['trade_date'])
+        if len({row['trade_date'] for row in rows}) != len(rows):
+            raise ValueError()
+        return rows
+    except (ValueError, TypeError, KeyError, struct.error, SnapshotDataError):
+        raise SnapshotDataError('估值汇总压缩包不完整，已保留原缓存。') from None
+
+
 def sync(engine, service, cutoff, check, progress, *, full=False, same_source=True):
     """Runs against copy_history's private SQLite snapshot; failure cannot publish it."""
     table = Table(TABLE, MetaData(), autoload_with=engine)
+    compressed = engine.dialect.name == 'mysql'
+    if compressed:
+        try:
+            with engine.connect() as connection:
+                connection.scalar(select(func.json_arrayagg('probe')))
+        except DBAPIError as exc:
+            if getattr(exc.orig, 'args', (None,))[0] != 1305:
+                raise
+            compressed = False  # Older MySQL without JSON_ARRAYAGG: small typed pages.
+    page_size = PAGE_SIZE if compressed else 100
     inserted = updated = processed = 0
     with service.db() as local:
         init_store(local)
@@ -90,19 +145,37 @@ def sync(engine, service, cutoff, check, progress, *, full=False, same_source=Tr
             recent = local.execute('SELECT trade_date FROM index_points_v2 WHERE index_code=? '
                                    'ORDER BY trade_date DESC LIMIT 3', (code,)).fetchall()
             start = date.fromisoformat(recent[-1][0]) if recent and not full else date.fromisoformat(INDICES[code][2])
+            condition = (table.c.index_code == code, table.c.method_version == METHOD,
+                         table.c.trade_date >= start, table.c.trade_date <= cutoff)
+            check()
+            progress('{}：核对增量范围'.format(INDICES[code][0]), 5 + index * 28)
+            with engine.connect() as connection:
+                total = connection.scalar(select(func.count()).select_from(table).where(*condition))
+            done = 0
             after = None
             while True:
                 check()
-                progress('{}：同步日汇总，已处理 {} 条'.format(INDICES[code][0], processed), 5+index*28)
-                query = select(table).where(table.c.index_code == code, table.c.method_version == METHOD,
-                    table.c.trade_date >= start, table.c.trade_date <= cutoff).order_by(table.c.trade_date).limit(500)
+                message = '{}：日汇总 {}/{} 条'.format(INDICES[code][0], done, total)
+                progress(message, 5 + index * 28 + 28 * done / max(1, total))
+                query = select(table).where(*condition).order_by(table.c.trade_date).limit(page_size)
                 if after is not None:
                     query = query.where(table.c.trade_date > after)
                 # Release the source connection before local processing/writes.
+                started = time.monotonic()
+                LOG.info('Valuation summary read index=%s after=%s start=%s limit=%s compressed=%s',
+                         code, after, start, page_size, compressed)
                 with engine.connect() as connection:
-                    rows = connection.execute(query).mappings().all()
+                    if compressed:
+                        packet = connection.scalar(packed_query(query))
+                        rows = unpack_page(packet, list(table.c.keys()))
+                    else:
+                        rows = connection.execute(query).mappings().all()
+                LOG.info('Valuation summary received index=%s rows=%s seconds=%.3f',
+                         code, len(rows), time.monotonic() - started)
                 for row in rows:
                     check()
+                    if row['index_code'] != code or row['trade_date'] < start or (after and row['trade_date'] <= after):
+                        raise SnapshotDataError('估值汇总返回范围不匹配，已保留原缓存。')
                     point = checked(row, cutoff)
                     payload = json.dumps(point, ensure_ascii=False, sort_keys=True)
                     prior = local.execute('SELECT payload FROM index_points_v2 WHERE index_code=? AND trade_date=?',
@@ -115,7 +188,13 @@ def sync(engine, service, cutoff, check, progress, *, full=False, same_source=Tr
                                       (payload, code, point['trade_date']))
                         updated += 1
                     processed += 1
-                if len(rows) < 500:
+                done += len(rows)
+                message = '{}：日汇总 {}/{} 条'.format(INDICES[code][0], done, max(done, total))
+                progress(message, 5 + index * 28 + 28 * min(1, done / max(1, total)))
+                report(message, rows=len(rows))
+                if len(rows) < page_size:
+                    if done < total:
+                        raise SnapshotDataError('估值汇总条数少于源库统计，本次未发布，请重试。')
                     break
                 after = rows[-1]['trade_date']
     return dict(inserted=inserted, updated=updated, processed=processed)

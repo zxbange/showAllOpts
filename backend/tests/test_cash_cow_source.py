@@ -84,16 +84,16 @@ def test_cancellation():
     with pytest.raises(Cancelled): EastmoneyCashCowSource(None,check_cancel=cancel).universe()
 
 
-def test_average_daily_and_current_ttm():
+def test_average_daily_and_current_static():
     from datetime import date, timedelta
     days = [date(2024,1,1) + timedelta(days=i) for i in range(366)]
     bars = [f"{d},1,{10 if i % 2 else 20},20,1,100,100,1,1,1,1" for i,d in enumerate(days)]
     s = source(dict(rc=0,data=dict(code='600900',dktotal=len(bars),klines=bars)))
     s.as_of = '2024-12-31'
     assert s.prices('600900',2024,2024)[2024]['year_average_close'] == 15
-    s.events['600900'] = [event(2024,'2024-06-20','10派5元(含税,扣税后4元)')]
+    s.events['600900'] = [event(2023,'2024-06-20','10派5元(含税,扣税后4元)')]
     result = s.current_dividend_yield('600900')
-    assert result['dividend_ttm_per_share'] == .5
+    assert result['dividend_annual_per_share'] == .5
     assert result['current_yield'] == 5
 
 
@@ -103,10 +103,10 @@ def test_future_fiscal_split_invalidates_prior_year_basis():
     assert s.per_share_dividends('600900',2024,2024)[2024] is None
 
 
-def test_ttm_missing_payment_date_is_unavailable():
+def test_static_missing_payment_date_is_unavailable():
     s = source({})
     s.as_of = '2024-12-31'
-    s.events['600900'] = [event(2024, '', '10派5元')]
+    s.events['600900'] = [event(2023, '', '10派5元')]
     s.daily['600900'] = [('2024-12-31', 10)]
     assert s.current_dividend_yield('600900')['current_yield'] is None
 
@@ -257,7 +257,7 @@ def test_medium_universe_batches_use_disjoint_200_code_chunks():
     assert [code for chunk in chunks for code in chunk] == codes
 
 
-def test_ancient_undated_noncash_does_not_poison_ttm():
+def test_ancient_undated_noncash_does_not_poison_static():
     s = source({})
     s.as_of = '2026-11-10'
     s.events['600548'] = [event(2006,'','10送3.2','流通股股东'),
@@ -266,16 +266,52 @@ def test_ancient_undated_noncash_does_not_poison_ttm():
     s.capital['600548'] = [dict(END_DATE='2000-01-01',TOTAL_SHARES=100)]
     s.daily['600548'] = [('2026-11-10',8.69)]
     result = s.current_dividend_yield('600548')
-    assert result['dividend_ttm_per_share'] == pytest.approx(.244)
+    assert result['dividend_annual_per_share'] == pytest.approx(.244)
     assert result['current_yield'] == pytest.approx(100*.244/8.69)
     s.capital['600548'] = []
     assert s.current_dividend_yield('600548')['current_yield'] is None
 
 
-def test_undated_unknown_cash_still_blocks_ttm():
+def test_undated_unknown_cash_still_blocks_static():
     for text in ['', '未知方案', '10派2.44元']:
         s = source({})
         s.as_of = '2026-11-10'
-        s.events['600900'] = [event(2006,'',text)]
+        s.events['600900'] = [event(2025,'',text)]
         s.daily['600900'] = [('2026-11-10',10)]
         assert s.current_dividend_yield('600900')['current_yield'] is None
+
+
+def test_static_history_uses_fiscal_years_and_one_current_price():
+    s = source({})
+    s.as_of = '2026-11-13'
+    s.events['600900'] = [event(2025, '2026-01-01', '10派1.414元'),
+        event(2025, '2026-07-01', '10派1.689元'), event(2026, '2026-10-21', '10派1.511元'),
+        event(2024, '2025-07-01', '10派3元'), event(2023, '2024-07-01', '10派2元')]
+    s.daily['600900'] = [('2026-11-13', 8.85)]
+    result = s.current_dividend_yield('600900')
+    assert result['dividend_annual_per_share'] == pytest.approx(.3103)
+    assert result['current_yield'] == pytest.approx(100 * .3103 / 8.85)
+    assert [r['fiscal_year'] for r in result['dividend_yield_history']] == [2025, 2024, 2023]
+    assert [r['yield_pct'] for r in result['dividend_yield_history']] == pytest.approx(
+        [100 * value / 8.85 for value in [.3103, .3, .2]])
+    s.daily['600900'] = [('2026-10-01', 8.85)]
+    assert all(r['yield_pct'] is None for r in s.current_dividend_yield('600900')['dividend_yield_history'])
+
+
+@pytest.mark.parametrize('error', [httpx.ReadError, httpx.ConnectError, httpx.RemoteProtocolError])
+def test_disconnected_request_retries_and_identifies_failed_stage(error, monkeypatch):
+    monkeypatch.setattr(EastmoneyCashCowSource, '_rate_limit', lambda self: None)
+    monkeypatch.setattr('app.services.cash_cow_source.time.sleep', lambda _: None)
+    calls = []
+    def handler(request):
+        calls.append(request)
+        if len(calls) == 1:
+            raise error('private response data')
+        return httpx.Response(200,json=dict(rc=0,data=dict(total=1,diff=[dict(f12='600900',f13=1,f14='长江电力')])))
+    s = EastmoneyCashCowSource(httpx.Client(transport=httpx.MockTransport(handler)))
+    assert len(s.universe()) == 1 and len(calls) == 2
+    def fail(request): raise error('private response data')
+    s.client = httpx.Client(transport=httpx.MockTransport(fail))
+    with pytest.raises(CashCowSourceError, match='股票列表连接被中断') as exc:
+        s.universe()
+    assert 'private' not in str(exc.value)

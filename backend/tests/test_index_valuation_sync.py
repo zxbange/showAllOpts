@@ -79,7 +79,7 @@ def test_increment_reads_three_recent_sessions_and_new_rows_only(synced):
     index_valuation.sync(c.engine, service, dt.date(2026, 1, 9), lambda: None, lambda *args: None)
     seen = []
     def record(conn, cur, statement, params, ctx, many):
-        if 'FROM valuation_ruler_daily_v2' in statement:
+        if 'FROM valuation_ruler_daily_v2' in statement and 'count(' not in statement:
             seen.append((statement, params))
     event.listen(c.engine, 'before_cursor_execute', record)
     try:
@@ -105,3 +105,43 @@ def test_invalid_contract_rejected(synced, bad):
     row['statistics'] = json.dumps(stats)
     with pytest.raises(index_valuation.SnapshotDataError):
         index_valuation.checked(row, DAYS[-1])
+
+
+def test_packed_mysql_page_roundtrip_precision_order_and_query_limit(synced):
+    import struct
+    import zlib
+    from sqlalchemy.dialects import mysql
+    c, _, _, _ = synced
+    table = c.m.ValuationDaily.__table__
+    with c.engine.connect() as connection:
+        rows = connection.execute(table.select().where(table.c.index_code == '000300.XSHG')
+                                  .order_by(table.c.trade_date)).mappings().all()
+    values = [[str(row[name]) if row[name] is not None else None for name in table.c.keys()] for row in reversed(rows)]
+    raw = json.dumps(values).encode()
+    packet = struct.pack('<I', len(raw)) + zlib.compress(raw)
+    decoded = index_valuation.unpack_page(packet, list(table.c.keys()))
+    assert [index_valuation.checked(r, DAYS[-1]) for r in decoded] == [index_valuation.checked(r, DAYS[-1]) for r in rows]
+    query = table.select().where(table.c.index_code == '000300.XSHG').order_by(table.c.trade_date).limit(500)
+    sql = str(index_valuation.packed_query(query).compile(dialect=mysql.dialect()))
+    assert 'compress(json_arrayagg(json_array(' in sql and 'LIMIT' in sql
+    assert 'valuation_ruler_member' not in sql
+    assert index_valuation.unpack_page(None, list(table.c.keys())) == []
+    for bad in [b'bad', struct.pack('<I', 9*1024*1024)+b'x', packet[:-5]]:
+        with pytest.raises(index_valuation.SnapshotDataError):
+            index_valuation.unpack_page(bad, list(table.c.keys()))
+
+
+def test_summary_progress_advances_with_pages_and_counts_rows(synced, monkeypatch):
+    from app.core.sync_progress import reporter
+    c, _, service, _ = synced
+    updates = []
+    progress = []
+    token = reporter.set(lambda stage, rows=0, percent=None: updates.append(rows))
+    try:
+        summary = index_valuation.sync(c.engine, service, DAYS[-1], lambda: None,
+            lambda stage, percent: progress.append((stage, percent)), full=True)
+    finally:
+        reporter.reset(token)
+    assert sum(updates) == summary['processed'] == 9
+    assert any('3/3' in stage for stage, _ in progress)
+    assert progress[-1][1] == 89

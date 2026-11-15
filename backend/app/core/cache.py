@@ -380,7 +380,8 @@ class SnapshotCache:
                 path.unlink(missing_ok=True)
                 raise
         destination = create_engine('sqlite:///' + path.as_posix(), poolclass=NullPool)
-        incremental = previous is not None and not full
+        # 高股息本来就完整替换几十行；新建本地表也能自动接收采集器新增字段。
+        incremental = previous is not None and not full and module != 'dividend-selection'
         try:
             report('准备本地快照', percent=5)
             if incremental:

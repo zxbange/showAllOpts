@@ -23,7 +23,7 @@ from app.core.diagnostics import diagnostic_details
 
 LOG = logging.getLogger(__name__)
 CHINA = timezone(timedelta(hours=8))
-RULE_VERSION = 'cash_cow_strict_window_average_close_v1'
+RULE_VERSION = 'cash_cow_static_display_v2'
 
 
 def now():
@@ -202,7 +202,12 @@ class CashCowScreen:
 
     def _read_result(self, db):
         row = db.execute('SELECT payload FROM snapshots WHERE years=?', (self.years,)).fetchone()
-        return json.loads(row[0]) if row else dict(snapshot=None, items=[])
+        result = json.loads(row[0]) if row else dict(snapshot=None, items=[])
+        # Keep the last successful screening, but never relabel its old TTM value.
+        if result.get('snapshot', {}) and result['snapshot'].get('rule_version') != RULE_VERSION:
+            for item in result['items']:
+                item.update(current_yield=None, dividend_yield_history=None)
+        return result
 
     def status(self):
         with self.publication_lock(), self.db() as db:

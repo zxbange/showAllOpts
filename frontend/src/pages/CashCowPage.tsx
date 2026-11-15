@@ -6,6 +6,7 @@ import { useAuth } from '../components/AccountAccess'
 import { PageHeader } from '../components/PageHeader'
 import { getCashCowLatest, getCashCowStatus, updateCashCow } from '../api/cashCow'
 import type { CashCowOverview, CashCowStatus } from '../types/cashCow'
+import { DividendYieldHistory } from '../components/DividendYieldHistory'
 import '../styles/cash-cow.css'
 
 const percent = (n: number) => `${n.toFixed(2)}%`
@@ -250,7 +251,7 @@ function CashCowPeriodPage({
           <p>
             股利支付率＝现金分红总额 ÷ 归母净利润；现金流覆盖＝经营现金流净额 ÷
             现金分红总额；年度股息率＝年度每股现金分红 ÷
-            该年平均每日收盘价。送转股、拆并股需统一每股口径；资料不足或口径不确定的股票待核验，不直接判定合格。当前股息率＝过去12个月已实施每股现金分红
+            该年平均每日收盘价。送转股、拆并股需统一每股口径；资料不足或口径不确定的股票待核验，不直接判定合格。当前静态股息率＝上一财年已实施每股现金分红
             ÷ 最新收盘价，仅供比较。
           </p>
           {snapshot && (
@@ -304,12 +305,13 @@ function CashCowPeriodPage({
                 <span
                   title={
                     item.latest_price_date
-                      ? `最新收盘价 ${item.latest_price?.toFixed(2) ?? '—'} 元（${item.latest_price_date}）；过去12个月已实施每股分红 ${item.dividend_ttm_per_share?.toFixed(4) ?? '—'} 元`
+                      ? `最新收盘价 ${item.latest_price?.toFixed(2) ?? '—'} 元（${item.latest_price_date}）；上一财年已实施每股分红 ${item.dividend_annual_per_share?.toFixed(4) ?? '—'} 元`
                       : '当前数据待核验'
                   }
                 >
-                  <small>当前股息率（TTM）</small>
+                  <small>静态股息率</small>
                   {item.current_yield == null ? '—' : percent(item.current_yield)}
+                  <DividendYieldHistory history={item.dividend_yield_history} />
                 </span>
                 <span>
                   <small>股利支付率区间</small>

@@ -1,3 +1,8 @@
+export interface AnnualYield {
+  fiscal_year: number
+  yield_pct: number | null
+}
+
 export interface DividendItem {
   method: string
   code: string
@@ -8,6 +13,7 @@ export interface DividendItem {
   industry_name: string | null
   industry_level: string | null
   dividend_yield_static: number
+  dividend_yield_history?: AnnualYield[] | null
   dividend_ratio_3y: number
   dividend_cash_annual: number
   dividend_cash_3y: number

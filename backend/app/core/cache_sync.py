@@ -4,7 +4,7 @@ import time
 from app.core.sync_progress import report, stage_range
 from app.core.mysql_payload import OPTION, compressed_column, decode_rows
 
-from sqlalchemy import JSON, Text, and_, bindparam, func, or_, select, tuple_, type_coerce
+from sqlalchemy import JSON, Text, and_, bindparam, func, inspect, literal, or_, select, tuple_, type_coerce
 
 logger = logging.getLogger(__name__)
 OMIT = {'member_codes', 'analysis', 'analysis_basis'}
@@ -90,6 +90,11 @@ def transfer_plan(source, target, table):
     compressed = json_names if source.get_execution_options().get(OPTION) else set()
     columns = [compressed_column(c) if c.name in compressed else type_coerce(c, Text).label(c.name) if c.name in json_names else c
                for c in table.columns if c.name not in OMIT]
+    if table.name == 'dividend_selection_stock':
+        names = {c['name'] for c in inspect(source).get_columns(table.name)}
+        if 'dividend_yield_history' not in names:
+            columns = [literal(None).label(c.name) if c.name == 'dividend_yield_history' else c for c in columns]
+            compressed.discard('dividend_yield_history')
     statement = table.insert()
     if json_names:
         statement = statement.values(**{name: bindparam(name, type_=Text) for name in json_names})
