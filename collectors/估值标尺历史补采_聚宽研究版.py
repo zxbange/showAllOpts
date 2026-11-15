@@ -20,7 +20,7 @@ import json
 import uuid
 from sqlalchemy import BigInteger, MetaData, Table, Text
 from sqlalchemy import event as sql_event
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import IntegrityError, OperationalError
 from sqlalchemy.dialects.mysql import LONGTEXT
 from sqlalchemy.schema import CreateTable
 from sqlalchemy import text as sql_text
@@ -564,6 +564,42 @@ def existing_day(session, day, index_code=INDEX):
     return True
 
 
+def save_day(Session, daily, raw, progress, done, total):
+    """Retry only rolled-back lock conflicts, reusing the already collected inputs."""
+    day, code = daily['trade_date'], daily['index_code']
+    stage = '{}：写入结果'.format(INDEXES[code][0])
+    for attempt in _builtins.range(3):
+        progress.update(stage, done, total, day)
+        session = Session()
+        try:
+            session.info['_result_journal_callbacks'][1](session)
+            added = not existing_day(session, day, code)
+            if added:
+                session.add(ValuationDaily(**daily))
+                session.add(ValuationMember(**raw))
+            else:
+                old = session.query(ValuationDaily).filter_by(trade_date=day, index_code=code, method_version=METHOD).one()
+                if old.source != PUBLIC_SOURCE and _builtins.any(_builtins.getattr(old, k) != v for k, v in daily.items() if k != 'updated_at'):
+                    raise HistoryError('并发已有结果冲突，本次事务取消。')
+            session.commit()
+            return _builtins.int(added)
+        except OperationalError as exc:
+            session.rollback()
+            args = _builtins.getattr(exc.orig, 'args', ())
+            if not args or args[0] not in (1205, 1213):
+                raise
+            if attempt == 2:
+                raise HistoryError('数据库锁冲突（{}），3次写入均未完成；请检查其他估值写入任务或未提交事务后重跑。'.format(args[0])) from None
+        except BaseException:
+            session.rollback()
+            raise
+        finally:
+            session.close()
+        progress.update('{}：锁冲突，准备第 {}/3 次写入'.format(INDEXES[code][0], attempt+2),
+                        done, total, day, force=True)
+        time.sleep(2*(attempt+1))  # Never wait while retaining the failed transaction/connection.
+
+
 def run(start_date=START_DATE, end_date=END_DATE, write_database=WRITE_DATABASE, max_days=MAX_DAYS,
         return_report=False, indices=INDICES):
     if not _builtins.isinstance(write_database, _builtins.bool):
@@ -621,24 +657,7 @@ def run(start_date=START_DATE, end_date=END_DATE, write_database=WRITE_DATABASE,
             daily, raw = source_day(day, code)
             if write_database:
                 stage = '{}：写入结果'.format(INDEXES[code][0])
-                progress.update(stage, offset, _builtins.len(selected), day)
-                session = Session()
-                try:
-                    session.info['_result_journal_callbacks'][1](session)
-                    if existing_day(session, day, code):
-                        old = session.query(ValuationDaily).filter_by(trade_date=day, index_code=code, method_version=METHOD).one()
-                        if old.source != PUBLIC_SOURCE and _builtins.any(_builtins.getattr(old, k) != v for k, v in daily.items() if k != 'updated_at'):
-                            raise HistoryError('并发已有结果冲突，本次事务取消。')
-                    else:
-                        session.add(ValuationDaily(**daily))
-                        session.add(ValuationMember(**raw))
-                        added += 1
-                    session.commit()
-                except Exception:
-                    session.rollback()
-                    raise
-                finally:
-                    session.close()
+                added += save_day(Session, daily, raw, progress, offset, _builtins.len(selected))
             results.append(daily)
             progress.update(stage, offset+1, _builtins.len(selected), day)
         progress.finish('完成' if selected else '无需补采')

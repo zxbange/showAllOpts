@@ -11,6 +11,7 @@ from types import ModuleType, SimpleNamespace
 import pandas as pd
 import pytest
 from sqlalchemy import create_engine, event, text
+from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import sessionmaker
 
 from test_collector_batch import CONFIG, load
@@ -161,6 +162,108 @@ def test_write_failure_rolls_back_summary_payload_and_journal(collector):
             assert db.execute(text('SELECT count(*) FROM '+table)).scalar() == 0
     event.remove(c.m.ValuationMember, 'before_insert', fail)
     assert len(run(c)) == 9
+
+
+@pytest.mark.parametrize('errno', [1205, 1213])
+@pytest.mark.parametrize('phase', ['lock', 'member'])
+def test_lock_retry_reuses_inputs_and_releases_transaction_before_wait(collector, monkeypatch, errno, phase):
+    c = collector
+    prepared = c.m.database(c.m.MODELS, 'valuation-ruler-v2')
+    monkeypatch.setattr(c.m, 'database', lambda *args: prepared)
+    prefix = 'SELECT result_sync_head' if phase == 'lock' else 'INSERT INTO valuation_ruler_member_v2'
+    attempts, sleeps = [], []
+    def conflict(db, cursor, statement, parameters, context, many):
+        if statement.startswith(prefix):
+            attempts.append(statement)
+            if len(attempts) == 1:
+                raise OperationalError(statement, parameters, Exception(errno, 'private_connection_data'))
+    event.listen(c.engine, 'before_cursor_execute', conflict)
+    def wait(seconds):
+        sleeps.append(seconds)
+        assert c.engine.pool.checkedout() == 0
+        with c.engine.connect() as db:
+            for table in ('valuation_ruler_daily_v2', 'valuation_ruler_member_v2', 'result_sync_change'):
+                assert db.execute(text('SELECT count(*) FROM '+table)).scalar() == 0
+            assert db.execute(text('SELECT revision FROM result_sync_head')).scalar() == 0
+    monkeypatch.setattr(c.m.time, 'sleep', wait)
+    report = run(c, indices=['000300.XSHG'], max_days=1, return_report=True)
+    assert report['added'] == 1 and sleeps == [2]
+    assert [call for call in c.calls if call[0] == 'members'] == [('members', '000300.XSHG', DAYS[0])]
+    assert len([call for call in c.calls if call[0] == 'valuation']) == 2  # 200 + 100, no refetch.
+    with c.engine.connect() as db:
+        for table in ('valuation_ruler_daily_v2', 'valuation_ruler_member_v2', 'result_sync_change'):
+            assert db.execute(text('SELECT count(*) FROM '+table)).scalar() == 1
+        assert db.execute(text('SELECT revision FROM result_sync_head')).scalar() == 1
+
+
+def test_persistent_lock_conflict_stops_after_three_attempts_and_resumes(collector, monkeypatch):
+    c = collector
+    attempts, sleeps = [], []
+    def conflict(mapper, connection, row):
+        if row.trade_date == DAYS[1]:
+            attempts.append(row.trade_date)
+            raise OperationalError('private_sql', {}, Exception(1205, 'private_connection_data'))
+    event.listen(c.m.ValuationMember, 'before_insert', conflict)
+    monkeypatch.setattr(c.m.time, 'sleep', sleeps.append)
+    with pytest.raises(c.m.HistoryError) as caught:
+        run(c, indices=['000300.XSHG'])
+    assert '1205' in str(caught.value) and '3次写入' in str(caught.value)
+    assert 'private' not in str(caught.value)
+    assert attempts == [DAYS[1]]*3 and sleeps == [2, 4]
+    with c.engine.connect() as db:
+        assert db.execute(text('SELECT count(*) FROM valuation_ruler_daily_v2')).scalar() == 1
+        assert db.execute(text('SELECT count(*) FROM result_sync_change')).scalar() == 1
+    event.remove(c.m.ValuationMember, 'before_insert', conflict)
+    c.calls.clear()
+    assert len(run(c, indices=['000300.XSHG'])) == 2
+    assert all(call[2] != DAYS[0] for call in c.calls if call[0] == 'members')
+
+
+def test_retry_preserves_another_writers_commit_without_duplicate_journal(collector, monkeypatch):
+    c = collector
+    prepared = c.m.database(c.m.MODELS, 'valuation-ruler-v2')
+    monkeypatch.setattr(c.m, 'database', lambda *args: prepared)
+    other_daily, other_raw = c.m.summarize(DAYS[0], '4001', sample(c.m), source=c.m.PUBLIC_SOURCE)
+    failed = []
+    def conflict(db, cursor, statement, parameters, context, many):
+        if statement.startswith('SELECT result_sync_head') and not failed:
+            failed.append(1)
+            raise OperationalError(statement, parameters, Exception(1205, 'lock timeout'))
+    event.listen(c.engine, 'before_cursor_execute', conflict)
+    def concurrent_commit(seconds):
+        session = prepared[1]()
+        try:
+            session.add(c.m.ValuationDaily(**other_daily))
+            session.add(c.m.ValuationMember(**other_raw))
+            session.commit()
+        finally:
+            session.close()
+    monkeypatch.setattr(c.m.time, 'sleep', concurrent_commit)
+    report = run(c, indices=['000300.XSHG'], max_days=1, return_report=True)
+    assert report['added'] == 0 and report['skipped'] == 1
+    with c.engine.connect() as db:
+        assert db.execute(text('SELECT index_close FROM valuation_ruler_daily_v2')).scalar() == 4001
+        assert db.execute(text('SELECT source FROM valuation_ruler_daily_v2')).scalar() == c.m.PUBLIC_SOURCE
+        assert db.execute(text('SELECT revision FROM result_sync_head')).scalar() == 1
+        assert db.execute(text('SELECT count(*) FROM result_sync_change')).scalar() == 1
+
+
+@pytest.mark.parametrize('errno', [1064, 2006, 2013])
+def test_unclassified_database_failures_are_not_replayed(collector, monkeypatch, errno):
+    c = collector
+    attempts = []
+    def fail(*args):
+        attempts.append(1)
+        raise OperationalError('private_sql', {}, Exception(errno, 'private_connection_data'))
+    event.listen(c.m.ValuationMember, 'before_insert', fail)
+    monkeypatch.setattr(c.m.time, 'sleep', lambda _: pytest.fail('non-lock error must not retry'))
+    with pytest.raises(RuntimeError) as caught:
+        run(c, indices=['000300.XSHG'])
+    assert len(attempts) == 1 and str(errno) in str(caught.value)
+    assert 'private' not in str(caught.value)
+    with c.engine.connect() as db:
+        assert db.execute(text('SELECT count(*) FROM valuation_ruler_daily_v2')).scalar() == 0
+        assert db.execute(text('SELECT count(*) FROM result_sync_change')).scalar() == 0
 
 
 @pytest.mark.parametrize('corrupt', ['payload', 'summary', 'missing'])
@@ -319,13 +422,23 @@ def test_default_full_range_and_index_launch_boundary(collector):
     assert ('members', '000852.XSHG', days[0]) not in c.calls
 
 
-def test_batch_embeds_identical_source_and_runs_all_indices(collector, monkeypatch):
+@pytest.mark.parametrize('lock_conflict', [False, True])
+def test_batch_embeds_identical_source_and_runs_all_indices(collector, monkeypatch, lock_conflict):
     c = collector
     monkeypatch.setitem(sys.modules, 'mysql_connector', SimpleNamespace(
         get_database_config=lambda: CONFIG, get_database_options=lambda: {},
         mysql_drivername=lambda _: 'mysql+pymysql', engine_options=lambda _: {}))
     batch = load(ROOT / 'collectors/策略批量采集_数据库版.py', 'batch_valuation_v2')
     monkeypatch.setattr(batch, 'connect_database', lambda _: c.engine)
+    if lock_conflict:
+        attempts = []
+        def conflict(db, cursor, statement, parameters, context, many):
+            if statement.startswith('INSERT INTO valuation_ruler_member_v2'):
+                attempts.append(1)
+                if len(attempts) == 1:
+                    raise OperationalError(statement, parameters, Exception(1205, 'lock timeout'))
+        event.listen(c.engine, 'before_cursor_execute', conflict)
+        monkeypatch.setattr(batch.time, 'sleep', lambda _: None)
     results = batch.run_all(['估值标尺'], options={'估值标尺': dict(start_date=DAYS[0], end_date=DAYS[-1])},
         db_config=CONFIG, api_namespace=vars(c.jq), preview_rows=0)
     assert results[0]['status'] == 'SUCCESS' and results[0]['rows'] == 9
