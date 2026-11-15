@@ -1,6 +1,7 @@
 """Committed source changes and local cursor move together, including history repairs."""
 from datetime import date
 import importlib.util
+import warnings
 from pathlib import Path
 
 import pytest
@@ -16,6 +17,46 @@ spec = importlib.util.spec_from_file_location('journal', Path(__file__).resolve(
 journal = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(journal)
 MODULE = 'microcap-temperature'
+
+
+def test_creation_silences_only_expected_existing_table_warnings(engine):
+    class DriverWarning(Warning):
+        pass
+
+    def database_warning(conn, cursor, statement, *args):
+        for table in ('result_sync_head', 'result_sync_change'):
+            if 'CREATE TABLE IF NOT EXISTS '+table in statement:
+                warnings.warn(DriverWarning(1050, "Table '{}' already exists".format(table)))
+        if 'CREATE TABLE IF NOT EXISTS result_sync_change' in statement:
+            warnings.warn(DriverWarning(1265, 'Data truncated'))
+            warnings.warn(DriverWarning(1050, "Table 'other_table' already exists"))
+
+    event.listen(engine, 'before_cursor_execute', database_warning)
+    try:
+        with warnings.catch_warnings(record=True) as seen:
+            warnings.simplefilter('always')
+            journal._install_result_journal(sessionmaker(bind=engine), (MicrocapTemperature,), MODULE)
+            warnings.warn(DriverWarning(1050, "Table 'result_sync_head' already exists"))
+        assert [w.message.args for w in seen if isinstance(w.message, DriverWarning)] == [
+            (1265, 'Data truncated'), (1050, "Table 'other_table' already exists"),
+            (1050, "Table 'result_sync_head' already exists")]
+    finally:
+        event.remove(engine, 'before_cursor_execute', database_warning)
+
+
+def test_creation_failure_still_raises_and_restores_warning_filters(engine):
+    def fail(conn, cursor, statement, *args):
+        if 'CREATE TABLE IF NOT EXISTS result_sync_change' in statement:
+            raise RuntimeError('creation failed')
+    event.listen(engine, 'before_cursor_execute', fail)
+    previous = list(warnings.filters)
+    try:
+        with pytest.raises(RuntimeError, match='creation failed'):
+            journal._install_result_journal(sessionmaker(bind=engine), (MicrocapTemperature,), MODULE)
+        assert warnings.filters == previous
+    finally:
+        event.remove(engine, 'before_cursor_execute', fail)
+
 
 @pytest.fixture
 def writer(engine):

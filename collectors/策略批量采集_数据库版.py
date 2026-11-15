@@ -16,6 +16,7 @@ import threading
 import time
 import unicodedata
 import uuid
+import warnings
 from builtins import (
     any, bool, callable, float, getattr, int, isinstance, len, min, range, set, sorted, str, type,
 )
@@ -666,7 +667,8 @@ def _install_result_journal(Session, models, module):
     engine = Session.kw['bind']
     # Compile explicitly for SQLAlchemy versions predating CreateTable(if_not_exists=True).
     # Database-side IF NOT EXISTS avoids the check-then-create race across collectors.
-    with engine.begin() as connection:
+    with engine.begin() as connection, warnings.catch_warnings():
+        warnings.filterwarnings('ignore', message=r'''^\(1050, ["']Table 'result_sync_(?:change|head)' already exists["']\)$''')
         for table in meta.sorted_tables:
             ddl = str(CreateTable(table).compile(dialect=engine.dialect))
             connection.execute(sql_text(ddl.replace('CREATE TABLE', 'CREATE TABLE IF NOT EXISTS', 1)))

@@ -1,6 +1,7 @@
 """Standalone collector journal; embedded copies are checked by the sync script."""
 import json
 import uuid
+import warnings
 from sqlalchemy import BigInteger, Column, Integer, MetaData, String, Table, Text
 from sqlalchemy import event as sql_event, inspect
 from sqlalchemy.exc import IntegrityError
@@ -35,7 +36,8 @@ def _install_result_journal(Session, models, module):
     engine = Session.kw['bind']
     # Compile explicitly for SQLAlchemy versions predating CreateTable(if_not_exists=True).
     # Database-side IF NOT EXISTS avoids the check-then-create race across collectors.
-    with engine.begin() as connection:
+    with engine.begin() as connection, warnings.catch_warnings():
+        warnings.filterwarnings('ignore', message=r'''^\(1050, ["']Table 'result_sync_(?:change|head)' already exists["']\)$''')
         for table in meta.sorted_tables:
             ddl = str(CreateTable(table).compile(dialect=engine.dialect))
             connection.execute(sql_text(ddl.replace('CREATE TABLE', 'CREATE TABLE IF NOT EXISTS', 1)))
