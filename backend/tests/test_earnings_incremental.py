@@ -141,6 +141,62 @@ def test_quotes_use_one_calendar_and_bounded_batches(c):
     assert all(set(bars) == set(d for d in calendar if d <= price_calls[0][1]['end_date']) for _, bars, _ in rows)
 
 
+def test_empty_express_skips_lazy_mapping_and_reports_source_before_loading(c):
+    from sqlalchemy import Column, Date, MetaData, Table
+    fields = Table('source_dates', MetaData(), Column('day', Date)).c
+    messages = []
+    class Jy:
+        run_query = None
+        @property
+        def LC_FSPerformedLetters(self):
+            assert messages[-1] == '聚宽：加载快报接口并查询新增披露'
+            return SimpleNamespace(EndDate=fields.day, InfoPublDate=fields.day)
+        @property
+        def SecuMain(self):
+            pytest.fail('no express disclosures: must not even load company metadata')
+    class Finance:
+        run_query = None
+        @property
+        def STK_FIN_FORCAST(self):
+            assert messages[-1] == '聚宽：加载预告接口并查询新增披露'
+            return SimpleNamespace(end_date=fields.day, pub_date=fields.day)
+    c.env.update(jy=Jy(), finance=Finance(), print=messages.append,
+        paged=lambda *a, **kw: [], fetch_formal_events=lambda *a: [])
+    assert c.env['fetch_events'](['600001.XSHG'], dt.date(2026,9,30), dt.date(2026,10,16), dt.date(2026,10,15)) == []
+    assert len([m for m in messages if '耗时' in m]) == 3
+
+
+@pytest.mark.parametrize('has_disclosures', [False, True])
+def test_formal_disclosures_are_queried_by_dynamic_dates_not_universe_batches(c, has_disclosures):
+    from sqlalchemy import Column, Date, Float, MetaData, String, Table
+    metadata = MetaData()
+    income = Table('formal_income', metadata, Column('code', String), Column('pubDate', Date),
+                   Column('statDate', Date), Column('np_parent_company_owners', Float))
+    indicator = Table('formal_indicator', metadata, Column('pubDate', Date), Column('statDate', Date),
+                      Column('inc_net_profit_to_shareholders_year_on_year', Float))
+    start, end, period = dt.date(2026,11,9), dt.date(2026,11,16), dt.date(2026,9,30)
+    codes = ['{}.XSHG'.format(600000+i) for i in range(5000)]
+    columns = ['code','publication_date','report_period','net_profit','profit_yoy',
+               'indicator_publication_date','indicator_period']
+    records = [dict(zip(columns, [code, start, period, 100, 25, end, period])) for code in codes[:2]]
+    calls = []
+    def fetch(q, date):
+        sql = str(q.statement)
+        params = q.statement.compile().params
+        assert ' IN (' not in sql
+        assert start in params.values() and end in params.values()
+        assert ' OR ' in sql and date == end
+        cursor = params['code_1']
+        calls.append(cursor)
+        # A short server page is not EOF: keep reading until an empty page.
+        return Frame([r for r in records if r['code'] > cursor][:1] if has_disclosures else [], columns)
+    with c.Session() as session:
+        c.env.update(income=income.c, indicator=indicator.c, query=session.query, get_fundamentals=fetch)
+        events = c.env['fetch_formal_events'](codes, period, end, start)
+    assert calls == (['', codes[0], codes[1]] if has_disclosures else [''])
+    assert [e['code'] for e in events] == (codes[:2] if has_disclosures else [])
+
+
 @pytest.mark.parametrize('fault', ['duplicate', 'wrong_code', 'missing_signal', 'missing_previous'])
 def test_invalid_batch_quotes_never_become_partial_results(c, fault):
     env = c.env

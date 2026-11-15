@@ -9,9 +9,11 @@ collectors/
 ├── *.py                    采集、补采和研究入口
 ├── rules/                  公共代码维护源，不在聚宽运行时导入
 │   ├── earnings_followup.py
+│   ├── earnings_history.py
 │   ├── earnings_version.py
 │   ├── momentum_threshold.py
-│   └── result_journal.py
+│   ├── result_journal.py
+│   └── selection_archive.py
 └── tools/                  仅在本地使用的代码同步工具
     ├── sync_earnings_version.py
     ├── sync_momentum_threshold.py
@@ -94,7 +96,7 @@ python collectors/tools/sync_momentum_threshold.py --check
 python collectors/tools/sync_history_strategies.py --check
 ```
 
-`sync_history_strategies.py` 将估值标尺、创红比独立实现嵌入批量版，并适配统一连接、配置和进度。其余工具只同步标记的公共代码块；其他策略修改仍须同步检查两个入口。工具只在本地维护时运行，聚宽无需上传。
+`sync_history_strategies.py` 同步估值标尺、创红比实现及高股息/高增长共用的归档函数，并适配批量版的连接、配置和进度。公共规则标记内只放实现，依赖在各入口顶部集中声明；修改依赖时同步维护入口文件头。其余工具只同步标记的公共代码块，其他策略修改仍须检查两个入口。工具仅供本地维护，聚宽无需上传。
 
 ## 行业动量20%边界
 

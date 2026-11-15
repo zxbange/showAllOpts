@@ -19,19 +19,26 @@ from decimal import Decimal, InvalidOperation, ROUND_HALF_UP, localcontext
 from statistics import median
 from types import SimpleNamespace
 from urllib.parse import quote, quote_plus
-
 import jqdata as jq
 import pandas as pd
-from sqlalchemy import (BigInteger, Column, Date, DateTime, Index, Integer, JSON,
-                        Numeric, String, Text, and_, or_, create_engine, func)
+from sqlalchemy import BigInteger, Column, Date, DateTime, Index, Integer, JSON, Numeric, String, Text, and_, or_, create_engine, func
 from sqlalchemy.engine.url import URL
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
+from mysql_connector import get_database_config, get_database_options, mysql_drivername, engine_options
+import uuid
+from sqlalchemy import MetaData, Table
+from sqlalchemy import event as sql_event, inspect
+from sqlalchemy.exc import IntegrityError
+from sqlalchemy.dialects.mysql import LONGTEXT
+from sqlalchemy.schema import CreateTable
+from sqlalchemy import text as sql_text
+
 
 dt = datetime  # 净利润断层使用的日期别名，共用同一个模块。
 
 # ==================== 集中配置区 ====================
-from mysql_connector import get_database_config, get_database_options, mysql_drivername, engine_options
+
 DB_CONFIG = get_database_config()
 DB_OPTIONS = get_database_options()
 # 连接参数只配置一次；重试仅针对连接，不重放写入事务。
@@ -57,14 +64,6 @@ _PROGRESS_LOCAL = threading.local()
 
 
 # BEGIN SHARED RESULT JOURNAL
-import json as _journal_json
-import uuid as _journal_uuid
-from sqlalchemy import BigInteger, Column, Integer, MetaData, String, Table, Text
-from sqlalchemy import event as _journal_event, inspect as _journal_inspect
-from sqlalchemy.exc import IntegrityError as _JournalIntegrityError
-from sqlalchemy.dialects.mysql import LONGTEXT as _JournalLongText
-from sqlalchemy.schema import CreateTable as _JournalCreateTable
-from sqlalchemy import text as _journal_text
 
 def _result_journal_tables():
     meta = MetaData()
@@ -76,7 +75,7 @@ def _result_journal_tables():
     changes = Table('result_sync_change', meta,
                     Column('module', String(48), primary_key=True),
                     Column('revision', BigInteger, primary_key=True),
-                    Column('payload', Text().with_variant(_JournalLongText(), 'mysql'), nullable=False))
+                    Column('payload', Text().with_variant(LONGTEXT(), 'mysql'), nullable=False))
     for table in meta.tables.values():
         table.dialect_options['mysql']['engine'] = 'InnoDB'
         table.dialect_options['mysql']['charset'] = 'utf8mb4'
@@ -93,8 +92,8 @@ def _install_result_journal(Session, models, module):
     # Database-side IF NOT EXISTS avoids the check-then-create race across collectors.
     with engine.begin() as connection:
         for table in meta.sorted_tables:
-            ddl = str(_JournalCreateTable(table).compile(dialect=engine.dialect))
-            connection.execute(_journal_text(ddl.replace('CREATE TABLE', 'CREATE TABLE IF NOT EXISTS', 1)))
+            ddl = str(CreateTable(table).compile(dialect=engine.dialect))
+            connection.execute(sql_text(ddl.replace('CREATE TABLE', 'CREATE TABLE IF NOT EXISTS', 1)))
     # Initialization races are harmless; never reset an existing generation/revision.
     with engine.begin() as connection:
         exists = connection.execute(head.select().where(head.c.module == module)).first()
@@ -102,8 +101,8 @@ def _install_result_journal(Session, models, module):
         try:
             with engine.begin() as connection:
                 connection.execute(head.insert().values(module=module, protocol=1,
-                                   generation=_journal_uuid.uuid4().hex, revision=0))
-        except _JournalIntegrityError:
+                                   generation=uuid.uuid4().hex, revision=0))
+        except IntegrityError:
             with engine.begin() as connection:
                 if connection.execute(head.select().where(head.c.module == module)).first() is None:
                     raise
@@ -127,9 +126,9 @@ def _install_result_journal(Session, models, module):
         info = lock(session)
         for key in keys:
             values = [value.isoformat() if hasattr(value, 'isoformat') else value for value in key]
-            identity = (table.name, _journal_json.dumps(values, ensure_ascii=True, separators=(',', ':')))
+            identity = (table.name, json.dumps(values, ensure_ascii=True, separators=(',', ':')))
             info['records'][identity] = {'table': table.name, 'key': values, 'deleted': bool(deleted)}
-        payload = _journal_json.dumps(list(info['records'].values()), ensure_ascii=True, separators=(',', ':'))
+        payload = json.dumps(list(info['records'].values()), ensure_ascii=True, separators=(',', ':'))
         with session.no_autoflush:
             if not info['written']:
                 info['revision'] += 1
@@ -147,7 +146,7 @@ def _install_result_journal(Session, models, module):
         rows += [row for row in session.deleted if isinstance(row, tracked)]
         groups = {}
         for row in rows:
-            state = _journal_inspect(row)
+            state = inspect(row)
             keys = list(row.__table__.primary_key.columns)
             if state.persistent and state.identity != tuple(getattr(row, column.name) for column in keys):
                 raise ValueError('结果同步不允许修改主键；请删除旧记录再插入新记录。')
@@ -160,9 +159,9 @@ def _install_result_journal(Session, models, module):
     def reset(session):
         session.info.pop(info_key, None)
 
-    _journal_event.listen(Session, 'before_flush', before_flush)
-    _journal_event.listen(Session, 'after_commit', reset)
-    _journal_event.listen(Session, 'after_rollback', reset)
+    sql_event.listen(Session, 'before_flush', before_flush)
+    sql_event.listen(Session, 'after_commit', reset)
+    sql_event.listen(Session, 'after_rollback', reset)
     # sessionmaker copies this info dictionary into each new Session.
     Session.configure(info=dict(Session.kw.get('info', {}), _result_journal_callbacks=(tracked, lock, record)))
     Session._result_journal_module = module
@@ -584,7 +583,6 @@ def _etf_heat_strategy(_apis, _config):
     PAGE_SIZE = 2000
 
 
-
     CROSS_BORDER_CODES = {
         '513100.XSHG', '159509.XSHE', '513030.XSHG', '513520.XSHG',
         '513690.XSHG', '513130.XSHG', '159550.XSHE',
@@ -644,7 +642,7 @@ def _etf_heat_strategy(_apis, _config):
                 raise ValueError('无效人工分类：' + category)
             return category, '人工指定'
         label = re.sub(r'\s+', '', target).upper()
-        if ('黄金' in label and not builtins.any(w in label for w in ('股票', '黄金股', '产业'))) or \
+        if ('黄金' in label and not builtins.any(w in label for w in ('股票', '黄金股', '产业'))) or\
                 builtins.any(w in label for w in ('豆粕期货', '有色金属期货', '能源化工期货')):
             return '商品ETF', '商品标的关键词'
         for category, words in RULES:

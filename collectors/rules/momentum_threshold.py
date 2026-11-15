@@ -1,7 +1,8 @@
 """Exact industry-momentum threshold, embedded into both JoinQuant entry points."""
 
+from decimal import Decimal, InvalidOperation
+
 # BEGIN SHARED MOMENTUM THRESHOLD
-from decimal import Decimal as _MomentumDecimal, InvalidOperation as _MomentumInvalidOperation
 
 
 def _momentum_front_status(start_close, end_close):
@@ -12,9 +13,9 @@ def _momentum_front_status(start_close, end_close):
     including decimal inputs longer than the active Decimal context precision.
     """
     try:
-        start = _MomentumDecimal(str(start_close))
-        end = _MomentumDecimal(str(end_close))
-    except (_MomentumInvalidOperation, TypeError, ValueError):
+        start = Decimal(str(start_close))
+        end = Decimal(str(end_close))
+    except (InvalidOperation, TypeError, ValueError):
         return None
     if not start.is_finite() or not end.is_finite() or start <= 0 or end <= 0:
         return None

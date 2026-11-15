@@ -1,10 +1,10 @@
-# BEGIN SHARED EARNINGS FOLLOWUP
-import builtins as _ef_b
-import datetime as _ef_dt
-import math as _ef_math
-from decimal import Decimal as _EFDecimal
+import builtins
+import datetime
+import math
+from decimal import Decimal
 from sqlalchemy import Column, Date, DateTime, MetaData, Numeric, String, Table
-from sqlalchemy import func as _ef_func
+
+# BEGIN SHARED EARNINGS FOLLOWUP
 
 
 def _earnings_followup_table():
@@ -40,7 +40,7 @@ def _refresh_earnings_followup(Session, Stock, as_of, get_price, progress=None):
     for index, (code, entries) in enumerate(sorted(grouped.items()), 1):
         if progress:
             progress('更新已入选股票收盘表现 {}/{} {}'.format(index, len(grouped), code))
-        first = _ef_b.min(day for _, day in entries)
+        first = builtins.min(day for _, day in entries)
         # 两个收盘价必须来自同一次前复权查询，不能拼接不同复权基准的旧快照。
         frame = get_price(code, start_date=first, end_date=as_of, frequency='daily',
                           fields=['close', 'paused'], skip_paused=False, fq='pre')
@@ -48,31 +48,31 @@ def _refresh_earnings_followup(Session, Stock, as_of, get_price, progress=None):
             raise ValueError('{} 收盘跟踪行情缺失。'.format(code))
         closes, seen = {}, set()
         for raw_day, row in frame.iterrows():
-            day = raw_day.date() if isinstance(raw_day, _ef_dt.datetime) else _ef_dt.datetime.strptime(str(raw_day)[:10], '%Y-%m-%d').date()
+            day = raw_day.date() if isinstance(raw_day, datetime.datetime) else datetime.datetime.strptime(str(raw_day)[:10], '%Y-%m-%d').date()
             if not first <= day <= as_of or day in seen:
                 raise ValueError('{} 收盘跟踪日期越界或重复。'.format(code))
             seen.add(day)
-            paused = _ef_b.float(row['paused'])
+            paused = builtins.float(row['paused'])
             if paused not in (0, 1):
                 raise ValueError('{} 停牌状态缺失。'.format(code))
             if paused:
                 continue
-            close = _ef_b.float(row['close'])
-            if not _ef_math.isfinite(close) or not 0 < close < 10 ** 16:
+            close = builtins.float(row['close'])
+            if not math.isfinite(close) or not 0 < close < 10 ** 16:
                 raise ValueError('{} 收盘价无效。'.format(code))
-            closes[day] = _EFDecimal(str(close))
-        if not closes or _ef_b.any(day not in closes for _, day in entries):
+            closes[day] = Decimal(str(close))
+        if not closes or builtins.any(day not in closes for _, day in entries):
             raise ValueError('{} 断层日收盘价缺失，保留原跟踪数据。'.format(code))
-        latest = _ef_b.max(closes)
+        latest = builtins.max(closes)
         for period, signal_day in entries:
             change = (closes[latest] / closes[signal_day] - 1) * 100
-            if _ef_b.abs(change) >= 10 ** 18:
+            if builtins.abs(change) >= 10 ** 18:
                 raise ValueError('{} 收盘涨幅超出字段范围。'.format(code))
             records.append(dict(report_period=period, code=code, signal_date=signal_day,
-                as_of_date=as_of, latest_date=latest, signal_close=closes[signal_day].quantize(_EFDecimal('1e-8'), rounding='ROUND_HALF_UP'),
-                latest_close=closes[latest].quantize(_EFDecimal('1e-8'), rounding='ROUND_HALF_UP'),
-                since_signal_pct=change.quantize(_EFDecimal('1e-6'), rounding='ROUND_HALF_UP'),
-                updated_at=_ef_dt.datetime.utcnow()))
+                as_of_date=as_of, latest_date=latest, signal_close=closes[signal_day].quantize(Decimal('1e-8'), rounding='ROUND_HALF_UP'),
+                latest_close=closes[latest].quantize(Decimal('1e-8'), rounding='ROUND_HALF_UP'),
+                since_signal_pct=change.quantize(Decimal('1e-6'), rounding='ROUND_HALF_UP'),
+                updated_at=datetime.datetime.utcnow()))
     # 网络读取结束后再写入，避免查询行情时长时间占用数据库事务。
     session = Session()
     try:

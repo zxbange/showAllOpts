@@ -1,8 +1,10 @@
+from contextlib import contextmanager
+from sqlalchemy import MetaData, Table
+
 # BEGIN SHARED EARNINGS HISTORY
-from contextlib import contextmanager as _earnings_history_contextmanager
 
 
-@_earnings_history_contextmanager
+@contextmanager
 def _history_session(Session):
     # JoinQuant notebooks can still use SQLAlchemy 1.3 Sessions without __enter__.
     session = Session()
@@ -32,7 +34,6 @@ def _history_checkpoint_table():
     # Independent checkpoint: an existing daily run is NOT evidence that history
     # was replayed. A crash after snapshot commit and before this commit safely
     # repeats append-only work instead of claiming an incomplete quarter is done.
-    from sqlalchemy import MetaData, Table
     return Table('earnings_history_checkpoint', MetaData(),
         Column('report_period', Date, primary_key=True),
         Column('as_of_date', Date, nullable=False),

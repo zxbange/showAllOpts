@@ -23,7 +23,8 @@ def sync_block(source_name, START, END, check):
 
 def sync_history(check=False):
     start, end = '# BEGIN SHARED EARNINGS HISTORY', '# END SHARED EARNINGS HISTORY'
-    source = (ROOT/'collectors/rules/earnings_history.py').read_text(encoding='utf-8').strip()
+    source = (ROOT/'collectors/rules/earnings_history.py').read_text(encoding='utf-8')
+    source = source[source.index(start):source.index(end)+len(end)]
     for name in ('净利润断层_数据库版.py', '策略批量采集_数据库版.py'):
         path = ROOT/'collectors'/name
         text = path.read_text(encoding='utf-8')

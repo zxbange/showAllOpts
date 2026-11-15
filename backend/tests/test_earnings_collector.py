@@ -231,8 +231,11 @@ def test_real_query_filters_three_sources_and_preserves_source_records(c, start_
         def fetch(q):
             model=q.column_descriptions[0]['entity']
             source_tables.append(model)
-            columns=[col.key for col in model.__table__.columns]
-            return Frame([{key:getattr(row,key) for key in columns} for row in q.all()],columns)
+            if q.column_descriptions[0]['expr'] is model:
+                columns=[col.key for col in model.__table__.columns]
+                return Frame([{key:getattr(row,key) for key in columns} for row in q.all()],columns)
+            columns=[col['name'] for col in q.column_descriptions]
+            return Frame([dict(zip(columns, row)) for row in q.all()],columns)
         c.env['jy']=SimpleNamespace(SecuMain=Securities,LC_FSPerformedLetters=Express,run_query=fetch)
         c.env['finance']=SimpleNamespace(STK_FIN_FORCAST=Forecast,run_query=fetch)
         c.env['income']=Income;c.env['indicator']=Indicator
@@ -241,12 +244,15 @@ def test_real_query_filters_three_sources_and_preserves_source_records(c, start_
             calls.append(date)
             if start_date is not None:
                 assert ' OR ' in str(q)  # Either publication date can advance the effective disclosure.
+            if len(calls)>1:
+                return Frame([], ['code','publication_date','report_period','net_profit','profit_yoy',
+                                  'indicator_publication_date','indicator_period'])
             return Frame([dict(code='600001.XSHG',publication_date=dt.date(2026,10,15),
                 report_period=period,net_profit=1e8,profit_yoy=35,indicator_publication_date=dt.date(2026,10,16),
                 indicator_period=period)])
         c.env['get_fundamentals']=formal
         events=c.env['fetch_events'](['600001.XSHG'],period,as_of,start_date)
-        assert {e['kind'] for e in events}==kinds and calls==[as_of]
+        assert {e['kind'] for e in events}==kinds and calls==[as_of,as_of]
         assert (Securities in source_tables) == ('express' in kinds)
         by_kind={e['kind']:e for e in events}
         assert by_kind['formal']['publication_date']=='2026-10-16'

@@ -31,6 +31,10 @@ def collector(tmp_path):
                      pd=SimpleNamespace(DataFrame=lambda data=None, columns=None: data or []))
     # The real run now initializes the journal even when there are no new dates.
     # Load its embedded, offline-safe helpers too; do not stub out the new behavior.
+    for node in tree.body:
+        if ((isinstance(node, ast.ImportFrom) and node.module.startswith('sqlalchemy'))
+                or (isinstance(node, ast.Import) and all(alias.name in ('json', 'uuid') for alias in node.names))):
+            exec(ast.get_source_segment(text, node), namespace)
     journal = text.split('# BEGIN SHARED RESULT JOURNAL', 1)[1].split('# END SHARED RESULT JOURNAL', 1)[0]
     exec(compile(journal, str(source), 'exec'), namespace)
     exec(compile(ast.Module(body=nodes, type_ignores=[]), str(source), 'exec'), namespace)

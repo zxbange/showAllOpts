@@ -114,25 +114,29 @@ def test_calculation_and_model_definitions_keep_original_rules(batch):
             compared += 1
     assert compared >= 35
     imports = [n for n in ast.walk(tree) if isinstance(n, (ast.Import, ast.ImportFrom))]
-    # Self-contained factories may lazily import stable platform/standard dependencies.
-    # No strategy/project-file imports are permitted (also checked for every entrypoint).
-    history_factories = [factories['_valuation_ruler_strategy'], factories['_growth_dividend_strategy']]
-    history_imports = {id(n) for factory in history_factories for n in ast.walk(factory)
-                       if isinstance(n, (ast.Import, ast.ImportFrom))}
-    allowed_history = {'datetime', 'builtins', 'time', 'hashlib', 're', 'decimal', 'jqdata',
-                       'math', 'sqlalchemy', 'sqlalchemy.ext.declarative', 'sqlalchemy.orm', 'mysql_connector'}
-    for node in imports:
-        if id(node) in history_imports:
-            modules = [node.module] if isinstance(node, ast.ImportFrom) else [alias.name for alias in node.names]
-            assert set(modules) <= allowed_history
-        else:
-            assert node in tree.body or (isinstance(node, ast.ImportFrom) and node.module in
-                {'contextlib', 'sqlalchemy', 'sqlalchemy.dialects.mysql'})
+    # Every dependency belongs to the header, including newly embedded strategies.
+    assert all(node in tree.body for node in imports)
+    first_config = next(node for node in tree.body if isinstance(node, ast.Assign))
+    assert max(node.end_lineno for node in imports) < first_config.lineno
     from mysql_connector import get_database_config
     assert batch.DB_CONFIG == get_database_config()
 
 
-def test_pasted_notebook_with_shared_connector_and_no_other_strategy_files(batch, monkeypatch, tmp_path):
+def test_batch_configuration_and_local_entrypoints_have_one_definition():
+    tree = ast.parse(TARGET.read_text(encoding='utf-8'))
+    definitions = [node for node in tree.body if isinstance(node, ast.Assign)
+                   and any(isinstance(target, ast.Name) and target.id == 'STRATEGY_CONFIG'
+                           for target in node.targets)]
+    assert len(definitions) == 1
+    config = ast.literal_eval(definitions[0].value)
+    assert len(config) == 12
+    for scope in [tree] + [node for node in ast.walk(tree) if isinstance(node, (ast.FunctionDef, ast.ClassDef))]:
+        names = [node.name for node in scope.body if isinstance(node, (ast.FunctionDef, ast.ClassDef))]
+        assert len(names) == len(set(names)), names
+
+
+@pytest.mark.parametrize('polluted_namespace', [False, True])
+def test_pasted_notebook_with_shared_connector_and_no_other_strategy_files(batch, monkeypatch, tmp_path, polluted_namespace):
     fake_platform(monkeypatch)
     monkeypatch.chdir(tmp_path)
     source = TARGET.read_text(encoding='utf-8')
@@ -142,6 +146,10 @@ def test_pasted_notebook_with_shared_connector_and_no_other_strategy_files(batch
     assert not any(isinstance(n, ast.Call) and isinstance(n.func, ast.Name)
                    and n.func.id in ('exec', 'eval', 'compile', 'open') for n in ast.walk(tree))
     namespace = {'__name__': 'notebook_cell'}
+    if polluted_namespace:
+        # Notebook wildcard imports may have shadowed builtin types and datetime.
+        namespace.update({name: object() for name in
+                          ('datetime', 'bool', 'int', 'float', 'str', 'type', 'isinstance', 'any', 'min')})
     exec(compile(source, '<ipython-input-test>', 'exec'), namespace)
     assert len(namespace['STRATEGIES']) == 12
     assert {'估值标尺', '创红比'} <= namespace['STRATEGIES'].keys()

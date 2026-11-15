@@ -10,12 +10,21 @@ import datetime
 import datetime as dt
 import json
 import math
+import time
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP, localcontext
 import pandas as pd
 from sqlalchemy import Column, Date, DateTime, Index, Integer, JSON, Numeric, String, Text, create_engine
 from sqlalchemy.engine.url import URL
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
+from sqlalchemy import MetaData, Table
+import uuid
+from sqlalchemy import BigInteger
+from sqlalchemy.schema import CreateTable
+from sqlalchemy import text as sql_text
+from mysql_connector import get_database_config, get_database_options, mysql_drivername, engine_options
+from contextlib import contextmanager
+
 
 END_DATE = None  # 北京时间运行当天；16:00 前仅使用上一日及以前的完整行情。
 RULE_VERSION = 'announcement-open-v1'
@@ -27,12 +36,6 @@ Base = declarative_base()
 
 
 # BEGIN SHARED EARNINGS FOLLOWUP
-import builtins as _ef_b
-import datetime as _ef_dt
-import math as _ef_math
-from decimal import Decimal as _EFDecimal
-from sqlalchemy import Column, Date, DateTime, MetaData, Numeric, String, Table
-from sqlalchemy import func as _ef_func
 
 
 def _earnings_followup_table():
@@ -68,7 +71,7 @@ def _refresh_earnings_followup(Session, Stock, as_of, get_price, progress=None):
     for index, (code, entries) in enumerate(sorted(grouped.items()), 1):
         if progress:
             progress('更新已入选股票收盘表现 {}/{} {}'.format(index, len(grouped), code))
-        first = _ef_b.min(day for _, day in entries)
+        first = builtins.min(day for _, day in entries)
         # 两个收盘价必须来自同一次前复权查询，不能拼接不同复权基准的旧快照。
         frame = get_price(code, start_date=first, end_date=as_of, frequency='daily',
                           fields=['close', 'paused'], skip_paused=False, fq='pre')
@@ -76,31 +79,31 @@ def _refresh_earnings_followup(Session, Stock, as_of, get_price, progress=None):
             raise ValueError('{} 收盘跟踪行情缺失。'.format(code))
         closes, seen = {}, set()
         for raw_day, row in frame.iterrows():
-            day = raw_day.date() if isinstance(raw_day, _ef_dt.datetime) else _ef_dt.datetime.strptime(str(raw_day)[:10], '%Y-%m-%d').date()
+            day = raw_day.date() if isinstance(raw_day, datetime.datetime) else datetime.datetime.strptime(str(raw_day)[:10], '%Y-%m-%d').date()
             if not first <= day <= as_of or day in seen:
                 raise ValueError('{} 收盘跟踪日期越界或重复。'.format(code))
             seen.add(day)
-            paused = _ef_b.float(row['paused'])
+            paused = builtins.float(row['paused'])
             if paused not in (0, 1):
                 raise ValueError('{} 停牌状态缺失。'.format(code))
             if paused:
                 continue
-            close = _ef_b.float(row['close'])
-            if not _ef_math.isfinite(close) or not 0 < close < 10 ** 16:
+            close = builtins.float(row['close'])
+            if not math.isfinite(close) or not 0 < close < 10 ** 16:
                 raise ValueError('{} 收盘价无效。'.format(code))
-            closes[day] = _EFDecimal(str(close))
-        if not closes or _ef_b.any(day not in closes for _, day in entries):
+            closes[day] = Decimal(str(close))
+        if not closes or builtins.any(day not in closes for _, day in entries):
             raise ValueError('{} 断层日收盘价缺失，保留原跟踪数据。'.format(code))
-        latest = _ef_b.max(closes)
+        latest = builtins.max(closes)
         for period, signal_day in entries:
             change = (closes[latest] / closes[signal_day] - 1) * 100
-            if _ef_b.abs(change) >= 10 ** 18:
+            if builtins.abs(change) >= 10 ** 18:
                 raise ValueError('{} 收盘涨幅超出字段范围。'.format(code))
             records.append(dict(report_period=period, code=code, signal_date=signal_day,
-                as_of_date=as_of, latest_date=latest, signal_close=closes[signal_day].quantize(_EFDecimal('1e-8'), rounding='ROUND_HALF_UP'),
-                latest_close=closes[latest].quantize(_EFDecimal('1e-8'), rounding='ROUND_HALF_UP'),
-                since_signal_pct=change.quantize(_EFDecimal('1e-6'), rounding='ROUND_HALF_UP'),
-                updated_at=_ef_dt.datetime.utcnow()))
+                as_of_date=as_of, latest_date=latest, signal_close=closes[signal_day].quantize(Decimal('1e-8'), rounding='ROUND_HALF_UP'),
+                latest_close=closes[latest].quantize(Decimal('1e-8'), rounding='ROUND_HALF_UP'),
+                since_signal_pct=change.quantize(Decimal('1e-6'), rounding='ROUND_HALF_UP'),
+                updated_at=datetime.datetime.utcnow()))
     # 网络读取结束后再写入，避免查询行情时长时间占用数据库事务。
     session = Session()
     try:
@@ -145,10 +148,6 @@ def _prune_earnings_history(Session, Stock, Run, as_of):
 # END SHARED EARNINGS FOLLOWUP
 
 # BEGIN SHARED EARNINGS VERSION
-import uuid as _earnings_uuid
-from sqlalchemy import BigInteger, Column, Date, MetaData, String, Table
-from sqlalchemy.schema import CreateTable as _EarningsCreateTable
-from sqlalchemy import text as _earnings_text
 
 
 def _earnings_version_table():
@@ -182,8 +181,8 @@ def _check_earnings_engines(connection):
     # Both reads use the collector's same connection/current database. No host,
     # database name, account, arbitrary metadata or driver exception is exposed.
     try:
-        selected = connection.execute(_earnings_text('SELECT DATABASE() IS NOT NULL')).scalar()
-        rows = connection.execute(_earnings_text(
+        selected = connection.execute(sql_text('SELECT DATABASE() IS NOT NULL')).scalar()
+        rows = connection.execute(sql_text(
             "SELECT TABLE_NAME, TABLE_TYPE, ENGINE FROM information_schema.TABLES "
             "WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME IN "
             "('earnings_gap_run','earnings_gap_stock','earnings_sync_head','earnings_sync_migration')"
@@ -246,13 +245,13 @@ def _prepare_earnings_version(Session):
         table = _earnings_version_table()
         engine = Session.kw['bind']
         # Database-side idempotence works on older SQLAlchemy used in notebooks.
-        ddl = str(_EarningsCreateTable(table).compile(dialect=engine.dialect))
+        ddl = str(CreateTable(table).compile(dialect=engine.dialect))
         with engine.begin() as connection:
-            connection.execute(_earnings_text(ddl.replace('CREATE TABLE', 'CREATE TABLE IF NOT EXISTS', 1)))
+            connection.execute(sql_text(ddl.replace('CREATE TABLE', 'CREATE TABLE IF NOT EXISTS', 1)))
         marker = _earnings_migration_table()
-        ddl = str(_EarningsCreateTable(marker).compile(dialect=engine.dialect))
+        ddl = str(CreateTable(marker).compile(dialect=engine.dialect))
         with engine.begin() as connection:
-            connection.execute(_earnings_text(ddl.replace('CREATE TABLE', 'CREATE TABLE IF NOT EXISTS', 1)))
+            connection.execute(sql_text(ddl.replace('CREATE TABLE', 'CREATE TABLE IF NOT EXISTS', 1)))
         if engine.dialect.name == 'mysql':
             with engine.connect() as connection:
                 _check_earnings_engines(connection)
@@ -268,14 +267,14 @@ def _lock_earnings_version(session, period):
     table = _earnings_version_table()
     row = session.execute(table.select().where(table.c.report_period == period).with_for_update()).first()
     if row is None:
-        session.execute(table.insert().values(report_period=period, generation=_earnings_uuid.uuid4().hex, revision=0))
+        session.execute(table.insert().values(report_period=period, generation=uuid.uuid4().hex, revision=0))
     return table
 
 
 def _advance_earnings_version(session, table, period, rebuild=False):
     values = {'revision': table.c.revision + 1}
     if rebuild:
-        values['generation'] = _earnings_uuid.uuid4().hex
+        values['generation'] = uuid.uuid4().hex
     session.execute(table.update().where(table.c.report_period == period).values(**values))
 
 def _earnings_migration_table():
@@ -290,17 +289,17 @@ def _earnings_migration_table():
 def _verify_earnings_quarter(session, period):
     # Read only scalar metadata/counts. Do not copy large JSON payloads or
     # infer completeness by rewriting matched_count to whatever remains.
-    run = session.execute(_earnings_text(
+    run = session.execute(sql_text(
         'SELECT as_of_date, universe_count, matched_count, rule_version FROM earnings_gap_run WHERE report_period=:period'),
         {'period': period}).first()
-    count = session.execute(_earnings_text(
+    count = session.execute(sql_text(
         'SELECT COUNT(*) FROM earnings_gap_stock WHERE report_period=:period'), {'period': period}).scalar()
     if (run is None or run[0] is None or str(run[0])[:10] < str(period)[:10]
             or run[1] is None or run[2] is None or run[1] <= 0
             or run[2] < 0 or run[2] > run[1] or not run[3] or run[2] != count):
         declared = run[2] if run is not None and isinstance(run[2], int) else 'unknown'
         raise ValueError('季度 {} 数据不完整：声明数量={}，实际数量={}；未发布新版本，请核查后重新采集该季度。'.format(period, declared, count))
-    invalid = session.execute(_earnings_text("""SELECT COUNT(*) FROM earnings_gap_stock
+    invalid = session.execute(sql_text("""SELECT COUNT(*) FROM earnings_gap_stock
         WHERE report_period=:period AND (code IS NULL OR code='' OR name IS NULL
         OR signal_date IS NULL OR announcement_date IS NULL OR valuation_date IS NULL
         OR announcement_date>signal_date OR signal_date>valuation_date OR valuation_date>:as_of
@@ -322,7 +321,7 @@ def _migrate_earnings_versions(Session):
     _prepare_earnings_version(Session)
     engine = Session.kw['bind']
     with engine.connect() as connection:
-        orphan = connection.execute(_earnings_text('SELECT COUNT(*) FROM earnings_gap_stock s LEFT JOIN earnings_gap_run r ON r.report_period=s.report_period WHERE r.report_period IS NULL')).scalar()
+        orphan = connection.execute(sql_text('SELECT COUNT(*) FROM earnings_gap_stock s LEFT JOIN earnings_gap_run r ON r.report_period=s.report_period WHERE r.report_period IS NULL')).scalar()
         if orphan:
             raise ValueError('净利润断层存在没有季度元数据的股票记录；拒绝迁移，请先核查对应季度。')
         runs = Table('earnings_gap_run', MetaData(), Column('report_period', Date, primary_key=True))
@@ -434,7 +433,7 @@ class EarningsStock(Base):
     events = Column(JSON, nullable=False)
     prices = Column(JSON, nullable=False)
 
-from mysql_connector import get_database_config, get_database_options, mysql_drivername, engine_options
+
 DB_CONFIG = get_database_config()
 DB_OPTIONS = get_database_options()
 
@@ -501,7 +500,7 @@ def clean(value):
 checked_rows = _checked_records
 
 
-def paged(table, filters, fetch):
+def paged(table, filters, fetch, columns=()):
     key = getattr(table, 'id', None)
     if key is None:
         key = getattr(table, 'ID', None)
@@ -509,7 +508,11 @@ def paged(table, filters, fetch):
         raise ValueError('数据表缺少分页主键，不能保证完整采集。')
     label = {'SecuMain': '公司代码映射', 'LC_FSPerformedLetters': '业绩快报',
              'STK_FIN_FORCAST': '业绩预告'}.get(getattr(table, '__tablename__', ''), '公告分页')
-    fetch_page = lambda cursor: fetch(query(table).filter(*filters).filter(key > cursor).order_by(key).limit(PAGE_SIZE))
+    selection = [key] + [getattr(table, name) for name in columns] if columns else [table]
+    if columns:
+        # 保留源表明确提供的公告原因，不传输其他与筛选无关的大量字段。
+        selection.extend(getattr(table, name) for name in ('change_reason', 'profit_change_reason', 'reason') if hasattr(table, name))
+    fetch_page = lambda cursor: fetch(query(*selection).filter(*filters).filter(key > cursor).order_by(key).limit(PAGE_SIZE))
     for frame in _source_pages(fetch_page, key=key.key, label=label, fields=(key.key,)):
         yield from frame.to_dict('records')
 
@@ -540,18 +543,24 @@ def fetch_events(codes, period, as_of, start_date=None):
     code_map = {code[:6]: code for code in codes}
     code_set = set(codes)
     cutoff = as_of + dt.timedelta(days=1)
+    started = time.monotonic()
+    print('聚宽：加载快报接口并查询新增披露')
     t = jy.LC_FSPerformedLetters
     filters = [t.EndDate == period, t.InfoPublDate < cutoff]
     if start_date is not None:
         filters.append(t.InfoPublDate >= start_date)
-    express = list(paged(t, filters, jy.run_query))
+    express = list(paged(t, filters, jy.run_query, columns=(
+        'CompanyCode', 'InfoPublDate', 'EndDate', 'NPParentCompanyOwners', 'NPCOwnersYOY')))
+    print('快报查询 {} 条，耗时 {:.1f}s'.format(len(express), time.monotonic()-started))
     company_codes = sorted({row['CompanyCode'] for row in express})
     companies = {}
     mapped_count = 0
-    t = jy.SecuMain
     # 没有窗口内快报时，不读取公司映射；有快报也只查对应公司。
     for start in range(0, len(company_codes), 300):
-        for row in paged(t, [t.SecuCategory == 1, t.CompanyCode.in_(company_codes[start:start+300])], jy.run_query):
+        print('聚宽：核对快报公司代码 {}/{}'.format(builtins.min(start+300, len(company_codes)), len(company_codes)))
+        t = jy.SecuMain
+        for row in paged(t, [t.SecuCategory == 1, t.CompanyCode.in_(company_codes[start:start+300])], jy.run_query,
+                         columns=('CompanyCode', 'SecuCode')):
             mapped_count += 1
             code = code_map.get(str(row['SecuCode']))
             if code:
@@ -563,47 +572,62 @@ def fetch_events(codes, period, as_of, start_date=None):
             events.append(event(code, 'express', row['InfoPublDate'], period,
                                 row['NPParentCompanyOwners'], row['NPCOwnersYOY'], row))
     print('业绩快报读取完成：{} 条。'.format(len(events)))
+    started = time.monotonic()
+    print('聚宽：加载预告接口并查询新增披露')
     t = finance.STK_FIN_FORCAST
     filters = [t.end_date == period, t.pub_date <= as_of]
     if start_date is not None:
         filters.append(t.pub_date >= start_date)
-    for row in paged(t, filters, finance.run_query):
+    columns = ('code', 'end_date', 'pub_date', 'profit_ratio_min')
+    if hasattr(t, 'profit_ratio_max'):
+        columns += ('profit_ratio_max',)
+    for row in paged(t, filters, finance.run_query, columns=columns):
         if row['code'] in code_set:
-            # 不猜测可选预告金额字段的单位；原始字段完整保存在 raw。
+            # 原始增幅与可用原因保存在 raw；不猜测金额字段的单位。
             events.append(event(row['code'], 'forecast', row['pub_date'], period, None,
                                 row['profit_ratio_min'], row, row.get('profit_ratio_max')))
-    print('业绩预告读取完成。')
+    print('预告查询完成，耗时 {:.1f}s'.format(time.monotonic()-started))
+    started = time.monotonic()
     events.extend(fetch_formal_events(codes, period, as_of, start_date))
+    print('正式财报查询完成，耗时 {:.1f}s'.format(time.monotonic()-started))
     print('三类公告合计 {} 条。'.format(len(events)))
     unique = {json.dumps(e, ensure_ascii=False, sort_keys=True): e for e in events}
     return sorted(unique.values(), key=lambda e: (e['code'], e['publication_date'], e['kind']))
 
 
 def fetch_formal_events(codes, period, as_of, start_date=None):
-    events = []
-    for start in range(0, len(codes), 300):
-        print('核对正式财报 {}/{} 只'.format(builtins.min(start+300, len(codes)), len(codes)))
+    # 先按披露窗口查公告；按股票代码翻页只为防止接口截断，不再分批遍历全市场。
+    events, cursor, code_set, read_count = [], '', set(codes), 0
+    while True:
+        print('聚宽：查询窗口内正式财报，已读取 {} 条'.format(read_count))
         q = query(income.code, income.pubDate.label('publication_date'),
                   income.statDate.label('report_period'),
                   income.np_parent_company_owners.label('net_profit'),
                   indicator.inc_net_profit_to_shareholders_year_on_year.label('profit_yoy'),
                   indicator.pubDate.label('indicator_publication_date'),
                   indicator.statDate.label('indicator_period')).filter(
-                      income.code.in_(codes[start:start+300]), income.statDate == period,
-                      indicator.statDate == period)
+                      income.code > cursor, income.statDate == period, indicator.statDate == period,
+                      income.pubDate <= as_of, indicator.pubDate <= as_of)
         if start_date is not None:
             q = q.filter((income.pubDate >= start_date) | (indicator.pubDate >= start_date))
-        frame = get_fundamentals(q, date=as_of)
-        for row in checked_rows(frame, ['code', 'publication_date', 'report_period', 'net_profit',
-                                        'profit_yoy', 'indicator_publication_date', 'indicator_period'], '正式财报'):
+        frame = get_fundamentals(q.order_by(income.code).limit(PAGE_SIZE), date=as_of)
+        rows = checked_rows(frame, ['code', 'publication_date', 'report_period', 'net_profit',
+                                   'profit_yoy', 'indicator_publication_date', 'indicator_period'], '正式财报')
+        if not rows:
+            return events
+        keys = [row['code'] for row in rows]
+        if len(keys) > PAGE_SIZE or keys != sorted(set(keys)) or keys[0] <= cursor:
+            raise ValueError('正式财报分页重复、乱序或未前进。')
+        cursor = keys[-1]
+        read_count += len(rows)
+        for row in rows:
             if pd.isna(row['publication_date']):
                 continue
             if as_date(row['report_period']) != period or as_date(row['indicator_period']) != period:
                 raise ValueError('财报与指标的报告期不一致。')
             pub = builtins.max(as_date(row['publication_date']), as_date(row['indicator_publication_date']))
-            if pub <= as_of and (start_date is None or pub >= start_date):
+            if row['code'] in code_set and pub <= as_of and (start_date is None or pub >= start_date):
                 events.append(event(row['code'], 'formal', pub, period, row['net_profit'], row['profit_yoy'], row))
-    return events
 
 
 def price_signal(previous_close, open_price, close_price):
@@ -829,10 +853,9 @@ def save_results(Session, period, as_of, universe_count, records, skip_existing=
 
 
 # BEGIN SHARED EARNINGS HISTORY
-from contextlib import contextmanager as _earnings_history_contextmanager
 
 
-@_earnings_history_contextmanager
+@contextmanager
 def _history_session(Session):
     # JoinQuant notebooks can still use SQLAlchemy 1.3 Sessions without __enter__.
     session = Session()
@@ -862,7 +885,6 @@ def _history_checkpoint_table():
     # Independent checkpoint: an existing daily run is NOT evidence that history
     # was replayed. A crash after snapshot commit and before this commit safely
     # repeats append-only work instead of claiming an incomplete quarter is done.
-    from sqlalchemy import MetaData, Table
     return Table('earnings_history_checkpoint', MetaData(),
         Column('report_period', Date, primary_key=True),
         Column('as_of_date', Date, nullable=False),

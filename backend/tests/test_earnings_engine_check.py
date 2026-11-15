@@ -1,4 +1,5 @@
 """MySQL-only checks with compiled MySQL SQL and real SQLAlchemy Rows, offline."""
+import ast
 from contextlib import contextmanager
 from pathlib import Path
 from types import SimpleNamespace
@@ -14,8 +15,13 @@ QUERY = ("SELECT TABLE_NAME, TABLE_TYPE, ENGINE FROM information_schema.TABLES "
 
 @pytest.fixture(params=['collectors/rules/earnings_version.py', 'collectors/净利润断层_数据库版.py', 'collectors/策略批量采集_数据库版.py'])
 def protocol(request):
-    source = (ROOT / request.param).read_text()
+    source = (ROOT / request.param).read_text(encoding='utf-8')
     ns = {}
+    # Dependencies now live in the entry header; load only the offline SQL/UUID imports.
+    for node in ast.parse(source).body:
+        if ((isinstance(node, ast.ImportFrom) and node.module.startswith('sqlalchemy'))
+                or (isinstance(node, ast.Import) and all(alias.name == 'uuid' for alias in node.names))):
+            exec(ast.get_source_segment(source, node), ns)
     exec(source[source.index('# BEGIN SHARED EARNINGS VERSION'):source.index('# END SHARED EARNINGS VERSION')], ns)
     return ns
 

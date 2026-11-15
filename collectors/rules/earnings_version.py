@@ -1,9 +1,10 @@
 """Small quarterly versions distinguish append-only additions from full rebuilds."""
-# BEGIN SHARED EARNINGS VERSION
-import uuid as _earnings_uuid
+import uuid
 from sqlalchemy import BigInteger, Column, Date, MetaData, String, Table
-from sqlalchemy.schema import CreateTable as _EarningsCreateTable
-from sqlalchemy import text as _earnings_text
+from sqlalchemy.schema import CreateTable
+from sqlalchemy import text as sql_text
+
+# BEGIN SHARED EARNINGS VERSION
 
 
 def _earnings_version_table():
@@ -37,8 +38,8 @@ def _check_earnings_engines(connection):
     # Both reads use the collector's same connection/current database. No host,
     # database name, account, arbitrary metadata or driver exception is exposed.
     try:
-        selected = connection.execute(_earnings_text('SELECT DATABASE() IS NOT NULL')).scalar()
-        rows = connection.execute(_earnings_text(
+        selected = connection.execute(sql_text('SELECT DATABASE() IS NOT NULL')).scalar()
+        rows = connection.execute(sql_text(
             "SELECT TABLE_NAME, TABLE_TYPE, ENGINE FROM information_schema.TABLES "
             "WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME IN "
             "('earnings_gap_run','earnings_gap_stock','earnings_sync_head','earnings_sync_migration')"
@@ -101,13 +102,13 @@ def _prepare_earnings_version(Session):
         table = _earnings_version_table()
         engine = Session.kw['bind']
         # Database-side idempotence works on older SQLAlchemy used in notebooks.
-        ddl = str(_EarningsCreateTable(table).compile(dialect=engine.dialect))
+        ddl = str(CreateTable(table).compile(dialect=engine.dialect))
         with engine.begin() as connection:
-            connection.execute(_earnings_text(ddl.replace('CREATE TABLE', 'CREATE TABLE IF NOT EXISTS', 1)))
+            connection.execute(sql_text(ddl.replace('CREATE TABLE', 'CREATE TABLE IF NOT EXISTS', 1)))
         marker = _earnings_migration_table()
-        ddl = str(_EarningsCreateTable(marker).compile(dialect=engine.dialect))
+        ddl = str(CreateTable(marker).compile(dialect=engine.dialect))
         with engine.begin() as connection:
-            connection.execute(_earnings_text(ddl.replace('CREATE TABLE', 'CREATE TABLE IF NOT EXISTS', 1)))
+            connection.execute(sql_text(ddl.replace('CREATE TABLE', 'CREATE TABLE IF NOT EXISTS', 1)))
         if engine.dialect.name == 'mysql':
             with engine.connect() as connection:
                 _check_earnings_engines(connection)
@@ -123,14 +124,14 @@ def _lock_earnings_version(session, period):
     table = _earnings_version_table()
     row = session.execute(table.select().where(table.c.report_period == period).with_for_update()).first()
     if row is None:
-        session.execute(table.insert().values(report_period=period, generation=_earnings_uuid.uuid4().hex, revision=0))
+        session.execute(table.insert().values(report_period=period, generation=uuid.uuid4().hex, revision=0))
     return table
 
 
 def _advance_earnings_version(session, table, period, rebuild=False):
     values = {'revision': table.c.revision + 1}
     if rebuild:
-        values['generation'] = _earnings_uuid.uuid4().hex
+        values['generation'] = uuid.uuid4().hex
     session.execute(table.update().where(table.c.report_period == period).values(**values))
 
 def _earnings_migration_table():
@@ -145,17 +146,17 @@ def _earnings_migration_table():
 def _verify_earnings_quarter(session, period):
     # Read only scalar metadata/counts. Do not copy large JSON payloads or
     # infer completeness by rewriting matched_count to whatever remains.
-    run = session.execute(_earnings_text(
+    run = session.execute(sql_text(
         'SELECT as_of_date, universe_count, matched_count, rule_version FROM earnings_gap_run WHERE report_period=:period'),
         {'period': period}).first()
-    count = session.execute(_earnings_text(
+    count = session.execute(sql_text(
         'SELECT COUNT(*) FROM earnings_gap_stock WHERE report_period=:period'), {'period': period}).scalar()
     if (run is None or run[0] is None or str(run[0])[:10] < str(period)[:10]
             or run[1] is None or run[2] is None or run[1] <= 0
             or run[2] < 0 or run[2] > run[1] or not run[3] or run[2] != count):
         declared = run[2] if run is not None and isinstance(run[2], int) else 'unknown'
         raise ValueError('季度 {} 数据不完整：声明数量={}，实际数量={}；未发布新版本，请核查后重新采集该季度。'.format(period, declared, count))
-    invalid = session.execute(_earnings_text("""SELECT COUNT(*) FROM earnings_gap_stock
+    invalid = session.execute(sql_text("""SELECT COUNT(*) FROM earnings_gap_stock
         WHERE report_period=:period AND (code IS NULL OR code='' OR name IS NULL
         OR signal_date IS NULL OR announcement_date IS NULL OR valuation_date IS NULL
         OR announcement_date>signal_date OR signal_date>valuation_date OR valuation_date>:as_of
@@ -177,7 +178,7 @@ def _migrate_earnings_versions(Session):
     _prepare_earnings_version(Session)
     engine = Session.kw['bind']
     with engine.connect() as connection:
-        orphan = connection.execute(_earnings_text('SELECT COUNT(*) FROM earnings_gap_stock s LEFT JOIN earnings_gap_run r ON r.report_period=s.report_period WHERE r.report_period IS NULL')).scalar()
+        orphan = connection.execute(sql_text('SELECT COUNT(*) FROM earnings_gap_stock s LEFT JOIN earnings_gap_run r ON r.report_period=s.report_period WHERE r.report_period IS NULL')).scalar()
         if orphan:
             raise ValueError('净利润断层存在没有季度元数据的股票记录；拒绝迁移，请先核查对应季度。')
         runs = Table('earnings_gap_run', MetaData(), Column('report_period', Date, primary_key=True))
