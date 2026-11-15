@@ -141,7 +141,7 @@ def test_quotes_use_one_calendar_and_bounded_batches(c):
     assert all(set(bars) == set(d for d in calendar if d <= price_calls[0][1]['end_date']) for _, bars, _ in rows)
 
 
-def test_empty_express_skips_lazy_mapping_and_reports_source_before_loading(c):
+def test_empty_express_never_loads_remote_table_metadata(c):
     from sqlalchemy import Column, Date, MetaData, Table
     fields = Table('source_dates', MetaData(), Column('day', Date)).c
     messages = []
@@ -149,8 +149,7 @@ def test_empty_express_skips_lazy_mapping_and_reports_source_before_loading(c):
         run_query = None
         @property
         def LC_FSPerformedLetters(self):
-            assert messages[-1] == '聚宽：加载快报表结构'
-            return SimpleNamespace(EndDate=fields.day, InfoPublDate=fields.day)
+            pytest.fail('must not load remote express metadata')
         @property
         def SecuMain(self):
             pytest.fail('no express disclosures: must not even load company metadata')
@@ -163,8 +162,56 @@ def test_empty_express_skips_lazy_mapping_and_reports_source_before_loading(c):
     c.env.update(jy=Jy(), finance=Finance(), print=messages.append,
         paged=lambda *a, **kw: [], fetch_formal_events=lambda *a: [])
     assert c.env['fetch_events'](['600001.XSHG'], dt.date(2026,9,30), dt.date(2026,10,16), dt.date(2026,10,15)) == []
-    assert '聚宽：快报表结构已就绪，查询新增披露' in messages
+    assert '聚宽：直接查询新增快报（不加载远程表结构）' in messages
     assert len([m for m in messages if '耗时' in m]) == 3
+
+
+@pytest.mark.parametrize('null_cache', [False, True])
+def test_direct_express_query_keeps_dates_mapping_and_readonly_source(c, null_cache):
+    from sqlalchemy import create_engine, inspect, event as sql_event
+    from sqlalchemy.orm import Session
+    env = c.env
+    assert not {'LC_FSPerformedLetters', 'SecuMain'} & set(inspect(c.engine).get_table_names())
+    source = create_engine('sqlite://')
+    env['_EarningsSourceBase'].metadata.create_all(source)
+    express, company = env['_EarningsExpress'], env['_EarningsCompany']
+    period, start, end = dt.date(2026, 9, 30), dt.date(2026, 11, 12), dt.date(2026, 11, 13)
+    statements = []
+    try:
+        with Session(source) as session:
+            session.add(company(ID=1, CompanyCode=10, SecuCode='600001', SecuCategory=1))
+            session.add_all([express(ID=i, CompanyCode=10, InfoPublDate=day, EndDate=report,
+                NPParentCompanyOwners=1e8, NPCOwnersYOY=25) for i, day, report in (
+                    (1, start-dt.timedelta(days=1), period), (2, end, period),
+                    (3, end+dt.timedelta(days=1), period), (4, end, dt.date(2026, 6, 30)))])
+            session.commit()
+            sql_event.listen(source, 'before_cursor_execute', lambda conn, cur, sql, *args: statements.append(sql))
+            class Jy:
+                def __init__(self):
+                    if null_cache:
+                        self.LC_FSPerformedLetters = self.SecuMain = None
+                def __getattribute__(self, name):
+                    if name in ('LC_FSPerformedLetters', 'SecuMain'):
+                        pytest.fail('table attribute would block on metadata loading')
+                    return object.__getattribute__(self, name)
+                def run_query(self, q):
+                    columns = [col['name'] for col in q.column_descriptions]
+                    return Frame([dict(zip(columns, row)) for row in q.all()], columns)
+            original_paged = env['paged']
+            forecast = SimpleNamespace(end_date=express.EndDate, pub_date=express.InfoPublDate)
+            env.update(jy=Jy(), query=session.query,
+                finance=SimpleNamespace(STK_FIN_FORCAST=forecast, run_query=None),
+                paged=lambda t, *args, **kw: [] if t is forecast else original_paged(t, *args, **kw),
+                fetch_formal_events=lambda *args: [])
+            events = env['fetch_events'](['600001.XSHG'], period, end, start)
+            assert len(events) == 1
+            assert events[0]['raw']['ID'] == 2 and events[0]['profit_yoy'] == 25
+            assert events[0]['source_table'] == 'jy.LC_FSPerformedLetters'
+            assert events[0]['publication_date'] == str(end) and events[0]['eligible']
+            assert all(sql.lstrip().startswith('SELECT') for sql in statements)
+            assert not any('JOIN' in sql for sql in statements)
+    finally:
+        source.dispose()
 
 
 @pytest.mark.parametrize('has_disclosures', [False, True])

@@ -37,6 +37,39 @@ PAGE_SIZE = 1000
 Base = declarative_base()
 
 
+# BEGIN SHARED EARNINGS SOURCES
+
+
+_EarningsSourceBase = declarative_base()  # 与入库 Base 隔离，绝不在目标库创建源表。
+
+
+class _EarningsExpress(_EarningsSourceBase):
+    __tablename__ = 'LC_FSPerformedLetters'
+    ID = Column(BigInteger, primary_key=True)
+    CompanyCode = Column(Integer)
+    InfoPublDate = Column(DateTime)
+    EndDate = Column(Date)
+    NPParentCompanyOwners = Column(Numeric)
+    NPCOwnersYOY = Column(Numeric)
+
+
+class _EarningsCompany(_EarningsSourceBase):
+    __tablename__ = 'SecuMain'
+    ID = Column(BigInteger, primary_key=True)
+    CompanyCode = Column(Integer)
+    SecuCode = Column(String)
+    SecuCategory = Column(Integer)
+
+
+def _earnings_source_table(database, name):
+    """只复用已加载对象；否则使用已核实字段，避免 getattr 触发远程表结构加载。"""
+    cached = builtins.vars(database).get(name)
+    if cached is not None:
+        return cached
+    return {'LC_FSPerformedLetters': _EarningsExpress, 'SecuMain': _EarningsCompany}[name]
+
+# END SHARED EARNINGS SOURCES
+
 # BEGIN SHARED EARNINGS FOLLOWUP
 
 
@@ -580,9 +613,8 @@ def fetch_events(codes, period, as_of, start_date=None):
     code_set = set(codes)
     cutoff = as_of + dt.timedelta(days=1)
     started = time.monotonic()
-    print('聚宽：加载快报表结构')
-    t = jy.LC_FSPerformedLetters
-    print('聚宽：快报表结构已就绪，查询新增披露')
+    print('聚宽：直接查询新增快报（不加载远程表结构）')
+    t = _earnings_source_table(jy, 'LC_FSPerformedLetters')
     filters = [t.EndDate == period, t.InfoPublDate < cutoff]
     if start_date is not None:
         filters.append(t.InfoPublDate >= start_date)
@@ -595,7 +627,7 @@ def fetch_events(codes, period, as_of, start_date=None):
     # 没有窗口内快报时，不读取公司映射；有快报也只查对应公司。
     for start in range(0, len(company_codes), 300):
         print('聚宽：核对快报公司代码 {}/{}'.format(builtins.min(start+300, len(company_codes)), len(company_codes)))
-        t = jy.SecuMain
+        t = _earnings_source_table(jy, 'SecuMain')
         for row in paged(t, [t.SecuCategory == 1, t.CompanyCode.in_(company_codes[start:start+300])], jy.run_query,
                          columns=('CompanyCode', 'SecuCode')):
             mapped_count += 1
@@ -971,7 +1003,7 @@ def _history_formal_events(period, as_of):
 
 def _history_events(period, as_of, pool_cache):
     """Date each universe to actual disclosures, including subsequently delisted stocks."""
-    t = jy.LC_FSPerformedLetters
+    t = _earnings_source_table(jy, 'LC_FSPerformedLetters')
     express = list(paged(t, [t.EndDate == period, t.InfoPublDate < as_of + dt.timedelta(days=1)], jy.run_query))
     t = finance.STK_FIN_FORCAST
     forecasts = list(paged(t, [t.end_date == period, t.pub_date <= as_of], finance.run_query))
@@ -1004,7 +1036,7 @@ def _history_events(period, as_of, pool_cache):
     # Mapping is based on historical dated codes, never today's surviving list.
     code_map = {code[:6]: code for code in names}
     companies = {}
-    t = jy.SecuMain
+    t = _earnings_source_table(jy, 'SecuMain')
     for row in paged(t, [t.SecuCategory == 1], jy.run_query):
         code = code_map.get(str(row['SecuCode']))
         if code:
@@ -1064,7 +1096,8 @@ def collect_history(Session, requested, history_mode, start_period, max_periods)
     first = dt.date(days[0].year + (m == 12), m % 12 + 1, 1) - dt.timedelta(days=1)
     # Permission/schema failures abort before any success marker. These earliest
     # rows describe current readable coverage, not a promised historical start.
-    express_floor = _history_source_floor(jy.LC_FSPerformedLetters, jy.LC_FSPerformedLetters.EndDate, jy.run_query)
+    express_table = _earnings_source_table(jy, 'LC_FSPerformedLetters')
+    express_floor = _history_source_floor(express_table, express_table.EndDate, jy.run_query)
     forecast_floor = _history_source_floor(finance.STK_FIN_FORCAST, finance.STK_FIN_FORCAST.end_date, finance.run_query)
     print('可见快报/预告最早报告期：{} / {}；正式财报逐季验证。'.format(express_floor, forecast_floor))
     if start_period is not None:

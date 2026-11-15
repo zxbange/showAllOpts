@@ -46,6 +46,7 @@ def sync_history(check=False):
 
 def sync(check=False):
     sync_history(check)
+    sync_block('earnings_sources.py', '# BEGIN SHARED EARNINGS SOURCES', '# END SHARED EARNINGS SOURCES', check)
     sync_block('earnings_version.py', START, END, check)
     sync_block('earnings_followup.py', '# BEGIN SHARED EARNINGS FOLLOWUP', '# END SHARED EARNINGS FOLLOWUP', check)
 
