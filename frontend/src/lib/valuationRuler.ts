@@ -71,7 +71,7 @@ export function valuationChartOption(data: ValuationHistory, days: number) {
               `${v2 ? label + '等权PE' : '平均PE-TTM'}：${valuationNumber(mean(p))}`,
               ...(v2
                 ? [
-                    `整体PE：${valuationNumber(p.overall_pe)}`,
+                    ...(data.basis === 'lyr' ? [`整体PE：${valuationNumber(p.overall_pe)}`] : []),
                     `中位数PE：${valuationNumber(p.median_pe)}`,
                     `PE>300剔除 ${p.excluded_high_pe_count ?? 0} 只`,
                   ]
@@ -135,12 +135,16 @@ export function valuationChartOption(data: ValuationHistory, days: number) {
       })),
       ...(v2
         ? [
-            line(
-              label + '整体PE',
-              '#c34b36',
-              points.map((p) => p.overall_pe ?? null),
-              1,
-            ),
+            ...(data.basis === 'lyr'
+              ? [
+                  line(
+                    '静态整体PE',
+                    '#c34b36',
+                    points.map((p) => p.overall_pe ?? null),
+                    1,
+                  ),
+                ]
+              : []),
             line(
               label + '中位数PE',
               '#7a57a3',

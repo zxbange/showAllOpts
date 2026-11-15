@@ -61,13 +61,14 @@ def run(c, **kw):
     return c.m.run(start_date=DAYS[0], end_date=DAYS[-1], **kw)
 
 
-def test_three_indices_six_metrics_and_repeat_without_source_reads(collector):
+def test_three_indices_five_metrics_and_repeat_without_source_reads(collector):
     c = collector
     result = run(c)
     assert len(result) == 9
     for row in result:
         assert row['member_count'] == c.m.INDEXES[row['index_code']][1]
-        assert [row[x+'_pe_ttm'] for x in ('overall', 'mean', 'median')] == [Decimal(10)]*3
+        assert 'overall_pe_ttm' not in row
+        assert [row[x+'_pe_ttm'] for x in ('mean', 'median')] == [Decimal(10)]*2
         assert [row[x+'_pe_lyr'] for x in ('overall', 'mean', 'median')] == [Decimal(20)]*3
     c.calls.clear()
     assert run(c) == []
@@ -81,15 +82,15 @@ def test_three_indices_six_metrics_and_repeat_without_source_reads(collector):
 
 def test_threshold_inclusive_and_overall_keeps_losses_high_pe(collector):
     m = collector.m
-    rows = [dict(code=str(i), suspended_listing=False, pe_ttm=str(pe), market_cap=str(cap))
+    rows = [dict(code=str(i), suspended_listing=False, pe_lyr=str(pe), market_cap=str(cap))
             for i, (pe, cap) in enumerate([(10, 100), (20, 400), (-10, 10), (300, 300), (600, 600)])]
-    overall, mean, median, stats = m.aggregate(rows, 'pe_ttm')
+    overall, mean, median, stats = m.aggregate(rows, 'pe_lyr')
     # Overall includes losses and >300, with market-cap weighting; arithmetic does not.
     assert overall == Decimal('45.483870967742')  # 1410 / (10+20-1+1+1)
     assert mean == Decimal(110) and median == Decimal(20)
     assert (stats['eligible'], stats['loss'], stats['over_limit']) == (3, 1, 1)
     rows[0]['suspended_listing'] = True
-    _, mean, median, stats = m.aggregate(rows, 'pe_ttm')
+    _, mean, median, stats = m.aggregate(rows, 'pe_lyr')
     assert mean == median == Decimal(160) and stats['suspended_listing'] == 1
 
 
@@ -100,7 +101,7 @@ def test_missing_values_separate_samples_and_nonpositive_profit(collector):
     members[1].update(pe_ttm=Decimal(-3), pe_lyr=None)
     daily, raw = m.summarize(DAYS[0], '4000', members)
     stats = json.loads(daily['statistics'])
-    assert daily['overall_pe_ttm'] is None and daily['overall_pe_lyr'] is None
+    assert 'overall_pe_ttm' not in daily and daily['overall_pe_lyr'] is None
     assert (stats['ttm']['eligible'], stats['ttm']['loss'], stats['ttm']['missing_pe']) == (298, 1, 1)
     assert (stats['lyr']['eligible'], stats['lyr']['over_limit'], stats['lyr']['missing_pe']) == (298, 1, 1)
     assert json.loads(raw['payload'])[0]['pe_ttm'] is None
@@ -314,7 +315,7 @@ def test_missing_rows_are_rechecked_and_remain_missing_not_zero(collector):
     assert len([codes for codes in requests if len(codes) == 1]) == 2
     assert len(json.loads(raw['payload'])) == 300
     assert json.loads(daily['statistics'])['ttm']['missing_pe'] == 2
-    assert daily['overall_pe_ttm'] is None and daily['mean_pe_ttm'] == 10
+    assert 'overall_pe_ttm' not in daily and daily['mean_pe_ttm'] == 10
 
 
 def test_truncated_batch_recovered_by_single_code_query(collector):
@@ -323,7 +324,7 @@ def test_truncated_batch_recovered_by_single_code_query(collector):
     c.jq.get_fundamentals = lambda codes, date: original(codes, date).iloc[:100]
     daily, _ = c.m.source_day(DAYS[0])
     assert json.loads(daily['statistics'])['ttm']['missing_pe'] == 0
-    assert daily['overall_pe_ttm'] == 10
+    assert 'overall_pe_ttm' not in daily and daily['mean_pe_ttm'] == 10
 
 
 def test_joinquant_resume_accepts_public_source_boundary(collector):
@@ -446,3 +447,33 @@ def test_batch_embeds_identical_source_and_runs_all_indices(collector, monkeypat
         db_config=CONFIG, api_namespace=vars(c.jq), preview_rows=0)[0]['rows'] == 0
     sync = load(ROOT / 'collectors/tools/sync_history_strategies.py', 'sync_valuation_v2')
     sync.sync(check=True)
+
+
+def test_ttm_aggregation_never_reads_market_cap(collector):
+    rows = [dict(pe_ttm=pe, suspended_listing=False) for pe in ('10', '20', '600', '-10')]
+    overall, mean, median, counts = collector.m.aggregate(rows, 'pe_ttm')
+    assert overall is None and mean == median == 15
+    assert not {'overall_valid', 'overall_missing', 'market_cap_yi', 'implied_profit_yi'} & counts.keys()
+
+
+def test_resume_preserves_old_overall_column_without_recollecting(collector):
+    c = collector
+    run(c)
+    with c.engine.begin() as db:
+        db.execute(text('ALTER TABLE valuation_ruler_daily_v2 ADD COLUMN overall_pe_ttm NUMERIC'))
+        records = db.execute(text('SELECT index_code, trade_date, statistics FROM valuation_ruler_daily_v2')).mappings()
+        for row in records:
+            stats = json.loads(row['statistics'])
+            stats['ttm'].update(overall_valid=c.m.INDEXES[row['index_code']][1], overall_missing=0,
+                                market_cap_yi='old-total', implied_profit_yi='old-profit')
+            db.execute(text('UPDATE valuation_ruler_daily_v2 SET statistics=:stats, overall_pe_ttm=10 '
+                            'WHERE index_code=:code AND trade_date=:day'),
+                       dict(stats=json.dumps(stats), code=row['index_code'], day=row['trade_date']))
+    c.calls.clear()
+    assert run(c) == [] and c.calls == []
+    with c.engine.connect() as db:
+        assert db.scalar(text('SELECT count(*) FROM valuation_ruler_daily_v2 WHERE overall_pe_ttm=10')) == 9
+
+    with c.engine.begin() as db:
+        db.execute(text('ALTER TABLE valuation_ruler_daily_v2 DROP COLUMN overall_pe_ttm'))
+    assert run(c) == [] and c.calls == []

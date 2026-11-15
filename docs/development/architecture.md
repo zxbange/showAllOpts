@@ -51,9 +51,7 @@ Nginx 从 `/var/www/showallopts` 提供前端静态资源，将 `/api` 代理到
 | 微盘温度计 | 每日补缺、旧指标复用、分位与指数衔接、已有数据幂等 | [微盘温度计](../data/microcap-temperature.md) |
 | 微盘新高新低 | 四窗口统计、源日期缺口、只新增和历史保留 | [新高新低](../data/microcap-breadth.md) |
 | ETF 份额 | 分基金续传、前一交易日对齐、缺数不补零、共同基准 | [ETF 份额](../data/etf-shares.md) |
-| 高股息选股 | 两组筛选、交集、排序、完整快照事务替换、合法零入选 | [高股息](../data/dividend-selection.md) |
-| 高增长 | 四类累计财报、两段同比、EPS 与净利润口径、证据完整性 | [高增长](../data/high-growth.md) |
-| 净利润断层 | 财报/公告与价格信号日期、首次快照保留、季度数量、分页与详情 | [净利润断层](../data/earnings-gap.md) |
+| 高股息选股 | 银行与非银行分组、排序、完整快照事务替换、合法零入选 | [高股息](../data/dividend-selection.md) |
 | 个股机构持仓 | 新披露影响范围、股东类型兜底、披露股数、户数、社保三种比较、增量断点 | [机构持仓](../data/institution-ownership.md) |
 | 独立采集与研究脚本 | 日常采集、历史补采、私有配置隔离与保留的历史研究 | [脚本使用说明](../../collectors/README.md) |
 | 博主与组合监控 | 监控时段、去重、限流、登录状态、Telegram/飞书独立开关与投递记录 | [博主监控](../data/social-monitor.md)、[飞书配置](../operations/飞书通知配置.md) |
@@ -66,8 +64,6 @@ Nginx 从 `/var/www/showallopts` 提供前端静态资源，将 `/api` 代理到
 微盘温度计使用独立的 `microcap_temperature` 表。采集器保存原始指标、当期历史分位、综合温度、累计指数和成分股；刷新最后一期时从该期之前的基准续算，避免重复计数。网页模型将成分股字段设为延迟加载，页面接口只读指标，不传输名单。网页不会在切换范围时重算分位或重新设置指数基期。
 
 ETF 份额按基金独立续传，源数据缺口不会补零。复合主键 `(fund_code, trade_date)` 支持最新日期和区间查询；非空页面请求执行两条 SELECT，历史查询只传输绘图字段。各卡片明确标记自己的数据日期，日增减严格关联 `previous_trade_date`；相对变化曲线使用共同基准日。完整口径、首次采集和部署说明见 [ETF 份额仪表盘](../data/etf-shares.md)。
-
-净利润断层使用 `earnings_gap_run` 与 `earnings_gap_stock` 保存每季度最新扫描元数据和全部入选股票。股票表以 `(report_period, code)` 为主键，另有季度+行业、季度+信号日期联合索引。独立脚本和批量入口默认均只新增，已有股票保留首次快照，只插入该季度未保存的股票，运行元数据按变化更新，命中数为累计保留数量；独立脚本显式指定 `skip_existing=False` 时才替换目标季度。两种模式均保存零命中运行元数据。列表查询分页且不加载公告和日线 JSON；详情一次主键查询取得全部证据。网页默认请求当前目标季度，无数据时不回退旧季度。已移除自动原因分析；旧表兼容列保留，API 不加载或返回它们，新采集结果写入空值占位。详见 [净利润断层说明](../data/earnings-gap.md)。
 
 ## 错误、并发与浏览器行为
 
@@ -106,25 +102,17 @@ Windows 集成测试创建随机本地端口的子进程和孙进程，分别验
 
 微盘新高新低使用 `microcap_breadth`，按 `(series_id, trade_date)` 唯一保存每日四周期数量。只新增续传，历史不清理；后端一次限量 SELECT，跳过成分股文本，按需计算比例和滚动指标。详见 [统计与部署说明](../data/microcap-breadth.md)。
 
-高股息选股使用 `dividend_selection_snapshot` 和 `dividend_selection_stock`，由聚宽单文件每次重算并事务替换最新结果，不保留历史；这是其他采集模块增量规则的独立例外。网页通过一次只读 JOIN 展示纯高股息前25只、低估值非银行前25只及银行前10只，详情见 [高股息选股](../data/dividend-selection.md)。
-
+高股息选股使用 `dividend_selection_snapshot` 和 `dividend_selection_stock`，由聚宽单文件每次重算并事务替换最新结果，不保留历史；这是其他采集模块增量规则的独立例外。网页通过一次只读 JOIN 展示低估值非银行前25只及银行前10只，详情见 [高股息选股](../data/dividend-selection.md)。
 
 ## 本地快照查询层
 
 `get_session` 默认按 API 模块选择 `SnapshotCache` 的只读 SQLite 会话，现有 repository/service 查询和响应格式保持一致。只有同步任务连接源 MySQL，网页查询没有自动回源分支；`CACHE_ENABLED=false` 恢复原会话工厂。展示表按模块分事务复制，详情 JSON 保留，不复制网页不用的成分股和已删除分析字段。MySQL 使用 REPEATABLE READ，确保同一模块的快照头和明细来自同一事务。两融监控、博主监控等公开源服务各自维护独立状态，采集任务通过统一配置管理。
 
-
 每次生成一个新的 SQLite 文件，完成写入与完整性检查后原子替换元信息；已有请求继续读取旧版本，新请求读取新版本。源数据库保持只读，建表和索引操作仅发生在本地 SQLite。独立文件锁协调 Uvicorn 多进程、每日调度和 CLI/网页手动同步。未完成模块记录在元信息中，进程中断后可继续；数据库/账号/映射结构变化会切换缓存命名空间，避免复用错误数据。详情见[本地缓存说明](../operations/local-cache.md)。
-
-
-## 高增长模块
-
-`finance.STK_INCOME_STATEMENT` 累计合并财报由聚宽采集脚本读取，四类报告分别检查净利润和基本 EPS 的两段同比。`high_growth_snapshot` + `high_growth_stock` 保存最新名单与12期财报证据，每次事务替换；股票代码、排名均保证唯一。后端沿用 model/repository/service/schema/API 分层，`GET /api/v1/high-growth/latest` 仅一次只读查询。前端的 `/high-growth` 展示四组微缩柱状图、估值及可展开明细。缓存按 `high-growth` 整体替换最新名单，支持原有定时和手动同步。详细口径见 [高增长](../data/high-growth.md)。
 
 ## ETF动量热度模块
 
 两张源表 `etf_momentum_pool`、`etf_momentum_heat` 由聚宽独立/批量脚本计算后写入；项目只同步计算结果到本地SQLite；候选池当前快照与按日基金历史分离。后端沿用模型、仓储、服务和路由层，从模块本地SQLite读取排名和曲线。前端 `/etf-momentum` 热力图与 `/etf-momentum/funds/:code` 详情页共享趋势图组件，支持负值坐标。详见 [ETF动量热度](../data/etf-momentum.md)。
-
 
 ## 个股机构持仓
 

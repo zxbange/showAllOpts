@@ -10,13 +10,11 @@ from app.api.routes.social_browser import router as social_browser_router
 from app.api.routes.ownership import router as ownership_router
 from fastapi import APIRouter
 from app.api.routes.etf_heat import router as etf_heat_router
-from app.api.routes.growth import router as growth_router
 from app.api.routes.cache import router as cache_router
 from app.api.routes.dividend import router as dividend_router
 from app.api.routes.personal_holdings import router as personal_holdings_router
 
 from app.api.routes.breadth import router as breadth_router
-from app.api.routes.earnings import router as earnings_router
 from app.api.routes.etf import router as etf_router
 from app.api.routes.crowding import router as crowding_router
 from app.api.routes.market_collection import router as market_collection_router
@@ -40,11 +38,9 @@ router.include_router(growth_dividend_router)
 router.include_router(valuation_ruler_router)
 router.include_router(microcap_router)
 router.include_router(etf_router)
-router.include_router(earnings_router)
 router.include_router(breadth_router)
 router.include_router(dividend_router)
 router.include_router(cache_router)
-router.include_router(growth_router)
 router.include_router(etf_heat_router)
 
 
@@ -79,10 +75,6 @@ def modules():
         'description': '从估值与交易拥挤度，观察微盘 1000 的温度与等权指数。',
         'path': '/microcap-temperature', 'status': 'available',
     }, {
-        'id': 'earnings-gap', 'name': '净利润断层',
-        'description': '筛选最新财报季度的业绩与价格共振，查看公告证据与估值数据。',
-        'path': '/earnings-gap', 'status': 'available',
-    }, {
         'id': 'etf-shares', 'name': 'ETF份额仪表盘',
         'description': '跟踪沪深300与中证500 ETF 总份额及份额变化率。',
         'path': '/etf-shares', 'status': 'available',
@@ -96,16 +88,12 @@ def modules():
         'path': '/microcap-breadth', 'status': 'available',
     }, {
         'id': 'dividend-selection', 'name': '高股息选股',
-        'description': '纯高股息前25只，低估值非银行前25只、银行前10只，展示最新结果。',
+        'description': '静态股息率大于3%、PE小于12；非银行前25只、银行前10只。',
         'path': '/dividend-selection', 'status': 'available',
     }, {
         'id': 'cash-cow', 'name': '奶牛股',
         'description': '十年连续分红、现金流覆盖、合理支付率与长期股息率。',
         'path': '/cash-cow', 'status': 'available',
-    }, {
-        'id': 'high-growth', 'name': '高增长',
-        'description': '年报与三类季报分别检验归母净利润及 EPS 的持续增长。',
-        'path': '/high-growth', 'status': 'available',
     }, {
         'id': 'etf-momentum', 'name': 'ETF动量热度',
         'description': '收盘动量热力排名与基金历史走势。',

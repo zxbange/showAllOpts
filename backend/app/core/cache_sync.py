@@ -147,52 +147,17 @@ def sync_history(source, target, table):
                 table.name, fetched, len(removed), len(remote))
 
 
-def sync_earnings(source, target, tables):
-    """Collector updates the quarter header; stock details have no updated_at."""
-    head, stocks = tables
-    # Compare every header field and stock membership; unchanged quarters keep their JSON locally.
-    columns = [head.c.report_period] + [c for c in head.columns if c.name != 'report_period']
-    remote = read_map(source, columns, 1)
-    local = read_map(target, columns, 1)
-    changed = {key[0] for key in remote.keys() | local.keys() if remote.get(key) != local.get(key)}
-    keys = list(stocks.primary_key.columns)
-    remote_keys = read_map(source, keys, len(keys))
-    local_keys = read_map(target, keys, len(keys))
-    changed.update(key[0] for key in remote_keys.keys() ^ local_keys.keys())
-    fetched = 0
-    for batch in chunks(changed):
-        for table in tables:
-            condition = table.c.report_period.in_(batch)
-            target.execute(table.delete().where(condition))
-            fetched += transfer(source, target, table, condition)
-    logger.info('Cache quarter sync quarters=%s downloaded=%s', len(changed), fetched)
-
-
-def sync_tables(source, target, tables, module, incremental, notes=None):
+def sync_tables(source, target, tables, module, incremental):
     report('同步数据表', percent=10)
-    handled = False
-    if module == 'earnings-gap':
-        from app.core.earnings_sync import sync_quarters
-        handled = sync_quarters(source, target, tables, incremental)
-        if notes is not None:
-            notes[module] = None if handled else '源库未启用完整季度版本，本次使用全量清单对账；升级独立及批量采集器后自动切换季度增量。'
-    if handled:
-        pass
-    elif incremental and module == 'earnings-gap':
-        sync_earnings(source, target, tables)
-    else:
-        for index, table in enumerate(tables):
-            with stage_range(10 + 80*index/len(tables), 10 + 80*(index+1)/len(tables)):
-                report('同步 ' + table.name, percent=0)
-                if not incremental or module in ('dividend-selection', 'high-growth'):
-                    target.execute(table.delete())
-                    fetched = transfer(source, target, table)
-                    logger.info('Cache table sync table=%s mode=full downloaded=%s', table.name, fetched)
-                else:
-                    sync_history(source, target, table)
-                report('数据表完成 ' + table.name, percent=100)
-    if module == 'earnings-gap':
-        from app.core.earnings_sync import sync_performance
-        sync_performance(source, target)
+    for index, table in enumerate(tables):
+        with stage_range(10 + 80*index/len(tables), 10 + 80*(index+1)/len(tables)):
+            report('同步 ' + table.name, percent=0)
+            if not incremental or module == 'dividend-selection':
+                target.execute(table.delete())
+                fetched = transfer(source, target, table)
+                logger.info('Cache table sync table=%s mode=full downloaded=%s', table.name, fetched)
+            else:
+                sync_history(source, target, table)
+            report('数据表完成 ' + table.name, percent=100)
     report('提交本地数据', percent=90)
     return sum(target.scalar(select(func.count()).select_from(table)) for table in tables)

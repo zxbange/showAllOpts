@@ -32,8 +32,6 @@ const ETFHeatDetailPage = lazy(() =>
   import('./pages/ETFHeatPage').then((m) => ({ default: m.ETFHeatDetailPage })),
 )
 
-const GrowthPage = lazy(() => import('./pages/GrowthPage').then((m) => ({ default: m.GrowthPage })))
-
 const DividendPage = lazy(() =>
   import('./pages/DividendPage').then((m) => ({ default: m.DividendPage })),
 )
@@ -68,13 +66,6 @@ const MicrocapPage = lazy(() =>
 
 const ETFPage = lazy(() =>
   import('./pages/ETFPage').then((module) => ({ default: module.ETFPage })),
-)
-
-const EarningsPage = lazy(() =>
-  import('./pages/EarningsPage').then((m) => ({ default: m.EarningsPage })),
-)
-const EarningsDetailPage = lazy(() =>
-  import('./pages/EarningsDetailPage').then((m) => ({ default: m.EarningsDetailPage })),
 )
 
 const ValuationRulerPage = lazy(() =>
@@ -148,34 +139,10 @@ export default function App() {
               }
             />
             <Route
-              path="high-growth"
-              element={
-                <Suspense fallback={<LoadingState />}>
-                  <GrowthPage />
-                </Suspense>
-              }
-            />
-            <Route
               path="dividend-selection"
               element={
                 <Suspense fallback={<LoadingState />}>
                   <DividendPage />
-                </Suspense>
-              }
-            />
-            <Route
-              path="earnings-gap"
-              element={
-                <Suspense fallback={<LoadingState />}>
-                  <EarningsPage />
-                </Suspense>
-              }
-            />
-            <Route
-              path="earnings-gap/stocks/:code"
-              element={
-                <Suspense fallback={<LoadingState />}>
-                  <EarningsDetailPage />
                 </Suspense>
               }
             />

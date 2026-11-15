@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""聚宽指数估值采集：三指数的静态/滚动整体、等权、中位数PE。
+"""聚宽指数估值采集：三指数的静态整体PE、静态/滚动等权及中位数PE。
 配置日期和指数后整段运行即入库；按各指数最后完成日续采，仅依赖mysql_connector。
 新口径写入valuation_ruler_daily_v2/member_v2，不改旧表。历史为平台当前可见修订值。
 整体PE以总市值/个股PE反推利润；等权与中位数只取0<PE<=300，普通停牌不剔除。
@@ -182,6 +182,9 @@ def validate_schema(engine, models):
     for model in models:
         table = model.__table__
         cols = {c['name']: c for c in inspector.get_columns(table.name)}
+        # The retired nullable metric may remain until the operator runs DROP COLUMN.
+        if table.name == 'valuation_ruler_daily_v2' and cols.get('overall_pe_ttm', {}).get('nullable') is True:
+            cols.pop('overall_pe_ttm')
         if _builtins.set(cols) != _builtins.set(c.name for c in table.columns):
             raise HistoryError('数据库字段集合不一致。')
         if inspector.get_pk_constraint(table.name)['constrained_columns'] != [c.name for c in table.primary_key]:
@@ -382,7 +385,6 @@ class ValuationDaily(Base):
     index_code = Column(String(16), primary_key=True)
     method_version = Column(String(48), primary_key=True)
     index_close = Column(Numeric(24, 8), nullable=False)
-    overall_pe_ttm = Column(Numeric(30, 12))
     mean_pe_ttm = Column(Numeric(30, 12))
     median_pe_ttm = Column(Numeric(30, 12))
     overall_pe_lyr = Column(Numeric(30, 12))
@@ -433,27 +435,29 @@ def source_number(value, field):
 
 
 def aggregate(members, field):
-    """Separate samples for each PE basis; never apply the 300 cap to overall PE."""
+    """Equal-weight and median for both bases; overall PE is static only."""
     active = [row for row in members if row['suspended_listing'] is not True]
     values = [Decimal(row[field]) for row in active if row[field] is not None]
     selected = _builtins.sorted(value for value in values if 0 < value <= 300)
-    valid = [row for row in active if row[field] is not None and row['market_cap'] is not None]
     counts = dict(eligible=_builtins.len(selected), loss=_builtins.sum(v < 0 for v in values),
                   over_limit=_builtins.sum(v > 300 for v in values), missing_pe=_builtins.len(active)-_builtins.len(values),
                   suspended_listing=_builtins.len(members)-_builtins.len(active),
-                  listing_status_unverified=_builtins.sum(row['suspended_listing'] is None for row in members),
-                  overall_valid=_builtins.len(valid), overall_missing=_builtins.len(active)-_builtins.len(valid))
+                  listing_status_unverified=_builtins.sum(row['suspended_listing'] is None for row in members))
     with localcontext() as ctx:
         ctx.prec = 80
         mean = derived(_builtins.sum(selected, Decimal(0))/_builtins.len(selected), 12) if selected else None
         middle = _builtins.len(selected)//2
         median = (selected[middle] if _builtins.len(selected)%2 else
                   derived((selected[middle-1]+selected[middle])/2, 12)) if selected else None
-        cap = _builtins.sum((Decimal(r['market_cap']) for r in valid), Decimal(0))
-        profit = _builtins.sum((Decimal(r['market_cap'])/Decimal(r[field]) for r in valid), Decimal(0))
-        # Missing/zero-profit PE must not produce a misleading whole-index ratio.
-        overall = derived(cap/profit, 12) if valid and _builtins.len(valid) == _builtins.len(active) and profit > 0 else None
-        counts.update(market_cap_yi=format(cap, 'f'), implied_profit_yi=format(derived(profit, 12), 'f'))
+        overall = None
+        if field == 'pe_lyr':
+            valid = [row for row in active if row[field] is not None and row['market_cap'] is not None]
+            counts.update(overall_valid=_builtins.len(valid), overall_missing=_builtins.len(active)-_builtins.len(valid))
+            cap = _builtins.sum((Decimal(r['market_cap']) for r in valid), Decimal(0))
+            profit = _builtins.sum((Decimal(r['market_cap'])/Decimal(r[field]) for r in valid), Decimal(0))
+            # Missing/zero-profit PE must not produce a misleading whole-index ratio.
+            overall = derived(cap/profit, 12) if valid and _builtins.len(valid) == _builtins.len(active) and profit > 0 else None
+            counts.update(market_cap_yi=format(cap, 'f'), implied_profit_yi=format(derived(profit, 12), 'f'))
     return overall, mean, median, counts
 
 
@@ -491,7 +495,8 @@ def summarize(day, close, members, index_code=INDEX, source=SOURCE):
     for basis in ('ttm', 'lyr'):
         overall, mean, median, stats[basis] = aggregate(checked, 'pe_'+basis)
         for metric, value in (('overall', overall), ('mean', mean), ('median', median)):
-            daily[metric+'_pe_'+basis] = None if value is None else number(value, 30, 12)
+            if metric != 'overall' or basis == 'lyr':
+                daily[metric+'_pe_'+basis] = None if value is None else number(value, 30, 12)
     payload = json_text(checked)
     daily.update(statistics=json_text(stats), members_sha256=hashlib.sha256(payload.encode('utf-8')).hexdigest())
     return daily, dict(key, payload=payload)
@@ -547,6 +552,14 @@ def source_day(day, index_code=INDEX):
     return summarize(day, close, members, index_code)
 
 
+def normalized_statistics(value):
+    """Compare retained statistics without requiring historical rewrites."""
+    result = json.loads(value)
+    for key in ('overall_valid', 'overall_missing', 'market_cap_yi', 'implied_profit_yi'):
+        result['ttm'].pop(key, None)
+    return result
+
+
 def existing_day(session, day, index_code=INDEX):
     key = dict(trade_date=day, index_code=index_code, method_version=METHOD)
     daily = session.query(ValuationDaily).filter_by(**key).one_or_none()
@@ -560,7 +573,7 @@ def existing_day(session, day, index_code=INDEX):
     if daily.source not in (SOURCE, PUBLIC_SOURCE) or raw.source != daily.source:
         raise HistoryError('已有记录来源不匹配。')
     computed, archive = summarize(day, daily.index_close, json.loads(raw.payload), index_code, source=daily.source)
-    if (archive['payload'] != raw.payload or _builtins.any(_builtins.getattr(daily, k) != v
+    if (archive['payload'] != raw.payload or _builtins.any((normalized_statistics(daily.statistics) != normalized_statistics(v) if k == 'statistics' else _builtins.getattr(daily, k) != v)
             for k, v in computed.items() if k != 'updated_at')):
         raise HistoryError('已有汇总、指纹与成分原值不一致；不会覆盖。')
     return True
@@ -581,7 +594,7 @@ def save_day(Session, daily, raw, progress, done, total):
                 session.add(ValuationMember(**raw))
             else:
                 old = session.query(ValuationDaily).filter_by(trade_date=day, index_code=code, method_version=METHOD).one()
-                if old.source != PUBLIC_SOURCE and _builtins.any(_builtins.getattr(old, k) != v for k, v in daily.items() if k != 'updated_at'):
+                if old.source != PUBLIC_SOURCE and _builtins.any((normalized_statistics(old.statistics) != normalized_statistics(v) if k == 'statistics' else _builtins.getattr(old, k) != v) for k, v in daily.items() if k != 'updated_at'):
                     raise HistoryError('并发已有结果冲突，本次事务取消。')
             session.commit()
             return _builtins.int(added)
@@ -612,7 +625,7 @@ def run(start_date=START_DATE, end_date=END_DATE, write_database=WRITE_DATABASE,
         raise HistoryError('indices须为不重复的受支持指数代码列表。')
     if as_date(start_date) < dt.date(2010, 1, 1):
         raise HistoryError('起点不得早于2010年。')
-    _builtins.print('估值采集v2：静态/滚动整体PE、等权PE及中位数；等权/中位数仅取0<PE≤300。')
+    _builtins.print('估值采集v2：静态整体PE、静态/滚动等权PE及中位数；等权/中位数仅取0<PE≤300。')
     engine = Session = None
     current_day, stage = None, '读取交易日历'
     progress = Progress()

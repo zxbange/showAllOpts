@@ -1,13 +1,12 @@
 import { useSearchParams } from 'react-router-dom'
-import { PageHeader } from '../components/PageHeader'
 import { useCallback, useState } from 'react'
 import { CalendarDays, Coins, Layers3, RefreshCw, Search, SlidersHorizontal } from 'lucide-react'
+import { PageHeader } from '../components/PageHeader'
 import { getDividendOverview } from '../api/client'
 import { useResource } from '../hooks/useResource'
 import { EmptyState, ErrorState, LoadingState } from '../components/States'
 import { StatCard } from '../components/StatCard'
 import { DividendYieldHistory } from '../components/DividendYieldHistory'
-import type { DividendItem } from '../types/dividend'
 import '../styles/dividend.css'
 
 const number = (v: number | null | undefined, suffix = '') =>
@@ -15,32 +14,25 @@ const number = (v: number | null | undefined, suffix = '') =>
 
 export function DividendPage() {
   const [params] = useSearchParams()
-  const requested = params.get('method')
-  const method = requested === 'value' || requested === 'bank' ? requested : 'classic'
+  const method = params.get('method') === 'bank' ? 'bank' : 'value'
   const [search, setSearch] = useState('')
-  const [overlapOnly, setOverlapOnly] = useState(false)
   const loader = useCallback((signal: AbortSignal) => getDividendOverview(signal), [])
   const { data, error, loading, reload } = useResource(loader)
   const group = data?.groups.find((g) => g.id === method)
-  const overlap = new Set(data?.overlap_codes ?? [])
   const term = search.trim().toLowerCase()
-  const items = (group?.items ?? []).filter(
-    (s) =>
-      (!overlapOnly || overlap.has(s.code)) &&
-      [s.code, s.name, s.industry_name ?? ''].some((v) => v.toLowerCase().includes(term)),
+  const items = (group?.items ?? []).filter((s) =>
+    [s.code, s.name, s.industry_name ?? ''].some((v) => v.toLowerCase().includes(term)),
   )
-  const classic = method === 'classic'
   const limit = method === 'bank' ? 10 : 25
-  const metric = (s: DividendItem) => (classic ? s.dividend_ratio_3y : s.dividend_yield_static)
-  const maxYield = Math.max(1, ...(group?.items ?? []).map(metric))
+  const maxYield = Math.max(1, ...(group?.items ?? []).map((s) => s.dividend_yield_static))
   return (
     <div className="page-enter dividend-page">
       <PageHeader>
         <div>
           <h1>
-            高股息选股 <span className="heading-tag">三组独立排名</span>
+            高股息低估值 <span className="heading-tag">银行与非银行</span>
           </h1>
-          <p>纯高股息取前 25 只；低估值按非银行、银行分别取前 25 只和前 10 只。</p>
+          <p>静态股息率 &gt; 3% · 0 &lt; PE &lt; 12 · 非银行前 25 只，银行前 10 只</p>
         </div>
         <div className="heading-actions">
           <span className="date-badge">
@@ -62,53 +54,35 @@ export function DividendPage() {
       ) : error ? (
         <ErrorState message={error} retry={reload} />
       ) : !data?.snapshot ? (
+        <EmptyState title="暂无高股息选股结果" description="请运行采集脚本，再同步本模块。" />
+      ) : data.requires_refresh ? (
         <EmptyState
-          title="暂无高股息选股结果"
-          description="请先在聚宽采集入库，再通过“数据同步”更新本模块。"
+          title="请更新选股结果"
+          description="PE 上限已调整为 12，请运行新版采集脚本并同步。"
         />
       ) : (
         <>
-          {data.requires_refresh && (
-            <p role="status" className="method-card">
-              股息率口径已更新，请运行新版高股息采集脚本并同步。
-            </p>
-          )}
-          <div className="stats-grid">
+          <div className="stats-grid dividend-stats">
             <StatCard
               label="本组入选"
               value={group?.items.length ?? 0}
               suffix="只"
-              note={
-                group?.candidates == null
-                  ? `本组最多 ${limit} 只`
-                  : `符合全部条件 ${group.candidates} 只`
-              }
+              note={`本组最多 ${limit} 只`}
               icon={<Layers3 size={18} />}
               accent
             />
             <StatCard
-              label={classic ? '最高三年累计分红比例' : '最高静态股息率'}
-              value={number(group?.items[0] ? metric(group.items[0]) : null)}
+              label="最高静态股息率"
+              value={number(group?.items[0]?.dividend_yield_static)}
               suffix="%"
-              note={
-                classic
-                  ? '累计比例，未年化'
-                  : `${Number(data.snapshot.trade_date.slice(0, 4)) - 1} 财年分红 / 当前市值`
-              }
+              note={`${Number(data.snapshot.trade_date.slice(0, 4)) - 1} 财年分红 / 当前市值`}
               icon={<Coins size={18} />}
-            />
-            <StatCard
-              label="两种口径共同入选"
-              value={data.overlap_codes.length}
-              suffix="只"
-              note="纯高股息与低估值名单的交集"
-              icon={<Layers3 size={18} />}
             />
             <StatCard
               label="可选股票池"
               value={data.snapshot.eligible_count}
               suffix="只"
-              note="保留科创板、停牌及涨跌停股票"
+              note="剔除 ST、退市及 4/8 开头股票"
               icon={<SlidersHorizontal size={18} />}
             />
           </div>
@@ -118,12 +92,9 @@ export function DividendPage() {
                 <h2>
                   {group?.name} · 前 {limit} 名
                 </h2>
-                <p>
-                  {classic ? '按三年累计分红比例降序' : '按静态股息率降序'}，同值按代码排序。不足
-                  {limit} 只不放宽条件。
-                </p>
+                <p>静态股息率从高到低排序</p>
               </div>
-              <span className="heading-tag">仅保留最新结果</span>
+              <span className="heading-tag">最新结果</span>
             </div>
             <div className="dividend-toolbar">
               <label className="dividend-search">
@@ -135,31 +106,14 @@ export function DividendPage() {
                   placeholder="搜索股票代码、名称或行业"
                 />
               </label>
-              <label className="dividend-overlap">
-                <input
-                  type="checkbox"
-                  checked={overlapOnly}
-                  onChange={(e) => setOverlapOnly(e.target.checked)}
-                />
-                只看两种口径共同入选
-              </label>
               <span>
                 展示 {items.length} / {group?.items.length ?? 0} 只
               </span>
             </div>
-            {data.requires_refresh ? (
-              <EmptyState
-                title="请更新静态股息率"
-                description="重新采集后显示上一财年的股息率与选股结果。"
-              />
-            ) : !group?.items.length ? (
-              <EmptyState title="本组暂无符合条件的股票" description="本次无股票满足全部条件。" />
+            {!group?.items.length ? (
+              <EmptyState title="本组暂无符合条件的股票" />
             ) : !items.length ? (
-              <EmptyState
-                search
-                title="没有匹配的股票"
-                description="试试其他代码、名称或行业，或取消共同入选筛选。"
-              />
+              <EmptyState search title="没有匹配的股票" description="试试其他代码、名称或行业。" />
             ) : (
               <div
                 className="dividend-table-wrap"
@@ -172,16 +126,10 @@ export function DividendPage() {
                     <tr>
                       <th>排名 / 股票</th>
                       <th>细分行业</th>
-                      <th>{classic ? '三年累计分红比例' : '静态股息率'}</th>
-                      <th>{classic ? '静态股息率' : '三年累计分红比例'}</th>
+                      <th>静态股息率</th>
                       <th>PE / PB</th>
                       <th>总市值 / 亿元</th>
                       <th>收盘价 / 元</th>
-                      <th>PEG</th>
-                      <th>营收同比</th>
-                      <th>净利润同比</th>
-                      <th>扣非 ROE</th>
-                      <th>财报 / 公告日期</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -194,10 +142,7 @@ export function DividendPage() {
                             </b>
                             <span>
                               <strong>{s.name}</strong>
-                              <small>
-                                {s.code}
-                                {overlap.has(s.code) && <em>共同入选</em>}
-                              </small>
+                              <small>{s.code}</small>
                             </span>
                           </div>
                         </td>
@@ -205,37 +150,23 @@ export function DividendPage() {
                         <td>
                           <div className="dividend-yield">
                             <strong>
-                              {number(metric(s), '%')}
-                              {!classic && (
-                                <DividendYieldHistory history={s.dividend_yield_history} />
-                              )}
+                              {number(s.dividend_yield_static, '%')}
+                              <DividendYieldHistory history={s.dividend_yield_history} />
                             </strong>
                             <span>
                               <i
-                                style={{ width: `${Math.max(0, (metric(s) / maxYield) * 100)}%` }}
+                                style={{
+                                  width: `${Math.max(0, (s.dividend_yield_static / maxYield) * 100)}%`,
+                                }}
                               />
                             </span>
                           </div>
-                        </td>
-                        <td>
-                          {number(classic ? s.dividend_yield_static : s.dividend_ratio_3y, '%')}
-                          {classic && <DividendYieldHistory history={s.dividend_yield_history} />}
                         </td>
                         <td>
                           {number(s.pe_ttm)} / {number(s.pb)}
                         </td>
                         <td>{number(s.market_cap)}</td>
                         <td>{number(s.close)}</td>
-                        <td>{number(s.peg)}</td>
-                        <td>{number(s.revenue_growth, '%')}</td>
-                        <td>{number(s.profit_growth, '%')}</td>
-                        <td>{number(s.adjusted_roe, '%')}</td>
-                        <td>
-                          <span className="dividend-dates">
-                            {s.report_period ?? '—'}
-                            <small>{s.publication_date ?? '—'}</small>
-                          </span>
-                        </td>
                       </tr>
                     ))}
                   </tbody>
@@ -246,28 +177,8 @@ export function DividendPage() {
               <span>
                 更新时间 {data.snapshot.updated_at.replace('T', ' ').slice(0, 19)} · 北京时间
               </span>
-              <span>左右滑动查看完整指标 · 页面刷新读取当前数据快照</span>
             </div>
           </section>
-          <details className="method-card">
-            <summary>两种筛选口径</summary>
-            <div>
-              <p>
-                纯高股息：按股权登记日统计近 1095 天累计分红，在可选池内有分红记录的股票中取比例前
-                10%，再要求 0.1 &lt; PEG &lt; 2、营收同比 &gt; 3%、净利润同比 &gt; 8%、扣非 ROE &gt;
-                4.5%。最后按三年累计分红比例取前 25。
-              </p>
-              <p>
-                高股息低估值：上一财年现金分红 / 当前总市值，要求静态股息率 &gt; 3%、0 &lt; PE &lt;
-                8；按当日申万一级行业区分银行与非银行，分别按股息率取前 10 和前 25 只。
-                分红按所属财年合计，仅计选股日已实施部分；三年累计比例未年化。
-              </p>
-              <span>
-                三组均剔除 4、8 开头、ST 及名称含 ST、*、退的股票，保留科创板、停牌和涨跌停股票。
-                财务数据取当日已披露值，报告期可能不同；停牌价使用填充值，缺失指标显示“—”。
-              </span>
-            </div>
-          </details>
         </>
       )}
     </div>

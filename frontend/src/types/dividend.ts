@@ -14,19 +14,11 @@ export interface DividendItem {
   industry_level: string | null
   dividend_yield_static: number
   dividend_yield_history?: AnnualYield[] | null
-  dividend_ratio_3y: number
   dividend_cash_annual: number
-  dividend_cash_3y: number
   pe_ttm: number
   pb: number | null
   market_cap: number
   close: number
-  revenue_growth: number | null
-  profit_growth: number | null
-  adjusted_roe: number | null
-  peg: number | null
-  report_period: string | null
-  publication_date: string | null
 }
 export interface DividendGroup {
   id: string
@@ -43,11 +35,8 @@ export interface DividendOverview {
     rule_version: string
     universe_count: number
     eligible_count: number
-    classic_candidates: number
     value_candidates: number
-    classic_count: number
     value_count: number
   } | null
   groups: DividendGroup[]
-  overlap_codes: string[]
 }

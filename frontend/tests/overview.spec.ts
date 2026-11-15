@@ -107,9 +107,7 @@ test('group tabs preserve direct links, active navigation and mobile layout', as
     ['市场情绪', 'etf-shares', 'market-crowding', '抱团拥挤度'],
     ['市场情绪', 'market-crowding', 'valuation-ruler', '估值标尺'],
     ['微盘观察', 'microcap-temperature', 'microcap-breadth', '微盘新高新低'],
-    ['业绩选股', 'cash-cow', 'earnings-gap', '净利润断层'],
-    ['业绩选股', 'cash-cow', 'high-growth', '高增长'],
-    ['业绩选股', 'high-growth', 'cash-cow', '奶牛股'],
+    ['业绩选股', 'dividend-selection', 'cash-cow', '奶牛股'],
   ]) {
     await page.goto('/' + first)
     const tabs = page.getByRole('navigation', { name: group + '模块切换' })
@@ -118,7 +116,7 @@ test('group tabs preserve direct links, active navigation and mobile layout', as
     const cards = await tabs.boundingBox()
     expect(heading!.y + heading!.height).toBeLessThanOrEqual(cards!.y)
     await expect(tabs.locator('.module-card')).toHaveCount(
-      group === '市场情绪' || group === '业绩选股' ? 6 : 2,
+      group === '市场情绪' ? 6 : group === '业绩选股' ? 3 : 2,
     )
     await tabs.getByRole('link', { name: label, exact: true }).click()
     await expect(page).toHaveURL(new RegExp(second + '$'))
@@ -141,7 +139,7 @@ test('shared module cards stay available while loading and after failures', asyn
   test.setTimeout(60000)
   for (const [path, count] of [
     ['etf-shares', 6],
-    ['dividend-selection', 6],
+    ['dividend-selection', 3],
   ] as const) {
     let release!: () => void
     const response = new Promise<void>((resolve) => {

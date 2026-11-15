@@ -100,3 +100,18 @@ describe('valuation chart truthfulness', () => {
     expect(valuationSource('unexpected_actual_source')).toBe('unexpected_actual_source')
   })
 })
+
+it('omits rolling overall PE even when an older cached response contains it', () => {
+  const option = valuationChartOption(
+    {
+      ...data,
+      basis: 'ttm',
+      points: [{ ...data.points[0], overall_pe: 999, mean_pe: 20, median_pe: 18 }],
+    },
+    0,
+  )
+  expect(option.series.some((s) => s.name === '滚动整体PE')).toBe(false)
+  expect(option.series.find((s) => s.name === '滚动等权PE')?.data).toEqual([20])
+  expect(option.series.find((s) => s.name === '滚动中位数PE')?.data).toEqual([18])
+  expect(option.tooltip.formatter([{ dataIndex: 0 }])).not.toContain('整体PE')
+})

@@ -73,27 +73,29 @@ def source_number(value, field):
 
 
 def aggregate(members, field):
-    """Separate samples for each PE basis; never apply the 300 cap to overall PE."""
+    """Equal-weight and median for both bases; overall PE is static only."""
     active = [row for row in members if row['suspended_listing'] is not True]
     values = [Decimal(row[field]) for row in active if row[field] is not None]
     selected = _builtins.sorted(value for value in values if 0 < value <= 300)
-    valid = [row for row in active if row[field] is not None and row['market_cap'] is not None]
     counts = dict(eligible=_builtins.len(selected), loss=_builtins.sum(v < 0 for v in values),
                   over_limit=_builtins.sum(v > 300 for v in values), missing_pe=_builtins.len(active)-_builtins.len(values),
                   suspended_listing=_builtins.len(members)-_builtins.len(active),
-                  listing_status_unverified=_builtins.sum(row['suspended_listing'] is None for row in members),
-                  overall_valid=_builtins.len(valid), overall_missing=_builtins.len(active)-_builtins.len(valid))
+                  listing_status_unverified=_builtins.sum(row['suspended_listing'] is None for row in members))
     with localcontext() as ctx:
         ctx.prec = 80
         mean = derived(_builtins.sum(selected, Decimal(0))/_builtins.len(selected), 12) if selected else None
         middle = _builtins.len(selected)//2
         median = (selected[middle] if _builtins.len(selected)%2 else
                   derived((selected[middle-1]+selected[middle])/2, 12)) if selected else None
-        cap = _builtins.sum((Decimal(r['market_cap']) for r in valid), Decimal(0))
-        profit = _builtins.sum((Decimal(r['market_cap'])/Decimal(r[field]) for r in valid), Decimal(0))
-        # Missing/zero-profit PE must not produce a misleading whole-index ratio.
-        overall = derived(cap/profit, 12) if valid and _builtins.len(valid) == _builtins.len(active) and profit > 0 else None
-        counts.update(market_cap_yi=format(cap, 'f'), implied_profit_yi=format(derived(profit, 12), 'f'))
+        overall = None
+        if field == 'pe_lyr':
+            valid = [row for row in active if row[field] is not None and row['market_cap'] is not None]
+            counts.update(overall_valid=_builtins.len(valid), overall_missing=_builtins.len(active)-_builtins.len(valid))
+            cap = _builtins.sum((Decimal(r['market_cap']) for r in valid), Decimal(0))
+            profit = _builtins.sum((Decimal(r['market_cap'])/Decimal(r[field]) for r in valid), Decimal(0))
+            # Missing/zero-profit PE must not produce a misleading whole-index ratio.
+            overall = derived(cap/profit, 12) if valid and _builtins.len(valid) == _builtins.len(active) and profit > 0 else None
+            counts.update(market_cap_yi=format(cap, 'f'), implied_profit_yi=format(derived(profit, 12), 'f'))
     return overall, mean, median, counts
 
 
@@ -131,7 +133,16 @@ def summarize(day, close, members, index_code=INDEX, source=SOURCE):
     for basis in ('ttm', 'lyr'):
         overall, mean, median, stats[basis] = aggregate(checked, 'pe_'+basis)
         for metric, value in (('overall', overall), ('mean', mean), ('median', median)):
-            daily[metric+'_pe_'+basis] = None if value is None else number(value, 30, 12)
+            if metric != 'overall' or basis == 'lyr':
+                daily[metric+'_pe_'+basis] = None if value is None else number(value, 30, 12)
     payload = json_text(checked)
     daily.update(statistics=json_text(stats), members_sha256=hashlib.sha256(payload.encode('utf-8')).hexdigest())
     return daily, dict(key, payload=payload)
+
+
+def normalized_statistics(value):
+    """Compare retained statistics without requiring historical rewrites."""
+    result = json.loads(value)
+    for key in ('overall_valid', 'overall_missing', 'market_cap_yi', 'implied_profit_yi'):
+        result['ttm'].pop(key, None)
+    return result

@@ -67,7 +67,7 @@ async function mock(page: Page, payload: CashCowOverview) {
   )
 }
 
-test('empty page is read only until requested and has six navigation modules', async ({ page }) => {
+test('empty page is read only until requested and has three navigation modules', async ({ page }) => {
   await mock(page, { snapshot: null, items: [], status: idle })
   const writes: string[] = [],
     polls: string[] = []
@@ -82,7 +82,7 @@ test('empty page is read only until requested and has six navigation modules', a
   await expect(page.getByRole('button', { name: '更新全部周期' })).toBeEnabled()
   await expect(
     page.getByRole('navigation', { name: '业绩选股模块切换' }).getByRole('link'),
-  ).toHaveCount(6)
+  ).toHaveCount(3)
   await page.waitForTimeout(2200)
   expect(writes).toEqual([])
   expect(polls).toEqual([])

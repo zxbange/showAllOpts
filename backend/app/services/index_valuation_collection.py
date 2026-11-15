@@ -15,7 +15,7 @@ from app.core.database import build_engine
 from app.core.history_sync import source_identity
 from app.core.result_sync import HEAD, CHANGE
 from app.services.index_valuation import checked, init_store, METRICS
-from app.services.index_valuation_rules import METHOD, SOURCE, PUBLIC_SOURCE, summarize
+from app.services.index_valuation_rules import METHOD, SOURCE, PUBLIC_SOURCE, summarize, normalized_statistics
 from app.services.system_configuration import database_config
 from app.services.valuation_ruler_model import ValuationError
 
@@ -70,7 +70,7 @@ def write_records(engine, records, check):
                     raise ValuationError('已有指数日来源不匹配。')
                 computed, archive = summarize(old['trade_date'], old['index_close'], json.loads(member['payload']),
                                                old['index_code'], source=old['source'])
-                if (archive['payload'] != member['payload'] or any(old[k] != v for k, v in computed.items() if k != 'updated_at')):
+                if (archive['payload'] != member['payload'] or any((normalized_statistics(old[k]) != normalized_statistics(v) if k == 'statistics' else old[k] != v) for k, v in computed.items() if k != 'updated_at')):
                     raise ValuationError('已有指数日汇总与原值不一致，请核实。')
                 # Preserve historical/JQ originals even when today's vendor revises its values.
                 published.append(checked(old, daily['trade_date']))

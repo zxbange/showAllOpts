@@ -12,9 +12,7 @@ class DividendSnapshot(Base):
     rule_version = Column(String(32), nullable=False)
     universe_count = Column(Integer, nullable=False)
     eligible_count = Column(Integer, nullable=False)
-    classic_candidates = Column(Integer, nullable=False)
     value_candidates = Column(Integer, nullable=False)
-    classic_count = Column(Integer, nullable=False)
     value_count = Column(Integer, nullable=False)
 
 
@@ -32,17 +30,9 @@ class DividendStock(Base):
     industry_level = Column(String(16), nullable=True)
     # v4 起 *_1y 兼容列存上一财年已实施分红及静态股息率，由快照 rule_version 区分。
     dividend_yield_1y = Column(Numeric(24, 6), nullable=False)
-    dividend_ratio_3y = Column(Numeric(24, 6), nullable=False)
     dividend_cash_1y = Column(Numeric(28, 6), nullable=False)
-    dividend_cash_3y = Column(Numeric(28, 6), nullable=False)
     dividend_yield_history = Column(JSON, nullable=True)
     pe_ttm = Column(Numeric(24, 6), nullable=False)
     pb = Column(Numeric(24, 6), nullable=True)
     market_cap = Column(Numeric(24, 6), nullable=False)
     close = Column(Numeric(24, 6), nullable=False)
-    revenue_growth = Column(Numeric(24, 6), nullable=True)
-    profit_growth = Column(Numeric(24, 6), nullable=True)
-    adjusted_roe = Column(Numeric(24, 6), nullable=True)
-    peg = Column(Numeric(24, 6), nullable=True)
-    report_period = Column(Date, nullable=True)
-    publication_date = Column(Date, nullable=True)

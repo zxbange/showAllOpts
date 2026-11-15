@@ -9,9 +9,7 @@ class DividendRun(BaseModel):
     rule_version: str
     universe_count: int
     eligible_count: int
-    classic_candidates: int
     value_candidates: int
-    classic_count: int
     value_count: int
 
 
@@ -31,20 +29,12 @@ class DividendItem(BaseModel):
     industry_name: str | None
     industry_level: str | None
     dividend_yield_static: float = Field(validation_alias='dividend_yield_1y')
-    dividend_ratio_3y: float
     dividend_cash_annual: float = Field(validation_alias='dividend_cash_1y')
-    dividend_cash_3y: float
     dividend_yield_history: list[DividendAnnualYield] | None = None
     pe_ttm: float
     pb: float | None
     market_cap: float
     close: float
-    revenue_growth: float | None
-    profit_growth: float | None
-    adjusted_roe: float | None
-    peg: float | None
-    report_period: date | None
-    publication_date: date | None
 
 
 class DividendGroup(BaseModel):
@@ -58,5 +48,4 @@ class DividendGroup(BaseModel):
 class DividendOverview(BaseModel):
     snapshot: DividendRun | None = None
     groups: list[DividendGroup]
-    overlap_codes: list[str] = Field(default_factory=list)
     requires_refresh: bool = False

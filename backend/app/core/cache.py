@@ -30,13 +30,11 @@ from app.core.ownership_sync import copy_ownership
 from app.core.result_sync import MODULE_IDS as JOURNAL_MODULES, copy_results
 from app.models.ownership import OwnershipStock, OwnershipReport, OwnershipHolders
 from app.models.etf_heat import Heat, Pool
-from app.models.growth import GrowthSnapshot, GrowthStock
 from app.models.momentum import IndustryMomentum
 from app.models.crowding import MarketCrowding
 from app.models.sentiment import MarketSentiment
 from app.models.microcap import MicrocapTemperature
 from app.models.etf import ETFShare
-from app.models.earnings import EarningsRun, EarningsStock
 from app.models.breadth import MicrocapBreadth
 from app.models.dividend import DividendSnapshot, DividendStock
 from app.models.cash_cow import CashCowSnapshot
@@ -50,11 +48,9 @@ MODULES = {
     'microcap-temperature': ('微盘温度计', (MicrocapTemperature,)),
     # Price table is optional and reconciled by etf_sync; keep legacy cache identity stable.
     'etf-shares': ('ETF份额仪表盘', (ETFShare,)),
-    'earnings-gap': ('净利润断层', (EarningsRun, EarningsStock)),
     'microcap-breadth': ('微盘新高新低', (MicrocapBreadth,)),
     'dividend-selection': ('高股息选股', (DividendSnapshot, DividendStock)),
     'cash-cow': ('奶牛股', (CashCowSnapshot,)),
-    'high-growth': ('高增长', (GrowthSnapshot, GrowthStock)),
     'etf-momentum': ('ETF动量热度', (Pool, Heat)),
     'institution-ownership': ('个股机构持仓', (OwnershipStock, OwnershipReport, OwnershipHolders)),
     **HISTORY_MODULES,
@@ -401,7 +397,7 @@ class SnapshotCache:
                     if module == 'institution-ownership':
                         # Legacy fallback cannot certify an existing journal cursor.
                         target.exec_driver_sql('DROP TABLE IF EXISTS ownership_cache_cursor')
-                    count = sync_tables(source, target, tables, module, incremental, notes=self.sync_notes)
+                    count = sync_tables(source, target, tables, module, incremental)
                     self.validate_module(module, target)
                     if module in JOURNAL_MODULES:
                         target.exec_driver_sql('DROP TABLE IF EXISTS result_sync_cursor_v1')

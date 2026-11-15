@@ -25,7 +25,7 @@ TABLE = 'valuation_ruler_daily_v2'
 INDICES = {'000300.XSHG': ('沪深300', 300, '2010-01-01'),
            '000016.XSHG': ('上证50', 50, '2010-01-01'),
            '000852.XSHG': ('中证1000', 1000, '2014-10-17')}
-METRICS = tuple(metric+'_pe_'+basis for basis in ('ttm', 'lyr') for metric in ('overall', 'mean', 'median'))
+METRICS = tuple(metric+'_pe_'+basis for basis in ('ttm', 'lyr') for metric in ('overall', 'mean', 'median') if metric != 'overall' or basis == 'lyr')
 
 
 def init_store(db):
@@ -74,16 +74,16 @@ def checked(row, cutoff):
             result[field] = str(value)
         for basis in ('ttm', 'lyr'):
             counts = stats[basis]
-            fields = ('eligible', 'loss', 'over_limit', 'missing_pe', 'suspended_listing', 'overall_valid', 'overall_missing')
+            fields = ('eligible', 'loss', 'over_limit', 'missing_pe', 'suspended_listing') + (('overall_valid', 'overall_missing') if basis == 'lyr' else ())
             if any(type(counts[k]) is not int or not 0 <= counts[k] <= row['member_count'] for k in fields):
                 reject()
             if sum(counts[k] for k in fields[:5]) != row['member_count']:
                 reject()
-            if counts['overall_valid']+counts['overall_missing']+counts['suspended_listing'] != row['member_count']:
+            if basis == 'lyr' and counts['overall_valid']+counts['overall_missing']+counts['suspended_listing'] != row['member_count']:
                 reject()
             if any((result[m+'_pe_'+basis] is None) != (counts['eligible'] == 0) for m in ('mean', 'median')):
                 reject()
-            if counts['overall_missing'] and result['overall_pe_'+basis] is not None:
+            if basis == 'lyr' and counts['overall_missing'] and result['overall_pe_lyr'] is not None:
                 reject()
         return result
     except (KeyError, TypeError, ValueError, InvalidOperation):
@@ -174,7 +174,7 @@ def sync(engine, service, cutoff, check, progress, *, full=False, same_source=Tr
                 check()
                 message = '{}：日汇总 {}/{} 条'.format(INDICES[code][0], done, total)
                 progress(message, 5 + index * 28 + 28 * done / max(1, total))
-                query = select(table).where(*condition).order_by(table.c.trade_date).limit(page_size)
+                query = select(*(c for c in table.c if c.name != 'overall_pe_ttm')).where(*condition).order_by(table.c.trade_date).limit(page_size)
                 if after is not None:
                     query = query.where(table.c.trade_date > after)
                 # Release the source connection before local processing/writes.
@@ -184,7 +184,7 @@ def sync(engine, service, cutoff, check, progress, *, full=False, same_source=Tr
                 with engine.connect() as connection:
                     if compressed:
                         packet = connection.scalar(packed_query(query))
-                        rows = unpack_page(packet, list(table.c.keys()))
+                        rows = unpack_page(packet, [c.name for c in table.c if c.name != 'overall_pe_ttm'])
                     else:
                         rows = connection.execute(query).mappings().all()
                 LOG.info('Valuation summary received index=%s rows=%s seconds=%.3f',
@@ -238,7 +238,9 @@ def history(service, cutoff, index_code, basis):
                      member_count=row['member_count'], positive_count=counts['eligible'], loss_count=counts['loss'],
                      missing_pe_count=counts['missing_pe'], excluded_high_pe_count=counts['over_limit'])
         point.update({key: None if row[key] is None else float(row[key]) for key in METRICS})
-        point.update({key+'_pe': point[key+'_pe_'+basis] for key in ('overall', 'mean', 'median')})
+        point.update({key+'_pe': point[key+'_pe_'+basis] for key in ('mean', 'median')})
+        if basis == 'lyr':
+            point['overall_pe'] = point['overall_pe_lyr']
         points.append(point)
     values = [p['mean_pe'] for p in points if p['mean_pe'] is not None]
     first, last = (points[0]['date'], points[-1]['date']) if points else (None, None)

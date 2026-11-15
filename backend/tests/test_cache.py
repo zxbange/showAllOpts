@@ -13,9 +13,7 @@ from app.core.config import Settings
 from app.main import create_app
 from app.models.momentum import IndustryMomentum
 from test_momentum_api import row
-from test_growth_api import seed as growth_seed
 from test_dividend_api import seed as dividend_seed
-from test_earnings_api import seed as earnings_seed
 
 
 def seed_cash_cow(session):
@@ -35,9 +33,7 @@ def cached(engine, session, tmp_path):
     session.commit()
     from history_sync_helpers import seed_history_sources
     seed_history_sources(engine)
-    growth_seed(session)
     dividend_seed(session)
-    earnings_seed(session)
     seed_cash_cow(session)
     settings = Settings(_env_file=None, cache_enabled=True, cache_auto_refresh=False,
                         log_dir=tmp_path/'log')
@@ -47,9 +43,7 @@ def cached(engine, session, tmp_path):
 
 PATHS = ['/industry-momentum/latest', '/industry-momentum/industries/A/history',
          '/market-crowding/history', '/market-sentiment/history', '/microcap-temperature/history', '/etf-shares/history',
-         '/earnings-gap/stocks?period=2026-09-30&search=测试&sort=profit_yoy',
-         '/earnings-gap/stocks/600001.XSHG?period=2026-09-30',
-         '/microcap-breadth/history', '/dividend-selection/latest', '/high-growth/latest', '/etf-momentum/latest']
+         '/microcap-breadth/history', '/dividend-selection/latest', '/etf-momentum/latest']
 
 
 def test_all_modules_and_detail_read_locally_with_source_disconnected(cached, engine):
@@ -127,7 +121,7 @@ def test_refresh_selects_only_source_columns_and_does_not_write_source(cached, e
     selects = [s for s in statements if s.lstrip().startswith('SELECT')]
     # Only crowding uses append bounds. Momentum/breadth without journals use
     # complete manifests so newly restored dates cannot hide within old bounds.
-    assert sum('GROUP BY' in sql for sql in selects) == 2  # Includes earnings completeness counts.
+    assert sum('GROUP BY' in sql for sql in selects) == 1  # Microcap completeness counts.
     assert any('FROM etf_price_daily' in sql for sql in selects)
     for _, models in MODULES.values():
         for model in models:

@@ -231,10 +231,10 @@ export function ValuationRulerPage() {
           accent
         />
         <StatCard
-          label={v2 ? peLabel + '整体PE' : '全历史 P20'}
-          value={valuationNumber(v2 ? latest?.overall_pe : benchmark?.p20)}
+          label={v2 && basis === 'lyr' ? '静态整体PE' : '全历史 P20'}
+          value={valuationNumber(v2 && basis === 'lyr' ? latest?.overall_pe : benchmark?.p20)}
           suffix="倍"
-          note={v2 ? '总市值 / 对应利润合计' : '已采集完整日均值的20%分位'}
+          note={v2 && basis === 'lyr' ? '总市值 / 上年利润合计' : '等权PE历史20%分位'}
           icon={<Gauge size={18} />}
         />
         <StatCard

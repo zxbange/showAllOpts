@@ -117,7 +117,7 @@ def test_invalid_contract_rejected(synced, bad):
     if bad == 'counts': stats['ttm']['eligible'] -= 1
     if bad == 'basis': stats['profit_basis'] = 'guessed'
     if bad == 'null_mean': row['mean_pe_ttm'] = None
-    if bad == 'overall_partial': stats['ttm'].update(overall_valid=299, overall_missing=1)
+    if bad == 'overall_partial': stats['lyr'].update(overall_valid=299, overall_missing=1)
     if bad == 'hash': row['members_sha256'] = 'bad'
     if bad == 'source_basis': row['source'] = index_valuation.PUBLIC_SOURCE
     row['statistics'] = json.dumps(stats)
@@ -163,3 +163,18 @@ def test_summary_progress_advances_with_pages_and_counts_rows(synced, monkeypatc
     assert sum(updates) == summary['processed'] == 9
     assert any('3/3' in stage for stage, _ in progress)
     assert progress[-1][1] == 89
+
+
+def test_legacy_overall_column_is_not_downloaded_or_exposed(synced):
+    c, cache, service, sql = synced
+    with c.engine.begin() as db:
+        db.execute(text('ALTER TABLE valuation_ruler_daily_v2 ADD COLUMN overall_pe_ttm NUMERIC'))
+        db.execute(text('UPDATE valuation_ruler_daily_v2 SET overall_pe_ttm=999'))
+    sql.clear()
+    cache.refresh('valuation-ruler', background=False)
+    reads = [s for s in sql if 'FROM valuation_ruler_daily_v2' in s and s.lstrip().startswith('SELECT')]
+    assert reads and all('overall_pe_ttm' not in s for s in reads)
+    for point in service.history(basis='ttm')['points']:
+        assert 'overall_pe_ttm' not in point and 'overall_pe' not in point
+        assert point['mean_pe'] == point['median_pe'] == 10
+    assert service.history(basis='lyr')['latest']['overall_pe'] == 20

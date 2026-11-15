@@ -194,7 +194,7 @@ def test_malformed_journal_preserves_published_snapshot(cached, writer, engine, 
 
 def test_shared_embedded_protocols_remain_identical():
     root = Path(__file__).resolve().parents[2]
-    for name in ('result_journal', 'earnings_version'):
+    for name in ('result_journal',):
         spec = importlib.util.spec_from_file_location(name, root / ('collectors/tools/sync_' + name + '.py'))
         module = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(module)

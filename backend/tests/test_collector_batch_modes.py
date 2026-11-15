@@ -24,7 +24,7 @@ def strategy_env(batch, name, source, monkeypatch):
     return SimpleNamespace(**dict(vars(source), env=env))
 
 
-@pytest.mark.parametrize('name', ['行业动量', '抱团拥挤度', '微盘温度计', '净利润断层'])
+@pytest.mark.parametrize('name', ['行业动量', '抱团拥挤度', '微盘温度计'])
 def test_overwrite_rejected_before_source_or_database_access(batch, monkeypatch, name):
     monkeypatch.setattr(batch, 'connect_database', lambda _: pytest.fail('must not connect'))
     strategy = batch.STRATEGIES[name]({}, CONFIG)

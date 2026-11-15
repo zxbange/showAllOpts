@@ -20,13 +20,13 @@ def test_archive_rules_are_identical_in_all_standalone_entries():
     start, end = '# BEGIN SHARED SELECTION ARCHIVE', '# END SHARED SELECTION ARCHIVE'
     source = (ROOT/'collectors/rules/selection_archive.py').read_text(encoding='utf-8')
     expected = source[source.index(start):source.index(end) + len(end)]
-    for filename in ('策略批量采集_数据库版.py', '高股息选股_数据库版.py', '高增长_数据库版.py'):
+    for filename in ('策略批量采集_数据库版.py', '高股息选股_数据库版.py'):
         text = (ROOT/'collectors'/filename).read_text(encoding='utf-8')
         assert text.count(start) == 1
         assert text[text.index(start):text.index(end)+len(end)] == expected
 
 
-@pytest.fixture(params=['高股息选股', '高增长'])
+@pytest.fixture(params=['高股息选股'])
 def scenario(request, monkeypatch, tmp_path):
     monkeypatch.setitem(sys.modules, 'jqdata', ModuleType('jqdata'))
     spec = importlib.util.spec_from_file_location('archive_test', ROOT/'collectors'/(request.param+'_数据库版.py'))
@@ -35,11 +35,11 @@ def scenario(request, monkeypatch, tmp_path):
     monkeypatch.setattr(mod, 'china_now', lambda: dt.datetime(2026, 11, 11, 18))
     engine = create_engine('sqlite:///' + str(tmp_path / 'archive.db'))
     monkeypatch.setattr(mod, 'connect_database', lambda config: engine)
-    fn = mod._dividend_strategy if request.param == '高股息选股' else mod._growth_strategy
+    fn = mod._dividend_strategy
     ns = fn({'get_trade_days': lambda **kw: DAYS, 'get_all_trade_days': lambda: DAYS}, mod.DB_CONFIG)
-    snapshot = getattr(ns, 'DividendSnapshot', getattr(ns, 'GrowthSnapshot', None))
-    stock = getattr(ns, 'DividendStock', getattr(ns, 'GrowthStock', None))
-    field = 'trade_date' if request.param == '高股息选股' else 'as_of_date'
+    snapshot = ns.DividendSnapshot
+    stock = ns.DividendStock
+    field = 'trade_date'
     calls, fail = [], set()
     def calc(day, *args, **kwargs):
         calls.append(day)
@@ -47,7 +47,7 @@ def scenario(request, monkeypatch, tmp_path):
         meta = {c.name: day if isinstance(c.type, Date) else 1 for c in snapshot.__table__.columns
                 if c.name not in ('id', 'updated_at')}
         meta['rule_version'] = ns.RULE_VERSION
-        if 'value_count' in meta: meta['value_count'] = 0
+        meta['value_count'] = 1
         record = {}
         for c in stock.__table__.columns:
             if isinstance(c.type, Date): record[c.name] = day
@@ -55,7 +55,7 @@ def scenario(request, monkeypatch, tmp_path):
             elif isinstance(c.type, Integer): record[c.name] = 1
             else: record[c.name] = None if c.nullable else 'sample'
         record.update(code='000001.XSHE', name='样本', rank=1)
-        if 'method' in record: record['method'] = 'classic'
+        if 'method' in record: record['method'] = 'value'
         if 'reports' in record: record['reports'] = {'annual': [{'net_profit': '12345678901234567890.12345678'}]}
         return meta, [record]
     cells = dict(zip(ns.archive_history.__code__.co_freevars, ns.archive_history.__closure__))
@@ -191,66 +191,12 @@ def test_empty_valid_selection_is_completed_only_with_valid_metadata(scenario):
     _, ns, engine, calls, fail, calc, snapshot, stock, field = scenario
     ns.ArchiveBase.metadata.create_all(engine)
     meta, _ = calc(DAYS[0])
-    for key in ('classic_count', 'value_count', 'matched_count'):
+    for key in ('value_count',):
         if key in meta: meta[key] = 0
     assert ns.save_archive(sessionmaker(bind=engine), DAYS[0], 'revised_asof', meta, [])
     with sessionmaker(bind=engine)() as session:
         saved = session.query(ns.SelectionArchive).one()
         assert saved.status == 'complete' and saved.stocks_json == '[]'
-
-
-def test_growth_short_pages_are_not_exhaustion(scenario):
-    from types import SimpleNamespace
-    from sqlalchemy import Table, MetaData, Column, String
-    import pandas as pd
-    mod, ns, engine, *unused = scenario
-    if not hasattr(mod, '_growth_strategy'):
-        return
-    source = create_engine('sqlite://')
-    table = Table('reports', MetaData(), Column('id', Integer, primary_key=True), Column('code', String),
-        Column('pub_date', Date), Column('start_date', Date), Column('end_date', Date),
-        Column('report_date', Date), Column('report_type', Integer),
-        Column('np_parent_company_owners', Numeric), Column('basic_eps', Numeric))
-    table.metadata.create_all(source)
-    with source.begin() as connection:
-        connection.execute(table.insert(), [dict(id=i+1, code='a', pub_date=dt.date(2025, 1, 10),
-            start_date=dt.date(year, 1, 1), end_date=dt.date(year, month, day),
-            report_date=dt.date(year, month, day), report_type=0,
-            np_parent_company_owners=100, basic_eps=1)
-            for i, (year, month, day) in enumerate((y,m,d) for y in (2022,2023,2024)
-                for m,d in ((3,31),(6,30),(9,30),(12,31)))])
-    with sessionmaker(bind=source)() as session:
-        def fetch(query):
-            rows = [dict(row._mapping) for row in query.limit(1).all()]
-            return pd.DataFrame(rows, columns=table.columns.keys())
-        worker = mod._growth_strategy({'query': session.query,
-            'finance': SimpleNamespace(STK_INCOME_STATEMENT=table.c, run_query=fetch)}, mod.DB_CONFIG)
-        result = worker.financial_reports(['a'], dt.date(2025, 1, 11))
-        assert len(result['a']) == 12
-    source.dispose()
-
-
-def test_dividend_history_rejects_partial_financial_coverage(scenario):
-    from sqlalchemy import Table, MetaData, Column, String
-    import pandas as pd
-    from types import SimpleNamespace
-    mod, ns, engine, *unused = scenario
-    if not hasattr(mod, '_dividend_strategy'):
-        return
-    fields = ('inc_total_revenue_year_on_year', 'inc_net_profit_year_on_year', 'inc_return', 'statDate', 'pubDate')
-    table = Table('indicators', MetaData(), Column('code', String),
-                  *[Column(field, Date if field in ('statDate','pubDate') else Numeric) for field in fields])
-    query = lambda *args: SimpleNamespace(filter=lambda *args: None)
-    frame = pd.DataFrame([dict(code='a', inc_total_revenue_year_on_year=10, inc_net_profit_year_on_year=20,
-                               inc_return=6, statDate='2023-09-30', pubDate='2023-10-20')])
-    worker = mod._dividend_strategy({'query': query, 'indicator': table.c,
-        'get_fundamentals': lambda *args, **kwargs: frame}, mod.DB_CONFIG)
-    assert set(worker.financials(['a', 'b'], DAYS[0])) == {'a'}
-    with pytest.raises(ValueError, match='未完整返回'):
-        worker.financials(['a', 'b'], DAYS[0], strict_history=True)
-    frame.loc[0, 'pubDate'] = None
-    with pytest.raises(ValueError, match='缺少公告日期'):
-        worker.financials(['a'], DAYS[0], strict_history=True)
 
 
 def test_explicit_none_processes_fixed_calendar_over_250_days(scenario):

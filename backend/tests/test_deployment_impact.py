@@ -13,7 +13,7 @@ spec.loader.exec_module(impact)
     (['collectors/README.md','backend/app/main.py'],True),
     (['scripts/deploy.py'],True), (['collectors/tools/sync_result_journal.py'],False),
     (['collectors/rules/result_journal.py'],False), (['frontend/package-lock.json'],True),
-    (['collectors/tools/sync_earnings_version.py','collectors/净利润断层_数据库版.py'],False),
+    (['collectors/tools/sync_history_strategies.py','collectors/高股息选股_数据库版.py'],False),
     (['collectors-other/tool.py'],True),
     (['backend/requirements.lock.txt'],True), (['.github/workflows/deploy.yml'],True),
     (['collectors/unknown.py'],False), ([],True),

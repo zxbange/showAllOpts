@@ -109,7 +109,7 @@ def test_disclosed_unavailable_pe_keeps_members_but_not_whole_index_ratio(servic
     assert monitor.status()['status'] == 'idle', monitor.read_state()
     latest = monitor.history(MOMENT)['latest']
     assert latest['member_count'] == 300 and latest['missing_pe_count'] == 2
-    assert latest['overall_pe'] is None and latest['mean_pe'] == 10
+    assert 'overall_pe' not in latest and latest['mean_pe'] == 10
 
 
 def test_database_failure_rolls_back_and_retains_retry_roster(service):

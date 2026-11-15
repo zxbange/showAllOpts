@@ -37,16 +37,6 @@
   outline: 2px solid var(--accent);
   outline-offset: 2px;
 }
-.dividend-overlap {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  font-size: 13px;
-  color: var(--muted);
-}
-.dividend-overlap input {
-  accent-color: var(--accent);
-}
 .dividend-table-wrap {
   overflow-x: auto;
 }
@@ -87,14 +77,6 @@
   font-size: 13px;
   color: var(--muted);
 }
-.dividend-stock small em {
-  font-style: normal;
-  color: #217b70;
-  background: #e9f5f0;
-  border-radius: 4px;
-  padding: 1px 4px;
-  font-size: 13px;
-}
 .dividend-rank {
   color: var(--muted);
   font-size: 13px;
@@ -125,14 +107,6 @@
   height: 100%;
   background: linear-gradient(90deg, #dca464, #bf4939);
   border-radius: 3px;
-}
-.dividend-dates {
-  display: flex;
-  flex-direction: column;
-  gap: 5px;
-}
-.dividend-dates small {
-  color: var(--muted);
 }
 @media (max-width: 600px) {
   .dividend-toolbar {
@@ -170,5 +144,14 @@
   }
   .dividend-results > .panel-bottom {
     padding: 16px;
+  }
+}
+
+.dividend-stats {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+@media (max-width: 600px) {
+  .dividend-stats {
+    grid-template-columns: 1fr;
   }
 }

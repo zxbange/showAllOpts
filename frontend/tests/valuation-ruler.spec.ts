@@ -68,7 +68,8 @@ test('v2 switches indices and static/rolling metrics and keeps automatic collect
 }) => {
   await page.route('**/api/v1/valuation-ruler/**', (route) => {
     const url = new URL(route.request().url())
-    if (url.pathname.endsWith('/status')) return route.fulfill({ json: { ...idle, automatic: true } })
+    if (url.pathname.endsWith('/status'))
+      return route.fulfill({ json: { ...idle, automatic: true } })
     const code = url.searchParams.get('index_code') ?? '000300.XSHG'
     const basis = url.searchParams.get('basis') ?? 'ttm'
     const names: Record<string, string> = {
@@ -76,7 +77,12 @@ test('v2 switches indices and static/rolling metrics and keeps automatic collect
       '000016.XSHG': '上证50',
       '000852.XSHG': '中证1000',
     }
-    const current = { ...point, mean_pe: basis === 'lyr' ? 20 : 10, overall_pe: 12, median_pe: 18 }
+    const current = {
+      ...point,
+      mean_pe: basis === 'lyr' ? 20 : 10,
+      ...(basis === 'lyr' ? { overall_pe: 12 } : {}),
+      median_pe: 18,
+    }
     return route.fulfill({
       json: {
         ...history,

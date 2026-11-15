@@ -556,20 +556,20 @@ def _safe_error(exc, config):
 
 
 def _dividend_strategy(_apis, _config):
-    """三组独立排名：纯高股息25、低估值非银行25、银行10；事务替换最新快照。"""
+    """高股息低估值：非银行25、银行10；事务替换最新快照。"""
     settings = strategy_settings('高股息选股')
     get_all_securities, get_trade_days = _apis.get('get_all_securities'), _apis.get('get_trade_days')
     get_price, get_extras = _apis.get('get_price'), _apis.get('get_extras')
     get_fundamentals, get_industry = _apis.get('get_fundamentals'), _apis.get('get_industry')
-    query, valuation, indicator, finance = [_apis.get(k) for k in ('query', 'valuation', 'indicator', 'finance')]
+    query, valuation, finance = [_apis.get(k) for k in ('query', 'valuation', 'finance')]
     BATCH_SIZE, PAGE_SIZE = settings['batch_size'], settings['page_size']
     if BATCH_SIZE > 3000 or PAGE_SIZE > 3000:
         raise ValueError('batch_size 和 page_size 不得超过 3000。')
     END_DATE = settings['end_date']
-    RULE_VERSION = 'dividend_static_3pct_v5'
+    RULE_VERSION = 'dividend_value_pe12_v6'
     MIN_YIELD = Decimal('3')
-    METHODS = ('classic', 'value', 'bank')
-    LIMITS = dict(classic=25, value=25, bank=10)
+    METHODS = ('value', 'bank')
+    LIMITS = dict(value=25, bank=10)
     Base = declarative_base()
 
     class DividendSnapshot(Base):
@@ -581,9 +581,7 @@ def _dividend_strategy(_apis, _config):
         rule_version = Column(String(32), nullable=False)
         universe_count = Column(Integer, nullable=False)
         eligible_count = Column(Integer, nullable=False)
-        classic_candidates = Column(Integer, nullable=False)
         value_candidates = Column(Integer, nullable=False)
-        classic_count = Column(Integer, nullable=False)
         value_count = Column(Integer, nullable=False)
 
     class DividendStock(Base):
@@ -599,20 +597,12 @@ def _dividend_strategy(_apis, _config):
         industry_name = Column(String(128), nullable=True)
         industry_level = Column(String(16), nullable=True)
         dividend_yield_1y = Column(Numeric(24, 6), nullable=False)
-        dividend_ratio_3y = Column(Numeric(24, 6), nullable=False)
         dividend_cash_1y = Column(Numeric(28, 6), nullable=False)
-        dividend_cash_3y = Column(Numeric(28, 6), nullable=False)
         dividend_yield_history = Column(JSON, nullable=True)
         pe_ttm = Column(Numeric(24, 6), nullable=False)
         pb = Column(Numeric(24, 6), nullable=True)
         market_cap = Column(Numeric(24, 6), nullable=False)
         close = Column(Numeric(24, 6), nullable=False)
-        revenue_growth = Column(Numeric(24, 6), nullable=True)
-        profit_growth = Column(Numeric(24, 6), nullable=True)
-        adjusted_roe = Column(Numeric(24, 6), nullable=True)
-        peg = Column(Numeric(24, 6), nullable=True)
-        report_period = Column(Date, nullable=True)
-        publication_date = Column(Date, nullable=True)
 
     RESULT_COLUMNS = [c.name for c in DividendStock.__table__.columns]
     META_COLUMNS = [c.name for c in DividendSnapshot.__table__.columns if c.name not in ('id', 'updated_at')]
@@ -687,17 +677,14 @@ def _dividend_strategy(_apis, _config):
 
     def dividends(codes, day):
         table = finance.STK_XR_XD
-        start3 = day-datetime.timedelta(days=1095)
         fiscal_start, fiscal_end = datetime.date(day.year-3, 1, 1), datetime.date(day.year-1, 12, 31)
         total = {}
         for offset in _progress_items(range(0, len(codes), BATCH_SIZE), '近三个财年分红批次'):
             batch = codes[offset:offset+BATCH_SIZE]
-            fields = ('id', 'code', 'report_date', 'a_registration_date', 'a_xr_date', 'bonus_amount_rmb')
+            fields = ('id', 'code', 'report_date', 'a_xr_date', 'bonus_amount_rmb')
             selection = query(*[getattr(table, f) for f in fields]).filter(
                 table.code.in_(batch),
-                or_(and_(table.a_registration_date >= start3, table.a_registration_date <= day),
-                    and_(table.report_date >= fiscal_start, table.report_date <= fiscal_end,
-                         table.a_xr_date <= day)))
+                table.report_date >= fiscal_start, table.report_date <= fiscal_end, table.a_xr_date <= day)
             fetch_page = lambda cursor: finance.run_query(selection.filter(table.id > cursor).order_by(table.id).limit(PAGE_SIZE))
             for frame in _source_pages(fetch_page, label='分红明细', progress=_progress_note, fields=fields, page_size=PAGE_SIZE):
                 page = frame.to_dict('records')
@@ -705,78 +692,37 @@ def _dividend_strategy(_apis, _config):
                     code = str(row['code'])
                     if code not in batch:
                         raise ValueError('分红代码越界。')
-                    registration = optional_date(row['a_registration_date'])
                     ex_date = optional_date(row['a_xr_date'])
                     period = optional_date(row['report_date'])
                     if period is None or period > day:
                         raise ValueError('{} 分红报告期缺失或晚于选股日，无法确认所属财年。'.format(code))
-                    in3 = registration is not None and start3 <= registration <= day
                     annual = fiscal_start <= period <= fiscal_end and ex_date is not None and ex_date <= day
-                    if not (in3 or annual):
+                    if not annual:
                         raise ValueError('分红日期越界。')
                     # 按报告期分别合计最近三个完整财年；各年均以选股日市值计算股息率。
                     # 只计选股日已实施分红，不读取未来方案；cash_1y/数据库同名列保留以兼容旧表。
                     cash = Decimal(0) if pd.isna(row['bonus_amount_rmb']) else number(row['bonus_amount_rmb'])
                     if cash is None or cash < 0:
                         raise ValueError('派现金额无效。')
-                    item = total.setdefault(code, dict(cash_1y=Decimal(0), cash_3y=Decimal(0), has_3y=False,
+                    item = total.setdefault(code, dict(cash_1y=Decimal(0),
                                                        annual_cash={year: Decimal(0) for year in range(day.year-3, day.year)}))
-                    if in3:
-                        item['cash_3y'] += cash
-                        item['has_3y'] = True
-                    if annual:
-                        item['annual_cash'][period.year] += cash
-                        if period.year == day.year-1:
-                            item['cash_1y'] += cash
+                    item['annual_cash'][period.year] += cash
+                    if period.year == day.year-1:
+                        item['cash_1y'] += cash
         return total
 
-    def financials(codes, day, strict_history=False):
-        result = {}
-        fields = ('inc_total_revenue_year_on_year', 'inc_net_profit_year_on_year', 'inc_return', 'statDate', 'pubDate')
-        for offset in _progress_items(range(0, len(codes), BATCH_SIZE), '财务指标批次'):
-            batch = codes[offset:offset+BATCH_SIZE]
-            q = query(indicator.code, *[getattr(indicator, f) for f in fields]).filter(indicator.code.in_(batch))
-            result.update(by_code(get_fundamentals(q, date=day), batch, fields, '财务指标', complete=False))
-        if codes and not result:
-            raise ValueError('全股票池财务指标为空，保留原快照。')
-        if strict_history and set(result) != set(codes):
-            raise ValueError('历史财务指标未完整返回，无法确认缺失股票是否应入选。')
-        for row in result.values():
-            pub = optional_date(row['pubDate'])
-            period = optional_date(row['statDate'])
-            if strict_history and (pub is None or period is None):
-                raise ValueError('历史财务指标缺少公告日期或报告期。')
-            if (pub and pub > day) or (period and period > day):
-                raise ValueError('财务指标包含未来日期。')
-        return result
+    def candidates(caps, cash):
+        # 使用未舍入的静态股息率比较；同值按代码排序。
+        yields = {code: cash.get(code, {}).get('cash_1y', Decimal(0))/100/number(cap['market_cap'])
+                  for code, cap in caps.items()}
+        codes = sorted((code for code, cap in caps.items() if number(cap['pe_ratio']) is not None
+                        and 0 < number(cap['pe_ratio']) < 12 and yields[code] > MIN_YIELD),
+                       key=lambda code: (-yields[code], code))
+        return codes, yields
 
-    def select(caps, cash, fundamentals, banks):
-        # 比较使用未舍入值；相同分红比例按代码排序，结果稳定。
-        ratios = {}
-        for code, cap in caps.items():
-            item = cash.get(code, {})
-            market_cap = number(cap['market_cap'])
-            if market_cap is None or market_cap <= 0:
-                raise ValueError('市值无效。')
-            ratios[code] = (item.get('cash_1y', Decimal(0))/100/market_cap,
-                            item.get('cash_3y', Decimal(0))/100/market_cap)
-        dividend_codes = sorted((c for c in caps if cash.get(c, {}).get('has_3y')),
-                                key=lambda c: (-ratios[c][1], c))
-        classic = []
-        for code in dividend_codes[:len(dividend_codes)//10]:
-            pe = number(caps[code]['pe_ratio'])
-            metrics = fundamentals.get(code, {})
-            revenue, profit, roe = [number(metrics.get(f)) for f in
-                                   ('inc_total_revenue_year_on_year', 'inc_net_profit_year_on_year', 'inc_return')]
-            if None not in (pe, revenue, profit, roe) and revenue > 3 and profit > 8 and roe > Decimal('4.5'):
-                if Decimal('.1') < pe/profit < 2:
-                    classic.append(code)
-        value = sorted((c for c in caps if number(caps[c]['pe_ratio']) is not None
-                        and 0 < number(caps[c]['pe_ratio']) < 8 and ratios[c][0] > MIN_YIELD),
-                       key=lambda c: (-ratios[c][0], c))
-        nonbank = [code for code in value if code not in banks]
-        bank = [code for code in value if code in banks]
-        return dict(classic=classic[:25], value=nonbank[:25], bank=bank[:10]), ratios, dict(classic=len(classic), value=len(value))
+    def select(codes, banks):
+        return dict(value=[code for code in codes if code not in banks][:25],
+                    bank=[code for code in codes if code in banks][:10])
 
     def industries_for(codes, day):
         industries, banks = {}, set()
@@ -795,42 +741,33 @@ def _dividend_strategy(_apis, _config):
             industries.update(result)
         return industries, banks
 
-    def calculate(day, strict_history=False):
+    def calculate(day):
         names, quotes, caps = universe(day)
         codes = sorted(caps)
         cash = dividends(codes, day)
-        fundamentals = financials(codes, day, strict_history=strict_history)
-        # 分类前保留完整低估值候选，避免先截取混合前25导致非银行漏选。
-        preliminary, ratios, counts = select(caps, cash, fundamentals, set())
-        candidates = sorted(set(preliminary['classic']) | {
-            code for code in caps if number(caps[code]['pe_ratio']) is not None
-            and 0 < number(caps[code]['pe_ratio']) < 8 and ratios[code][0] > MIN_YIELD})
-        industries, banks = industries_for(candidates, day)
-        selected, ratios, counts = select(caps, cash, fundamentals, banks)
-        _progress_note('生成纯高股息25只、非银行25只、银行10只')
+        candidates_all, yields = candidates(caps, cash)
+        # 所有候选先分类，再独立截取，避免混合排名导致非银行漏选。
+        industries, banks = industries_for(candidates_all, day)
+        selected = select(candidates_all, banks)
+        _progress_note('生成非银行25只、银行10只低估值结果')
         records = []
         for method in METHODS:
             for rank, code in enumerate(selected[method], 1):
                 info = industries.get(code) or {}
                 level = next((k for k in ('sw_l3', 'sw_l2', 'sw_l1') if info.get(k)), None)
                 industry = info.get(level, {})
-                cap, fin, payout = caps[code], fundamentals.get(code, {}), cash.get(code, {})
-                profit = number(fin.get('inc_net_profit_year_on_year'))
+                cap, payout = caps[code], cash.get(code, {})
                 pe = number(cap['pe_ratio'])
                 records.append(dict(method=method, code=code, trade_date=day, rank=rank, name=names[code],
                     industry_code=industry.get('industry_code'), industry_name=industry.get('industry_name'), industry_level=level,
-                    dividend_yield_1y=rounded(ratios[code][0]), dividend_ratio_3y=rounded(ratios[code][1]),
-                    dividend_cash_1y=rounded(payout.get('cash_1y', 0)), dividend_cash_3y=rounded(payout.get('cash_3y', 0)),
+                    dividend_yield_1y=rounded(yields[code]),
+                    dividend_cash_1y=rounded(payout.get('cash_1y', 0)),
                     dividend_yield_history=[dict(fiscal_year=year, yield_pct=float(rounded(
                         payout.get('annual_cash', {}).get(year, Decimal(0))/100/number(cap['market_cap']))))
                         for year in range(day.year-1, day.year-4, -1)],
-                    pe_ttm=rounded(pe), pb=rounded(cap['pb_ratio']), market_cap=rounded(cap['market_cap']), close=rounded(quotes[code]),
-                    revenue_growth=rounded(fin.get('inc_total_revenue_year_on_year')), profit_growth=rounded(profit),
-                    adjusted_roe=rounded(fin.get('inc_return')), peg=rounded(pe/profit) if profit and profit > 0 else None,
-                    report_period=optional_date(fin.get('statDate')), publication_date=optional_date(fin.get('pubDate'))))
+                    pe_ttm=rounded(pe), pb=rounded(cap['pb_ratio']), market_cap=rounded(cap['market_cap']), close=rounded(quotes[code])))
         meta = dict(trade_date=day, rule_version=RULE_VERSION, universe_count=len(names), eligible_count=len(caps),
-                    classic_candidates=counts['classic'], value_candidates=counts['value'],
-                    classic_count=len(selected['classic']), value_count=len(selected['value'])+len(selected['bank']))
+                    value_candidates=len(candidates_all), value_count=len(records))
         return meta, records
 
     def validate_records(meta, records):
@@ -840,8 +777,7 @@ def _dividend_strategy(_apis, _config):
             group = [r for r in records if r['method'] == method]
             if len(group) > LIMITS[method] or sorted(r['rank'] for r in group) != list(range(1, len(group)+1)):
                 raise ValueError('数量或排名与快照不一致。')
-        if (builtins.sum(r['method'] == 'classic' for r in records) != meta['classic_count']
-                or builtins.sum(r['method'] in ('value', 'bank') for r in records) != meta['value_count']
+        if (len(records) != meta['value_count']
                 or {r['code'] for r in records if r['method'] == 'value'} & {r['code'] for r in records if r['method'] == 'bank'}):
             raise ValueError('分组数量或银行分类与快照不一致。')
         if builtins.any(r['method'] not in METHODS or r['trade_date'] != meta['trade_date'] for r in records):
@@ -856,13 +792,13 @@ def _dividend_strategy(_apis, _config):
             columns = {c['name'] for c in inspect(connection).get_columns(DividendStock.__tablename__)}
             if 'dividend_yield_history' not in columns:
                 connection.execute(sql_text('ALTER TABLE dividend_selection_stock ADD COLUMN dividend_yield_history JSON NULL'))
-        _progress_note('事务更新三组最新选股结果')
+        _progress_note('事务更新两组最新选股结果')
         return _replace_latest_snapshot(Session, DividendSnapshot, DividendStock, meta, records,
                                         RESULT_COLUMNS, META_COLUMNS, 'trade_date')
 
     # Archives deliberately do not share the website's latest-only tables.
     archive = _selection_archive(_apis, _config, Base, DividendSnapshot, DividendStock, RULE_VERSION,
-        'dividend_selection_archive', 'trade_date', lambda day: calculate(day, strict_history=True), validate_records, save_latest)
+        'dividend_selection_archive', 'trade_date', calculate, validate_records, save_latest)
     ArchiveBase, SelectionArchive = archive.ArchiveBase, archive.SelectionArchive
     archive_json, validate_archive_schema = archive.archive_json, archive.validate_archive_schema
     save_archive, archive_history = archive.save_archive, archive.archive_history
@@ -897,7 +833,7 @@ def _dividend_strategy(_apis, _config):
     return SimpleNamespace(**locals())
 
 _API_NAMES = ('get_all_trade_days', 'get_all_securities', 'get_trade_days', 'get_price', 'get_extras', 'get_industry',
-              'get_fundamentals', 'query', 'valuation', 'indicator', 'finance')
+              'get_fundamentals', 'query', 'valuation', 'finance')
 
 
 def run(database_config=None, **options):
@@ -913,7 +849,7 @@ def run(database_config=None, **options):
 if __name__ == '__main__':
     try:
         dividend_df = run()
-        print('高股息选股：当前三组结果共 {} 条，数据库仅保留最新快照。'.format(len(dividend_df)))
+        print('高股息选股：当前两组结果共 {} 条，数据库仅保留最新快照。'.format(len(dividend_df)))
         if len(dividend_df):
             print(dividend_df.to_string(index=False))
     except Exception as exc:

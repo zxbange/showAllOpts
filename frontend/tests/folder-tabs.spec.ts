@@ -1,6 +1,6 @@
 import { test, expect } from './fixtures'
 
-test('six performance modules preserve URLs, stable layout, contrast and hit targets', async ({
+test('three performance modules preserve URLs, stable layout, contrast and hit targets', async ({
   page,
 }, info) => {
   // Measure settled colors, not intermediate hover/selection transition frames.
@@ -10,25 +10,17 @@ test('six performance modules preserve URLs, stable layout, contrast and hit tar
   )
   await page.goto('/dividend-selection')
   const nav = page.getByRole('navigation', { name: '业绩选股模块切换' })
-  const names = [
-    '奶牛股',
-    '高增长',
-    '净利润断层',
-    '纯高股息',
-    '高股息低估值（非银行业）',
-    '高股息低估值（银行业）',
-  ]
-  await expect(nav.getByRole('link')).toHaveCount(6)
+  const names = ['奶牛股', '高股息低估值（非银行业）', '高股息低估值（银行业）']
+  await expect(nav.getByRole('link')).toHaveCount(3)
   expect(await nav.getByRole('link').allTextContents()).toEqual(names)
-  await expect(nav.getByRole('link', { name: '纯高股息', exact: true })).toHaveAttribute(
-    'aria-current',
-    'page',
-  )
+  await expect(
+    nav.getByRole('link', { name: '高股息低估值（非银行业）', exact: true }),
+  ).toHaveAttribute('aria-current', 'page')
   const initialHeight = await nav.evaluate((el) => el.getBoundingClientRect().height)
   for (const [name, method] of [
     ['高股息低估值（非银行业）', 'value'],
     ['高股息低估值（银行业）', 'bank'],
-    ['纯高股息', 'classic'],
+    ['高股息低估值（非银行业）', 'value'],
   ]) {
     await nav.getByRole('link', { name, exact: true }).click()
     await expect(page).toHaveURL(new RegExp(`dividend-selection\\?method=${method}$`))
@@ -80,7 +72,7 @@ test('six performance modules preserve URLs, stable layout, contrast and hit tar
       }
     })
     expect(result.activeHeight).toBe(44)
-    expect(result.inactiveHeights).toEqual([44, 44, 44, 44, 44])
+    expect(result.inactiveHeights).toEqual([44, 44])
     expect(result.gaps.every((v) => v >= 6)).toBe(true)
     expect(new Set(result.colors).size).toBe(2)
     expect(Math.min(...result.contrasts)).toBeGreaterThanOrEqual(4.5)
@@ -106,10 +98,9 @@ test('six performance modules preserve URLs, stable layout, contrast and hit tar
   )
   await page.screenshot({ path: info.outputPath('performance-navigation.png'), fullPage: true })
   await page.goBack()
-  await expect(nav.getByRole('link', { name: '纯高股息', exact: true })).toHaveAttribute(
-    'aria-current',
-    'page',
-  )
+  await expect(
+    nav.getByRole('link', { name: '高股息低估值（非银行业）', exact: true }),
+  ).toHaveAttribute('aria-current', 'page')
   await page.goForward()
   await expect(nav.getByRole('link', { name: '奶牛股', exact: true })).toHaveAttribute(
     'aria-current',
@@ -126,8 +117,8 @@ test('six performance modules preserve URLs, stable layout, contrast and hit tar
   await expect(page).toHaveURL(/cash-cow$/)
   await expect(nav.getByRole('link').first()).toHaveText('奶牛股')
   await expect(nav.getByRole('link').first()).toHaveAttribute('aria-current', 'page')
-  await nav.getByRole('link', { name: '高增长', exact: true }).click()
-  await expect(page).toHaveURL(/high-growth$/)
+  await nav.getByRole('link', { name: '高股息低估值（银行业）', exact: true }).click()
+  await expect(page).toHaveURL(/dividend-selection\?method=bank$/)
   const mainEntry = page
     .getByRole('navigation', { name: '主导航' })
     .getByRole('link', { name: '业绩选股', exact: true })

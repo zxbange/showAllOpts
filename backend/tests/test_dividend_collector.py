@@ -1,4 +1,4 @@
-﻿"""Offline tests: synthetic JoinQuant data and SQLite only."""
+"""Offline tests: synthetic JoinQuant data and SQLite only."""
 import ast
 import datetime as dt
 import importlib.util
@@ -47,18 +47,17 @@ def ns(module):
 
 
 def meta(**changes):
-    return dict(dict(trade_date=DAY, rule_version='dividend_static_3pct_v5', universe_count=5000, eligible_count=4000,
-                classic_candidates=1, value_candidates=1, classic_count=1, value_count=1), **changes)
+    return dict(dict(trade_date=DAY, rule_version='dividend_value_pe12_v6', universe_count=5000, eligible_count=4000,
+                value_candidates=2, value_count=2), **changes)
 
 
-def row(method='classic', code='000001.XSHE', rank=1, **changes):
+def row(method='value', code=None, rank=1, **changes):
+    code = code or ('600000.XSHG' if method == 'bank' else '000001.XSHE')
     data = dict(method=method,code=code,trade_date=DAY,rank=rank,name='示例股票',industry_code='801010',industry_name='农业',
-                industry_level='sw_l3',dividend_yield_1y=Decimal('5'),dividend_ratio_3y=Decimal('16'),
-                dividend_cash_1y=Decimal('50000'),dividend_cash_3y=Decimal('160000'),
+                industry_level='sw_l3',dividend_yield_1y=Decimal('5'),
+                dividend_cash_1y=Decimal('50000'),
                 dividend_yield_history=[dict(fiscal_year=year,yield_pct=value) for year,value in [(2025,5),(2024,4),(2023,3)]],
-                pe_ttm=Decimal('7'),pb=Decimal('1'),market_cap=Decimal('100'),close=Decimal('10'),
-                revenue_growth=Decimal('10'),profit_growth=Decimal('20'),adjusted_roe=Decimal('8'),peg=Decimal('.35'),
-                report_period=dt.date(2026,6,30),publication_date=dt.date(2026,8,1))
+                pe_ttm=Decimal('7'),pb=Decimal('1'),market_cap=Decimal('100'),close=Decimal('10'))
     data.update(changes);return data
 
 
@@ -74,31 +73,17 @@ def test_schemas_and_embedded_factory_match(ns):
     assert '__file__' not in SOURCE.read_text(encoding='utf-8')
 
 
-def test_top10_then_fundamentals_then_top25_and_tie_breaking(ns):
-    codes=['{:06d}.XSHE'.format(i) for i in range(1000)]
-    caps={c:dict(market_cap=100,pe_ratio=7,pb_ratio=1) for c in reversed(codes)}
-    cash={c:dict(cash_1y=Decimal(50000),cash_3y=Decimal(100000+i*100),has_3y=True) for i,c in enumerate(codes)}
-    fin={c:dict(inc_total_revenue_year_on_year=10,inc_net_profit_year_on_year=20,inc_return=8) for c in codes}
-    selected,ratios,counts=ns.select(caps,cash,fin,set())
-    assert selected['classic']==list(reversed(codes))[:25]
-    assert selected['value']==codes[:25]  # equal yield, code ascending
-    assert counts==dict(classic=100,value=1000)
-    assert ratios[codes[0]]==(Decimal(5),Decimal(10))
-    # Failure of the top decile never admits lower-ranked stocks to make 25.
-    for c in codes[-100:]:fin[c]['inc_net_profit_year_on_year']=8
-    assert ns.select(caps,cash,fin,set())[0]['classic']==[]
-
-
 def test_bank_and_nonbank_rank_independently_before_limits(ns):
     codes=['{:06d}.XSHE'.format(i) for i in range(100)]
     caps={c:dict(market_cap=100,pe_ratio=7) for c in codes}
     cash={c:dict(cash_1y=Decimal(50000),cash_3y=Decimal(0)) for c in codes}
-    selected,_,counts=ns.select(caps,cash,{},set(codes[:40]))
+    candidates,yields=ns.candidates(caps,cash)
+    selected=ns.select(candidates,set(codes[:40]))
     assert selected['bank']==codes[:10]
     assert selected['value']==codes[40:65]
     assert not set(selected['bank']) & set(selected['value'])
-    assert counts['value']==100
-    assert ns.select(caps,cash,{},set(codes))[0]['value']==[]
+    assert len(candidates)==100 and yields[codes[0]]==5
+    assert ns.select(ns.candidates(caps,cash)[0],set(codes))['value']==[]
 
 
 def test_industry_uses_first_level_code_and_missing_classification_fails(module):
@@ -113,13 +98,13 @@ def test_industry_uses_first_level_code_and_missing_classification_fails(module)
         ns.industries_for(['a','b'],DAY)
 
 
-def test_three_group_write_limits_and_snapshot_replacement(ns):
+def test_two_group_write_limits_and_snapshot_replacement(ns):
     engine=create_engine('sqlite://');ns.Base.metadata.create_all(engine);Session=sessionmaker(bind=engine)
     try:
-        ns.save_latest(Session,meta(),[row(),row('value')])
+        ns.save_latest(Session,meta(),[row(),row('bank')])
         data=[row('value',code=str(i),rank=i+1) for i in range(25)]
         data += [row('bank',code=str(100+i),rank=i+1) for i in range(10)]
-        head=meta(classic_count=0,classic_candidates=0,value_count=35,value_candidates=60)
+        head=meta(value_count=35,value_candidates=60)
         assert ns.save_latest(Session,head,data)
         assert not ns.save_latest(Session,head,data)
         with Session() as db:
@@ -132,42 +117,32 @@ def test_three_group_write_limits_and_snapshot_replacement(ns):
         engine.dispose()
 
 
-@pytest.mark.parametrize('pe,cash1,accepted', [(0,50000,False),(-1,50000,False),(8,50000,False),(7,30000,False),(7,30001,True)])
+@pytest.mark.parametrize('pe,cash1,accepted', [(0,50000,False),(-1,50000,False),(8,50000,True),(Decimal('11.999'),50000,True),(12,50000,False),(13,50000,False),(None,50000,False),(7,30000,False),(7,30001,True)])
 def test_value_strict_boundaries_and_no_growth_requirement(ns,pe,cash1,accepted):
     caps={'a':dict(market_cap=100,pe_ratio=pe)}
     cash={'a':dict(cash_1y=Decimal(cash1),cash_3y=Decimal(0),has_3y=False)}
-    selected,_,_=ns.select(caps,cash,{},set())
+    codes,_=ns.candidates(caps,cash)
+    selected=ns.select(codes,set())
     assert selected['value']==(['a'] if accepted else [])
-    assert selected['classic']==[]
-
-
-@pytest.mark.parametrize('field,value', [('inc_total_revenue_year_on_year',3),('inc_net_profit_year_on_year',8),('inc_return',4.5)])
-def test_classic_growth_boundaries(ns,field,value):
-    caps={str(i):dict(market_cap=100,pe_ratio=7) for i in range(10)}
-    cash={str(i):dict(cash_1y=Decimal(0),cash_3y=Decimal(1000+i),has_3y=True) for i in range(10)}
-    fin={'9':dict(inc_total_revenue_year_on_year=10,inc_net_profit_year_on_year=20,inc_return=8)}
-    assert ns.select(caps,cash,fin,set())[0]['classic']==['9']
-    fin['9'][field]=value
-    assert ns.select(caps,cash,fin,set())[0]['classic']==[]
 
 
 def test_latest_replacement_no_duplicates_unchanged_no_dml_and_empty_results(ns):
     engine=create_engine('sqlite://');ns.Base.metadata.create_all(engine);Session=sessionmaker(bind=engine)
-    values=[row(),row('value')]
+    values=[row(),row('bank')]
     assert ns.save_latest(Session,meta(),values)
     statements=[]
     event.listen(engine,'before_cursor_execute',lambda conn,cursor,sql,*args:statements.append(sql))
     assert ns.save_latest(Session,meta(),values) is False
     assert all(sql.lstrip().upper().startswith(('SELECT', 'PRAGMA')) for sql in statements)
-    revised=[row(pe_ttm=Decimal('6')),row('value',code='000002.XSHE')]
+    revised=[row(pe_ttm=Decimal('6')),row('bank',code='000002.XSHE')]
     assert ns.save_latest(Session,meta(),revised)
     with Session() as session:
         assert session.query(ns.DividendStock).count()==2
         assert session.query(ns.DividendSnapshot).count()==1
-        assert session.get(ns.DividendStock,('classic','000001.XSHE')).pe_ttm==6
+        assert session.get(ns.DividendStock,('value','000001.XSHE')).pe_ttm==6
     with pytest.raises(ValueError,match='旧日期'):
         ns.save_latest(Session,meta(trade_date=DAY-dt.timedelta(days=1)),[dict(r,trade_date=DAY-dt.timedelta(days=1)) for r in revised])
-    assert ns.save_latest(Session,meta(classic_count=0,value_count=0,classic_candidates=0,value_candidates=0),[])
+    assert ns.save_latest(Session,meta(value_count=0,value_candidates=0),[])
     with Session() as session:
         assert session.query(ns.DividendStock).count()==0 and session.query(ns.DividendSnapshot).count()==1
     engine.dispose()
@@ -175,7 +150,7 @@ def test_latest_replacement_no_duplicates_unchanged_no_dml_and_empty_results(ns)
 
 def test_failed_replacement_rolls_back_both_lists(ns):
     engine=create_engine('sqlite://');ns.Base.metadata.create_all(engine);Session=sessionmaker(bind=engine)
-    original=[row(),row('value')];ns.save_latest(Session,meta(),original)
+    original=[row(),row('bank')];ns.save_latest(Session,meta(),original)
     def broken():
         s=Session()
         def commit():
@@ -183,7 +158,7 @@ def test_failed_replacement_rolls_back_both_lists(ns):
             raise RuntimeError('simulated commit failure')
         s.commit=commit;return s
     with pytest.raises(RuntimeError,match='commit failure'):
-        ns.save_latest(broken,meta(),[row(name='changed'),row('value',name='changed')])
+        ns.save_latest(broken,meta(),[row(name='changed'),row('bank',name='changed')])
     with Session() as session:
         assert {r.name for r in session.query(ns.DividendStock)}=={'示例股票'}
         assert session.query(ns.DividendStock).count()==2
@@ -193,10 +168,10 @@ def test_failed_replacement_rolls_back_both_lists(ns):
 def test_existing_database_gains_nullable_history_without_dropping_data(ns):
     from sqlalchemy import text, inspect
     engine=create_engine('sqlite://'); ns.Base.metadata.create_all(engine); Session=sessionmaker(bind=engine)
-    ns.save_latest(Session,meta(rule_version='dividend_static_fy_v4'),[row(),row('value')])
+    ns.save_latest(Session,meta(rule_version='dividend_static_fy_v4'),[row(),row('bank')])
     with engine.begin() as connection:
         connection.execute(text('ALTER TABLE dividend_selection_stock DROP COLUMN dividend_yield_history'))
-    assert ns.save_latest(Session,meta(),[row(),row('value')])
+    assert ns.save_latest(Session,meta(),[row(),row('bank')])
     assert 'dividend_yield_history' in {col['name'] for col in inspect(engine).get_columns('dividend_selection_stock')}
     with Session() as session:
         assert session.query(ns.DividendStock).count() == 2
@@ -215,7 +190,7 @@ def test_dividend_dates_pagination_and_truncation_protection(module):
     columns=['id','code','report_date','a_registration_date','a_xr_date','bonus_amount_rmb']
     source=[dict(id=1,code='a',report_date=dt.date(2024,12,31),a_registration_date=DAY-dt.timedelta(days=500),a_xr_date=DAY-dt.timedelta(days=499),bonus_amount_rmb=200),
             dict(id=2,code='a',report_date=dt.date(2025,12,31),a_registration_date=DAY-dt.timedelta(days=1),a_xr_date=DAY,bonus_amount_rmb=300),
-            dict(id=3,code='b',report_date=dt.date(2025,12,31),a_registration_date=DAY,a_xr_date=DAY+dt.timedelta(days=1),bonus_amount_rmb=400),
+
             dict(id=4,code='a',report_date=dt.date(2025,6,30),a_registration_date=DAY-dt.timedelta(days=365),a_xr_date=DAY-dt.timedelta(days=365),bonus_amount_rmb=1000)]
     calls=[]
     pages=iter([Frame(source[:2],columns),Frame(source[2:],columns),Frame([],columns)])
@@ -223,8 +198,8 @@ def test_dividend_dates_pagination_and_truncation_protection(module):
     ns=module._dividend_strategy(dict(query=q,finance=SimpleNamespace(STK_XR_XD=table.c,run_query=fetch)),module.DB_CONFIG)
     result=ns.dividends(['a','b'],DAY)
     assert len(calls)==3  # even a short page is followed until confirmed empty
-    assert result['a']['cash_1y']==1300 and result['a']['cash_3y']==1500
-    assert result['b']['cash_1y']==0 and result['b']['cash_3y']==400
+    assert result['a']['cash_1y']==1300 and result['a']['annual_cash'][2024]==200
+    assert 'b' not in result
     pages=iter([Frame(source[:2],columns),Frame(source[:2],columns)])
     with pytest.raises(ValueError,match='分页'):ns.dividends(['a','b'],DAY)
 
@@ -266,9 +241,9 @@ def test_static_yield_sums_report_year_not_payment_window(module,day,annual_cash
             STK_XR_XD=table.c,run_query=fetch)),module.DB_CONFIG)
         cash=ns.dividends(['601398.XSHG'],day)
         assert cash['601398.XSHG']['cash_1y']==annual_cash
-        selected,ratios,_=ns.select({'601398.XSHG':dict(market_cap=Decimal('8.85'),pe_ratio=7)},
-                                  cash,{}, {'601398.XSHG'})
-        assert ratios['601398.XSHG'][0]==annual_cash/100/Decimal('8.85')
+        codes,ratios=ns.candidates({'601398.XSHG':dict(market_cap=Decimal('8.85'),pe_ratio=7)},cash)
+        selected=ns.select(codes,{'601398.XSHG'})
+        assert ratios['601398.XSHG']==annual_cash/100/Decimal('8.85')
         assert selected['bank']==(['601398.XSHG'] if day.year == 2026 else [])
         assert cash['601398.XSHG']['annual_cash'][day.year-1] == annual_cash
     finally:
@@ -295,10 +270,10 @@ def test_rule_upgrade_replaces_old_yields_even_on_same_day(ns):
     try:
         old=meta(rule_version='dividend_split_bank_v3')
         ns.save_latest(Session,old,[row(),row('bank')])
-        current=meta(value_count=0,value_candidates=0)
+        current=meta(value_count=1,value_candidates=1)
         assert ns.save_latest(Session,current,[row(dividend_yield_1y=Decimal('3.51'))])
         with Session() as db:
-            assert db.get(ns.DividendSnapshot,1).rule_version=='dividend_static_3pct_v5'
+            assert db.get(ns.DividendSnapshot,1).rule_version=='dividend_value_pe12_v6'
             assert db.query(ns.DividendStock).count()==1
             assert db.query(ns.DividendStock).first().dividend_yield_1y==Decimal('3.51')
     finally:
@@ -332,8 +307,7 @@ def test_end_to_end_source_dates_filters_recompute_and_failure_keeps_snapshot(mo
         batch=next(v for v in q.compile().params.values() if isinstance(v,list))
         if q.column_descriptions[1]['name']=='market_cap':
             return Frame([dict(code=c,market_cap=100,pe_ratio=7,pb_ratio=1) for c in batch])
-        return Frame([dict(code=c,inc_total_revenue_year_on_year=10,inc_net_profit_year_on_year=20,
-                           inc_return=8,statDate=dt.date(2026,6,30),pubDate=dt.date(2026,8,1)) for c in batch])
+        raise AssertionError('Unexpected obsolete financial-indicator query')
     def dividends(q):
         params=q.compile().params
         batch=next(v for v in params.values() if isinstance(v,list))
@@ -350,11 +324,11 @@ def test_end_to_end_source_dates_filters_recompute_and_failure_keeps_snapshot(mo
               get_industry=lambda selected,date:{c:{'sw_l1':dict(industry_code='801010',industry_name='农林牧渔'), 'sw_l3':dict(industry_code='test',industry_name='测试行业')} for c in selected})
     ns=module._dividend_strategy(apis,module.DB_CONFIG)
     result=ns.run()
-    assert len(result)==28  # 39 eligible -> top-decile 3 + value top25
+    assert len(result)==25  # Nonbank top25; no growth/PEG query
     assert {r['trade_date'] for r in result.data}=={DAY}
     assert all(d==DAY for d in dates)
     assert all(not r['code'].startswith(('4','8')) and r['code'] not in codes[:2] for r in result.data)
-    assert {r['method'] for r in result.data if r['code']==preferred}=={'classic','value'}
+    assert {r['method'] for r in result.data if r['code']==preferred}=={'value'}
     assert all(r['rank']==1 for r in result.data if r['code']==preferred)
     assert [r['rank'] for r in result.data if r['method']=='value']==list(range(1,26))
     assert all(r['dividend_yield_1y']==(10 if r['code']==preferred else 5) for r in result.data)
@@ -363,7 +337,7 @@ def test_end_to_end_source_dates_filters_recompute_and_failure_keeps_snapshot(mo
     state['fail']=True
     with pytest.raises(RuntimeError,match='source unavailable'):ns.run()
     with module.database_scope(ns.Base,module.DB_CONFIG) as Session:
-        with Session() as session:assert session.query(ns.DividendStock).count()==28
+        with Session() as session:assert session.query(ns.DividendStock).count()==25
     # Before 16:00 request at most yesterday, and never request a future cutoff.
     monkeypatch.setattr(module,'china_now',lambda:dt.datetime(2026,10,16,15))
     cutoff=[]

@@ -38,7 +38,6 @@ from sqlalchemy.schema import CreateTable
 from sqlalchemy import text as sql_text
 
 
-dt = datetime  # 净利润断层使用的日期别名，共用同一个模块。
 
 # ==================== 集中配置区 ====================
 
@@ -50,7 +49,7 @@ DB_OPTIONS = get_database_options()
 STRATEGY_CONFIG = {'ETF动量热度': {'end_date': None, 'initial_trade_days': 180, 'retention_trade_days': 180, 'min_size_yi': 30, 'history_mode': False, 'start_date': None, 'from_platform_earliest': False, 'include_lof': True}}
 
 STRATEGY_ORDER = ['ETF动量热度']
-STRATEGY_OPTIONS = {}  # 原六策略固定只新增；高股息选股和高增长每次重算并替换最新快照。
+STRATEGY_OPTIONS = {}  # 已有日期跳过，仅新增缺失结果。
 PREVIEW_ROWS = 5  # 每个策略展示最后几条新增记录；0 表示仅展示条数。
 PROGRESS_ENABLED = True  # 控制台进度条；关闭后仍保留各策略结果和最终汇总。
 PROGRESS_INTERVAL_SECONDS = 5.0  # 最多每隔多少秒刷新；等待接口/数据库时也刷新耗时。
@@ -522,7 +521,7 @@ def _safe_error(exc, config):
 
 def run_all(strategy_names=None, options=None, db_config=None, preview_rows=None,
             raise_on_failure=True, api_namespace=None):
-    """依次调用文件内策略；高股息/高增长替换最新结果，其余只新增；控制台展示进度及结果，失败后继续，最后统一报告。"""
+    """采集 ETF 动量增量结果，展示进度并汇总。"""
     names = list(STRATEGY_ORDER if strategy_names is None else strategy_names)
     config = dict(DB_CONFIG if db_config is None else db_config)
     options = dict(STRATEGY_OPTIONS if options is None else options)
@@ -553,10 +552,7 @@ def run_all(strategy_names=None, options=None, db_config=None, preview_rows=None
                 with _progress_scope(name, strategy_index, len(names)), _QuietStream() as quiet, redirect_stdout(quiet), redirect_stderr(quiet):
                     run = _load_strategy(name, config, apis)
                     kwargs = dict(options.get(name, {}))
-                    if name in ('高股息选股', '高增长'):
-                        kwargs.pop('skip_existing', None)  # 此模块显式授权每次更新最新结果。
-                    else:
-                        kwargs['skip_existing'] = True
+                    kwargs['skip_existing'] = True
                     result = run(**kwargs)
                     row.update(status='SUCCESS', rows=len(result))
             except KeyboardInterrupt:
@@ -567,11 +563,10 @@ def run_all(strategy_names=None, options=None, db_config=None, preview_rows=None
             row['elapsed_seconds'] = builtins.round(time.monotonic() - started, 3)
             summary.append(row)
             if row['status'] == 'SUCCESS':
-                label = '当前选股结果' if name in ('高股息选股', '高增长') else '新增'
+                label = '新增'
                 print('\n【{}】成功：{} {} 条，耗时 {:.2f} 秒。'.format(name, label, row['rows'], row['elapsed_seconds']))
                 if not row['rows']:
-                    print('本次选股无匹配，最新结果已保存。' if name in ('高股息选股', '高增长')
-                          else '无新增数据；已有记录跳过，或数据源尚无可入库数据。')
+                    print('无新增数据；已有记录跳过，或数据源尚无可入库数据。')
                 elif preview_rows:
                     try:
                         columns = [c for c in _PREVIEW_COLUMNS[name] if c in result.columns]
@@ -582,7 +577,7 @@ def run_all(strategy_names=None, options=None, db_config=None, preview_rows=None
             else:
                 print('\n【{}】失败：{}；已提交部分保留，继续后续策略。'.format(name, row['error']))
             del result
-        print('\n采集结果汇总\n策略 | 结果 | 条数（高股息/高增长为当前结果，其余为新增） | 耗时（秒）')
+        print('\n采集结果汇总\n策略 | 结果 | 新增条数 | 耗时（秒）')
         for row in summary:
             print('{} | {} | {} | {:.2f}'.format(row['strategy'], row['status'],
                   row['rows'] if row['rows'] is not None else '未完成', row['elapsed_seconds']))

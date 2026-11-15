@@ -8,16 +8,12 @@ collectors/
 ├── mysql_connector.py      全部采集脚本共用的 MySQL 配置
 ├── *.py                    采集、补采和研究入口
 ├── rules/                  公共代码维护源，不在聚宽运行时导入
-│   ├── earnings_followup.py
 │   ├── cash_cow.py
 │   ├── cash_cow_strategy.py
-│   ├── earnings_history.py
-│   ├── earnings_version.py
 │   ├── momentum_threshold.py
 │   ├── result_journal.py
 │   └── selection_archive.py
 └── tools/                  仅在本地使用的代码同步工具
-    ├── sync_earnings_version.py
     ├── sync_cash_cow.py
     ├── sync_momentum_threshold.py
     ├── sync_result_journal.py
@@ -31,7 +27,7 @@ collectors/
 新增专用入口：
 
 - [市场情绪历史补采](市场情绪历史补采_聚宽研究版.py)：市场热度、拥挤度独立补洞，原成功数据保留。
-- [估值标尺历史补采](估值标尺历史补采_聚宽研究版.py)：沪深300、上证50、中证1000的静态/滚动整体、等权及中位数PE；v2专用表，按指数续采。
+- [估值标尺历史补采](估值标尺历史补采_聚宽研究版.py)：沪深300、上证50、中证1000的静态整体PE与静态/滚动等权及中位数PE；v2专用表，按指数续采。
 - [创红比历史补采](创红比历史补采_聚宽研究版.py)：默认补2018起三指数可见历史，页面专门同步。
 
 ## 日常入口
@@ -57,9 +53,7 @@ collectors/
 | 市场情绪跟踪 | [市场情绪跟踪_数据库版.py](市场情绪跟踪_数据库版.py) |
 | 微盘温度计 | [微盘温度计_数据库版.py](微盘温度计_数据库版.py) |
 | 微盘新高新低 | [微盘新高新低数量统计_数据库版.py](微盘新高新低数量统计_数据库版.py) |
-| 净利润断层 | [净利润断层_数据库版.py](净利润断层_数据库版.py) |
 | 高股息选股 | [高股息选股_数据库版.py](高股息选股_数据库版.py) |
-| 高增长 | [高增长_数据库版.py](高增长_数据库版.py) |
 | ETF/LOF 动量热度 | [ETF动量热度_数据库版.py](ETF动量热度_数据库版.py) |
 | 个股机构持仓 | [个股机构持仓_数据库版.py](个股机构持仓_数据库版.py) |
 | 估值标尺 | [估值标尺历史补采_聚宽研究版.py](估值标尺历史补采_聚宽研究版.py) |
@@ -77,15 +71,12 @@ collectors/
 
 | 公共代码 | 职责 | 内嵌目标 |
 | --- | --- | --- |
-| `rules/earnings_followup.py` | 断层后续涨幅（保留历史，不再滚动删除） | 净利润断层独立版、批量版 |
-| `rules/earnings_version.py` | 财季版本及同步标记 | 净利润断层独立版、批量版 |
 | `rules/momentum_threshold.py` | 行业动量严格大于20%的精确判断 | 行业动量独立版、批量版 |
 | `rules/result_journal.py` | 采集结果变更记录 | 行业动量、微盘新高新低、市场情绪跟踪、微盘温度计、ETF动量热度独立版及批量版，以及市场情绪/估值标尺专用历史入口 |
 
 公共代码在本地维护阶段预先嵌入采集脚本，运行时不会加载源文件。修改公共规则后，在项目根目录执行：
 
 ```bash
-python collectors/tools/sync_earnings_version.py
 python collectors/tools/sync_result_journal.py
 python collectors/tools/sync_momentum_threshold.py
 python collectors/tools/sync_history_strategies.py
@@ -94,13 +85,12 @@ python collectors/tools/sync_history_strategies.py
 只核对一致性、不改文件：
 
 ```bash
-python collectors/tools/sync_earnings_version.py --check
 python collectors/tools/sync_result_journal.py --check
 python collectors/tools/sync_momentum_threshold.py --check
 python collectors/tools/sync_history_strategies.py --check
 ```
 
-`sync_history_strategies.py` 同步估值标尺、创红比实现及高股息/高增长共用的归档函数，并适配批量版的连接、配置和进度。公共规则标记内只放实现，依赖在各入口顶部集中声明；修改依赖时同步维护入口文件头。其余工具只同步标记的公共代码块，其他策略修改仍须检查两个入口。工具仅供本地维护，聚宽无需上传。
+`sync_history_strategies.py` 同步估值标尺、创红比实现及高股息选股共用的归档函数，并适配批量版的连接、配置和进度。公共规则标记内只放实现，依赖在各入口顶部集中声明；修改依赖时同步维护入口文件头。其余工具只同步标记的公共代码块，其他策略修改仍须检查两个入口。工具仅供本地维护，聚宽无需上传。
 
 ## 行业动量20%边界
 

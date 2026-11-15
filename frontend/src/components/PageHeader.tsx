@@ -12,7 +12,6 @@ export function PageHeader({ children, switcher }: { children: ReactNode; switch
     const module = individualModules.find((item) => item.id === id)
     if (module?.id === 'dividend-selection') {
       return [
-        ['classic', '纯高股息'],
         ['value', '高股息低估值（非银行业）'],
         ['bank', '高股息低估值（银行业）'],
       ].map(([method, name]) => ({
@@ -45,7 +44,7 @@ export function PageHeader({ children, switcher }: { children: ReactNode; switch
             items={groupItems}
             value={
               pathname === '/dividend-selection'
-                ? `dividend-${['value', 'bank'].includes(new URLSearchParams(search).get('method') ?? '') ? new URLSearchParams(search).get('method') : 'classic'}`
+                ? `dividend-${new URLSearchParams(search).get('method') === 'bank' ? 'bank' : 'value'}`
                 : pathname.split('/')[1]
             }
           />

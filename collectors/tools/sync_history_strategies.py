@@ -85,7 +85,7 @@ def sync_selection_archive(check=False):
     start, end = '# BEGIN SHARED SELECTION ARCHIVE', '# END SHARED SELECTION ARCHIVE'
     source = (ROOT / 'collectors/rules/selection_archive.py').read_text(encoding='utf-8')
     source = source[source.index(start):source.index(end)+len(end)]
-    for filename in ('策略批量采集_数据库版.py', '高股息选股_数据库版.py', '高增长_数据库版.py'):
+    for filename in ('策略批量采集_数据库版.py', '高股息选股_数据库版.py'):
         path = ROOT / 'collectors' / filename
         text = path.read_text(encoding='utf-8')
         updated = text[:text.index(start)] + source + text[text.index(end)+len(end):]
@@ -105,7 +105,7 @@ def sync_valuation_rules(check=False):
         assert backend.read_text(encoding='utf-8') == rules, 'run python collectors/tools/sync_history_strategies.py'
     else:
         backend.write_text(rules, encoding='utf-8')
-    names = {'number', 'derived', 'valid_code', 'json_text', 'source_number', 'aggregate', 'summarize'}
+    names = {'number', 'derived', 'valid_code', 'json_text', 'source_number', 'aggregate', 'summarize', 'normalized_statistics'}
     definitions = {n.name: ast.get_source_segment(rules, n) for n in ast.parse(rules).body
                    if isinstance(n, ast.FunctionDef) and n.name in names}
     lines = source.splitlines(keepends=True)

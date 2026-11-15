@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """聚宽单文件串行采集：直接粘贴到 Notebook，或 %run -i 本文件。
-十三个策略在本文件内独立实现；仅依赖 mysql_connector 获取统一数据库配置。
+十一个策略在本文件内独立实现；仅依赖 mysql_connector 获取统一数据库配置。
 策略参数集中在开头；共用连接、会话及日期工具。用法见 docs/data/collector-batch.md。
 """
 import bisect
@@ -51,7 +51,8 @@ from mysql_connector import (
 )
 
 
-dt = datetime  # 净利润断层使用的日期别名，共用同一个模块。
+
+dt = datetime  # 估值历史采集共用日期模块。
 
 # ==================== 集中配置区 ====================
 
@@ -76,19 +77,12 @@ STRATEGY_CONFIG = {
         'start_date': '2021-01-01', 'end_date': None, 'micro_num': 1000, 'batch_size': 1000,
         'archive_history': False,
     },
-    '净利润断层': {
-        'end_date': None, 'page_size': 1000, 'history_mode': 'latest', 'start_period': None,
-        'max_periods': 4,
-    },
     '微盘新高新低': {
         'start_date': None, 'end_date': None, 'micro_num': 400, 'initial_days': 180,
         'batch_size': 500, 'price_batch_size': 100, 'history_mode': False,
     },
     '高股息选股': {
         'end_date': None, 'batch_size': 300, 'page_size': 2000,
-    },
-    '高增长': {
-        'end_date': None, 'batch_size': 100, 'page_size': 2000,
     },
     'ETF动量热度': {
         'end_date': None, 'initial_trade_days': 180, 'retention_trade_days': 180,
@@ -110,8 +104,8 @@ STRATEGY_CONFIG = {
 }
 
 # ETF份额和两融担保比例由项目接口任务采集，不在此注册。
-STRATEGY_ORDER = ['行业动量', '抱团拥挤度', '市场情绪跟踪', '微盘温度计', '净利润断层', '微盘新高新低', '高股息选股', '奶牛股', '高增长', 'ETF动量热度', '个股机构持仓', '估值标尺', '创红比']
-STRATEGY_OPTIONS = {}  # 历史策略固定只新增；高股息选股和高增长每次重算并替换最新快照。
+STRATEGY_ORDER = ['行业动量', '抱团拥挤度', '市场情绪跟踪', '微盘温度计', '微盘新高新低', '高股息选股', '奶牛股', 'ETF动量热度', '个股机构持仓', '估值标尺', '创红比']
+STRATEGY_OPTIONS = {}  # 历史策略固定只新增；高股息选股和奶牛股每次重算并替换最新快照。
 PREVIEW_ROWS = 5  # 每个策略展示最后几条新增记录；0 表示仅展示条数。
 PROGRESS_ENABLED = True  # 控制台进度条；关闭后仍保留各策略结果和最终汇总。
 PROGRESS_INTERVAL_SECONDS = 5.0  # 最多每隔多少秒刷新；等待接口/数据库时也刷新耗时。
@@ -123,39 +117,6 @@ _API_NAMES = ('get_all_trade_days', 'get_all_securities', 'get_trade_days', 'get
 
 _PROGRESS_LOCAL = threading.local()
 
-
-# BEGIN SHARED EARNINGS SOURCES
-
-
-_EarningsSourceBase = declarative_base()  # 与入库 Base 隔离，绝不在目标库创建源表。
-
-
-class _EarningsExpress(_EarningsSourceBase):
-    __tablename__ = 'LC_FSPerformedLetters'
-    ID = Column(BigInteger, primary_key=True)
-    CompanyCode = Column(Integer)
-    InfoPublDate = Column(DateTime)
-    EndDate = Column(Date)
-    NPParentCompanyOwners = Column(Numeric)
-    NPCOwnersYOY = Column(Numeric)
-
-
-class _EarningsCompany(_EarningsSourceBase):
-    __tablename__ = 'SecuMain'
-    ID = Column(BigInteger, primary_key=True)
-    CompanyCode = Column(Integer)
-    SecuCode = Column(String)
-    SecuCategory = Column(Integer)
-
-
-def _earnings_source_table(database, name):
-    """只复用已加载对象；否则使用已核实字段，避免 getattr 触发远程表结构加载。"""
-    cached = builtins.vars(database).get(name)
-    if cached is not None:
-        return cached
-    return {'LC_FSPerformedLetters': _EarningsExpress, 'SecuMain': _EarningsCompany}[name]
-
-# END SHARED EARNINGS SOURCES
 
 # BEGIN SHARED SELECTION ARCHIVE
 def _selection_archive(_apis, _config, Base, Snapshot, Stock, rule_version, table_name,
@@ -360,321 +321,6 @@ def _momentum_front_status(start_close, end_close):
     return (5 * end_numerator * start_denominator
             > 6 * start_numerator * end_denominator)
 # END SHARED MOMENTUM THRESHOLD
-
-# BEGIN SHARED EARNINGS FOLLOWUP
-
-
-def _earnings_followup_table():
-    return Table('earnings_gap_performance', MetaData(),
-        Column('report_period', Date, primary_key=True), Column('code', String(16), primary_key=True),
-        Column('signal_date', Date, nullable=False), Column('as_of_date', Date, nullable=False),
-        Column('latest_date', Date, nullable=False),
-        Column('signal_close', Numeric(24, 8), nullable=False),
-        Column('latest_close', Numeric(24, 8), nullable=False),
-        Column('since_signal_pct', Numeric(24, 6), nullable=False),
-        Column('updated_at', DateTime, nullable=False),
-        mysql_engine='InnoDB', mysql_charset='utf8mb4')
-
-
-def _refresh_earnings_followup(Session, Stock, as_of, get_price, progress=None):
-    """仅跟踪已入选股票；同股票多季度共用一次行情，同日重复运行跳过。"""
-    table = _earnings_followup_table()
-    table.create(Session.kw['bind'], checkfirst=True)
-    session = Session()
-    try:
-        signals = session.query(Stock.report_period, Stock.code, Stock.signal_date).filter(Stock.signal_date <= as_of).all()
-        previous = {(r.report_period, r.code): (r.signal_date, r.as_of_date)
-                    for r in session.execute(table.select())}
-    finally:
-        session.close()
-    grouped = {}
-    for period, code, signal_day in signals:
-        old = previous.get((period, code))
-        if old and old[0] == signal_day and old[1] >= as_of:
-            continue
-        grouped.setdefault(code, []).append((period, signal_day))
-    records = []
-    for index, (code, entries) in enumerate(sorted(grouped.items()), 1):
-        if progress:
-            progress('更新已入选股票收盘表现 {}/{} {}'.format(index, len(grouped), code))
-        first = builtins.min(day for _, day in entries)
-        # 两个收盘价必须来自同一次前复权查询，不能拼接不同复权基准的旧快照。
-        frame = get_price(code, start_date=first, end_date=as_of, frequency='daily',
-                          fields=['close', 'paused'], skip_paused=False, fq='pre')
-        if frame is None or not {'close', 'paused'}.issubset(frame.columns):
-            raise ValueError('{} 收盘跟踪行情缺失。'.format(code))
-        closes, seen = {}, set()
-        for raw_day, row in frame.iterrows():
-            day = raw_day.date() if isinstance(raw_day, datetime.datetime) else datetime.datetime.strptime(str(raw_day)[:10], '%Y-%m-%d').date()
-            if not first <= day <= as_of or day in seen:
-                raise ValueError('{} 收盘跟踪日期越界或重复。'.format(code))
-            seen.add(day)
-            paused = builtins.float(row['paused'])
-            if paused not in (0, 1):
-                raise ValueError('{} 停牌状态缺失。'.format(code))
-            if paused:
-                continue
-            close = builtins.float(row['close'])
-            if not math.isfinite(close) or not 0 < close < 10 ** 16:
-                raise ValueError('{} 收盘价无效。'.format(code))
-            closes[day] = Decimal(str(close))
-        if not closes or builtins.any(day not in closes for _, day in entries):
-            raise ValueError('{} 断层日收盘价缺失，保留原跟踪数据。'.format(code))
-        latest = builtins.max(closes)
-        for period, signal_day in entries:
-            change = (closes[latest] / closes[signal_day] - 1) * 100
-            if builtins.abs(change) >= 10 ** 18:
-                raise ValueError('{} 收盘涨幅超出字段范围。'.format(code))
-            records.append(dict(report_period=period, code=code, signal_date=signal_day,
-                as_of_date=as_of, latest_date=latest, signal_close=closes[signal_day].quantize(Decimal('1e-8'), rounding='ROUND_HALF_UP'),
-                latest_close=closes[latest].quantize(Decimal('1e-8'), rounding='ROUND_HALF_UP'),
-                since_signal_pct=change.quantize(Decimal('1e-6'), rounding='ROUND_HALF_UP'),
-                updated_at=datetime.datetime.utcnow()))
-    # 网络读取结束后再写入，避免查询行情时长时间占用数据库事务。
-    session = Session()
-    try:
-        for period in sorted({r['report_period'] for r in records}):
-            _lock_earnings_version(session, period)
-            current = dict(session.query(Stock.code, Stock.signal_date).filter(Stock.report_period == period).all())
-            for row in (r for r in records if r['report_period'] == period):
-                if current.get(row['code']) != row['signal_date']:
-                    continue
-                condition = (table.c.report_period == period) & (table.c.code == row['code'])
-                old = session.execute(table.select().where(condition)).first()
-                if old and old.signal_date == row['signal_date'] and old.as_of_date >= as_of:
-                    continue
-                session.execute(table.delete().where(condition))
-                session.execute(table.insert().values(**row))
-        session.commit()
-    except Exception:
-        session.rollback()
-        raise
-    finally:
-        session.close()
-    return len(records)
-
-
-def _prune_earnings_history(Session, Stock, Run, as_of):
-    """保留全部历史报告期；只清理显式重建后的孤立跟踪数据。"""
-    performance = _earnings_followup_table()
-    performance.create(Session.kw['bind'], checkfirst=True)
-    session = Session()
-    try:
-        # 清除被季度重建移除的股票跟踪记录，包括没有剩余季度头的历史数据。
-        live = session.query(Stock.code).filter(Stock.report_period == performance.c.report_period,
-                                              Stock.code == performance.c.code).exists()
-        session.execute(performance.delete().where(~live))
-        session.commit()
-        return 0
-    except Exception:
-        session.rollback()
-        raise
-    finally:
-        session.close()
-# END SHARED EARNINGS FOLLOWUP
-
-# BEGIN SHARED EARNINGS VERSION
-
-
-def _earnings_version_table():
-    table = Table('earnings_sync_head', MetaData(),
-                  Column('report_period', Date, primary_key=True),
-                  Column('generation', String(32), nullable=False),
-                  Column('revision', BigInteger, nullable=False))
-    table.dialect_options['mysql']['engine'] = 'InnoDB'
-    table.dialect_options['mysql']['charset'] = 'utf8mb4'
-    return table
-
-
-_EARNINGS_TABLES = ('earnings_gap_run', 'earnings_gap_stock',
-                    'earnings_sync_head', 'earnings_sync_migration')
-
-
-def _earnings_metadata_text(value, strip=True):
-    # text() result columns may be bytes with older notebook DBAPI drivers.
-    # Never stringify arbitrary objects or treat undecodable/NULL values as safe.
-    if isinstance(value, bytes):
-        try:
-            value = value.decode('ascii')
-        except UnicodeDecodeError:
-            return None
-    if not isinstance(value, str):
-        return None
-    return value.strip() if strip else value
-
-
-def _check_earnings_engines(connection):
-    # Both reads use the collector's same connection/current database. No host,
-    # database name, account, arbitrary metadata or driver exception is exposed.
-    try:
-        selected = connection.execute(sql_text('SELECT DATABASE() IS NOT NULL')).scalar()
-        rows = connection.execute(sql_text(
-            "SELECT TABLE_NAME, TABLE_TYPE, ENGINE FROM information_schema.TABLES "
-            "WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME IN "
-            "('earnings_gap_run','earnings_gap_stock','earnings_sync_head','earnings_sync_migration')"
-        )).fetchall()
-    except Exception:
-        raise ValueError('净利润断层无法读取当前连接的表引擎元数据；请核对采集账号的元数据权限，拒绝非事务发布。') from None
-    found = {}
-    malformed = False
-    unexpected = 0
-    for row in rows:
-        # SQLAlchemy Row/RowProxy and DBAPI tuples share positional access.
-        if len(row) != 3:
-            malformed = True
-            continue
-        name = _earnings_metadata_text(row[0], strip=False)
-        if name not in _EARNINGS_TABLES:
-            unexpected += 1
-            continue
-        kind = _earnings_metadata_text(row[1])
-        storage = _earnings_metadata_text(row[2])
-        found.setdefault(name, []).append((kind.upper() if kind else None,
-                                          storage.upper() if storage else None))
-    problems = []
-    if selected != 1:
-        problems.append('当前连接未确认已选择数据库')
-    missing = [name for name in _EARNINGS_TABLES if name not in found]
-    if missing:
-        problems.append('缺失或当前账号不可见的表=' + ','.join(missing))
-    if malformed or unexpected:
-        problems.append('元数据结构异常或出现非目标表（数量={}）'.format(unexpected))
-    details = []
-    # Only fixed table/engine/type labels can reach the message. Unknown raw
-    # metadata is deliberately withheld rather than interpolated into logs.
-    known_engines = ('INNODB', 'MYISAM', 'MEMORY', 'ARCHIVE', 'CSV', 'NDB', 'NDBCLUSTER', 'BLACKHOLE', 'FEDERATED', 'MERGE', 'MRG_MYISAM')
-    for name in _EARNINGS_TABLES:
-        values = found.get(name, [])
-        if not values:
-            details.append(name + '=MISSING')
-            continue
-        if len(values) != 1:
-            problems.append(name + ' 返回重复表记录')
-            details.append(name + '=DUPLICATE')
-            continue
-        kind, storage = values[0]
-        label = storage if storage in known_engines else 'UNKNOWN'
-        type_label = kind if kind in ('BASE TABLE', 'VIEW', 'SYSTEM VIEW') else 'UNKNOWN'
-        details.append(name + '=' + label + '/' + type_label)
-        if kind != 'BASE TABLE':
-            problems.append(name + ' 不是已确认的普通表')
-        if storage != 'INNODB':
-            problems.append(name + (' 实际引擎非InnoDB' if storage in known_engines else ' 引擎无法识别或为空'))
-    if problems:
-        raise ValueError('净利润断层表引擎检查失败：' + '；'.join(problems)
-                         + '。当前采集连接：' + ', '.join(details)
-                         + '。请核对采集器与SQL客户端的连接/账号是否一致；拒绝非事务发布。')
-
-
-def _prepare_earnings_version(Session):
-    if not getattr(Session, '_earnings_version_ready', False):
-        table = _earnings_version_table()
-        engine = Session.kw['bind']
-        # Database-side idempotence works on older SQLAlchemy used in notebooks.
-        ddl = str(CreateTable(table).compile(dialect=engine.dialect))
-        with engine.begin() as connection:
-            connection.execute(sql_text(ddl.replace('CREATE TABLE', 'CREATE TABLE IF NOT EXISTS', 1)))
-        marker = _earnings_migration_table()
-        ddl = str(CreateTable(marker).compile(dialect=engine.dialect))
-        with engine.begin() as connection:
-            connection.execute(sql_text(ddl.replace('CREATE TABLE', 'CREATE TABLE IF NOT EXISTS', 1)))
-        if engine.dialect.name == 'mysql':
-            with engine.connect() as connection:
-                _check_earnings_engines(connection)
-        # DDL setup does not adopt/publish unvalidated historical quarters.
-        # Check both schemas now; migration will create versions transactionally.
-        with engine.connect() as connection:
-            connection.execute(table.select().limit(0))
-            connection.execute(marker.select().limit(0))
-        Session._earnings_version_ready = True
-
-
-def _lock_earnings_version(session, period):
-    table = _earnings_version_table()
-    row = session.execute(table.select().where(table.c.report_period == period).with_for_update()).first()
-    if row is None:
-        session.execute(table.insert().values(report_period=period, generation=uuid.uuid4().hex, revision=0))
-    return table
-
-
-def _advance_earnings_version(session, table, period, rebuild=False):
-    values = {'revision': table.c.revision + 1}
-    if rebuild:
-        values['generation'] = uuid.uuid4().hex
-    session.execute(table.update().where(table.c.report_period == period).values(**values))
-
-def _earnings_migration_table():
-    table = Table('earnings_sync_migration', MetaData(),
-                  Column('report_period', Date, primary_key=True),
-                  Column('protocol', BigInteger, nullable=False))
-    table.dialect_options['mysql']['engine'] = 'InnoDB'
-    table.dialect_options['mysql']['charset'] = 'utf8mb4'
-    return table
-
-
-def _verify_earnings_quarter(session, period):
-    # Read only scalar metadata/counts. Do not copy large JSON payloads or
-    # infer completeness by rewriting matched_count to whatever remains.
-    run = session.execute(sql_text(
-        'SELECT as_of_date, universe_count, matched_count, rule_version FROM earnings_gap_run WHERE report_period=:period'),
-        {'period': period}).first()
-    count = session.execute(sql_text(
-        'SELECT COUNT(*) FROM earnings_gap_stock WHERE report_period=:period'), {'period': period}).scalar()
-    if (run is None or run[0] is None or str(run[0])[:10] < str(period)[:10]
-            or run[1] is None or run[2] is None or run[1] <= 0
-            or run[2] < 0 or run[2] > run[1] or not run[3] or run[2] != count):
-        declared = run[2] if run is not None and isinstance(run[2], int) else 'unknown'
-        raise ValueError('季度 {} 数据不完整：声明数量={}，实际数量={}；未发布新版本，请核查后重新采集该季度。'.format(period, declared, count))
-    invalid = session.execute(sql_text("""SELECT COUNT(*) FROM earnings_gap_stock
-        WHERE report_period=:period AND (code IS NULL OR code='' OR name IS NULL
-        OR signal_date IS NULL OR announcement_date IS NULL OR valuation_date IS NULL
-        OR announcement_date>signal_date OR signal_date>valuation_date OR valuation_date>:as_of
-        OR signal_source NOT IN ('formal','forecast','express') OR signal_source IS NULL
-        OR profit_yoy IS NULL OR profit_yoy<20 OR open_gap_pct IS NULL OR open_gap_pct<3
-        OR intraday_pct IS NULL OR intraday_pct<0 OR events IS NULL OR prices IS NULL)"""),
-        {'period': period, 'as_of': run[0]}).scalar()
-    if invalid:
-        raise ValueError('季度 {} 有 {} 条不完整或无效股票记录；未发布新版本，请核查后重新采集该季度。'.format(period, invalid))
-    return count
-
-
-def _migrate_earnings_versions(Session):
-    """One validated generation reset per existing quarter, including history.
-
-    Never delete business rows or repair missing rows by lowering the head.
-    Marker and generation are committed together under the existing row lock.
-    """
-    _prepare_earnings_version(Session)
-    engine = Session.kw['bind']
-    with engine.connect() as connection:
-        orphan = connection.execute(sql_text('SELECT COUNT(*) FROM earnings_gap_stock s LEFT JOIN earnings_gap_run r ON r.report_period=s.report_period WHERE r.report_period IS NULL')).scalar()
-        if orphan:
-            raise ValueError('净利润断层存在没有季度元数据的股票记录；拒绝迁移，请先核查对应季度。')
-        runs = Table('earnings_gap_run', MetaData(), Column('report_period', Date, primary_key=True))
-        marker = _earnings_migration_table()
-        periods = [row[0] for row in connection.execute(runs.select().select_from(runs.outerjoin(marker, runs.c.report_period == marker.c.report_period)).where((marker.c.report_period.is_(None)) | (marker.c.protocol < 2)).order_by(runs.c.report_period))]
-    marker = _earnings_migration_table()
-    for period in periods:
-        session = Session()
-        try:
-            table = _lock_earnings_version(session, period)
-            migrated = session.execute(marker.select().where(marker.c.report_period == period).with_for_update()).first()
-            if migrated is not None and migrated.protocol >= 2:
-                continue
-            _verify_earnings_quarter(session, period)
-            _advance_earnings_version(session, table, period, rebuild=True)
-            if migrated is None:
-                session.execute(marker.insert().values(report_period=period, protocol=2))
-            else:
-                session.execute(marker.update().where(marker.c.report_period == period).values(protocol=2))
-            session.commit()
-        except Exception:
-            session.rollback()
-            raise
-        finally:
-            session.close()
-
-# END SHARED EARNINGS VERSION
 
 # BEGIN SHARED RESULT JOURNAL
 
@@ -2515,727 +2161,6 @@ def _microcap_strategy(_apis, _config):
     return SimpleNamespace(**locals())
 
 
-# ---------- 净利润断层 ----------
-def _earnings_strategy(_apis, _config):
-    """独立作用域隔离模型、参数和函数，返回本策略的接口。"""
-    settings = strategy_settings('净利润断层')
-    get_all_securities = _apis.get('get_all_securities')
-    get_all_trade_days = _apis.get('get_all_trade_days')
-    get_trade_days = _apis.get('get_trade_days')
-    get_price = _apis.get('get_price')
-    get_industry = _apis.get('get_industry')
-    get_fundamentals = _apis.get('get_fundamentals')
-    query = _apis.get('query')
-    valuation = _apis.get('valuation')
-    indicator = _apis.get('indicator')
-    income = _apis.get('income')
-    finance = _apis.get('finance')
-    jy = _apis.get('jy')
-
-    END_DATE = settings['end_date']
-    RULE_VERSION = 'announcement-open-v1'
-    PAGE_SIZE = settings['page_size']
-    Base = declarative_base()
-
-    class EarningsRun(Base):
-        __tablename__ = 'earnings_gap_run'
-        report_period = Column(Date, primary_key=True)
-        as_of_date = Column(Date, nullable=False)
-        updated_at = Column(DateTime, nullable=False)
-        universe_count = Column(Integer, nullable=False)
-        matched_count = Column(Integer, nullable=False)
-        rule_version = Column(String(32), nullable=False)
-
-    class EarningsStock(Base):
-        __tablename__ = 'earnings_gap_stock'
-        __table_args__ = (
-            Index('ix_earnings_period_industry', 'report_period', 'industry_code'),
-            Index('ix_earnings_period_signal', 'report_period', 'signal_date'),
-        )
-        report_period = Column(Date, primary_key=True)
-        code = Column(String(16), primary_key=True)
-        name = Column(String(128), nullable=False)
-        industry_code = Column(String(32), nullable=True)
-        industry_name = Column(String(128), nullable=True)
-        industry_level = Column(String(16), nullable=True)
-        signal_date = Column(Date, nullable=False)
-        announcement_date = Column(Date, nullable=False)
-        signal_source = Column(String(16), nullable=False)
-        profit_basis = Column(String(32), nullable=False)
-        profit_yoy = Column(Numeric(24, 6), nullable=False)
-        net_profit = Column(Numeric(28, 4), nullable=True)
-        open_gap_pct = Column(Numeric(20, 6), nullable=False)
-        intraday_pct = Column(Numeric(20, 6), nullable=False)
-        market_cap = Column(Numeric(24, 6), nullable=True)
-        circulating_market_cap = Column(Numeric(24, 6), nullable=True)
-        pe_ttm = Column(Numeric(24, 6), nullable=True)
-        pb = Column(Numeric(24, 6), nullable=True)
-        valuation_date = Column(Date, nullable=False)
-        # 兼容旧表的非空列；不再生成分析内容，新记录写入空字符串。
-        analysis = Column(Text, nullable=False, default='')
-        analysis_basis = Column(String(32), nullable=False, default='')
-        events = Column(JSON, nullable=False)
-        prices = Column(JSON, nullable=False)
-
-    def latest_period(day):
-        # 当前季度开始前一天；10 月运行统一取 9 月 30 日。
-        return dt.date(day.year, ((day.month - 1) // 3) * 3 + 1, 1) - dt.timedelta(days=1)
-
-    number = _float_number
-
-    def clean(value):
-        # 原始字段用于审计；JSON 不允许 NaN/Infinity。
-        if isinstance(value, dict):
-            return {str(k): clean(v) for k, v in value.items()}
-        if isinstance(value, (list, tuple)):
-            return [clean(v) for v in value]
-        if value is None or pd.isna(value):
-            return None
-        if isinstance(value, (dt.datetime, dt.date)):
-            return value.isoformat()
-        if isinstance(value, (str, bool)):
-            return value
-        return number(value)
-
-    checked_rows = _checked_records
-
-    def paged(table, filters, fetch, columns=(), small_window=False):
-        key = getattr(table, 'id', None)
-        if key is None:
-            key = getattr(table, 'ID', None)
-        if key is None:
-            raise ValueError('数据表缺少分页主键，不能保证完整采集。')
-        label = {'SecuMain': '公司代码映射', 'LC_FSPerformedLetters': '业绩快报',
-                 'STK_FIN_FORCAST': '业绩预告'}.get(getattr(table, '__tablename__', ''), '公告分页')
-        selection = [key] + [getattr(table, name) for name in columns] if columns else [table]
-        if columns:
-            # 保留源表明确提供的公告原因，不传输其他与筛选无关的大量字段。
-            selection.extend(getattr(table, name) for name in ('change_reason', 'profit_change_reason', 'reason') if hasattr(table, name))
-        if small_window:
-            # No primary-key ORDER BY for a tiny disclosure window: it can make the
-            # upstream database walk historical IDs instead of its publication index.
-            _progress_note('{}：统计窗口内披露数量'.format(label))
-            counts = checked_rows(fetch(query(func.count(key).label('row_count')).filter(*filters).limit(1)),
-                                  ['row_count'], label)
-            if len(counts) != 1 or number(counts[0]['row_count']) is None:
-                raise ValueError('公告数量查询无效，检查日期不推进。')
-            total = number(counts[0]['row_count'])
-            if total < 0 or total != builtins.int(total):
-                raise ValueError('公告数量无效。')
-            if total == 0:
-                return
-            if total <= PAGE_SIZE:
-                _progress_note('{}：读取 {} 条新增披露'.format(label, builtins.int(total)))
-                rows = checked_rows(fetch(query(*selection).filter(*filters).limit(PAGE_SIZE)), [key.key], label)
-                if len(rows) != total or len({r[key.key] for r in rows}) != total:
-                    raise ValueError('公告返回数量与计数不符，可能截断或源数据正在变化；请重试。')
-                yield from rows
-                return
-        fetch_page = lambda cursor: fetch(query(*selection).filter(*filters).filter(key > cursor).order_by(key).limit(PAGE_SIZE))
-        for frame in _source_pages(fetch_page, key=key.key, label=label, fields=(key.key,)):
-            yield from frame.to_dict('records')
-
-
-    def event(code, kind, pub, period, profit, growth, raw, growth_max=None):
-        profit, growth = number(profit), number(growth)
-        eligible = growth is not None and growth >= 20 and (
-            kind == 'forecast' or (profit is not None and profit > 0))
-        # 仅明确原因字段作为经营归因，绝不把任意摘要当成原因。
-        reason_field = next((f for f in ('change_reason', 'profit_change_reason', 'reason')
-                             if isinstance(raw.get(f), str) and raw[f].strip()), None)
-        return dict(code=code, kind=kind, publication_date=str(as_date(pub)),
-                    report_period=str(period),
-                    source_table={'express': 'jy.LC_FSPerformedLetters', 'forecast': 'finance.STK_FIN_FORCAST',
-                                  'formal': 'income + indicator'}[kind],
-                    net_profit=profit, profit_yoy=growth,
-                    profit_yoy_max=number(growth_max), eligible=eligible,
-                    profit_basis='单季度' if kind == 'formal' else '报告期累计',
-                    reason=raw[reason_field].strip() if reason_field else None,
-                    reason_field=reason_field, raw=clean(raw), signal=None)
-
-    def fetch_events(codes, period, as_of, start_date=None):
-        events = []
-        code_map = {code[:6]: code for code in codes}
-        code_set = set(codes)
-        cutoff = as_of + dt.timedelta(days=1)
-        started = time.monotonic()
-        _progress_note('聚宽：直接查询新增快报（不加载远程表结构）')
-        _progress_message('聚宽：直接查询新增快报（不加载远程表结构）')
-        t = _earnings_source_table(jy, 'LC_FSPerformedLetters')
-        filters = [t.EndDate == period, t.InfoPublDate < cutoff]
-        if start_date is not None:
-            filters.append(t.InfoPublDate >= start_date)
-        express = list(paged(t, filters, jy.run_query, columns=(
-            'CompanyCode', 'InfoPublDate', 'EndDate', 'NPParentCompanyOwners', 'NPCOwnersYOY'), small_window=start_date is not None))
-        _progress_message('快报查询 {} 条，耗时 {:.1f}s'.format(len(express), time.monotonic()-started))
-        company_codes = sorted({row['CompanyCode'] for row in express})
-        companies = {}
-        mapped_count = 0
-        # 没有窗口内快报时，不读取公司映射；有快报也只查对应公司。
-        for start in range(0, len(company_codes), 300):
-            _progress_note('聚宽：核对快报公司代码 {}/{}'.format(builtins.min(start+300, len(company_codes)), len(company_codes)))
-            t = _earnings_source_table(jy, 'SecuMain')
-            for row in paged(t, [t.SecuCategory == 1, t.CompanyCode.in_(company_codes[start:start+300])], jy.run_query,
-                             columns=('CompanyCode', 'SecuCode')):
-                mapped_count += 1
-                code = code_map.get(str(row['SecuCode']))
-                if code:
-                    companies.setdefault(row['CompanyCode'], set()).add(code)
-        if express and not mapped_count:
-            raise ValueError('A 股公司代码映射为空，不能覆盖数据库。')
-        for row in express:
-            for code in sorted(companies.get(row['CompanyCode'], [])):
-                events.append(event(code, 'express', row['InfoPublDate'], period,
-                                    row['NPParentCompanyOwners'], row['NPCOwnersYOY'], row))
-        _progress_note('业绩快报读取完成：{} 条。'.format(len(events)))
-        started = time.monotonic()
-        _progress_note('聚宽：加载预告接口并查询新增披露')
-        t = finance.STK_FIN_FORCAST
-        filters = [t.end_date == period, t.pub_date <= as_of]
-        if start_date is not None:
-            filters.append(t.pub_date >= start_date)
-        columns = ('code', 'end_date', 'pub_date', 'profit_ratio_min')
-        if hasattr(t, 'profit_ratio_max'):
-            columns += ('profit_ratio_max',)
-        for row in paged(t, filters, finance.run_query, columns=columns, small_window=start_date is not None):
-            if row['code'] in code_set:
-                # 原始增幅与可用原因保存在 raw；不猜测金额字段的单位。
-                events.append(event(row['code'], 'forecast', row['pub_date'], period, None,
-                                    row['profit_ratio_min'], row, row.get('profit_ratio_max')))
-        _progress_message('预告查询完成，耗时 {:.1f}s'.format(time.monotonic()-started))
-        started = time.monotonic()
-        events.extend(fetch_formal_events(codes, period, as_of, start_date))
-        _progress_note('正式财报查询完成，耗时 {:.1f}s'.format(time.monotonic()-started))
-        _progress_note('三类公告合计 {} 条。'.format(len(events)))
-        unique = {json.dumps(e, ensure_ascii=False, sort_keys=True): e for e in events}
-        return sorted(unique.values(), key=lambda e: (e['code'], e['publication_date'], e['kind']))
-
-
-    def fetch_formal_events(codes, period, as_of, start_date=None):
-        # 先按披露窗口查公告；按股票代码翻页只为防止接口截断，不再分批遍历全市场。
-        events, cursor, code_set, read_count = [], '', set(codes), 0
-        while True:
-            _progress_note('聚宽：查询窗口内正式财报，已读取 {} 条'.format(read_count))
-            q = query(income.code, income.pubDate.label('publication_date'),
-                      income.statDate.label('report_period'),
-                      income.np_parent_company_owners.label('net_profit'),
-                      indicator.inc_net_profit_to_shareholders_year_on_year.label('profit_yoy'),
-                      indicator.pubDate.label('indicator_publication_date'),
-                      indicator.statDate.label('indicator_period')).filter(
-                          income.code > cursor, income.statDate == period, indicator.statDate == period,
-                          income.pubDate <= as_of, indicator.pubDate <= as_of)
-            if start_date is not None:
-                q = q.filter((income.pubDate >= start_date) | (indicator.pubDate >= start_date))
-            frame = get_fundamentals(q.order_by(income.code).limit(PAGE_SIZE), date=as_of)
-            rows = checked_rows(frame, ['code', 'publication_date', 'report_period', 'net_profit',
-                                       'profit_yoy', 'indicator_publication_date', 'indicator_period'], '正式财报')
-            if not rows:
-                return events
-            keys = [row['code'] for row in rows]
-            if len(keys) > PAGE_SIZE or keys != sorted(set(keys)) or keys[0] <= cursor:
-                raise ValueError('正式财报分页重复、乱序或未前进。')
-            cursor = keys[-1]
-            read_count += len(rows)
-            for row in rows:
-                if pd.isna(row['publication_date']):
-                    continue
-                if as_date(row['report_period']) != period or as_date(row['indicator_period']) != period:
-                    raise ValueError('财报与指标的报告期不一致。')
-                pub = builtins.max(as_date(row['publication_date']), as_date(row['indicator_publication_date']))
-                if row['code'] in code_set and pub <= as_of and (start_date is None or pub >= start_date):
-                    events.append(event(row['code'], 'formal', pub, period, row['net_profit'], row['profit_yoy'], row))
-
-
-    def price_signal(previous_close, open_price, close_price):
-        values = [number(v) for v in (previous_close, open_price, close_price)]
-        if builtins.any(v is None or v <= 0 for v in values):
-            return None
-        previous, opening, closing = [Decimal(str(v)) for v in values]
-        # 精确等于 3% 不通过，避免二进制浮点边界误差。
-        if opening <= previous * Decimal('1.03') or closing < opening:
-            return None
-        return dict(open_gap_pct=float((opening / previous - 1) * 100),
-                    intraday_pct=float((closing / opening - 1) * 100))
-
-
-    def screening_prices(grouped, as_of):
-        """仅给财务条件通过的股票分批取价；共用日历，不向数据库写筛选中间态。"""
-        candidates = [(code, [e for e in events if e['eligible']]) for code, events in sorted(grouped.items())]
-        candidates = [(code, events) for code, events in candidates if events]
-        if not candidates:
-            return
-        first = builtins.min(as_date(e['publication_date']) for _, events in candidates for e in events)
-        _progress_note('读取筛选交易日历，财务条件通过 {} 只'.format(len(candidates)))
-        calendar = [as_date(d) for d in get_trade_days(start_date=first-dt.timedelta(days=40), end_date=as_of)]
-        if not calendar or calendar != sorted(set(calendar)) or calendar[0] < first-dt.timedelta(days=40) or calendar[-1] > as_of:
-            raise ValueError('交易日历为空、乱序或越界。')
-        fields = ['open', 'close', 'high', 'low', 'paused', 'volume']
-        for start in range(0, len(candidates), 50):
-            batch = candidates[start:start+50]
-            pubs = [as_date(e['publication_date']) for _, events in batch for e in events]
-            quote_start = next(d for d in calendar if d >= builtins.min(pubs)-dt.timedelta(days=40))
-            final_index = next((i for i, d in enumerate(calendar) if d >= builtins.max(pubs)), len(calendar)-1)
-            # 筛选只用公告对应日及前收盘；详情最多展示信号后20日，无需读到今天。
-            quote_end = calendar[builtins.min(len(calendar)-1, final_index+20)]
-            batch_codes = [code for code, _ in batch]
-            _progress_note('读取筛选行情 {}—{}/{} 只，{} 至 {}'.format(start+1, start+len(batch), len(candidates), quote_start, quote_end))
-            frame = get_price(batch_codes, start_date=quote_start, end_date=quote_end, frequency='daily',
-                              fields=fields, skip_paused=False, fq='pre', panel=False)
-            bars = {code: {} for code in batch_codes}
-            for row in checked_rows(frame, ['code', 'time']+fields, '分批股票行情'):
-                code, day = row['code'], as_date(row['time'])
-                if code not in bars or not quote_start <= day <= quote_end or day in bars[code]:
-                    raise ValueError('分批行情股票、日期越界或重复，取消本次入库。')
-                bars[code][day] = row
-            for code, _ in batch:
-                yield code, bars[code], calendar
-            _progress_note('已完成行情筛选 {}/{} 只'.format(start+len(batch), len(candidates)))
-
-
-    def screen(codes, names, events, period, as_of, historical=False):
-        grouped = {}
-        for e in events:
-            if e['report_period'] != str(period) or as_date(e['publication_date']) > as_of or e['code'] not in names:
-                raise ValueError('公告报告期、股票代码或截止日期异常。')
-            grouped.setdefault(e['code'], []).append(e)
-        results = []
-        for code, bars, calendar in screening_prices(grouped, as_of):
-            disclosures = grouped[code]
-            qualifying = [e for e in disclosures if e['eligible']]
-            hits = []
-            for e in qualifying:
-                pub = as_date(e['publication_date'])
-                # 原策略的公告日行情；非交易日公告对应下一个交易日，不倒取公告前行情。
-                day = next((d for d in calendar if d >= pub), None)
-                if day is None:
-                    continue
-                position = calendar.index(day)
-                if position == 0:
-                    continue
-                previous = calendar[position-1]
-                current, prior = bars.get(day), bars.get(previous)
-                if current is None or prior is None:
-                    raise ValueError('{} 行情缺失，取消本次入库。'.format(code))
-                if number(current['paused']) is None:
-                    raise ValueError('{} 停牌状态缺失。'.format(code))
-                if number(current['volume']) is None:
-                    raise ValueError('{} 成交量缺失。'.format(code))
-                if current['paused'] or number(current['volume']) == 0:
-                    continue
-                if builtins.any(number(current[k]) is None or number(current[k]) <= 0 for k in ('open', 'close', 'high', 'low')):
-                    raise ValueError('{} 已成交日的价格不完整。'.format(code))
-                # 上市前缺失前收盘，不构造跳空信号；不延迟到复牌日追认。
-                signal = price_signal(prior['close'], current['open'], current['close'])
-                if signal:
-                    signal['date'] = str(day)
-                    e['signal'] = signal
-                    hits.append(e)
-            if not hits:
-                continue
-            selected = sorted(hits, key=lambda e: (e['signal']['date'], e['signal']['open_gap_pct'], e['kind']))[-1]
-            industry_data = get_industry([code], date=as_date(selected['signal']['date']) if historical else as_of)
-            if not isinstance(industry_data, dict) or code not in industry_data:
-                raise ValueError('{} 行业接口返回异常。'.format(code))
-            industries = industry_data[code]
-            level = next((k for k in ('sw_l3', 'sw_l2', 'sw_l1') if industries.get(k)), None)
-            industry = industries.get(level, {})
-            signal_day = as_date(selected['signal']['date'])
-            offset = calendar.index(signal_day)
-            chart_days = calendar[builtins.max(0, offset-10):offset+21]
-            prices = [dict(date=str(d), **{k: number(bars[d][k]) for k in ('open', 'close', 'high', 'low')})
-                      for d in chart_days if d in bars]
-            record = dict(report_period=period, code=code, name=names[code],
-                          industry_code=industry.get('industry_code'), industry_name=industry.get('industry_name'),
-                          industry_level=level, signal_date=signal_day,
-                          announcement_date=as_date(selected['publication_date']), signal_source=selected['kind'],
-                          profit_basis=selected['profit_basis'], profit_yoy=selected['profit_yoy'],
-                          net_profit=selected['net_profit'], open_gap_pct=selected['signal']['open_gap_pct'],
-                          intraday_pct=selected['signal']['intraday_pct'], valuation_date=as_of,
-                          events=disclosures, prices=prices)
-            results.append(record)
-        selected_codes = [r['code'] for r in results]
-        valuations = {}
-        for start in range(0, len(selected_codes), 300):
-            _progress_note('读取新入选股票估值 {}/{} 只'.format(builtins.min(start+300, len(selected_codes)), len(selected_codes)))
-            q = query(valuation.code, valuation.market_cap, valuation.circulating_market_cap,
-                      valuation.pe_ratio, valuation.pb_ratio).filter(valuation.code.in_(selected_codes[start:start+300]))
-            frame = get_fundamentals(q, date=as_of)
-            valuations.update({r['code']: r for r in checked_rows(frame,
-                ['code', 'market_cap', 'circulating_market_cap', 'pe_ratio', 'pb_ratio'], '估值')})
-        for r in results:
-            v = valuations.get(r['code'], {})
-            for target, source in [('market_cap', 'market_cap'), ('circulating_market_cap', 'circulating_market_cap'),
-                                   ('pe_ttm', 'pe_ratio'), ('pb', 'pb_ratio')]:
-                r[target] = number(v.get(source))
-        return results
-
-
-    def database_record(record):
-        """按表定义量化全部 DECIMAL 列，保留 Decimal 交给 MySQL 驱动。"""
-        result = dict(record)
-        for column in EarningsStock.__table__.columns:
-            if not isinstance(column.type, Numeric):
-                continue
-            value = record.get(column.name)
-            if value is None:
-                if not column.nullable:
-                    raise ValueError('{} 不允许为空。'.format(column.name))
-                result[column.name] = None
-                continue
-            precision, scale = column.type.precision, column.type.scale
-            try:
-                decimal_value = Decimal(str(value))
-                limit = Decimal(10) ** (precision - scale)
-                if not decimal_value.is_finite() or decimal_value.copy_abs() >= limit:
-                    raise ValueError('{} 不是有限值或超出字段范围。'.format(column.name))
-                with localcontext() as context:
-                    context.prec = precision + 2
-                    rounded = decimal_value.quantize(Decimal(1).scaleb(-scale), rounding=ROUND_HALF_UP)
-                if rounded.copy_abs() >= limit:
-                    raise ValueError('{} 四舍五入后超出字段范围。'.format(column.name))
-            except (InvalidOperation, TypeError):
-                raise ValueError('{} 无法转换为数据库定点数。'.format(column.name)) from None
-            result[column.name] = rounded
-        return result
-
-    def save_results(Session, period, as_of, universe_count, records, skip_existing=True):
-        _require_append(skip_existing)
-        _progress_note('写入本季度新入选股票')
-        if len({r['code'] for r in records}) != len(records):
-            raise ValueError('筛选结果包含重复股票。')
-        for r in records:
-            if (r['report_period'] != period or r['valuation_date'] != as_of
-                    or r['signal_date'] > as_of or r['announcement_date'] > r['signal_date']
-                    or r['open_gap_pct'] <= 3 or r['intraday_pct'] < 0 or r['profit_yoy'] < 20):
-                raise ValueError('筛选结果校验失败，拒绝覆盖数据库。')
-        # 先验证原始筛选阈值，再量化写入值；任何转换失败均发生在写入之前。
-        # 不修改原始 records 和公告 JSON，也不把 Decimal 转回 float。
-        db_records = [database_record(r) for r in records]
-        _prepare_earnings_version(Session)
-        with session_scope(Session) as session:
-            version_table = _lock_earnings_version(session, period)
-            # 股票快照只插入首次命中的结果；不覆盖、不删除已入库股票。
-            existing = {row[0] for row in session.query(EarningsStock.code).filter(
-                EarningsStock.report_period == period).all()}
-            fresh = [record for record in records if record['code'] not in existing]
-            fresh_db = [record for record in db_records if record['code'] not in existing]
-            run = session.query(EarningsRun).filter(EarningsRun.report_period == period).first()
-            if (run is None and existing) or (run is not None and (run.matched_count < 0 or run.matched_count > len(existing))):
-                raise ValueError('季度 {} 已有股票少于声明数量或缺少季度元数据；拒绝调低数量发布，请核查后重新采集。'.format(period))
-            count_repair = run is not None and run.matched_count != len(existing)
-            total = len(existing) + len(fresh_db)
-            # 元数据用于网页展示累计命中数量和扫描截止日；仅值有变化时更新。
-            metadata_changed = False
-            if run is None:
-                session.add(EarningsRun(report_period=period, as_of_date=as_of, updated_at=china_now(),
-                    universe_count=universe_count, matched_count=total, rule_version=RULE_VERSION))
-                metadata_changed = True
-            else:
-                values = {'matched_count': total}
-                if as_of >= run.as_of_date:
-                    values.update(as_of_date=as_of, universe_count=universe_count, rule_version=RULE_VERSION)
-                for key, value in values.items():
-                    if getattr(run, key) != value:
-                        setattr(run, key, value)
-                        metadata_changed = True
-                if metadata_changed:
-                    run.updated_at = china_now()
-            if not fresh_db and not metadata_changed:
-                return []
-            session.add_all([EarningsStock(**record) for record in fresh_db])
-            session.flush()
-            _verify_earnings_quarter(session, period)
-            if fresh_db or count_repair:
-                _advance_earnings_version(session, version_table, period, rebuild=count_repair)
-            session.commit()
-            return fresh
-
-    # BEGIN SHARED EARNINGS HISTORY
-
-
-    @contextmanager
-    def _history_session(Session):
-        # JoinQuant notebooks can still use SQLAlchemy 1.3 Sessions without __enter__.
-        session = Session()
-        try:
-            yield session
-        except Exception:
-            session.rollback()
-            raise
-        finally:
-            session.close()
-
-    def _history_periods(first, last):
-        """Closed calendar quarters, inclusive; never silently round a configured date."""
-        first, last = as_date(first), as_date(last)
-        if latest_period(first + dt.timedelta(days=1)) != first:
-            raise ValueError('start_period 必须是报告季末日期。')
-        while first <= last:
-            yield first
-            month = first.month + 3
-            year = first.year + (month > 12)
-            month = (month - 1) % 12 + 1
-            first = (dt.date(year + (month == 12), month % 12 + 1, 1)
-                     - dt.timedelta(days=1))
-
-
-    def _history_checkpoint_table():
-        # Independent checkpoint: an existing daily run is NOT evidence that history
-        # was replayed. A crash after snapshot commit and before this commit safely
-        # repeats append-only work instead of claiming an incomplete quarter is done.
-        return Table('earnings_history_checkpoint', MetaData(),
-            Column('report_period', Date, primary_key=True),
-            Column('as_of_date', Date, nullable=False),
-            Column('method', String(40), nullable=False),
-            Column('updated_at', DateTime, nullable=False),
-            mysql_engine='InnoDB', mysql_charset='utf8mb4')
-
-
-    def _history_source_floor(table, field, fetch):
-        frame = fetch(query(field).filter(field != None).order_by(field).limit(1))
-        rows = checked_rows(frame, [field.key], '历史财务覆盖探测')
-        if not rows:
-            raise ValueError('财务源未返回可验证的起点；权限或覆盖未知，不能记为零命中。')
-        return as_date(rows[0][field.key])
-
-
-    def _history_formal_events(period, as_of):
-        """Current visible quarterly values, never represented as unrevised PIT."""
-        events, cursor = [], ''
-        fields = ['code', 'publication_date', 'report_period', 'net_profit',
-                  'profit_yoy', 'indicator_publication_date', 'indicator_period']
-        while True:
-            q = query(income.code, income.pubDate.label('publication_date'),
-                income.statDate.label('report_period'),
-                income.np_parent_company_owners.label('net_profit'),
-                indicator.inc_net_profit_to_shareholders_year_on_year.label('profit_yoy'),
-                indicator.pubDate.label('indicator_publication_date'),
-                indicator.statDate.label('indicator_period')).filter(
-                    income.code > cursor, income.statDate == period, indicator.statDate == period,
-                    income.pubDate <= as_of, indicator.pubDate <= as_of).order_by(income.code).limit(PAGE_SIZE)
-            rows = checked_rows(get_fundamentals(q, statDate='{}q{}'.format(period.year, period.month // 3)),
-                                fields, '历史季度正式财报')
-            if not rows:
-                return events
-            keys = [row['code'] for row in rows]
-            if len(keys) > PAGE_SIZE or builtins.any(not isinstance(code, str) for code in keys) or keys != sorted(set(keys)) or keys[0] <= cursor:
-                raise ValueError('历史正式财报股票分页重复、乱序、超限或未前进。')
-            cursor = keys[-1]
-            for row in rows:
-                if as_date(row['report_period']) != period or as_date(row['indicator_period']) != period:
-                    raise ValueError('历史财报与指标的报告期不一致。')
-                pub = builtins.max(as_date(row['publication_date']), as_date(row['indicator_publication_date']))
-                if pub > as_of:
-                    raise ValueError('历史财报接口返回截止日期后公告。')
-                events.append(event(row['code'], 'formal', pub, period, row['net_profit'], row['profit_yoy'], row))
-
-
-    def _history_events(period, as_of, pool_cache):
-        """Date each universe to actual disclosures, including subsequently delisted stocks."""
-        t = _earnings_source_table(jy, 'LC_FSPerformedLetters')
-        express = list(paged(t, [t.EndDate == period, t.InfoPublDate < as_of + dt.timedelta(days=1)], jy.run_query))
-        t = finance.STK_FIN_FORCAST
-        forecasts = list(paged(t, [t.end_date == period, t.pub_date <= as_of], finance.run_query))
-        formal = _history_formal_events(period, as_of)
-        if builtins.any(as_date(row['EndDate']) != period for row in express) or builtins.any(as_date(row['end_date']) != period for row in forecasts):
-            raise ValueError('历史公告接口返回其他报告期。')
-        # All-empty is UNKNOWN, not evidence that a complete period had zero matches.
-        if not express and not forecasts and not formal:
-            return {}, [], False
-        dates = {as_date(r['InfoPublDate']) for r in express} | {as_date(r['pub_date']) for r in forecasts}
-        dates.update(as_date(e['publication_date']) for e in formal)
-        if builtins.any(day > as_of for day in dates):
-            raise ValueError('公告接口返回截止日期后记录。')
-        names, membership = {}, {}
-        for day in sorted(dates):
-            if day not in pool_cache:
-                frame = get_all_securities(types=['stock'], date=day)
-                if frame is None or frame.empty or not {'display_name', 'start_date', 'end_date'}.issubset(frame.columns):
-                    raise ValueError('历史股票池/上市退市日期不可验证；保留已成功季度。')
-                pool = {}
-                for code, row in frame.iterrows():
-                    if not as_date(row['start_date']) <= day <= as_date(row['end_date']):
-                        raise ValueError('历史股票池上市区间与快照日期冲突。')
-                    pool[str(code)] = str(row['display_name'])
-                pool_cache[day] = pool
-                if len(pool_cache) > 32:
-                    del pool_cache[next(iter(pool_cache))]
-            membership[day] = pool_cache[day]
-            names.update(pool_cache[day])
-        # Mapping is based on historical dated codes, never today's surviving list.
-        code_map = {code[:6]: code for code in names}
-        companies = {}
-        t = _earnings_source_table(jy, 'SecuMain')
-        for row in paged(t, [t.SecuCategory == 1], jy.run_query):
-            code = code_map.get(str(row['SecuCode']))
-            if code:
-                companies.setdefault(row['CompanyCode'], set()).add(code)
-        if express and not companies:
-            raise ValueError('历史 A 股公司代码映射不可验证。')
-        events = list(formal)
-        for row in express:
-            for code in sorted(companies.get(row['CompanyCode'], [])):
-                events.append(event(code, 'express', row['InfoPublDate'], period,
-                    row['NPParentCompanyOwners'], row['NPCOwnersYOY'], row))
-        for row in forecasts:
-            events.append(event(row['code'], 'forecast', row['pub_date'], period, None,
-                row['profit_ratio_min'], row, row.get('profit_ratio_max')))
-        verified = []
-        for e in events:
-            if e['code'] in membership[as_date(e['publication_date'])]:
-                verified.append(e)
-            elif e['kind'] == 'formal':
-                # Could be a delisted issuer filing after exit. There is no listed
-                # announcement-day trade to screen; do not substitute today's pool.
-                print('{} {}：披露日不在当日上市股票池，跳过。'.format(period, e['code']))
-        return names, verified, True
-
-
-    def _history_write_checkpoint(Session, checkpoint, period, as_of, method):
-        with _history_session(Session) as session:
-            if method == 'quarter-visible-v2':
-                _lock_earnings_version(session, period)
-            condition = checkpoint.c.report_period == period
-            prior = session.execute(checkpoint.select().where(condition)).first()
-            if prior is None or prior.as_of_date <= as_of:
-                session.execute(checkpoint.delete().where(condition))
-                session.execute(checkpoint.insert().values(report_period=period, as_of_date=as_of,
-                    method=method, updated_at=china_now()))
-            session.commit()
-
-
-    def collect_history(Session, requested, history_mode, start_period, max_periods):
-        """Bound attempted quarters; successful snapshots are always append-only."""
-        if history_mode not in ('gaps', 'full'):
-            raise ValueError('history_mode 只支持 latest / gaps / full。')
-        if max_periods is not None and (isinstance(max_periods, bool) or not isinstance(max_periods, int) or max_periods < 1):
-            raise ValueError('max_periods 必须为正整数或 None。')
-        now = china_now()
-        requested = as_date(requested) if requested is not None else now.date()
-        if requested > now.date():
-            raise ValueError('结束日期不能晚于今天。')
-        raw_days = get_all_trade_days()
-        if raw_days is None or len(raw_days) == 0:
-            raise ValueError('无法验证聚宽完整历史交易日历。')
-        days = [as_date(d) for d in raw_days if as_date(d) <= _closed_day(requested, now)]
-        if not days or days != sorted(set(days)):
-            raise ValueError('历史交易日历为空、重复或乱序。')
-        as_of, last = days[-1], latest_period(requested)
-        m = ((days[0].month - 1) // 3 + 1) * 3
-        first = dt.date(days[0].year + (m == 12), m % 12 + 1, 1) - dt.timedelta(days=1)
-        # Permission/schema failures abort before any success marker. These earliest
-        # rows describe current readable coverage, not a promised historical start.
-        express_table = _earnings_source_table(jy, 'LC_FSPerformedLetters')
-        express_floor = _history_source_floor(express_table, express_table.EndDate, jy.run_query)
-        forecast_floor = _history_source_floor(finance.STK_FIN_FORCAST, finance.STK_FIN_FORCAST.end_date, finance.run_query)
-        print('可见快报/预告最早报告期：{} / {}；正式财报逐季验证。'.format(express_floor, forecast_floor))
-        if start_period is not None:
-            first = as_date(start_period)
-        if first > last:
-            raise ValueError('起始报告期晚于最新已结束报告期。')
-        checkpoint = _history_checkpoint_table()
-        checkpoint.create(Session.kw['bind'], checkfirst=True)
-        _prepare_earnings_version(Session)
-        attempted, output, pool_cache = 0, [], {}
-        for period in _history_periods(first, last):
-            with _history_session(Session) as session:
-                done = session.execute(checkpoint.select().where(checkpoint.c.report_period == period)).first()
-            if history_mode == 'gaps' and done and done.as_of_date >= as_of and done.method in ('quarter-visible-v2', 'unknown-empty-v2'):
-                if done.method == 'unknown-empty-v2':
-                    print('{}：上次覆盖仍为未知；full 可复核，不视为成功/零命中。'.format(period))
-                continue
-            if max_periods is not None and attempted >= max_periods:
-                print('达到本次季度尝试上限；同一 end_date 再运行 gaps 继续。')
-                break
-            attempted += 1
-            names, events, verified = _history_events(period, as_of, pool_cache)
-            if not verified:
-                _history_write_checkpoint(Session, checkpoint, period, as_of, 'unknown-empty-v2')
-                print('{}：覆盖未知，已记录探测状态；未写季度结果。'.format(period))
-                continue
-            for e in events:
-                e['source_kind'] = 'joinquant_current_visible_history'
-                e['reconstruction_as_of'] = str(now.date())
-                e['historical_cutoff'] = str(as_of)
-            with _history_session(Session) as session:
-                existing = {r[0] for r in session.query(EarningsStock.code).filter(EarningsStock.report_period == period).all()}
-            codes = sorted(names)
-            pending = [code for code in codes if code not in existing]
-            pending_events = [e for e in events if e['code'] not in existing]
-            records = screen(pending, names, pending_events, period, as_of, historical=True) if pending_events else []
-            fresh = save_results(Session, period, as_of, len(codes), records, skip_existing=True)
-            _migrate_earnings_versions(Session)
-            # Separate durable checkpoint: crash after snapshot commit only repeats
-            # safe append work. No failed/incomplete quarter is published as done.
-            _history_write_checkpoint(Session, checkpoint, period, as_of, 'quarter-visible-v2')
-            output.extend(fresh)
-            print('历史季度 {} 完成：新增 {} 只。'.format(period, len(fresh)))
-        return pd.DataFrame(output)
-    # END SHARED EARNINGS HISTORY
-
-    def scan_start(Session, period, as_of):
-        """复用随选股结果原子提交的截止日；首次只查最新收盘日，不自动补季度。"""
-        session = Session()
-        try:
-            checked = session.query(EarningsRun.as_of_date).filter(EarningsRun.report_period == period).scalar()
-            if checked is not None:
-                return checked if checked < as_of else None
-            # 换季仍从上次成功检查接续；不能因新季度没有记录而漏掉中间日期。
-            previous = session.query(EarningsRun.as_of_date).filter(EarningsRun.as_of_date <= as_of).order_by(
-                EarningsRun.as_of_date.desc()).first()
-            return previous[0] if previous else as_of
-        finally:
-            session.close()
-
-
-    def run(end_date=END_DATE, skip_existing=True):
-        _require_append(skip_existing)
-        if settings.get('history_mode', 'latest') != 'latest':
-            with database_scope(Base, _config) as Session:
-                return collect_history(Session, end_date, settings['history_mode'],
-                                       settings.get('start_period'), settings.get('max_periods', 4))
-        now = china_now()
-        requested = as_date(end_date) if end_date is not None else now.date()
-        if requested > now.date():
-            raise ValueError('结束日期不能晚于今天。')
-        period = latest_period(requested)
-        cutoff = _closed_day(requested, now)
-        days = get_trade_days(end_date=cutoff, count=1)
-        if days is None or len(days) != 1:
-            raise ValueError('无法获取最近完整交易日。')
-        as_of = as_date(days[0])
-        universe = get_all_securities(types=['stock'], date=as_of)
-        if universe is None or universe.empty or 'display_name' not in universe.columns:
-            raise ValueError('A 股股票池获取失败。')
-        # 平台提供的全部 A 股，不使用原行业白名单、黑名单、ST/持仓或数量限制。
-        names = {str(code): str(row['display_name']) for code, row in universe.iterrows()}
-        codes = sorted(names)
-        with database_scope(Base, _config) as Session:
-            # 显式指定 InnoDB，确保旧数据库默认引擎不会破坏整批事务。
-            _progress_note('读取本季度已入选股票代码')
-            with session_scope(Session) as session:
-                existing = {row[0] for row in session.query(EarningsStock.code).filter(
-                    EarningsStock.report_period == period).all()}
-            pending = [code for code in codes if code not in existing]
-            _progress_note('读取上次成功检查日期')
-            since = scan_start(Session, period, as_of)
-            _progress_note('准备读取增量披露' if since is not None else '本日公告已检查完成')
-            _progress_message('净利润断层：本季度已有 {} 只；{}'.format(len(existing),
-                '已检查至 {}，跳过公告筛选'.format(as_of) if since is None
-                else '仅检查 {} 至 {} 披露'.format(since, as_of)))
-            events = fetch_events(pending, period, as_of, since) if pending and since is not None else []
-            records = screen(pending, names, events, period, as_of) if events else []
-            records = save_results(Session, period, as_of, len(codes), records, skip_existing=skip_existing)
-            _progress_note('清理孤立收盘跟踪')
-            _prune_earnings_history(Session, EarningsStock, EarningsRun, as_of)
-            _progress_note('核对季度同步版本')
-            _migrate_earnings_versions(Session)
-            _progress_note('读取已入选股票收盘跟踪状态')
-            _refresh_earnings_followup(Session, EarningsStock, as_of, get_price, _progress_note)
-        return pd.DataFrame(records)
-    return SimpleNamespace(**locals())
-
-
 # ---------- 微盘新高新低 ----------
 def _breadth_strategy(_apis, _config):
     """微盘 400 新高新低：每日动态选股，一次历史行情计算四个周期。"""
@@ -3599,20 +2524,20 @@ def _breadth_strategy(_apis, _config):
 
 # ---------- 高股息选股 ----------
 def _dividend_strategy(_apis, _config):
-    """三组独立排名：纯高股息25、低估值非银行25、银行10；事务替换最新快照。"""
+    """高股息低估值：非银行25、银行10；事务替换最新快照。"""
     settings = strategy_settings('高股息选股')
     get_all_securities, get_trade_days = _apis.get('get_all_securities'), _apis.get('get_trade_days')
     get_price, get_extras = _apis.get('get_price'), _apis.get('get_extras')
     get_fundamentals, get_industry = _apis.get('get_fundamentals'), _apis.get('get_industry')
-    query, valuation, indicator, finance = [_apis.get(k) for k in ('query', 'valuation', 'indicator', 'finance')]
+    query, valuation, finance = [_apis.get(k) for k in ('query', 'valuation', 'finance')]
     BATCH_SIZE, PAGE_SIZE = settings['batch_size'], settings['page_size']
     if BATCH_SIZE > 3000 or PAGE_SIZE > 3000:
         raise ValueError('batch_size 和 page_size 不得超过 3000。')
     END_DATE = settings['end_date']
-    RULE_VERSION = 'dividend_static_3pct_v5'
+    RULE_VERSION = 'dividend_value_pe12_v6'
     MIN_YIELD = Decimal('3')
-    METHODS = ('classic', 'value', 'bank')
-    LIMITS = dict(classic=25, value=25, bank=10)
+    METHODS = ('value', 'bank')
+    LIMITS = dict(value=25, bank=10)
     Base = declarative_base()
 
     class DividendSnapshot(Base):
@@ -3624,9 +2549,7 @@ def _dividend_strategy(_apis, _config):
         rule_version = Column(String(32), nullable=False)
         universe_count = Column(Integer, nullable=False)
         eligible_count = Column(Integer, nullable=False)
-        classic_candidates = Column(Integer, nullable=False)
         value_candidates = Column(Integer, nullable=False)
-        classic_count = Column(Integer, nullable=False)
         value_count = Column(Integer, nullable=False)
 
     class DividendStock(Base):
@@ -3642,20 +2565,12 @@ def _dividend_strategy(_apis, _config):
         industry_name = Column(String(128), nullable=True)
         industry_level = Column(String(16), nullable=True)
         dividend_yield_1y = Column(Numeric(24, 6), nullable=False)
-        dividend_ratio_3y = Column(Numeric(24, 6), nullable=False)
         dividend_cash_1y = Column(Numeric(28, 6), nullable=False)
-        dividend_cash_3y = Column(Numeric(28, 6), nullable=False)
         dividend_yield_history = Column(JSON, nullable=True)
         pe_ttm = Column(Numeric(24, 6), nullable=False)
         pb = Column(Numeric(24, 6), nullable=True)
         market_cap = Column(Numeric(24, 6), nullable=False)
         close = Column(Numeric(24, 6), nullable=False)
-        revenue_growth = Column(Numeric(24, 6), nullable=True)
-        profit_growth = Column(Numeric(24, 6), nullable=True)
-        adjusted_roe = Column(Numeric(24, 6), nullable=True)
-        peg = Column(Numeric(24, 6), nullable=True)
-        report_period = Column(Date, nullable=True)
-        publication_date = Column(Date, nullable=True)
 
     RESULT_COLUMNS = [c.name for c in DividendStock.__table__.columns]
     META_COLUMNS = [c.name for c in DividendSnapshot.__table__.columns if c.name not in ('id', 'updated_at')]
@@ -3730,17 +2645,14 @@ def _dividend_strategy(_apis, _config):
 
     def dividends(codes, day):
         table = finance.STK_XR_XD
-        start3 = day-datetime.timedelta(days=1095)
         fiscal_start, fiscal_end = datetime.date(day.year-3, 1, 1), datetime.date(day.year-1, 12, 31)
         total = {}
         for offset in _progress_items(range(0, len(codes), BATCH_SIZE), '近三个财年分红批次'):
             batch = codes[offset:offset+BATCH_SIZE]
-            fields = ('id', 'code', 'report_date', 'a_registration_date', 'a_xr_date', 'bonus_amount_rmb')
+            fields = ('id', 'code', 'report_date', 'a_xr_date', 'bonus_amount_rmb')
             selection = query(*[getattr(table, f) for f in fields]).filter(
                 table.code.in_(batch),
-                or_(and_(table.a_registration_date >= start3, table.a_registration_date <= day),
-                    and_(table.report_date >= fiscal_start, table.report_date <= fiscal_end,
-                         table.a_xr_date <= day)))
+                table.report_date >= fiscal_start, table.report_date <= fiscal_end, table.a_xr_date <= day)
             fetch_page = lambda cursor: finance.run_query(selection.filter(table.id > cursor).order_by(table.id).limit(PAGE_SIZE))
             for frame in _source_pages(fetch_page, label='分红明细', progress=_progress_note, fields=fields, page_size=PAGE_SIZE):
                 page = frame.to_dict('records')
@@ -3748,78 +2660,37 @@ def _dividend_strategy(_apis, _config):
                     code = str(row['code'])
                     if code not in batch:
                         raise ValueError('分红代码越界。')
-                    registration = optional_date(row['a_registration_date'])
                     ex_date = optional_date(row['a_xr_date'])
                     period = optional_date(row['report_date'])
                     if period is None or period > day:
                         raise ValueError('{} 分红报告期缺失或晚于选股日，无法确认所属财年。'.format(code))
-                    in3 = registration is not None and start3 <= registration <= day
                     annual = fiscal_start <= period <= fiscal_end and ex_date is not None and ex_date <= day
-                    if not (in3 or annual):
+                    if not annual:
                         raise ValueError('分红日期越界。')
                     # 按报告期分别合计最近三个完整财年；各年均以选股日市值计算股息率。
                     # 只计选股日已实施分红，不读取未来方案；cash_1y/数据库同名列保留以兼容旧表。
                     cash = Decimal(0) if pd.isna(row['bonus_amount_rmb']) else number(row['bonus_amount_rmb'])
                     if cash is None or cash < 0:
                         raise ValueError('派现金额无效。')
-                    item = total.setdefault(code, dict(cash_1y=Decimal(0), cash_3y=Decimal(0), has_3y=False,
+                    item = total.setdefault(code, dict(cash_1y=Decimal(0),
                                                        annual_cash={year: Decimal(0) for year in range(day.year-3, day.year)}))
-                    if in3:
-                        item['cash_3y'] += cash
-                        item['has_3y'] = True
-                    if annual:
-                        item['annual_cash'][period.year] += cash
-                        if period.year == day.year-1:
-                            item['cash_1y'] += cash
+                    item['annual_cash'][period.year] += cash
+                    if period.year == day.year-1:
+                        item['cash_1y'] += cash
         return total
 
-    def financials(codes, day, strict_history=False):
-        result = {}
-        fields = ('inc_total_revenue_year_on_year', 'inc_net_profit_year_on_year', 'inc_return', 'statDate', 'pubDate')
-        for offset in _progress_items(range(0, len(codes), BATCH_SIZE), '财务指标批次'):
-            batch = codes[offset:offset+BATCH_SIZE]
-            q = query(indicator.code, *[getattr(indicator, f) for f in fields]).filter(indicator.code.in_(batch))
-            result.update(by_code(get_fundamentals(q, date=day), batch, fields, '财务指标', complete=False))
-        if codes and not result:
-            raise ValueError('全股票池财务指标为空，保留原快照。')
-        if strict_history and set(result) != set(codes):
-            raise ValueError('历史财务指标未完整返回，无法确认缺失股票是否应入选。')
-        for row in result.values():
-            pub = optional_date(row['pubDate'])
-            period = optional_date(row['statDate'])
-            if strict_history and (pub is None or period is None):
-                raise ValueError('历史财务指标缺少公告日期或报告期。')
-            if (pub and pub > day) or (period and period > day):
-                raise ValueError('财务指标包含未来日期。')
-        return result
+    def candidates(caps, cash):
+        # 使用未舍入的静态股息率比较；同值按代码排序。
+        yields = {code: cash.get(code, {}).get('cash_1y', Decimal(0))/100/number(cap['market_cap'])
+                  for code, cap in caps.items()}
+        codes = sorted((code for code, cap in caps.items() if number(cap['pe_ratio']) is not None
+                        and 0 < number(cap['pe_ratio']) < 12 and yields[code] > MIN_YIELD),
+                       key=lambda code: (-yields[code], code))
+        return codes, yields
 
-    def select(caps, cash, fundamentals, banks):
-        # 比较使用未舍入值；相同分红比例按代码排序，结果稳定。
-        ratios = {}
-        for code, cap in caps.items():
-            item = cash.get(code, {})
-            market_cap = number(cap['market_cap'])
-            if market_cap is None or market_cap <= 0:
-                raise ValueError('市值无效。')
-            ratios[code] = (item.get('cash_1y', Decimal(0))/100/market_cap,
-                            item.get('cash_3y', Decimal(0))/100/market_cap)
-        dividend_codes = sorted((c for c in caps if cash.get(c, {}).get('has_3y')),
-                                key=lambda c: (-ratios[c][1], c))
-        classic = []
-        for code in dividend_codes[:len(dividend_codes)//10]:
-            pe = number(caps[code]['pe_ratio'])
-            metrics = fundamentals.get(code, {})
-            revenue, profit, roe = [number(metrics.get(f)) for f in
-                                   ('inc_total_revenue_year_on_year', 'inc_net_profit_year_on_year', 'inc_return')]
-            if None not in (pe, revenue, profit, roe) and revenue > 3 and profit > 8 and roe > Decimal('4.5'):
-                if Decimal('.1') < pe/profit < 2:
-                    classic.append(code)
-        value = sorted((c for c in caps if number(caps[c]['pe_ratio']) is not None
-                        and 0 < number(caps[c]['pe_ratio']) < 8 and ratios[c][0] > MIN_YIELD),
-                       key=lambda c: (-ratios[c][0], c))
-        nonbank = [code for code in value if code not in banks]
-        bank = [code for code in value if code in banks]
-        return dict(classic=classic[:25], value=nonbank[:25], bank=bank[:10]), ratios, dict(classic=len(classic), value=len(value))
+    def select(codes, banks):
+        return dict(value=[code for code in codes if code not in banks][:25],
+                    bank=[code for code in codes if code in banks][:10])
 
     def industries_for(codes, day):
         industries, banks = {}, set()
@@ -3838,42 +2709,33 @@ def _dividend_strategy(_apis, _config):
             industries.update(result)
         return industries, banks
 
-    def calculate(day, strict_history=False):
+    def calculate(day):
         names, quotes, caps = universe(day)
         codes = sorted(caps)
         cash = dividends(codes, day)
-        fundamentals = financials(codes, day, strict_history=strict_history)
-        # 分类前保留完整低估值候选，避免先截取混合前25导致非银行漏选。
-        preliminary, ratios, counts = select(caps, cash, fundamentals, set())
-        candidates = sorted(set(preliminary['classic']) | {
-            code for code in caps if number(caps[code]['pe_ratio']) is not None
-            and 0 < number(caps[code]['pe_ratio']) < 8 and ratios[code][0] > MIN_YIELD})
-        industries, banks = industries_for(candidates, day)
-        selected, ratios, counts = select(caps, cash, fundamentals, banks)
-        _progress_note('生成纯高股息25只、非银行25只、银行10只')
+        candidates_all, yields = candidates(caps, cash)
+        # 所有候选先分类，再独立截取，避免混合排名导致非银行漏选。
+        industries, banks = industries_for(candidates_all, day)
+        selected = select(candidates_all, banks)
+        _progress_note('生成非银行25只、银行10只低估值结果')
         records = []
         for method in METHODS:
             for rank, code in enumerate(selected[method], 1):
                 info = industries.get(code) or {}
                 level = next((k for k in ('sw_l3', 'sw_l2', 'sw_l1') if info.get(k)), None)
                 industry = info.get(level, {})
-                cap, fin, payout = caps[code], fundamentals.get(code, {}), cash.get(code, {})
-                profit = number(fin.get('inc_net_profit_year_on_year'))
+                cap, payout = caps[code], cash.get(code, {})
                 pe = number(cap['pe_ratio'])
                 records.append(dict(method=method, code=code, trade_date=day, rank=rank, name=names[code],
                     industry_code=industry.get('industry_code'), industry_name=industry.get('industry_name'), industry_level=level,
-                    dividend_yield_1y=rounded(ratios[code][0]), dividend_ratio_3y=rounded(ratios[code][1]),
-                    dividend_cash_1y=rounded(payout.get('cash_1y', 0)), dividend_cash_3y=rounded(payout.get('cash_3y', 0)),
+                    dividend_yield_1y=rounded(yields[code]),
+                    dividend_cash_1y=rounded(payout.get('cash_1y', 0)),
                     dividend_yield_history=[dict(fiscal_year=year, yield_pct=float(rounded(
                         payout.get('annual_cash', {}).get(year, Decimal(0))/100/number(cap['market_cap']))))
                         for year in range(day.year-1, day.year-4, -1)],
-                    pe_ttm=rounded(pe), pb=rounded(cap['pb_ratio']), market_cap=rounded(cap['market_cap']), close=rounded(quotes[code]),
-                    revenue_growth=rounded(fin.get('inc_total_revenue_year_on_year')), profit_growth=rounded(profit),
-                    adjusted_roe=rounded(fin.get('inc_return')), peg=rounded(pe/profit) if profit and profit > 0 else None,
-                    report_period=optional_date(fin.get('statDate')), publication_date=optional_date(fin.get('pubDate'))))
+                    pe_ttm=rounded(pe), pb=rounded(cap['pb_ratio']), market_cap=rounded(cap['market_cap']), close=rounded(quotes[code])))
         meta = dict(trade_date=day, rule_version=RULE_VERSION, universe_count=len(names), eligible_count=len(caps),
-                    classic_candidates=counts['classic'], value_candidates=counts['value'],
-                    classic_count=len(selected['classic']), value_count=len(selected['value'])+len(selected['bank']))
+                    value_candidates=len(candidates_all), value_count=len(records))
         return meta, records
 
     def validate_records(meta, records):
@@ -3883,8 +2745,7 @@ def _dividend_strategy(_apis, _config):
             group = [r for r in records if r['method'] == method]
             if len(group) > LIMITS[method] or sorted(r['rank'] for r in group) != list(range(1, len(group)+1)):
                 raise ValueError('数量或排名与快照不一致。')
-        if (builtins.sum(r['method'] == 'classic' for r in records) != meta['classic_count']
-                or builtins.sum(r['method'] in ('value', 'bank') for r in records) != meta['value_count']
+        if (len(records) != meta['value_count']
                 or {r['code'] for r in records if r['method'] == 'value'} & {r['code'] for r in records if r['method'] == 'bank'}):
             raise ValueError('分组数量或银行分类与快照不一致。')
         if builtins.any(r['method'] not in METHODS or r['trade_date'] != meta['trade_date'] for r in records):
@@ -3899,13 +2760,13 @@ def _dividend_strategy(_apis, _config):
             columns = {c['name'] for c in inspect(connection).get_columns(DividendStock.__tablename__)}
             if 'dividend_yield_history' not in columns:
                 connection.execute(sql_text('ALTER TABLE dividend_selection_stock ADD COLUMN dividend_yield_history JSON NULL'))
-        _progress_note('事务更新三组最新选股结果')
+        _progress_note('事务更新两组最新选股结果')
         return _replace_latest_snapshot(Session, DividendSnapshot, DividendStock, meta, records,
                                         RESULT_COLUMNS, META_COLUMNS, 'trade_date')
 
     # Archives deliberately do not share the website's latest-only tables.
     archive = _selection_archive(_apis, _config, Base, DividendSnapshot, DividendStock, RULE_VERSION,
-        'dividend_selection_archive', 'trade_date', lambda day: calculate(day, strict_history=True), validate_records, save_latest)
+        'dividend_selection_archive', 'trade_date', calculate, validate_records, save_latest)
     ArchiveBase, SelectionArchive = archive.ArchiveBase, archive.SelectionArchive
     archive_json, validate_archive_schema = archive.archive_json, archive.validate_archive_schema
     save_archive, archive_history = archive.save_archive, archive.archive_history
@@ -3936,283 +2797,6 @@ def _dividend_strategy(_apis, _config):
                     _progress_note('选股结果未变化，未重复写入')
         with database_scope(ArchiveBase, _config) as Session:
             save_archive(Session, meta['trade_date'], 'observed', meta, records)
-        return pd.DataFrame(records, columns=RESULT_COLUMNS)
-    return SimpleNamespace(**locals())
-
-
-# ---------- 高增长 ----------
-def _growth_strategy(_apis, _config):
-    """四类累计财报，各取最新三期；归母净利润和基本 EPS 双增长。"""
-    settings = strategy_settings('高增长')
-    get_all_securities, get_trade_days, get_fundamentals, get_industry, query, valuation = [
-        _apis.get(k) for k in ('get_all_securities', 'get_trade_days', 'get_fundamentals', 'get_industry', 'query', 'valuation')]
-    BATCH_SIZE, PAGE_SIZE = settings['batch_size'], settings['page_size']
-    if BATCH_SIZE > 500 or PAGE_SIZE > 3000:
-        raise ValueError('batch_size 不得超过 500，page_size 不得超过 3000。')
-    END_DATE = settings['end_date']
-    RULE_VERSION = 'growth_cumulative_parent_eps_v1'
-    GROUPS = {'annual': (12, 31), 'q1': (3, 31), 'q2': (6, 30), 'q3': (9, 30)}
-    Base = declarative_base()
-
-    class GrowthSnapshot(Base):
-        __tablename__ = 'high_growth_snapshot'
-        __table_args__ = {'mysql_engine': 'InnoDB', 'mysql_charset': 'utf8mb4'}
-        id = Column(Integer, primary_key=True)
-        as_of_date = Column(Date, nullable=False)
-        valuation_date = Column(Date, nullable=False)
-        updated_at = Column(DateTime, nullable=False)
-        rule_version = Column(String(48), nullable=False)
-        universe_count = Column(Integer, nullable=False)
-        evaluated_count = Column(Integer, nullable=False)
-        matched_count = Column(Integer, nullable=False)
-
-
-    class GrowthStock(Base):
-        __tablename__ = 'high_growth_stock'
-        __table_args__ = (Index('ux_high_growth_rank', 'rank', unique=True),
-                          {'mysql_engine': 'InnoDB', 'mysql_charset': 'utf8mb4'})
-        code = Column(String(16), primary_key=True)
-        as_of_date = Column(Date, nullable=False)
-        rank = Column(Integer, nullable=False)
-        name = Column(String(128), nullable=False)
-        industry_code = Column(String(32), nullable=True)
-        industry_name = Column(String(128), nullable=True)
-        industry_level = Column(String(16), nullable=True)
-        pe_ttm = Column(Numeric(24, 6), nullable=True)
-        pb = Column(Numeric(24, 6), nullable=True)
-        market_cap = Column(Numeric(24, 6), nullable=True)
-        annual_profit_growth = Column(Numeric(28, 8), nullable=False)
-        reports = Column(JSON, nullable=False)
-
-    RESULT_COLUMNS = [c.name for c in GrowthStock.__table__.columns]
-    META_COLUMNS = [c.name for c in GrowthSnapshot.__table__.columns if c.name not in ('id', 'updated_at')]
-
-    number = _decimal_number
-
-    rounded = _round_decimal
-
-    rows = _checked_records
-
-    def latest_reports(source, as_of):
-        # 先选最新三期再检查质量，不可用旧的合格报表顶替最新不合格报表。
-        unique = {}
-        for raw in source:
-            period, pub = as_date(raw['report_period']), as_date(raw['publication_date'])
-            if (period.month, period.day) not in GROUPS.values() or period > as_of or pub > as_of:
-                raise ValueError('财报报告期或公告日期无效。')
-            if pub < period:
-                raise ValueError('财报公告早于报告期末。')
-            row = dict(raw, report_period=period, publication_date=pub)
-            old = unique.get(period)
-            if old is None or pub > old['publication_date']:
-                unique[period] = row
-            elif pub == old['publication_date'] and builtins.any(number(row[k]) != number(old[k]) for k in ('net_profit', 'eps')):
-                raise ValueError('相同报告期和公告日期存在冲突财务数据。')
-        selected = {}
-        for name, month_day in GROUPS.items():
-            group = sorted((r for d, r in unique.items() if (d.month, d.day) == month_day), key=lambda r: r['report_period'])[-3:]
-            if len(group) != 3:
-                return None
-            years = [r['report_period'].year for r in group]
-            if years != list(range(years[0], years[0]+3)):
-                return None  # 同比必须比较连续年份的同类报告。
-            if builtins.any(number(r[k]) is None for r in group for k in ('net_profit', 'eps')):
-                return None
-            selected[name] = group
-        return selected
-
-    def evaluate(groups):
-        if groups is None:
-            return None
-        evidence = {}
-        annual_growth = None
-        for name, group in groups.items():
-            if builtins.any(number(group[-1][key]) <= 0 for key in ('net_profit', 'eps')):
-                return None
-            output = []
-            for i, row in enumerate(group):
-                record = {key: str(row[key]) for key in ('report_period', 'publication_date')}
-                for field, target in (('net_profit', 'profit_growth'), ('eps', 'eps_growth')):
-                    value = number(row[field])
-                    record[field] = str(value)
-                    record[target] = None
-                    if i:
-                        previous = number(group[i-1][field])
-                        if previous == 0:
-                            return None
-                        # 先用原值交叉相乘判断，避免把 19.999...% 四舍五入成达标。
-                        if (value-previous)*100 < builtins.abs(previous)*20:
-                            return None
-                        rate = (value-previous)/builtins.abs(previous)*100
-                        record[target] = str(rounded(rate, 8))
-                        if name == 'annual' and i == 2 and field == 'net_profit':
-                            annual_growth = rate
-                output.append(record)
-            evidence[name] = output
-        return annual_growth, evidence
-
-    def select(all_reports, as_of):
-        chosen, evaluated = [], 0
-        for code in _progress_items(sorted(all_reports), '检查四类财报'):
-            groups = latest_reports(all_reports[code], as_of)
-            if groups is not None:
-                evaluated += 1
-                result = evaluate(groups)
-                if result is not None:
-                    chosen.append((code, result[0], result[1]))
-        chosen.sort(key=lambda item: (-item[1], item[0]))
-        return chosen, evaluated
-
-    def financial_reports(codes, as_of):
-        # 聚宽合并利润表：不使用 *_PARENT 母公司报表，也不把单季度 EPS 相加。
-        finance = _apis.get('finance')
-        if finance is None or query is None:
-            raise RuntimeError('当前环境缺少 finance/query，请在聚宽研究环境运行。')
-        table = finance.STK_INCOME_STATEMENT
-        fields = ('id', 'code', 'pub_date', 'start_date', 'end_date', 'report_date',
-                  'report_type', 'np_parent_company_owners', 'basic_eps')
-        missing = [f for f in fields if not hasattr(table, f)]
-        if missing:
-            raise ValueError('聚宽累计利润表缺少字段：{}'.format(', '.join(missing)))
-        result = {code: [] for code in codes}
-        for offset in _progress_items(range(0, len(codes), BATCH_SIZE), '累计财报批次'):
-            pending = set(codes[offset:offset+BATCH_SIZE])
-            cursor = None
-            while pending:
-                _progress_note('倒序读取累计财报：本批待完成 {} 只'.format(len(pending)))
-                q = query(*[getattr(table, f) for f in fields]).filter(
-                    table.code.in_(sorted(pending)), table.pub_date <= as_of,
-                    table.end_date <= as_of, table.report_date == table.end_date)
-                if cursor is not None:
-                    q = q.filter(or_(table.end_date < cursor[0],
-                                     and_(table.end_date == cursor[0], table.id < cursor[1])))
-                q = q.order_by(table.end_date.desc(), table.id.desc()).limit(PAGE_SIZE)
-                page = rows(finance.run_query(q), fields, '累计利润表')
-                if not page:
-                    break
-                keys = [(as_date(r['end_date']), int(r['id'])) for r in page]
-                if len(page) > PAGE_SIZE or keys != sorted(set(keys), reverse=True) or (cursor is not None and keys[0] >= cursor):
-                    raise ValueError('累计财报分页重复、乱序或超限。')
-                for raw in page:
-                    code = str(raw['code'])
-                    period, pub = as_date(raw['end_date']), as_date(raw['pub_date'])
-                    report_date, start = as_date(raw['report_date']), as_date(raw['start_date'])
-                    if code not in pending or period > as_of or pub > as_of or report_date != period:
-                        raise ValueError('累计财报返回越界股票、未来数据或比较期数据。')
-                    # 必须从当年 1 月 1 日开始，排除半年/三季报告内的单季度栏。
-                    if start != datetime.date(period.year, 1, 1) or (period.month, period.day) not in GROUPS.values():
-                        continue
-                    result[code].append(dict(report_period=period, publication_date=pub,
-                        net_profit=raw['np_parent_company_owners'], eps=raw['basic_eps']))
-                cursor = keys[-1]
-                completed = set()
-                for code in pending:
-                    values = result[code]
-                    keep = set()
-                    enough = True
-                    for month_day in GROUPS.values():
-                        periods = sorted({r['report_period'] for r in values
-                                          if (r['report_period'].month, r['report_period'].day) == month_day}, reverse=True)[:3]
-                        keep.update(periods)
-                        enough = enough and len(periods) == 3
-                    result[code] = [r for r in values if r['report_period'] in keep]
-                    # 游标越过最早所需报告期，才证明该期所有更正版本均已读取。
-                    if enough and cursor[0] < builtins.min(keep):
-                        completed.add(code)
-                pending -= completed
-                # A short server page is not proof of exhaustion; continue to an empty page.
-        return result
-
-    def calculate(as_of, valuation_day):
-        _progress_note('读取 A 股股票池')
-        frame = get_all_securities(types=['stock'], date=as_of)
-        if frame is None or frame.empty or 'display_name' not in frame.columns:
-            raise ValueError('股票池为空或缺少名称，保留原快照。')
-        names = {str(code): str(row['display_name']) for code, row in frame.iterrows()}
-        if len(names) != len(frame):
-            raise ValueError('股票代码重复。')
-        # get_all_securities(stock) 的平台 A 股范围，不额外剔除 ST、科创板、停牌或涨跌停。
-        all_reports = financial_reports(sorted(names), as_of)
-        if not builtins.any(all_reports.values()):
-            raise ValueError('全部财报为空，保留原快照。')
-        chosen, evaluated = select(all_reports, as_of)
-        if evaluated == 0:
-            raise ValueError('没有任何股票取得完整四类三期财报，检查数据权限及字段；保留原快照。')
-        codes = [item[0] for item in chosen]
-        caps, industries = {}, {}
-        for offset in _progress_items(range(0, len(codes), BATCH_SIZE), '补充估值与行业'):
-            batch = codes[offset:offset+BATCH_SIZE]
-            fields = ('code', 'pe_ratio', 'pb_ratio', 'market_cap')
-            q = query(*[getattr(valuation, f) for f in fields]).filter(valuation.code.in_(batch))
-            values = rows(get_fundamentals(q, date=valuation_day), fields, '估值')
-            for row in values:
-                code = str(row['code'])
-                if code not in batch or code in caps:
-                    raise ValueError('估值包含重复或越界股票。')
-                caps[code] = row
-            if set(batch)-set(caps):
-                raise ValueError('估值未完整返回，保留原快照。')
-            result = get_industry(batch, date=as_of)
-            if not isinstance(result, dict) or set(batch)-set(result):
-                raise ValueError('行业未完整返回，保留原快照。')
-            industries.update(result)
-        records = []
-        for rank, (code, growth, reports) in enumerate(chosen, 1):
-            info = industries.get(code) or {}
-            level = next((k for k in ('sw_l3', 'sw_l2', 'sw_l1') if info.get(k)), None)
-            industry = info.get(level, {})
-            cap = caps.get(code, {})
-            records.append(dict(code=code, as_of_date=as_of, rank=rank, name=names[code],
-                industry_code=industry.get('industry_code'), industry_name=industry.get('industry_name'), industry_level=level,
-                pe_ttm=rounded(cap.get('pe_ratio')), pb=rounded(cap.get('pb_ratio')), market_cap=rounded(cap.get('market_cap')),
-                annual_profit_growth=rounded(growth, 8), reports=reports))
-        meta = dict(as_of_date=as_of, valuation_date=valuation_day, rule_version=RULE_VERSION,
-                    universe_count=len(names), evaluated_count=evaluated, matched_count=len(records))
-        return meta, records
-
-    def validate_records(meta, records):
-        if (len({r['code'] for r in records}) != len(records) or len(records) != meta['matched_count']
-                or sorted(r['rank'] for r in records) != list(range(1, len(records)+1))
-                or builtins.any(r['as_of_date'] != meta['as_of_date'] for r in records)):
-            raise ValueError('股票重复、日期、数量或排名与快照不一致。')
-
-    def save_latest(Session, meta, records):
-        validate_records(meta, records)
-        _progress_note('事务更新最新高增长名单')
-        return _replace_latest_snapshot(Session, GrowthSnapshot, GrowthStock, meta, records,
-                                        RESULT_COLUMNS, META_COLUMNS, 'as_of_date', json_fields=('reports',))
-
-    # Archives deliberately do not share the website's latest-only tables.
-    archive = _selection_archive(_apis, _config, Base, GrowthSnapshot, GrowthStock, RULE_VERSION,
-        'high_growth_archive', 'as_of_date', lambda day: calculate(day, day), validate_records, save_latest)
-    ArchiveBase, SelectionArchive = archive.ArchiveBase, archive.SelectionArchive
-    archive_json, validate_archive_schema = archive.archive_json, archive.validate_archive_schema
-    save_archive, archive_history = archive.save_archive, archive.archive_history
-    restore_observed = archive.restore_observed
-    REVISION_LIMIT, SOURCE_URL = archive.REVISION_LIMIT, archive.SOURCE_URL
-
-    def run(end_date=END_DATE, mode='latest', **options):
-        if mode == 'history':
-            return archive_history(end_date=end_date, **options)
-        if mode == 'restore':
-            return restore_observed(**options)
-        if mode != 'latest' or options:
-            raise ValueError('mode 仅支持 latest、history、restore；latest 不接受额外参数。')
-        now = china_now()
-        as_of = as_date(end_date) if end_date is not None else now.date()
-        if as_of > now.date():
-            raise ValueError('结束日期不能晚于今天。')
-        valuation_end = _closed_day(as_of, now)
-        days = get_trade_days(end_date=valuation_end, count=1)
-        if days is None or len(days) != 1 or as_date(days[0]) > valuation_end:
-            raise ValueError('交易日历无效。')
-        # 全部采集成功后再进入写入流程，任何源接口失败都不会清空旧名单。
-        meta, records = calculate(as_of, as_date(days[0]))
-        with database_scope(Base, _config) as Session:
-            if not save_latest(Session, meta, records):
-                _progress_note('名单与指标未变化，未重复写入')
-        with database_scope(ArchiveBase, _config) as Session:
-            save_archive(Session, meta['as_of_date'], 'observed', meta, records)
         return pd.DataFrame(records, columns=RESULT_COLUMNS)
     return SimpleNamespace(**locals())
 
@@ -6073,6 +4657,9 @@ def _valuation_ruler_strategy(_apis, _config):
         for model in models:
             table = model.__table__
             cols = {c['name']: c for c in inspector.get_columns(table.name)}
+            # The retired nullable metric may remain until the operator runs DROP COLUMN.
+            if table.name == 'valuation_ruler_daily_v2' and cols.get('overall_pe_ttm', {}).get('nullable') is True:
+                cols.pop('overall_pe_ttm')
             if builtins.set(cols) != builtins.set(c.name for c in table.columns):
                 raise HistoryError('数据库字段集合不一致。')
             if inspector.get_pk_constraint(table.name)['constrained_columns'] != [c.name for c in table.primary_key]:
@@ -6143,7 +4730,6 @@ def _valuation_ruler_strategy(_apis, _config):
         index_code = Column(String(16), primary_key=True)
         method_version = Column(String(48), primary_key=True)
         index_close = Column(Numeric(24, 8), nullable=False)
-        overall_pe_ttm = Column(Numeric(30, 12))
         mean_pe_ttm = Column(Numeric(30, 12))
         median_pe_ttm = Column(Numeric(30, 12))
         overall_pe_lyr = Column(Numeric(30, 12))
@@ -6188,27 +4774,29 @@ def _valuation_ruler_strategy(_apis, _config):
         return number(value, 30, 12, field, round_source=True)
 
     def aggregate(members, field):
-        """Separate samples for each PE basis; never apply the 300 cap to overall PE."""
+        """Equal-weight and median for both bases; overall PE is static only."""
         active = [row for row in members if row['suspended_listing'] is not True]
         values = [Decimal(row[field]) for row in active if row[field] is not None]
         selected = builtins.sorted(value for value in values if 0 < value <= 300)
-        valid = [row for row in active if row[field] is not None and row['market_cap'] is not None]
         counts = dict(eligible=builtins.len(selected), loss=builtins.sum(v < 0 for v in values),
                       over_limit=builtins.sum(v > 300 for v in values), missing_pe=builtins.len(active)-builtins.len(values),
                       suspended_listing=builtins.len(members)-builtins.len(active),
-                      listing_status_unverified=builtins.sum(row['suspended_listing'] is None for row in members),
-                      overall_valid=builtins.len(valid), overall_missing=builtins.len(active)-builtins.len(valid))
+                      listing_status_unverified=builtins.sum(row['suspended_listing'] is None for row in members))
         with localcontext() as ctx:
             ctx.prec = 80
             mean = derived(builtins.sum(selected, Decimal(0))/builtins.len(selected), 12) if selected else None
             middle = builtins.len(selected)//2
             median = (selected[middle] if builtins.len(selected)%2 else
                       derived((selected[middle-1]+selected[middle])/2, 12)) if selected else None
-            cap = builtins.sum((Decimal(r['market_cap']) for r in valid), Decimal(0))
-            profit = builtins.sum((Decimal(r['market_cap'])/Decimal(r[field]) for r in valid), Decimal(0))
-            # Missing/zero-profit PE must not produce a misleading whole-index ratio.
-            overall = derived(cap/profit, 12) if valid and builtins.len(valid) == builtins.len(active) and profit > 0 else None
-            counts.update(market_cap_yi=format(cap, 'f'), implied_profit_yi=format(derived(profit, 12), 'f'))
+            overall = None
+            if field == 'pe_lyr':
+                valid = [row for row in active if row[field] is not None and row['market_cap'] is not None]
+                counts.update(overall_valid=builtins.len(valid), overall_missing=builtins.len(active)-builtins.len(valid))
+                cap = builtins.sum((Decimal(r['market_cap']) for r in valid), Decimal(0))
+                profit = builtins.sum((Decimal(r['market_cap'])/Decimal(r[field]) for r in valid), Decimal(0))
+                # Missing/zero-profit PE must not produce a misleading whole-index ratio.
+                overall = derived(cap/profit, 12) if valid and builtins.len(valid) == builtins.len(active) and profit > 0 else None
+                counts.update(market_cap_yi=format(cap, 'f'), implied_profit_yi=format(derived(profit, 12), 'f'))
         return overall, mean, median, counts
 
     def summarize(day, close, members, index_code=INDEX, source=SOURCE):
@@ -6245,7 +4833,8 @@ def _valuation_ruler_strategy(_apis, _config):
         for basis in ('ttm', 'lyr'):
             overall, mean, median, stats[basis] = aggregate(checked, 'pe_'+basis)
             for metric, value in (('overall', overall), ('mean', mean), ('median', median)):
-                daily[metric+'_pe_'+basis] = None if value is None else number(value, 30, 12)
+                if metric != 'overall' or basis == 'lyr':
+                    daily[metric+'_pe_'+basis] = None if value is None else number(value, 30, 12)
         payload = json_text(checked)
         daily.update(statistics=json_text(stats), members_sha256=hashlib.sha256(payload.encode('utf-8')).hexdigest())
         return daily, dict(key, payload=payload)
@@ -6299,6 +4888,13 @@ def _valuation_ruler_strategy(_apis, _config):
                    for code in codes]
         return summarize(day, close, members, index_code)
 
+    def normalized_statistics(value):
+        """Compare retained statistics without requiring historical rewrites."""
+        result = json.loads(value)
+        for key in ('overall_valid', 'overall_missing', 'market_cap_yi', 'implied_profit_yi'):
+            result['ttm'].pop(key, None)
+        return result
+
     def existing_day(session, day, index_code=INDEX):
         key = dict(trade_date=day, index_code=index_code, method_version=METHOD)
         daily = session.query(ValuationDaily).filter_by(**key).one_or_none()
@@ -6312,7 +4908,7 @@ def _valuation_ruler_strategy(_apis, _config):
         if daily.source not in (SOURCE, PUBLIC_SOURCE) or raw.source != daily.source:
             raise HistoryError('已有记录来源不匹配。')
         computed, archive = summarize(day, daily.index_close, json.loads(raw.payload), index_code, source=daily.source)
-        if (archive['payload'] != raw.payload or builtins.any(builtins.getattr(daily, k) != v
+        if (archive['payload'] != raw.payload or builtins.any((normalized_statistics(daily.statistics) != normalized_statistics(v) if k == 'statistics' else builtins.getattr(daily, k) != v)
                 for k, v in computed.items() if k != 'updated_at')):
             raise HistoryError('已有汇总、指纹与成分原值不一致；不会覆盖。')
         return True
@@ -6332,7 +4928,7 @@ def _valuation_ruler_strategy(_apis, _config):
                     session.add(ValuationMember(**raw))
                 else:
                     old = session.query(ValuationDaily).filter_by(trade_date=day, index_code=code, method_version=METHOD).one()
-                    if old.source != PUBLIC_SOURCE and builtins.any(builtins.getattr(old, k) != v for k, v in daily.items() if k != 'updated_at'):
+                    if old.source != PUBLIC_SOURCE and builtins.any((normalized_statistics(old.statistics) != normalized_statistics(v) if k == 'statistics' else builtins.getattr(old, k) != v) for k, v in daily.items() if k != 'updated_at'):
                         raise HistoryError('并发已有结果冲突，本次事务取消。')
                 session.commit()
                 return builtins.int(added)
@@ -6362,7 +4958,7 @@ def _valuation_ruler_strategy(_apis, _config):
             raise HistoryError('indices须为不重复的受支持指数代码列表。')
         if as_date(start_date) < dt.date(2010, 1, 1):
             raise HistoryError('起点不得早于2010年。')
-        builtins.print('估值采集v2：静态/滚动整体PE、等权PE及中位数；等权/中位数仅取0<PE≤300。')
+        builtins.print('估值采集v2：静态整体PE、静态/滚动等权PE及中位数；等权/中位数仅取0<PE≤300。')
         engine = Session = None
         current_day, stage = None, '读取交易日历'
         progress = Progress()
@@ -7080,14 +5676,10 @@ STRATEGY_SPECS = {
         ('trade_date', 'top_pct', 'ratio', 'top_money', 'total_money')),
     '微盘温度计': (_microcap_strategy, 'append',
         ('trade_date', 'score', 'micro_index', 'sample_count')),
-    '净利润断层': (_earnings_strategy, 'append',
-        ('report_period', 'code', 'name', 'industry_name', 'signal_date', 'profit_yoy')),
     '微盘新高新低': (_breadth_strategy, 'append',
         ('trade_date', 'sample_count', 'high_5', 'low_5', 'high_30', 'low_30')),
     '高股息选股': (_dividend_strategy, 'latest',
-        ('method', 'rank', 'code', 'name', 'dividend_yield_1y', 'dividend_ratio_3y', 'pe_ttm')),
-    '高增长': (_growth_strategy, 'latest',
-        ('rank', 'code', 'name', 'industry_name', 'annual_profit_growth', 'pe_ttm', 'pb')),
+        ('method', 'rank', 'code', 'name', 'dividend_yield_1y', 'pe_ttm')),
     'ETF动量热度': (_etf_heat_strategy, 'append',
         ('trade_date', 'code', 'name', 'score', 'annual_return', 'r2')),
 }
@@ -7148,7 +5740,7 @@ def _safe_error(exc, config):
 
 def run_all(strategy_names=None, options=None, db_config=None, preview_rows=None,
             raise_on_failure=True, api_namespace=None):
-    """依次调用文件内策略；高股息/高增长替换最新结果，机构持仓更新变化，其余只新增；控制台展示进度及结果，失败后继续，最后统一报告。"""
+    """依次调用文件内策略；高股息替换最新结果，机构持仓更新变化，其余只新增；控制台展示进度及结果，失败后继续，最后统一报告。"""
     names = list(STRATEGY_ORDER if strategy_names is None else strategy_names)
     config = dict(DB_CONFIG if db_config is None else db_config)
     options = dict(STRATEGY_OPTIONS if options is None else options)
@@ -7241,7 +5833,7 @@ def run_all(strategy_names=None, options=None, db_config=None, preview_rows=None
             else:
                 print('\n【{}】失败：{}；已提交部分保留，继续后续策略。'.format(name, row['error']))
             del result
-        print('\n采集结果汇总\n策略 | 结果 | 条数（高股息/高增长/奶牛股为当前结果，机构持仓为新增或更新，其余为新增） | 耗时（秒）')
+        print('\n采集结果汇总\n策略 | 结果 | 条数（高股息/奶牛股为当前结果，机构持仓为新增或更新，其余为新增） | 耗时（秒）')
         for row in summary:
             print('{} | {} | {} | {:.2f}'.format(row['strategy'], row['status'],
                   row['rows'] if row['rows'] is not None else '未完成', row['elapsed_seconds']))
