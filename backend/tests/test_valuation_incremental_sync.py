@@ -156,6 +156,8 @@ def test_many_pending_days_use_bounded_date_batches(context, engine):
             added += 1
     reads.clear()
     assert not sync(cache)['error']
-    assert len(reads) == 2
+    assert len(reads) == 17  # 15 bounded pages + EOF for 50 days, then the last day.
     assert len(reads[0][1]) == 52  # 50 dates + LIMIT/OFFSET on SQLite.
-    assert len(reads[1][1]) == 3
+    assert len(reads[-1][1]) == 3
+    assert all(parameters[-2] <= imp.CHUNK_SIZE for _, parameters in reads)
+    assert all(str(DAY) not in parameters for _, parameters in reads)

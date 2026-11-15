@@ -3,13 +3,18 @@ from contextlib import contextmanager
 from datetime import date, datetime
 import hashlib
 import json
+import logging
 from pathlib import Path
 import sqlite3
 import tempfile
 import time
 
-from sqlalchemy import Column, Date, DateTime, Integer, MetaData, Numeric, String, Table, inspect, select
+from sqlalchemy import Column, Date, DateTime, Integer, LargeBinary, MetaData, Numeric, String, Table, cast, func, inspect, select
+from sqlalchemy.dialects.mysql import CHAR
+from app.core.cache_errors import SnapshotDataError
+from app.core.cache_sync import after_key
 from app.core.database import build_engine
+from app.core.mysql_payload import decompress_json
 from app.services.valuation_ruler_model import ValuationError, ValuationConflict, validate_day
 
 METHOD = 'csi300_equal_positive_pe_ttm_v1'
@@ -17,10 +22,12 @@ INDEX = '000300.XSHG'
 SOURCE = 'JQ_PLATFORM.PE_TTM.V1'
 CALENDAR_SOURCE = 'JQDATA.GET_TRADE_DAYS'
 CHUNK_SIZE = 1000
+PACKED_DAYS = 50
 MAX_DAYS = 20000
 MAX_MEMBERS = MAX_DAYS * 300
 MAX_SECONDS = 1800
 metadata = MetaData()
+logger = logging.getLogger(__name__)
 
 
 def _keys():
@@ -79,24 +86,95 @@ def check_schema(connection):
                 raise ImportError(table.name + ' 必须使用 InnoDB 一致快照。')
 
 
-def _rows(connection, table, limit, check, days=None):
-    statement = select(table).order_by(*table.primary_key.columns).limit(limit + 1)
-    if days is not None:
-        statement = statement.where(table.c.trade_date.in_(days))
-    result = connection.execution_options(stream_results=True, max_row_buffer=CHUNK_SIZE).execute(statement).mappings()
-    count = 0
+def _read_page(connection, statement, size, check):
+    check()
+    result = connection.execution_options(stream_results=False).execute(statement.limit(size)).mappings()
     try:
-        while True:
-            check()
-            chunk = result.fetchmany(CHUNK_SIZE)
-            if not chunk:
-                return
-            count += len(chunk)
-            if count > limit:
-                raise ImportError('估值标尺源数据超出安全导入上限，未发布。')
-            yield from chunk
+        chunk = result.fetchmany(size)
     finally:
         result.close()
+    check()
+    return chunk
+
+
+def _pages(connection, statement, keys, limit, size, check):
+    """Close each bounded, buffered query before validation or cancellation.
+
+    Closing a MySQL streaming cursor drains its unread rows, even on timeout.
+    Keyset pages avoid draining the entire history when a job stops.
+    """
+    count, last = 0, None
+    while True:
+        page_size = min(size, limit - count + 1)
+        query = statement.order_by(*keys)
+        if last is not None:
+            query = query.where(after_key(keys, last))
+        chunk = _read_page(connection, query, page_size, check)
+        count += len(chunk)
+        if count > limit:
+            raise ImportError('估值标尺源数据超出安全导入上限，未发布。')
+        if chunk:
+            yield chunk
+        if len(chunk) < page_size:
+            return
+        last = tuple(chunk[-1][key.name] for key in keys)
+
+
+def _rows(connection, table, limit, check, days=None):
+    statement = select(table)
+    if days is not None:
+        statement = statement.where(table.c.trade_date.in_(days))
+    for chunk in _pages(connection, statement, list(table.primary_key), limit, CHUNK_SIZE, check):
+        yield from chunk
+
+
+def _member_rows(connection, check, days=None):
+    """Pack one day's members on MySQL; retain exact PE text and all identities."""
+    dialect = connection.dialect
+    version = getattr(dialect, 'server_version_info', None) or ()
+    # JSON_ARRAYAGG is available from MySQL 5.7.22. MariaDB's aggregation has
+    # different length limits; older/other servers use bounded ordinary rows.
+    compressed = dialect.name == 'mysql' and not getattr(dialect, 'is_mariadb', False) and version >= (5, 7, 22)
+    logger.info('Valuation member transfer compressed=%s page_size=%s', compressed, PACKED_DAYS if compressed else CHUNK_SIZE)
+    if not compressed:
+        yield from _rows(connection, MEMBER, MAX_MEMBERS, check, days)
+        return
+    c = MEMBER.c
+    packed = func.json_arrayagg(func.json_array(
+        c.index_code, c.method_version, c.code, cast(c.pe_ttm, CHAR()),
+        c.source, cast(c.updated_at, CHAR())))
+    statement = select(c.trade_date, func.count().label('members'),
+                       func.compress(packed, type_=LargeBinary).label('payload')).group_by(c.trade_date).order_by(c.trade_date)
+    dates = select(c.trade_date).distinct()
+    if days is not None:
+        dates = dates.where(c.trade_date.in_(days))
+    count = 0
+    for page in _pages(connection, dates, [c.trade_date], MAX_DAYS, PACKED_DAYS, check):
+        # Bound the input date range as well as the output: the server never
+        # needs to aggregate the entire history before applying LIMIT.
+        query = statement.where(c.trade_date.in_([r['trade_date'] for r in page]))
+        batch = _read_page(connection, query, len(page), check)
+        if len(batch) != len(page):
+            raise ImportError('估值标尺压缩明细日期缺失，未发布。')
+        for row in batch:
+            check()
+            count += row['members']
+            if row['members'] != 300 or count > MAX_MEMBERS:
+                raise ImportError('估值标尺成分股数量异常或超过安全导入上限，未发布。')
+            try:
+                values = json.loads(decompress_json(row['payload']))
+                if not isinstance(values, list) or len(values) != row['members']:
+                    raise ValueError()
+                for value in values:
+                    if not isinstance(value, list) or len(value) != 6:
+                        raise ValueError()
+                    index, method, code, pe, source, stamp = value
+                    if pe is not None and not isinstance(pe, str):
+                        raise ValueError()
+                    yield dict(trade_date=row['trade_date'], index_code=index, method_version=method,
+                               code=code, pe_ttm=pe, source=source, updated_at=datetime.fromisoformat(stamp))
+            except (SnapshotDataError, ValueError, TypeError):
+                raise ImportError('估值标尺压缩明细校验失败，未发布。') from None
 
 
 def _identity(row, cutoff, calendar=False):
@@ -200,7 +278,7 @@ def read_source(engine, cutoff, check_cancel, *, stage_dir=None, receipts=None, 
                     # Incremental queries use the primary-key date prefix, at most 50 days each.
                     batches = [None] if not receipts else [needed[i:i+50] for i in range(0, len(needed), 50)]
                     for batch in batches:
-                        for row in _rows(connection, MEMBER, MAX_MEMBERS, check, days=batch):
+                        for row in _member_rows(connection, check, days=batch):
                             day = _identity(row, cutoff)
                             if day != current:
                                 finish()

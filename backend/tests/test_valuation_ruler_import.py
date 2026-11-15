@@ -1,11 +1,15 @@
-"""Fake MySQL streaming fixture; no network or historical evidence fabrication."""
+"""Bounded MySQL reads and compressed transport; no external database required."""
 from datetime import date, datetime
 from decimal import Decimal
 import json
+import struct
 from types import SimpleNamespace
+import zlib
 
 import pytest
 from sqlalchemy import Numeric, String
+from sqlalchemy.sql import operators
+from sqlalchemy.sql.elements import BindParameter, BooleanClauseList, Grouping
 from app.services import valuation_ruler_import as imp
 from app.services.valuation_ruler_model import ValuationError, validate_day
 
@@ -21,7 +25,6 @@ class Result:
         return self
 
     def fetchmany(self, size):
-        assert size == imp.CHUNK_SIZE
         self.owner.fetches += 1
         rows = []
         for _ in range(size):
@@ -57,11 +60,10 @@ class Inspector:
 
 
 class Engine:
-    dialect = SimpleNamespace(name='mysql')
-
-    def __init__(self, rows):
+    def __init__(self, rows, packed=False):
+        self.dialect = SimpleNamespace(name='mysql', server_version_info=(8, 0, 36) if packed else (5, 7, 21))
         self.rows = rows
-        self.sql, self.options, self.results = [], [], []
+        self.sql, self.options, self.results, self.statements = [], [], [], []
         self.fetches, self.disposed = 0, False
 
     def __enter__(self):
@@ -84,7 +86,18 @@ class Engine:
         self.sql.append(statement)
 
     def execute(self, statement):
-        result = Result(self.rows[statement.get_final_froms()[0].name], self)
+        self.statements.append(statement)
+        table = statement.get_final_froms()[0]
+        rows = self.rows[table.name]
+        if statement.whereclause is not None:
+            rows = [r for r in rows if matches(statement.whereclause, r)]
+        rows = sorted(rows, key=lambda r: tuple(r[c.name] for c in table.primary_key))
+        if 'json_arrayagg' in str(statement):
+            days = sorted({r['trade_date'] for r in rows})
+            rows = [pack_day(day, [r for r in rows if r['trade_date'] == day]) for day in days]
+        elif statement._distinct:
+            rows = [dict(trade_date=day) for day in sorted({r['trade_date'] for r in rows})]
+        result = Result(rows[:statement._limit_clause.value], self)
         self.results.append(result)
         return result
 
@@ -92,8 +105,31 @@ class Engine:
         self.disposed = True
 
 
-@pytest.fixture
-def source(monkeypatch):
+def matches(expr, row):
+    if isinstance(expr, BindParameter):
+        return expr.value
+    if isinstance(expr, Grouping):
+        return matches(expr.element, row)
+    if isinstance(expr, BooleanClauseList):
+        values = [matches(c, row) for c in expr.clauses]
+        return all(values) if expr.operator is operators.and_ else any(values)
+    if hasattr(expr, 'left'):
+        left, right = matches(expr.left, row), matches(expr.right, row)
+        return left in right if expr.operator is operators.in_op else expr.operator(left, right)
+    return row[expr.name]
+
+
+def pack_day(day, rows):
+    # MySQL casts DECIMAL to text before JSON encoding, preserving null and scale.
+    values = [[r['index_code'], r['method_version'], r['code'],
+               None if r['pe_ttm'] is None else str(r['pe_ttm']), r['source'],
+               None if r['updated_at'] is None else str(r['updated_at'])] for r in reversed(rows)]
+    raw = json.dumps(values).encode()
+    return dict(trade_date=day, members=len(rows), payload=struct.pack('<I', len(raw)) + zlib.compress(raw))
+
+
+@pytest.fixture(params=[False, True], ids=['legacy-rows', 'mysql-packed'])
+def source(monkeypatch, request):
     members = {f'{i:06d}.XSHE': Decimal('12.25') if i else Decimal('-3.1') for i in range(300)}
     daily = validate_day(DAY,'4000',members,imp.SOURCE)
     daily.update(trade_date=DAY,updated_at=STAMP)
@@ -102,10 +138,10 @@ def source(monkeypatch):
                 pe_ttm=pe,source=imp.SOURCE,updated_at=STAMP) for code,pe in members.items()]}
     inspector = Inspector()
     monkeypatch.setattr(imp,'inspect',lambda connection:inspector)
-    return Engine(rows), inspector
+    return Engine(rows, packed=request.param), inspector
 
 
-def test_streamed_readonly_staging_cleanup(source,tmp_path):
+def test_buffered_readonly_staging_cleanup(source,tmp_path):
     engine,_ = source
     with imp.read_source(engine,DAY,lambda:None,stage_dir=tmp_path) as staged:
         points = list(staged.points())
@@ -118,6 +154,7 @@ def test_streamed_readonly_staging_cleanup(source,tmp_path):
     assert engine.sql == ['SET TRANSACTION READ ONLY','START TRANSACTION WITH CONSISTENT SNAPSHOT']
     assert {'isolation_level':'REPEATABLE READ'} in engine.options
     assert all(r.closed for r in engine.results)
+    assert all(o.get('stream_results') is not True for o in engine.options)
 
 
 @pytest.mark.parametrize('field,value', [('mean_pe_ttm','99'),('pe_sum','99'),('members_sha256','0'*64),
@@ -141,7 +178,8 @@ def test_unknown_pe_rejected(source,value):
             pytest.fail('Invalid PE exposed')
 
 
-@pytest.mark.parametrize('corruption',['duplicate','missing','all_missing','orphan','source','code','calendar'])
+@pytest.mark.parametrize('corruption',['duplicate','missing','all_missing','orphan','source','code','calendar',
+                                       'index_code','method_version','updated_at'])
 def test_invalid_members_calendar(source,corruption):
     engine,_ = source
     rows = engine.rows[imp.MEMBER.name]
@@ -157,6 +195,8 @@ def test_invalid_members_calendar(source,corruption):
         rows[0]['source'] = 'other'
     elif corruption == 'code':
         rows[0]['code'] = '600000.XSHE'
+    elif corruption in ('index_code', 'method_version', 'updated_at'):
+        rows[0][corruption] = None if corruption == 'updated_at' else 'wrong'
     else:
         engine.rows[imp.CALENDAR.name].clear()
     with pytest.raises(ValueError):
@@ -224,10 +264,124 @@ def test_cancel_cleans_staging(source,tmp_path):
 
 def test_split_chunks_keep_day_boundaries(source,monkeypatch):
     engine,_ = source
+    engine.dialect.server_version_info = (5, 7, 21)
     monkeypatch.setattr(imp,'CHUNK_SIZE',77)
     with imp.read_source(engine,DAY,lambda:None) as staged:
         assert len(list(staged.points())[0][1]) == 300
-    assert engine.fetches >= 9
+    assert engine.fetches == 6  # Calendar, summary and four primary-key pages.
+    assert all(s._limit_clause.value <= 77 for s in engine.statements)
+
+
+@pytest.mark.parametrize('reason', ['cancel', 'timeout'])
+def test_stop_after_first_page_has_no_open_result_or_followup_read(source, monkeypatch, reason):
+    engine, _ = source
+    engine.dialect.server_version_info = (5, 7, 21)
+    monkeypatch.setattr(imp, 'CHUNK_SIZE', 77)
+    rows = imp._rows(engine, imp.MEMBER, imp.MAX_MEMBERS, lambda: None)
+    next(rows)
+    assert engine.results[-1].closed
+    assert len(engine.statements) == 1
+    rows.close()
+
+    # Cancellation/deadline checks immediately after a bounded read must also
+    # see an already closed cursor, without fetching a second page.
+    engine.statements.clear()
+    engine.results.clear()
+    error = RuntimeError('cancel') if reason == 'cancel' else imp.ImportError('timeout')
+    def stop():
+        if engine.results:
+            assert all(r.closed for r in engine.results)
+            raise error
+    with pytest.raises(type(error), match=str(error)):
+        list(imp._rows(engine, imp.MEMBER, imp.MAX_MEMBERS, stop))
+    assert len(engine.statements) == 1
+
+
+def test_packed_pe_precision_and_null_preserved(source):
+    engine, _ = source
+    rows = engine.rows[imp.MEMBER.name]
+    rows[0]['pe_ttm'] = None
+    rows[1]['pe_ttm'] = Decimal('12345678901234567.123456789012')
+    values = {r['code']: r['pe_ttm'] for r in rows}
+    daily = validate_day(DAY, '4000', values, imp.SOURCE)
+    daily.update(trade_date=DAY, updated_at=STAMP)
+    engine.rows[imp.DAILY.name] = [daily]
+    with imp.read_source(engine, DAY, lambda: None) as staged:
+        point, members = list(staged.points())[0]
+        assert members[rows[0]['code']] is None
+        assert members[rows[1]['code']] == '12345678901234567.123456789012'
+        assert point['missing_pe_count'] == 1
+
+
+@pytest.mark.parametrize('kind', ['corrupt', 'null', 'count', 'shape', 'timestamp'])
+def test_bad_packed_packet_fails_closed(source, monkeypatch, tmp_path, kind):
+    engine, _ = source
+    engine.dialect.server_version_info = (8, 0, 36)
+    original = pack_day
+    def damaged(day, rows):
+        packet = original(day, rows)
+        if kind == 'corrupt':
+            packet['payload'] = b'not a zlib packet'
+        elif kind == 'null':
+            packet['payload'] = None
+        elif kind == 'count':
+            packet['members'] = 301
+        else:
+            values = json.loads(imp.decompress_json(packet['payload']))
+            if kind == 'shape':
+                values[0].pop()
+            else:
+                values[0][-1] = None
+            raw = json.dumps(values).encode()
+            packet['payload'] = struct.pack('<I', len(raw)) + zlib.compress(raw)
+        return packet
+    monkeypatch.setattr(__import__(__name__), 'pack_day', damaged)
+    with pytest.raises(imp.ImportError):
+        with imp.read_source(engine, DAY, lambda: None, stage_dir=tmp_path):
+            pytest.fail('Damaged compressed history exposed')
+    assert all(r.closed for r in engine.results)
+    assert not list(tmp_path.iterdir())
+
+
+def test_compressed_pages_use_date_index_and_keep_source_identity(source, monkeypatch):
+    from datetime import timedelta
+    from sqlalchemy.dialects import mysql
+    engine, _ = source
+    engine.dialect.server_version_info = (8, 0, 36)
+    monkeypatch.setattr(imp, 'PACKED_DAYS', 2)
+    rows = engine.rows[imp.MEMBER.name]
+    engine.rows[imp.MEMBER.name] = [dict(r, trade_date=DAY + timedelta(days=i)) for i in range(3) for r in rows]
+    restored = list(imp._member_rows(engine, lambda: None))
+    assert len(restored) == 900
+    assert {r['trade_date'] for r in restored} == {DAY + timedelta(days=i) for i in range(3)}
+    assert len(engine.statements) == 4
+    date_sql = str(engine.statements[2].compile(dialect=mysql.dialect()))
+    assert 'WHERE valuation_ruler_member.trade_date >' in date_sql
+    sql = str(engine.statements[3].compile(dialect=mysql.dialect()))
+    assert 'WHERE valuation_ruler_member.trade_date IN' in sql
+    assert 'GROUP BY valuation_ruler_member.trade_date ORDER BY valuation_ruler_member.trade_date' in sql
+    assert 'CAST(valuation_ruler_member.pe_ttm AS CHAR)' in sql
+    assert 'compress(json_arrayagg(json_array(' in sql
+    assert all(s._limit_clause.value <= 2 for s in engine.statements)
+    assert all(r.closed for r in engine.results)
+    engine.statements.clear()
+    selected = DAY + timedelta(days=2)
+    assert {r['trade_date'] for r in imp._member_rows(engine, lambda: None, [selected])} == {selected}
+    assert len(engine.statements) == 2
+
+
+def test_network_failure_is_not_retried_as_uncompressed(source, monkeypatch):
+    from sqlalchemy.exc import OperationalError
+    engine, _ = source
+    engine.dialect.server_version_info = (8, 0, 36)
+    attempts = []
+    def disconnect(statement):
+        attempts.append(statement)
+        raise OperationalError('query', {}, RuntimeError(2013))
+    monkeypatch.setattr(engine, 'execute', disconnect)
+    with pytest.raises(OperationalError):
+        list(imp._member_rows(engine, lambda: None))
+    assert len(attempts) == 1
 
 
 def test_future_date_rejected(source):
