@@ -24,9 +24,23 @@ def test_default_is_global_database_and_daily_schedules(tmp_path):
     value = config.public()
     assert value['database']['password_set'] and 'password' not in value['database']
     assert value['schedules']['market']['times'] == ['00:01']
+    assert value['schedules']['valuation_ruler']['times'] == ['18:30']
     assert value['schedules']['holdings']['start'] == '09:25'
     assert value['schedules']['holdings']['interval_seconds'] == 15
     assert not config.path.exists()
+
+
+def test_valuation_migrates_old_default_once_and_preserves_explicit_times(tmp_path):
+    config = service(tmp_path)
+    old = config.default()
+    old['schedules']['valuation_ruler']['times'] = ['20:00']
+    old.pop('valuation_schedule_v2', None)
+    config._persist(old, config.cipher())
+    assert config.load()['schedules']['valuation_ruler']['times'] == ['18:30']
+    body = form(config)
+    body['schedules']['valuation_ruler']['times'] = ['20:00']
+    config.save(body)
+    assert config.load()['schedules']['valuation_ruler']['times'] == ['20:00']
 
 def test_save_encrypted_revisions_and_pin(tmp_path):
     config = service(tmp_path)

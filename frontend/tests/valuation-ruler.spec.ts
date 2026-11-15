@@ -49,7 +49,7 @@ const idle: ValuationStatus = {
   error: null,
   completed_days: 1,
   failed_days: 0,
-  schedule: '20:00 Asia/Shanghai',
+  schedule: '18:30 Asia/Shanghai',
   source_configured: true,
   automatic: false,
   recent_failures: [],
@@ -63,12 +63,12 @@ const idle: ValuationStatus = {
   last_success_at: null,
 }
 
-test('v2 switches indices and static/rolling metrics without showing old collection actions', async ({
+test('v2 switches indices and static/rolling metrics and keeps automatic collection available', async ({
   page,
 }) => {
   await page.route('**/api/v1/valuation-ruler/**', (route) => {
     const url = new URL(route.request().url())
-    if (url.pathname.endsWith('/status')) return route.fulfill({ json: idle })
+    if (url.pathname.endsWith('/status')) return route.fulfill({ json: { ...idle, automatic: true } })
     const code = url.searchParams.get('index_code') ?? '000300.XSHG'
     const basis = url.searchParams.get('basis') ?? 'ttm'
     const names: Record<string, string> = {
@@ -98,7 +98,8 @@ test('v2 switches indices and static/rolling metrics without showing old collect
   await expect(statisticValue(page, '静态等权PE')).toHaveText('20.00倍')
   await page.getByRole('combobox', { name: '估值指数' }).selectOption('000852.XSHG')
   await expect(statisticValue(page, '中证1000指数')).toBeVisible()
-  await expect(page.getByRole('button', { name: '采集并补数据' })).toHaveCount(0)
+  await expect(page.getByRole('button', { name: '采集并补数据' })).toBeVisible()
+  await expect(page.getByText('东方财富 · 每天北京时间 18:30 更新')).toBeVisible()
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
 })
 

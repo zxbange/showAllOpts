@@ -6038,6 +6038,7 @@ def _valuation_ruler_strategy(_apis, _config):
     INDICES = ('000300.XSHG', '000016.XSHG', '000852.XSHG')
     METHOD = 'index_pe_lyr_ttm_cap300_v2'
     SOURCE = 'JQ_PLATFORM.VALUATION.V2'
+    PUBLIC_SOURCE = 'EASTMONEY.VALUATION.V2'
     CALENDAR_SOURCE = 'JQDATA.GET_TRADE_DAYS'
 
     class ValuationDaily(Base):
@@ -6115,7 +6116,9 @@ def _valuation_ruler_strategy(_apis, _config):
             counts.update(market_cap_yi=format(cap, 'f'), implied_profit_yi=format(derived(profit, 12), 'f'))
         return overall, mean, median, counts
 
-    def summarize(day, close, members, index_code=INDEX):
+    def summarize(day, close, members, index_code=INDEX, source=SOURCE):
+        if source not in (SOURCE, PUBLIC_SOURCE):
+            raise HistoryError('估值来源无效。')
         if index_code not in INDEXES:
             raise HistoryError('指数不在支持范围。')
         name, expected, _ = INDEXES[index_code]
@@ -6140,9 +6143,9 @@ def _valuation_ruler_strategy(_apis, _config):
                         raise HistoryError('{} {}：零值或负市值无效。'.format(row['code'], field))
                 item[field] = None if value is None else format(value, '.12f')
             checked.append(item)
-        key = dict(trade_date=day, index_code=index_code, method_version=METHOD, source=SOURCE, updated_at=china_now())
+        key = dict(trade_date=day, index_code=index_code, method_version=METHOD, source=source, updated_at=china_now())
         daily = dict(key, index_close=close, member_count=expected)
-        stats = dict(listing_status_basis='historical_index_members', profit_basis='market_cap_divided_by_pe',
+        stats = dict(listing_status_basis=('historical_index_members' if source == SOURCE else 'eastmoney_current_members'), profit_basis='market_cap_divided_by_pe',
                      market_cap_unit='亿元', ordinary_trading_suspension_excluded=False)
         for basis in ('ttm', 'lyr'):
             overall, mean, median, stats[basis] = aggregate(checked, 'pe_'+basis)
@@ -6162,21 +6165,47 @@ def _valuation_ruler_strategy(_apis, _config):
         fields = ('code', 'day', 'pe_ratio', 'pe_ratio_lyr', 'market_cap')
         if not builtins.all(builtins.hasattr(v, field) for field in fields):
             raise HistoryError('聚宽valuation缺少静态PE或总市值字段，拒绝用TTM代替。')
-        q = api('query')(*[builtins.getattr(v, field) for field in fields]).filter(v.code.in_(codes))
-        frame = api('get_fundamentals')(q, date=day)
-        if (frame is None or not builtins.set(fields).issubset(frame.columns)
-                or builtins.len(frame) != expected or builtins.set(frame['code']) != builtins.set(codes)
-                or builtins.any(as_date(d) != day for d in frame['day'])):
-            raise HistoryError('当日估值缺失、重复或日期不匹配。')
+        records = {}
+        for offset in builtins.range(0, expected, 200):
+            batch = codes[offset:offset+200]
+            q = api('query')(*[builtins.getattr(v, field) for field in fields]).filter(v.code.in_(batch))
+            frame = api('get_fundamentals')(q, date=day)
+            if frame is None or not builtins.set(fields).issubset(frame.columns):
+                raise HistoryError('{} {}：估值响应缺少字段。'.format(index_code, day))
+            for row in frame.to_dict('records'):
+                code = row['code']
+                if code not in batch or code in records:
+                    raise HistoryError('{} {}：估值代码越界或重复：{}。'.format(index_code, day, code))
+                if as_date(row['day']) != day:
+                    raise HistoryError('{} {}：{} 估值日期实际为 {}。'.format(index_code, day, code, row['day']))
+                records[code] = row
+        if not records:
+            raise HistoryError('{} {}：全部成分均无估值记录，拒绝写入空结果。'.format(index_code, day))
+        missing = [code for code in codes if code not in records]
+        # Verify an absent row individually; a truncated batch must not become a false NULL.
+        for code in missing:
+            q = api('query')(*[builtins.getattr(v, field) for field in fields]).filter(v.code.in_([code]))
+            frame = api('get_fundamentals')(q, date=day)
+            if frame is None or not builtins.set(fields).issubset(frame.columns) or builtins.len(frame) > 1:
+                raise HistoryError('{} {}：{} 缺失估值复核失败。'.format(index_code, day, code))
+            if not frame.empty:
+                row = frame.to_dict('records')[0]
+                if row['code'] != code or as_date(row['day']) != day:
+                    raise HistoryError('{} {}：{} 复核返回代码或日期不一致。'.format(index_code, day, code))
+                records[code] = row
+        missing = [code for code in codes if code not in records]
+        if missing:
+            builtins.print('\n{} {}：{} 只缺少估值，保留成分并按缺失统计：{}。'.format(
+                index_code, day, builtins.len(missing), ', '.join(missing[:10])), flush=True)
         prices = api('get_price')(index_code, start_date=day, end_date=day, frequency='daily',
                                   fields=['close'], fq=None, skip_paused=False)
         if prices is None or builtins.len(prices) != 1 or 'close' not in prices.columns or as_date(prices.index[0]) != day:
             raise HistoryError('指数收盘行情缺失或日期不匹配。')
         close = number(prices.iloc[0]['close'], 24, 8, index_code+' close', round_source=True)
-        members = [dict(code=code, pe_ttm=source_number(ttm, code+' pe_ratio'),
-                        pe_lyr=source_number(lyr, code+' pe_ratio_lyr'),
-                        market_cap=source_number(cap, code+' market_cap'), suspended_listing=None)
-                   for code, ttm, lyr, cap in builtins.zip(frame['code'], frame['pe_ratio'], frame['pe_ratio_lyr'], frame['market_cap'])]
+        members = [dict(code=code, pe_ttm=source_number(records.get(code, {}).get('pe_ratio'), code+' pe_ratio'),
+                        pe_lyr=source_number(records.get(code, {}).get('pe_ratio_lyr'), code+' pe_ratio_lyr'),
+                        market_cap=source_number(records.get(code, {}).get('market_cap'), code+' market_cap'), suspended_listing=None)
+                   for code in codes]
         return summarize(day, close, members, index_code)
 
     def existing_day(session, day, index_code=INDEX):
@@ -6189,9 +6218,9 @@ def _valuation_ruler_strategy(_apis, _config):
             raise HistoryError('已有单日数据不完整；不会覆盖。')
         complete(daily, ValuationDaily)
         complete(raw, ValuationMember)
-        if daily.source != SOURCE or raw.source != SOURCE:
+        if daily.source not in (SOURCE, PUBLIC_SOURCE) or raw.source != daily.source:
             raise HistoryError('已有记录来源不匹配。')
-        computed, archive = summarize(day, daily.index_close, json.loads(raw.payload), index_code)
+        computed, archive = summarize(day, daily.index_close, json.loads(raw.payload), index_code, source=daily.source)
         if (archive['payload'] != raw.payload or builtins.any(builtins.getattr(daily, k) != v
                 for k, v in computed.items() if k != 'updated_at')):
             raise HistoryError('已有汇总、指纹与成分原值不一致；不会覆盖。')
@@ -6222,18 +6251,25 @@ def _valuation_ruler_strategy(_apis, _config):
             for code in indices:
                 candidates = [d for d in days if d >= as_date(INDEXES[code][2])]
                 latest = None
+                public_days = builtins.set()
                 if write_database:
                     session = Session()
                     try:
-                        latest = session.query(ValuationDaily.trade_date).filter_by(index_code=code, method_version=METHOD).order_by(
+                        # Web collection can already contain today's row while JQ is still
+                        # backfilling 2014. Its date must not jump the historical checkpoint.
+                        latest = session.query(ValuationDaily.trade_date).filter_by(index_code=code, method_version=METHOD, source=SOURCE).order_by(
                             ValuationDaily.trade_date.desc()).first()
                         if latest:
                             stage = '核对{}最后完成日'.format(INDEXES[code][0])
                             progress.update(stage, day=latest[0])
                             existing_day(session, latest[0], code)
+                        public_days = builtins.set(row[0] for row in session.query(ValuationDaily.trade_date).filter_by(
+                            index_code=code, method_version=METHOD, source=PUBLIC_SOURCE).filter(
+                                ValuationDaily.trade_date >= (latest[0] if latest else as_date(start_date)),
+                                ValuationDaily.trade_date <= days[-1]).all())
                     finally:
                         session.close()
-                pending[code] = [d for d in candidates if latest is None or d > latest[0]]
+                pending[code] = [d for d in candidates if (latest is None or d > latest[0]) and d not in public_days]
                 skipped += builtins.len(candidates)-builtins.len(pending[code])
             selected_days = builtins.sorted(builtins.set(d for values in pending.values() for d in values))[:max_days]
             pending = {code: builtins.set(values) for code, values in pending.items()}
@@ -6253,7 +6289,7 @@ def _valuation_ruler_strategy(_apis, _config):
                         session.info['_result_journal_callbacks'][1](session)
                         if existing_day(session, day, code):
                             old = session.query(ValuationDaily).filter_by(trade_date=day, index_code=code, method_version=METHOD).one()
-                            if builtins.any(builtins.getattr(old, k) != v for k, v in daily.items() if k != 'updated_at'):
+                            if old.source != PUBLIC_SOURCE and builtins.any(builtins.getattr(old, k) != v for k, v in daily.items() if k != 'updated_at'):
                                 raise HistoryError('并发已有结果冲突，本次事务取消。')
                         else:
                             session.add(ValuationDaily(**daily))

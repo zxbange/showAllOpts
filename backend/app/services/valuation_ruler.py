@@ -1,6 +1,6 @@
 from app.core.history_sync import mark_sync_owner, clear_sync_owner, database_syncing, SYNC_MESSAGE
 from app.services.system_configuration import task_config, latest_task_slot
-"""Append-only valuation history, durable recovery and an independent 20:00 schedule."""
+"""Append-only valuation history, durable recovery and an independent 18:30 schedule."""
 from app.services.system_runtime import source_client
 from app.services.collection_notifications import notify_collection
 from contextlib import contextmanager
@@ -21,7 +21,8 @@ import portalocker
 from app.core.diagnostics import diagnostic_details
 from app.services.valuation_ruler_model import (START, INDEX, METHOD, PUBLIC_SOURCE, JQ_SOURCE,
     ValuationError, ValuationConflict, validate_day, valid_code)
-from app.services.valuation_ruler_source import PublicSource, SourceError, CALENDAR_SOURCE
+from app.services.valuation_ruler_source import SourceError, CALENDAR_SOURCE
+from app.services.index_valuation_source import EastmoneySource
 
 LOG=logging.getLogger(__name__)
 CHINA=ZoneInfo('Asia/Shanghai')
@@ -41,13 +42,13 @@ def close_cutoff(moment):
 
 
 def schedule_cutoff(moment):
-    """Startup catches up only the last due 20:00 slot, never today's early close."""
+    """Startup catches up only the last due 18:30 slot."""
     local=moment.astimezone(CHINA)
-    return local.date() if local.hour>=20 else local.date()-timedelta(days=1)
+    return local.date() if (local.hour, local.minute)>=(18,30) else local.date()-timedelta(days=1)
 
 
 def slot_for(day):
-    return datetime.combine(day,time(20),CHINA).isoformat()
+    return datetime.combine(day,time(18,30),CHINA).isoformat()
 
 
 class CollectionCancelled(Exception):
@@ -78,7 +79,7 @@ class ValuationRuler:
         self.client_factory=client_factory or (lambda:source_client(self.settings, factory=httpx.Client,
             timeout=httpx.Timeout(20,connect=8),trust_env=False,follow_redirects=False,
             headers={'User-Agent':'ShowAllOpts/1.0'}))
-        self.source_factory=source_factory or PublicSource
+        self.source_factory=source_factory or EastmoneySource
         self.stop_event=threading.Event()
         self.scheduler=self.worker=None
         with self.db() as db:
@@ -262,7 +263,8 @@ class ValuationRuler:
             phase='interrupted' if interrupted else state.get('phase'),target_date=state.get('target_date'),
             updated_at=state.get('updated_at'),
             error='上次任务中断，已保存的数据保留，可继续补采。' if interrupted else state.get('error'),
-            completed_days=state.get('completed_days',0),failed_days=failed,schedule='20:00 Asia/Shanghai',
+            completed_days=state.get('completed_days',0),failed_days=failed,
+            schedule=task_config(self.settings, 'valuation_ruler')['times'][0]+' Asia/Shanghai',
             source_configured=True,automatic=task_config(self.settings, 'valuation_ruler')['enabled'],recent_failures=failures,
             cancelled=state.get('phase')=='cancelled',comparison=comparison,
             comparison_status='compared' if comparison else 'not_compared',comparison_error=state.get('comparison_error'),
@@ -307,8 +309,11 @@ class ValuationRuler:
             with self.db() as db:
                 db.execute('BEGIN IMMEDIATE')
                 prior=db.execute('SELECT outcome FROM slots WHERE slot=?',(slot,)).fetchone() if slot else None
-                if prior and prior[0]!='running':lock.release();return False
                 state=self.read_state(db)
+                if prior and prior[0] not in ('running', 'failed'):
+                    lock.release();return False
+                if prior and prior[0]=='failed' and state.get('retry_after') and moment < datetime.fromisoformat(state['retry_after']):
+                    lock.release();return False
                 state.update(run_id=uuid.uuid4().hex,active=True,phase=kind,error=None,completed_days=0,conflict_days=0,
                     comparison_error=None,comparison_attempted_date=None,target_date=None,updated_at=moment.isoformat())
                 db.execute('UPDATE state SET payload=? WHERE id=1',(json.dumps(state),))
@@ -346,6 +351,7 @@ class ValuationRuler:
         finally:
             try:
                 state['active']=False
+                state['retry_after']=(moment+timedelta(minutes=15, seconds=monotonic()-started)).isoformat() if state['phase']=='failed' else None
                 with self.db() as db:
                     self.write_state(state,db)
                     if slot:db.execute('UPDATE slots SET outcome=? WHERE slot=?',(state['phase'],slot))
@@ -353,11 +359,6 @@ class ValuationRuler:
             finally:lock.release()
 
     def refresh(self,background=True,*,moment=None,slot=None,cutoff=None):
-        with self.db() as db:
-            from app.services.index_valuation import init_store
-            init_store(db)
-            if db.execute('SELECT 1 FROM index_points_v2 LIMIT 1').fetchone():
-                return False  # V2 is calculated in JoinQuant and updated via database sync.
         def runner(monitor,state,check_cancel,moment):
             monitor._collect(state,check_cancel,moment,cutoff=cutoff,automatic=slot is not None)
         return self.start_job('public',runner,background=background,moment=moment,slot=slot)
@@ -366,6 +367,9 @@ class ValuationRuler:
         cutoff=cutoff or close_cutoff(moment)
         with self.client_factory() as client:
             source=self.source_factory(client,self,check_cancel)
+            if hasattr(source, 'collect_latest'):
+                from app.services.index_valuation_collection import collect
+                return collect(self, source, state, check_cancel, moment, cutoff)
             days=source.calendar(cutoff);check_cancel()
             with self.db() as db:
                 previous_days={date.fromisoformat(row[0]) for row in db.execute('SELECT trade_date FROM calendar')}

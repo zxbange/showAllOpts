@@ -180,7 +180,7 @@ def test_resume_boundary_validation(collector, corrupt):
     assert c.calls == []
 
 
-@pytest.mark.parametrize('fault', ['duplicate', 'wrong_day', 'missing_field', 'missing_rows', 'bad_price_day'])
+@pytest.mark.parametrize('fault', ['duplicate', 'wrong_day', 'missing_field', 'bad_price_day'])
 def test_source_coverage_guards(collector, fault):
     c = collector
     original = c.jq.get_fundamentals
@@ -189,13 +189,62 @@ def test_source_coverage_guards(collector, fault):
         if fault == 'duplicate': frame.loc[0, 'code'] = frame.loc[1, 'code']
         if fault == 'wrong_day': frame.loc[0, 'day'] = DAYS[1]
         if fault == 'missing_field': frame = frame.drop(columns=['pe_ratio_lyr'])
-        if fault == 'missing_rows': frame = frame.iloc[:-1]
         return frame
     c.jq.get_fundamentals = fundamentals
     if fault == 'bad_price_day':
         c.jq.get_price = lambda *args, **kw: pd.DataFrame({'close': [4000]}, index=[DAYS[1]])
     with pytest.raises(c.m.HistoryError):
         c.m.source_day(DAYS[0])
+
+
+def test_missing_rows_are_rechecked_and_remain_missing_not_zero(collector):
+    c = collector
+    original = c.jq.get_fundamentals
+    requests = []
+    def fundamentals(codes, date):
+        requests.append(codes)
+        frame = original(codes, date)
+        return frame.iloc[:-1]
+    c.jq.get_fundamentals = fundamentals
+    daily, raw = c.m.source_day(DAYS[0])
+    assert max(map(len, requests)) == 200
+    assert len([codes for codes in requests if len(codes) == 1]) == 2
+    assert len(json.loads(raw['payload'])) == 300
+    assert json.loads(daily['statistics'])['ttm']['missing_pe'] == 2
+    assert daily['overall_pe_ttm'] is None and daily['mean_pe_ttm'] == 10
+
+
+def test_truncated_batch_recovered_by_single_code_query(collector):
+    c = collector
+    original = c.jq.get_fundamentals
+    c.jq.get_fundamentals = lambda codes, date: original(codes, date).iloc[:100]
+    daily, _ = c.m.source_day(DAYS[0])
+    assert json.loads(daily['statistics'])['ttm']['missing_pe'] == 0
+    assert daily['overall_pe_ttm'] == 10
+
+
+def test_joinquant_resume_accepts_public_source_boundary(collector):
+    c = collector
+    daily, raw = c.m.source_day(DAYS[0])
+    daily, raw = c.m.summarize(DAYS[0], daily['index_close'], json.loads(raw['payload']), source=c.m.PUBLIC_SOURCE)
+    c.m.database(c.m.MODELS, 'valuation-ruler-v2')
+    with c.engine.begin() as db:
+        db.execute(c.m.ValuationDaily.__table__.insert().values(**daily))
+        db.execute(c.m.ValuationMember.__table__.insert().values(**raw))
+    assert len(run(c, indices=['000300.XSHG'])) == 2
+
+
+def test_public_latest_date_does_not_skip_unfinished_history(collector):
+    c = collector
+    daily, raw = c.m.source_day(DAYS[-1])
+    daily, raw = c.m.summarize(DAYS[-1], daily['index_close'], json.loads(raw['payload']), source=c.m.PUBLIC_SOURCE)
+    c.m.database(c.m.MODELS, 'valuation-ruler-v2')
+    with c.engine.begin() as db:
+        db.execute(c.m.ValuationDaily.__table__.insert().values(**daily))
+        db.execute(c.m.ValuationMember.__table__.insert().values(**raw))
+    result = run(c, indices=['000300.XSHG'])
+    assert [row['trade_date'] for row in result] == DAYS[:-1]
+    assert run(c, indices=['000300.XSHG']) == []
 
 
 def test_preview_is_read_only_python36_and_rounding(collector, monkeypatch, capsys):

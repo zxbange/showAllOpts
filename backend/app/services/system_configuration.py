@@ -29,7 +29,7 @@ def default_schedules(settings, *, legacy=True, warnings=None):
         'commodities': {'enabled': True, 'times': ['11:00', '18:00']},
         'growth_dividend': daily('18:00', getattr(settings, 'growth_dividend_worker_enabled', True)),
         'market': daily('00:01', getattr(settings, 'market_collection_enabled', True) and getattr(settings, 'market_collection_worker_enabled', True)),
-        'valuation_ruler': daily('20:00', getattr(settings, 'valuation_ruler_worker_enabled', True)),
+        'valuation_ruler': daily('18:30', getattr(settings, 'valuation_ruler_worker_enabled', True)),
         'cci': daily('21:00'),
         'cash_cow': daily('21:00', getattr(settings, 'cash_cow_worker_enabled', True)) | {'frequency': 'month_end'},
         'holdings': dict(enabled=False, start='09:25', end='15:10', interval_seconds=15, table=''),
@@ -182,6 +182,11 @@ class SystemConfiguration:
             result.setdefault('integrations', integration_defaults(self.settings))
             from app.services.system_runtime import default_runtime
             result.setdefault('runtime', default_runtime(self.settings))
+            # Migrate only the previous default once; explicitly customized times survive.
+            if not result.get('valuation_schedule_v2'):
+                if result['schedules']['valuation_ruler']['times'] == ['20:00']:
+                    result['schedules']['valuation_ruler']['times'] = ['18:30']
+                result['valuation_schedule_v2'] = True
             return result
         except SystemConfigurationError:
             raise
@@ -312,7 +317,7 @@ class SystemConfiguration:
         integrations = validate_integrations(body.get('integrations'), previous.get('integrations', {}))
         from app.services.system_runtime import validate_runtime, default_runtime
         runtime = validate_runtime(body.get('runtime'), previous.get('runtime', default_runtime(self.settings)))
-        return dict(revision=previous['revision'], database_revision=previous['database_revision'], timezone='Asia/Shanghai', database=db, schedules=schedules, integrations=integrations, runtime=runtime)
+        return dict(revision=previous['revision'], database_revision=previous['database_revision'], timezone='Asia/Shanghai', database=db, schedules=schedules, integrations=integrations, runtime=runtime, valuation_schedule_v2=True)
 
     def save(self, body):
         from app.services.system_integrations import integration_env_updates

@@ -14,6 +14,7 @@ import '../styles/valuation-ruler.css'
 const mutation = { pending: false, uncertain: false, observedRunning: false }
 const phaseLabels: Record<string, string> = {
   collecting: '采集中',
+  saving: '保存数据库与本地',
   refresh: '准备采集',
   'sync-joinquant': '同步聚宽历史',
   import: '同步聚宽历史',
@@ -295,7 +296,7 @@ export function ValuationRulerPage() {
         <summary>统计口径与覆盖</summary>
         {v2 ? (
           <p>
-            等权与中位数剔除亏损及PE＞300的样本；整体PE由聚宽总市值与个股PE反推利润。使用历史指数成分，普通停牌不剔除；暂停上市状态尚未独立核验。
+            等权与中位数取0＜PE≤300；整体PE由总市值与个股PE反推利润。东方财富按采集日成分计算，历史使用聚宽当日成分；普通停牌不剔除，暂停上市状态未独立核验。
           </p>
         ) : (
           <p>
@@ -327,106 +328,99 @@ export function ValuationRulerPage() {
           </details>
         )}
       </details>
-      {v2 ? (
-        <p>聚宽计算入库后，从“数据同步”更新估值日汇总。</p>
-      ) : (
-        <>
-          <section className="panel valuation-update" aria-label="估值数据采集">
-            <div className="valuation-update-row">
-              <div>
-                <h2>数据采集</h2>
-                <p>
-                  {status
-                    ? status.automatic
-                      ? '自动采集已启用。'
-                      : '自动采集当前未启用，请管理员检查系统配置。'
-                    : '正在核验自动采集状态。'}
-                </p>
-                <p>更新已收盘交易日，自动重试缺口。</p>
-              </div>
-              <div className="valuation-actions">
-                <button
-                  className="button button-primary"
-                  disabled={disabled || running}
-                  onClick={() => void act('refresh')}
-                >
-                  <Download size={16} />
-                  {databaseSyncing
-                    ? '数据库同步中'
-                    : running
-                      ? '采集中'
-                      : busy
-                        ? '正在提交…'
-                        : '采集并补数据'}
-                </button>
-                {running && (
-                  <button
-                    className="button button-quiet"
-                    disabled={!admin || busy || uncertain}
-                    onClick={() => void act('cancel')}
-                  >
-                    <Square size={14} />
-                    停止采集
-                  </button>
-                )}
-              </div>
+      <>
+        <section className="panel valuation-update" aria-label="估值数据采集">
+          <div className="valuation-update-row">
+            <div>
+              <h2>数据采集</h2>
+              <p>
+                {status
+                  ? status.automatic
+                    ? `东方财富 · 每天北京时间 ${status.schedule.split(' ')[0]} 更新`
+                    : '自动采集当前未启用，请管理员检查系统配置。'
+                  : '正在核验自动采集状态。'}
+              </p>
+              <p>计算后保存至数据库与本地。历史补采使用聚宽。</p>
             </div>
-            {!admin && <p>仅管理员可采集与停止任务。</p>}
-            <div aria-live="polite">
-              {databaseSyncing ? (
-                <p>数据库同步中，请到顶部“数据同步”查看或取消。</p>
-              ) : (
-                <p>
-                  {running
+            <div className="valuation-actions">
+              <button
+                className="button button-primary"
+                disabled={disabled || running}
+                onClick={() => void act('refresh')}
+              >
+                <Download size={16} />
+                {databaseSyncing
+                  ? '数据库同步中'
+                  : running
                     ? '采集中'
-                    : status?.cancelled
-                      ? '已停止'
-                      : status?.status === 'failed'
-                        ? '采集未完成'
-                        : '等待更新'}{' '}
-                  · {status?.phase ? (phaseLabels[status.phase] ?? status.phase) : '等待状态'} ·
-                  目标 {status?.target_date ?? '—'} · 完成 {status?.completed_days ?? 0} 日 / 失败{' '}
-                  {status?.failed_days ?? 0} 日
-                </p>
-              )}
-              {status?.joinquant_imported != null && (
-                <p>
-                  本次聚宽导入 {status.joinquant_imported} 日 · 冲突 {status.joinquant_conflicts}{' '}
-                  日（未覆盖）
-                </p>
+                    : busy
+                      ? '正在提交…'
+                      : '采集并补数据'}
+              </button>
+              {running && (
+                <button
+                  className="button button-quiet"
+                  disabled={!admin || busy || uncertain}
+                  onClick={() => void act('cancel')}
+                >
+                  <Square size={14} />
+                  停止采集
+                </button>
               )}
             </div>
-            {(statusError || actionError || status?.error) && (
-              <div role="alert" className="valuation-error">
-                {statusError || actionError || status?.error}
-              </div>
-            )}
-            {uncertain && (
-              <p role="alert">
-                上次操作结果不确定，已暂停重复提交。正在读取服务器状态；请勿重复启动。若持续无运行记录，请联系管理员核查服务日志。
+          </div>
+          {!admin && <p>仅管理员可采集与停止任务。</p>}
+          <div aria-live="polite">
+            {databaseSyncing ? (
+              <p>数据库同步中，请到顶部“数据同步”查看或取消。</p>
+            ) : (
+              <p>
+                {running
+                  ? '采集中'
+                  : status?.cancelled
+                    ? '已停止'
+                    : status?.status === 'failed'
+                      ? '采集未完成'
+                      : '等待更新'}{' '}
+                · {status?.phase ? (phaseLabels[status.phase] ?? status.phase) : '等待状态'} · 目标{' '}
+                {status?.target_date ?? '—'} · 完成 {status?.completed_days ?? 0} 日 / 失败{' '}
+                {status?.failed_days ?? 0} 日
               </p>
             )}
-            <button
-              className="button button-quiet"
-              disabled={busy}
-              onClick={() => void readStatus()}
-            >
-              重新读取采集状态
-            </button>
-            {!!status?.recent_failures.length && (
-              <div className="valuation-failures">
-                <h3>待补日期与持久化失败记录</h3>
-                <ul>
-                  {status.recent_failures.map((f) => (
-                    <li key={`${f.trade_date}-${f.code}`}>
-                      <strong>{f.trade_date}</strong> · {f.code} · {f.reason}（尝试 {f.attempts}{' '}
-                      次）
-                    </li>
-                  ))}
-                </ul>
-              </div>
+            {status?.joinquant_imported != null && (
+              <p>
+                本次聚宽导入 {status.joinquant_imported} 日 · 冲突 {status.joinquant_conflicts}{' '}
+                日（未覆盖）
+              </p>
             )}
-          </section>
+          </div>
+          {(statusError || actionError || status?.error) && (
+            <div role="alert" className="valuation-error">
+              {statusError || actionError || status?.error}
+            </div>
+          )}
+          {uncertain && (
+            <p role="alert">
+              上次操作结果不确定，已暂停重复提交。正在读取服务器状态；请勿重复启动。若持续无运行记录，请联系管理员核查服务日志。
+            </p>
+          )}
+          <button className="button button-quiet" disabled={busy} onClick={() => void readStatus()}>
+            重新读取采集状态
+          </button>
+          {!!status?.recent_failures.length && (
+            <div className="valuation-failures">
+              <h3>待补日期与持久化失败记录</h3>
+              <ul>
+                {status.recent_failures.map((f) => (
+                  <li key={`${f.trade_date}-${f.code}`}>
+                    <strong>{f.trade_date}</strong> · {f.code} · {f.reason}（尝试 {f.attempts} 次）
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+        </section>
+        {!v2 && (
           <section className="panel valuation-comparison">
             <h2>重叠交易日来源对照</h2>
             <p>仅比较实际重叠日期，不覆盖已保存日；单日一致也不证明两来源长期等价。</p>
@@ -463,8 +457,8 @@ export function ValuationRulerPage() {
               </p>
             )}
           </section>
-        </>
-      )}
+        )}
+      </>
     </div>
   )
 }

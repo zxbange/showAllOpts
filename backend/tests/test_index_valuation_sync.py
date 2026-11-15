@@ -26,7 +26,7 @@ def synced(collector, tmp_path, monkeypatch):
     return c, cache, service, sql
 
 
-def test_summary_only_sync_and_static_ttm_are_separate(synced):
+def test_summary_only_sync_and_static_ttm_are_separate(synced, monkeypatch):
     c, cache, service, sql = synced
     entry = next(r for r in cache.status()['modules'] if r['id'] == 'valuation-ruler')
     assert entry['ready'] and entry['progress']['status'] == 'complete'
@@ -40,7 +40,15 @@ def test_summary_only_sync_and_static_ttm_are_separate(synced):
         assert lyr['latest']['mean_pe_ttm'] == 10  # static selection must not relabel raw TTM
         assert ttm['latest']['member_count'] == count
         assert lyr['benchmarks']['p50'] == 20
-    assert service.refresh(background=False) is False  # V2 cannot be extended with the old public formula.
+    from app.services.index_valuation_source import EastmoneySource
+    assert service.source_factory is EastmoneySource
+    before = service.history()
+    # Public collection remains available after JQ sync; a failed source keeps all history.
+    def unavailable(*args):
+        raise ValueError('synthetic unavailable')
+    monkeypatch.setattr(EastmoneySource, 'collect_latest', unavailable)
+    assert service.refresh(background=False) is True
+    assert service.status()['status'] == 'failed' and service.history() == before
     cache.refresh('valuation-ruler', background=False)
     assert len(service.history()['points']) == 3
 

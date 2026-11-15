@@ -144,10 +144,10 @@ def test_os_lock_blocks_another_instance_and_stale_run_cannot_overwrite(monitor)
     replacement.stop()
 
 
-def test_20_slots_persist_across_restart_and_new_day_runs_once(monitor):
+def test_1830_slots_persist_across_restart_and_new_day_runs_once(monitor):
     monitor.settings.valuation_ruler_worker_enabled = True
     calls=provider(monitor)
-    monitor.tick(MOMENT.replace(hour=19),background=False)
+    monitor.tick(MOMENT.replace(hour=18,minute=29),background=False)
     assert calls==[date(2026,11,9)]
     monitor.tick(MOMENT,background=False)
     assert calls[-1]==date(2026,11,10)
@@ -289,16 +289,16 @@ def test_production_scheduler_flag_start_stop_without_network(monitor,monkeypatc
     monitor.stop();assert not monitor.scheduler.is_alive() and not monitor.refresh()
 
 
-def test_manual15_vs_schedule1959_and20(monitor):
+def test_manual15_vs_schedule1829_and1830(monitor):
     monitor.settings.valuation_ruler_worker_enabled = True
     calls=provider(monitor)
-    monitor.tick(MOMENT.replace(hour=19,minute=59),background=False)
+    monitor.tick(MOMENT.replace(hour=18,minute=29),background=False)
     assert calls==[date(2026,11,9)]
     calls.clear();monitor.refresh(background=False,moment=MOMENT.replace(hour=15,minute=0))
     assert calls==[date(2026,11,10)]
     assert monitor.history(MOMENT.replace(hour=15,minute=0))['latest']['date']=='2026-11-10'
     with monitor.db() as db:assert db.execute('SELECT 1 FROM slots WHERE slot=?',(m.slot_for(date(2026,11,10)),)).fetchone() is None
-    monitor.tick(MOMENT.replace(hour=20,minute=0),background=False)
+    monitor.tick(MOMENT.replace(hour=18,minute=30),background=False)
     with monitor.db() as db:assert db.execute('SELECT outcome FROM slots WHERE slot=?',(m.slot_for(date(2026,11,10)),)).fetchone()[0]=='complete'
 
 

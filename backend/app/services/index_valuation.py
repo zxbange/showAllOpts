@@ -10,6 +10,7 @@ from app.core.cache_errors import SnapshotDataError
 
 METHOD = 'index_pe_lyr_ttm_cap300_v2'
 SOURCE = 'JQ_PLATFORM.VALUATION.V2'
+PUBLIC_SOURCE = 'EASTMONEY.VALUATION.V2'
 TABLE = 'valuation_ruler_daily_v2'
 INDICES = {'000300.XSHG': ('沪深300', 300, '2010-01-01'),
            '000016.XSHG': ('上证50', 50, '2010-01-01'),
@@ -33,7 +34,7 @@ def checked(row, cutoff):
         raise SnapshotDataError('指数估值v2汇总不完整或计算口径不匹配；已有缓存保留。')
     code, day = row['index_code'], row['trade_date']
     if (code not in INDICES or type(day) is not date or not date.fromisoformat(INDICES[code][2]) <= day <= cutoff
-            or day.weekday() >= 5 or row['method_version'] != METHOD or row['source'] != SOURCE
+            or day.weekday() >= 5 or row['method_version'] != METHOD or row['source'] not in (SOURCE, PUBLIC_SOURCE)
             or row['member_count'] != INDICES[code][1] or not isinstance(row['updated_at'], datetime)
             or not re.fullmatch('[a-f0-9]{64}', row['members_sha256'])):
         reject()
@@ -41,7 +42,7 @@ def checked(row, cutoff):
         stats = json.loads(row['statistics'])
         if (stats['profit_basis'] != 'market_cap_divided_by_pe' or stats['market_cap_unit'] != '亿元'
                 or stats['ordinary_trading_suspension_excluded'] is not False
-                or stats['listing_status_basis'] not in ('historical_index_members', 'jy_listing_history')):
+                or stats['listing_status_basis'] not in ('historical_index_members', 'jy_listing_history', 'eastmoney_current_members')):
             reject()
         result = {k: row[k] for k in ('index_code', 'method_version', 'member_count', 'members_sha256', 'source')}
         result.update(trade_date=str(day), updated_at=row['updated_at'].isoformat(), statistics=stats)
@@ -130,7 +131,7 @@ def history(service, cutoff, index_code, basis):
     points = []
     for row in rows:
         counts = row['statistics'][basis]
-        point = dict(date=row['trade_date'], index_close=float(row['index_close']), source=SOURCE,
+        point = dict(date=row['trade_date'], index_close=float(row['index_close']), source=row['source'],
                      member_count=row['member_count'], positive_count=counts['eligible'], loss_count=counts['loss'],
                      missing_pe_count=counts['missing_pe'], excluded_high_pe_count=counts['over_limit'])
         point.update({key: None if row[key] is None else float(row[key]) for key in METRICS})
@@ -144,4 +145,4 @@ def history(service, cutoff, index_code, basis):
                         sample_days=len(values), start_date=first, end_date=last),
         coverage=dict(requested_start=INDICES[index_code][2], first_date=first, last_date=last,
                       missing_count=None, known_missing_count=0, calendar_complete=False),
-        gap_dates=[], sources=[SOURCE] if rows else [])
+        gap_dates=[], sources=sorted({row['source'] for row in rows}))

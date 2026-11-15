@@ -6,6 +6,7 @@ export const valuationNumber = (value: number | null | undefined) =>
     : value.toLocaleString('zh-CN', { maximumFractionDigits: 2, minimumFractionDigits: 2 })
 export function valuationSource(source: string | null | undefined) {
   if (!source) return '来源未记录'
+  if (source === 'EASTMONEY.VALUATION.V2') return '东方财富'
   if (
     source === 'joinquant' ||
     source === 'JQ_PLATFORM.PE_TTM.V1' ||

@@ -95,7 +95,32 @@ def sync_selection_archive(check=False):
             path.write_text(updated, encoding='utf-8')
 
 
+def sync_valuation_rules(check=False):
+    """One formula for web collection and the two standalone research entries."""
+    path = ROOT / 'collectors/估值标尺历史补采_聚宽研究版.py'
+    source = path.read_text(encoding='utf-8')
+    rules = (ROOT / 'collectors/rules/index_valuation.py').read_text(encoding='utf-8')
+    backend = ROOT / 'backend/app/services/index_valuation_rules.py'
+    if check:
+        assert backend.read_text(encoding='utf-8') == rules, 'run python collectors/tools/sync_history_strategies.py'
+    else:
+        backend.write_text(rules, encoding='utf-8')
+    names = {'number', 'derived', 'valid_code', 'json_text', 'source_number', 'aggregate', 'summarize'}
+    definitions = {n.name: ast.get_source_segment(rules, n) for n in ast.parse(rules).body
+                   if isinstance(n, ast.FunctionDef) and n.name in names}
+    lines = source.splitlines(keepends=True)
+    for node in reversed(ast.parse(source).body):
+        if isinstance(node, ast.FunctionDef) and node.name in names:
+            lines[node.lineno-1:node.end_lineno] = [definitions[node.name] + '\n']
+    updated = ''.join(lines)
+    if check:
+        assert updated == source, 'run python collectors/tools/sync_history_strategies.py'
+    else:
+        path.write_text(updated, encoding='utf-8')
+
+
 def sync(check=False):
+    sync_valuation_rules(check)
     sync_selection_archive(check)
     factories = [factory('估值标尺历史补采_聚宽研究版.py', '_valuation_ruler_strategy', '估值标尺'),
                  factory('创红比历史补采_聚宽研究版.py', '_growth_dividend_strategy', '创红比')]

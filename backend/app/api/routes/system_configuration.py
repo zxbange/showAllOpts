@@ -92,6 +92,12 @@ def save_with_locks(request, value):
         if lock is None:
             raise SystemConfigurationError('市场采集正在运行，请完成或取消后修改数据库')
         stack.callback(lock.release)
+        valuation = getattr(request.app.state, 'valuation_ruler', None)
+        if valuation is not None:
+            lock = valuation.acquire()
+            if lock is None:
+                raise SystemConfigurationError('估值采集正在运行，请完成或取消后修改数据库')
+            stack.callback(lock.release)
         for owner in (etf, market):
             with owner.connect() as db:
                 if db.execute("SELECT 1 FROM manual_runs WHERE status='queued'").fetchone():
