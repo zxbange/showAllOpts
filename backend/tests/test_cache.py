@@ -18,6 +18,17 @@ from test_dividend_api import seed as dividend_seed
 from test_earnings_api import seed as earnings_seed
 
 
+def seed_cash_cow(session):
+    from app.models.cash_cow import CashCowSnapshot
+    payload = {str(p): dict(snapshot=dict(years=p, as_of='2026-01-06', updated_at='2026-01-06T18:00:00+08:00',
+        run_id='test-cow-run', rule_version='cash_cow_static_display_v2', source='聚宽',
+        start_year=2026-p, end_year=2025, universe_count=1, evaluated_count=1,
+        excluded_count=1, insufficient_count=0, matched_count=0), items=[]) for p in (3,5,10)}
+    session.add(CashCowSnapshot(id=1, as_of_date=datetime(2026,1,6).date(),
+                                updated_at=datetime(2026,1,6,18), payload=payload))
+    session.commit()
+
+
 @pytest.fixture
 def cached(engine, session, tmp_path):
     session.add_all([row(datetime(2026,1,5).date(), 'A', 3), row(datetime(2026,1,6).date(), 'A', 5)])
@@ -27,14 +38,7 @@ def cached(engine, session, tmp_path):
     growth_seed(session)
     dividend_seed(session)
     earnings_seed(session)
-    from app.models.cash_cow import CashCowSnapshot
-    payload = {str(p): dict(snapshot=dict(years=p, as_of='2026-01-06', updated_at='2026-01-06T18:00:00+08:00',
-        run_id='test-cow-run', rule_version='cash_cow_static_display_v2', source='聚宽',
-        start_year=2026-p, end_year=2025, universe_count=1, evaluated_count=1,
-        excluded_count=1, insufficient_count=0, matched_count=0), items=[]) for p in (3,5,10)}
-    session.add(CashCowSnapshot(id=1, as_of_date=datetime(2026,1,6).date(),
-                                updated_at=datetime(2026,1,6,18), payload=payload))
-    session.commit()
+    seed_cash_cow(session)
     settings = Settings(_env_file=None, cache_enabled=True, cache_auto_refresh=False,
                         log_dir=tmp_path/'log')
     cache = SnapshotCache(settings, engine)

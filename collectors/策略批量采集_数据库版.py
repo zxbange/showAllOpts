@@ -2626,9 +2626,9 @@ def _earnings_strategy(_apis, _config):
         code_set = set(codes)
         cutoff = as_of + dt.timedelta(days=1)
         started = time.monotonic()
-        _progress_note('聚宽：加载快报表结构')
+        _progress_message('聚宽：加载快报表结构')
         t = jy.LC_FSPerformedLetters
-        _progress_note('聚宽：快报表结构已就绪，查询新增披露')
+        _progress_message('聚宽：快报表结构已就绪，查询新增披露')
         filters = [t.EndDate == period, t.InfoPublDate < cutoff]
         if start_date is not None:
             filters.append(t.InfoPublDate >= start_date)

@@ -201,7 +201,7 @@ def test_public_collection_lock_blocks_shared_import(setup,module):
 def test_legacy_namespace_and_source_change_are_safe(setup, engine, tmp_path):
     settings, cache = setup
     schema = [(key,[(m.__tablename__,[(c.name,str(c.type)) for c in m.__table__.columns]) for m in models])
-              for key,(_,models) in MODULES.items() if key!='market-sentiment' and key not in HISTORY_MODULES]
+              for key,(_,models) in MODULES.items() if key not in ('market-sentiment', 'cash-cow') and key not in HISTORY_MODULES]
     url=engine.url
     legacy=[url.drivername,url.host,url.port,url.database,url.username,schema,'provider-results-v2']
     assert cache.root.name == hashlib.sha256(json.dumps(legacy,ensure_ascii=True).encode()).hexdigest()[:20]

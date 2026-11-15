@@ -79,7 +79,7 @@ def test_increment_reads_three_recent_sessions_and_new_rows_only(synced):
     index_valuation.sync(c.engine, service, dt.date(2026, 1, 9), lambda: None, lambda *args: None)
     seen = []
     def record(conn, cur, statement, params, ctx, many):
-        if 'FROM valuation_ruler_daily_v2' in statement and 'count(' not in statement:
+        if 'FROM valuation_ruler_daily_v2' in statement and 'count(' not in statement and 'min(' not in statement:
             seen.append((statement, params))
     event.listen(c.engine, 'before_cursor_execute', record)
     try:
@@ -88,6 +88,24 @@ def test_increment_reads_three_recent_sessions_and_new_rows_only(synced):
         event.remove(c.engine, 'before_cursor_execute', record)
     assert len(seen) == 3
     assert all('trade_date >=' in statement and '2026-01-07' in params for statement, params in seen)
+
+
+@pytest.mark.parametrize('has_baseline', [False, True])
+def test_latest_daily_point_does_not_hide_earlier_source_history(synced, has_baseline):
+    c, cache, service, _ = synced
+    with service.db() as db:
+        db.execute('DELETE FROM index_points_v2 WHERE trade_date < ?', (str(DAYS[-1]),))
+        if not has_baseline:
+            db.execute('DELETE FROM index_sync_baseline_v2')
+    assert len(service.history()['points']) == 1
+    cache.refresh('valuation-ruler', background=False)
+    for code in index_valuation.INDICES:
+        assert len(service.history(index_code=code)['points']) == 3
+    entry = next(r for r in cache.status()['modules'] if r['id'] == 'valuation-ruler')
+    assert entry['ready'] and not entry['error']
+    assert '新增 6 个指数日' in entry['sync_note']
+    with service.db() as db:
+        assert db.execute('SELECT COUNT(*) FROM index_sync_baseline_v2').fetchone()[0] == 3
 
 
 @pytest.mark.parametrize('bad', ['counts', 'basis', 'null_mean', 'overall_partial', 'hash', 'source_basis'])

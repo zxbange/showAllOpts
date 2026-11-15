@@ -32,6 +32,8 @@ def init_store(db):
     db.execute('CREATE TABLE IF NOT EXISTS index_points_v2 '
                '(index_code TEXT NOT NULL,trade_date TEXT NOT NULL,payload TEXT NOT NULL, '
                'PRIMARY KEY(index_code,trade_date))')
+    db.execute('CREATE TABLE IF NOT EXISTS index_sync_baseline_v2 '
+               '(index_code TEXT PRIMARY KEY, method_version TEXT NOT NULL, start_date TEXT NOT NULL)')
 
 
 def available(engine):
@@ -141,10 +143,25 @@ def sync(engine, service, cutoff, check, progress, *, full=False, same_source=Tr
         init_store(local)
         if not same_source:
             local.execute('DELETE FROM index_points_v2')
+            local.execute('DELETE FROM index_sync_baseline_v2')
         for index, code in enumerate(INDICES):
+            floor = date.fromisoformat(INDICES[code][2])
+            baseline = local.execute('SELECT method_version,start_date FROM index_sync_baseline_v2 '
+                                     'WHERE index_code=?', (code,)).fetchone()
             recent = local.execute('SELECT trade_date FROM index_points_v2 WHERE index_code=? '
                                    'ORDER BY trade_date DESC LIMIT 3', (code,)).fetchall()
-            start = date.fromisoformat(recent[-1][0]) if recent and not full else date.fromisoformat(INDICES[code][2])
+            complete = baseline is not None and baseline[0] == METHOD and baseline[1] <= str(floor)
+            start = date.fromisoformat(recent[-1][0]) if recent and complete and not full else floor
+            # Public daily collection may have written just today's point. It is not
+            # evidence that this MySQL history has ever been imported completely.
+            source_range = (table.c.index_code == code, table.c.method_version == METHOD,
+                            table.c.trade_date >= floor, table.c.trade_date <= cutoff)
+            with engine.connect() as connection:
+                first_source = connection.scalar(select(func.min(table.c.trade_date)).where(*source_range))
+            first_local = local.execute('SELECT MIN(trade_date) FROM index_points_v2 WHERE index_code=?',
+                                        (code,)).fetchone()[0]
+            if first_source is not None and (first_local is None or str(first_source) < first_local):
+                start = floor  # Historical backfill can arrive after the first daily sync.
             condition = (table.c.index_code == code, table.c.method_version == METHOD,
                          table.c.trade_date >= start, table.c.trade_date <= cutoff)
             check()
@@ -197,6 +214,11 @@ def sync(engine, service, cutoff, check, progress, *, full=False, same_source=Tr
                         raise SnapshotDataError('估值汇总条数少于源库统计，本次未发布，请重试。')
                     break
                 after = rows[-1]['trade_date']
+            if start == floor:
+                local.execute('INSERT INTO index_sync_baseline_v2 VALUES (?,?,?) '
+                              'ON CONFLICT(index_code) DO UPDATE SET '
+                              'method_version=excluded.method_version,start_date=excluded.start_date',
+                              (code, METHOD, str(floor)))
     return dict(inserted=inserted, updated=updated, processed=processed)
 
 
