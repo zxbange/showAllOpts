@@ -37,32 +37,44 @@ class HistoryError(ValueError):
 
 
 class Progress:
-    """One throttled Notebook/terminal line; counts advance only after successful work."""
+    """Update one Notebook output (or terminal line), without clearing other output."""
     def __init__(self):
         self.started = time.monotonic()
         self.last_draw = -1
         self.width = 0
         self.stage, self.done, self.total, self.day = '', 0, None, None
+        shell = _builtins.getattr(_builtins, 'get_ipython', lambda: None)()
+        self.publisher = _builtins.getattr(shell, 'display_pub', None) if _builtins.getattr(shell, 'kernel', None) else None
+        self.display_id, self.displayed = uuid.uuid4().hex, False
 
     def update(self, stage, done=0, total=None, day=None, force=False):
         now = time.monotonic()
-        changed = stage != self.stage
         self.stage, self.done, self.total, self.day = stage, done, total, day
-        if not force and not changed and now-self.last_draw < 0.3:
+        if not force and now-self.last_draw < 0.5:
             return
         if total is None:
             bar = '[--------------------] --'
         else:
             ratio = done/total if total else 1
             filled = _builtins.int(20*ratio)
-            bar = '[{}{}] {}/{} 指数日 {:.0f}%'.format('#'*filled, '-'*(20-filled), done, total, 100*ratio)
+            percent = 100*done//total if total else 100
+            bar = '[{}{}] {}/{} 指数日 {}%'.format('#'*filled, '-'*(20-filled), done, total, percent)
         line = '估值历史补采 | {} | {} | {} | 已用 {:.0f}s'.format(stage, bar, day or '--', now-self.started)
-        _builtins.print('\r'+line+' '*_builtins.max(0, self.width-_builtins.len(line)), end='', flush=True)
+        if self.publisher is not None:
+            try:
+                self.publisher.publish(data={'text/plain': line}, metadata={},
+                    transient={'display_id': self.display_id}, update=self.displayed)
+                self.displayed = True
+            except Exception:
+                self.publisher = None  # Display failure must not interrupt committed collection.
+        if self.publisher is None:
+            _builtins.print('\r'+line+' '*_builtins.max(0, self.width-_builtins.len(line)), end='', flush=True)
         self.width, self.last_draw = _builtins.len(line), now
 
     def finish(self, status):
         self.update(status, self.done, self.total, self.day, force=True)
-        _builtins.print(flush=True)
+        if self.publisher is None:
+            _builtins.print(flush=True)
 
 
 def api(name):
@@ -521,10 +533,6 @@ def source_day(day, index_code=INDEX):
             if row['code'] != code or as_date(row['day']) != day:
                 raise HistoryError('{} {}：{} 复核返回代码或日期不一致。'.format(index_code, day, code))
             records[code] = row
-    missing = [code for code in codes if code not in records]
-    if missing:
-        _builtins.print('\n{} {}：{} 只缺少估值，保留成分并按缺失统计：{}。'.format(
-            index_code, day, _builtins.len(missing), ', '.join(missing[:10])), flush=True)
     prices = api('get_price')(index_code, start_date=day, end_date=day, frequency='daily',
                               fields=['close'], fq=None, skip_paused=False)
     if prices is None or _builtins.len(prices) != 1 or 'close' not in prices.columns or as_date(prices.index[0]) != day:
@@ -636,6 +644,10 @@ def run(start_date=START_DATE, end_date=END_DATE, write_database=WRITE_DATABASE,
         progress.finish('完成' if selected else '无需补采')
         _builtins.print('处理 {} 个指数日，剩余 {}；{}'.format(_builtins.len(results), total-_builtins.len(results),
             '重复运行按各指数最后完成日继续。' if write_database else '仅预览，未连接数据库。'))
+        stats = [json.loads(row['statistics']) for row in results]
+        missing = [_builtins.sum(s[basis]['missing_pe'] for s in stats) for basis in ('lyr', 'ttm')]
+        if _builtins.any(missing):
+            _builtins.print('缺失PE汇总：静态 {} 条，滚动 {} 条（按成分×指数日统计）；保留NULL，明细随结果保存。'.format(*missing))
         if return_report:
             return dict(added=added, skipped=skipped+_builtins.len(selected)-added,
                         remaining=total-_builtins.len(selected), gaps=[], unit='指数日')

@@ -6193,10 +6193,6 @@ def _valuation_ruler_strategy(_apis, _config):
                 if row['code'] != code or as_date(row['day']) != day:
                     raise HistoryError('{} {}：{} 复核返回代码或日期不一致。'.format(index_code, day, code))
                 records[code] = row
-        missing = [code for code in codes if code not in records]
-        if missing:
-            builtins.print('\n{} {}：{} 只缺少估值，保留成分并按缺失统计：{}。'.format(
-                index_code, day, builtins.len(missing), ', '.join(missing[:10])), flush=True)
         prices = api('get_price')(index_code, start_date=day, end_date=day, frequency='daily',
                                   fields=['close'], fq=None, skip_paused=False)
         if prices is None or builtins.len(prices) != 1 or 'close' not in prices.columns or as_date(prices.index[0]) != day:
@@ -6306,6 +6302,10 @@ def _valuation_ruler_strategy(_apis, _config):
             progress.finish('完成' if selected else '无需补采')
             builtins.print('处理 {} 个指数日，剩余 {}；{}'.format(builtins.len(results), total-builtins.len(results),
                 '重复运行按各指数最后完成日继续。' if write_database else '仅预览，未连接数据库。'))
+            stats = [json.loads(row['statistics']) for row in results]
+            missing = [builtins.sum(s[basis]['missing_pe'] for s in stats) for basis in ('lyr', 'ttm')]
+            if builtins.any(missing):
+                builtins.print('缺失PE汇总：静态 {} 条，滚动 {} 条（按成分×指数日统计）；保留NULL，明细随结果保存。'.format(*missing))
             if return_report:
                 return dict(added=added, skipped=skipped+builtins.len(selected)-added,
                             remaining=total-builtins.len(selected), gaps=[], unit='指数日')

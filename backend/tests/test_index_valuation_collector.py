@@ -257,6 +257,58 @@ def test_preview_is_read_only_python36_and_rounding(collector, monkeypatch, caps
     assert c.m.source_number('-1.1234567890135', 'PE') == Decimal('-1.123456789014')
 
 
+def test_notebook_progress_reuses_one_output_and_throttles_stage_changes(collector, monkeypatch, capsys):
+    m = collector.m
+    messages = []
+    shell = SimpleNamespace(kernel=object(), display_pub=SimpleNamespace(publish=lambda **kw: messages.append(kw)))
+    monkeypatch.setattr(m._builtins, 'get_ipython', lambda: shell, raising=False)
+    monkeypatch.setattr(m.time, 'monotonic', lambda: 100)
+    progress = m.Progress()
+    progress.update('读取', 0, 1000, DAYS[0])
+    for i in range(1, 1000):
+        progress.update('读取' if i % 2 else '写入', i, 1000, DAYS[0])
+    assert len(messages) == 1
+    progress.finish('失败：本次事务未提交')
+    assert len(messages) == 2
+    assert [x['update'] for x in messages] == [False, True]
+    assert messages[0]['transient'] == messages[1]['transient']
+    assert '999/1000 指数日 99%' in messages[-1]['data']['text/plain']
+    assert '失败' in messages[-1]['data']['text/plain']
+    assert not capsys.readouterr().out
+    next_progress = m.Progress()
+    next_progress.finish('无需补采')
+    assert not messages[-1]['update']
+    assert messages[-1]['transient'] != messages[0]['transient']
+
+
+def test_notebook_display_failure_does_not_interrupt_collection(collector, monkeypatch, capsys):
+    def failed_display(**kw):
+        raise OSError('display unavailable')
+    shell = SimpleNamespace(kernel=object(), display_pub=SimpleNamespace(publish=failed_display))
+    monkeypatch.setattr(collector.m._builtins, 'get_ipython', lambda: shell, raising=False)
+    assert len(run(collector, max_days=1)) == 3
+    out = capsys.readouterr().out
+    assert '3/3 指数日 100%' in out
+    assert 'display unavailable' not in out
+
+
+def test_missing_pe_is_summarized_once_without_daily_log_flood(collector, monkeypatch, capsys):
+    c = collector
+    messages = []
+    shell = SimpleNamespace(kernel=object(), display_pub=SimpleNamespace(publish=lambda **kw: messages.append(kw)))
+    monkeypatch.setattr(c.m._builtins, 'get_ipython', lambda: shell, raising=False)
+    original = c.jq.get_fundamentals
+    c.jq.get_fundamentals = lambda codes, date: original(codes, date).iloc[:-1]
+    result = run(c, write_database=False)
+    assert len(result) == 9
+    assert all(json.loads(row['statistics'])['ttm']['missing_pe'] > 0 for row in result)
+    out = capsys.readouterr().out
+    assert len(out.splitlines()) == 3  # Introduction, completion, one missing-data summary.
+    assert '缺失PE汇总：静态 24 条，滚动 24 条' in out
+    assert all(message['update'] for message in messages[1:])
+    assert '9/9 指数日 100%' in messages[-1]['data']['text/plain']
+
+
 def test_default_full_range_and_index_launch_boundary(collector):
     c = collector
     days = [dt.date(2014, 10, 16), dt.date(2014, 10, 17)]
