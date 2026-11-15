@@ -8,6 +8,7 @@ from contextlib import closing
 import copy
 import hashlib
 import json
+import logging
 import os
 from pathlib import Path
 import shutil
@@ -17,11 +18,13 @@ import time
 import uuid
 
 from app.core.cache_errors import SnapshotDataError
+from app.core.database import VersionedDatabase
 from app.core.sync_progress import report
 
 MODULES = {'growth-dividend': ('创红比', ()), 'valuation-ruler': ('估值标尺', ())}
 OWNER_FILE = '.database-sync-owner'
 SYNC_MESSAGE = '数据库历史正在同步，请到数据同步中心查看或停止。'
+logger = logging.getLogger(__name__)
 
 
 def clear_sync_owner(service):
@@ -75,25 +78,32 @@ def copy_history(cache, module, full=False):
     filename = module + '-' + uuid.uuid4().hex + '.sqlite'
     snapshot = cache.root / filename
     started = time.monotonic()
-    source = cache.source
-    identity = source_identity(source)
     stage = ['校验完整源历史' if full else '核对源历史并补齐缺失记录']
+    budget = 1800
+    if module == 'valuation-ruler':
+        from app.services import valuation_ruler_import as importer
+        budget = importer.MAX_SECONDS
+        checkpoint = service.root / importer.CHECKPOINT_FILE
 
     def check():
         if cache.stop_event.is_set() or service.stop_event.is_set():
             raise SyncCancelled()
-        if time.monotonic() - started > 1800:
+        if time.monotonic() - started > budget:
             raise SnapshotDataError('历史同步超过安全时间上限，请稍后重试。')
         # The existing cache reporter owns run/module cancellation and progress.
         report(stage[0])
 
     try:
         check()
+        source = cache.source.current() if isinstance(cache.source, VersionedDatabase) else cache.source
+        identity = source_identity(source)
         # Same filesystem as the live DB, even when CACHE_DIR is on another mount.
         with tempfile.TemporaryDirectory(prefix='.cache-sync-', dir=service.root) as directory:
             staged = copy.copy(service)
             staged.root = Path(directory)
             path = staged.root / 'history.sqlite3'
+            stage[0] = '准备本地历史副本'
+            check()
             with service.db() as existing, closing(sqlite3.connect(path)) as target:
                 existing.backup(target, pages=256, progress=lambda *_: check())
             public_state = staged.read_state()
@@ -112,14 +122,15 @@ def copy_history(cache, module, full=False):
                 summary['imported_at'] = moment.isoformat()
                 sync_metadata = dict(sync_summary=summary)
             else:
-                from app.services import valuation_ruler_import as importer
                 from app.services.valuation_ruler import close_cutoff
                 receipts = (importer.read_receipts(staged) if not full and snapshot_matches(path, identity) else None)
                 def valuation_progress(message, percent):
                     stage[0] = message
                     report(message, percent=percent)
                 with importer.read_source(source, close_cutoff(moment), check, stage_dir=staged.root,
-                                          receipts=receipts, progress=valuation_progress) as data:
+                                          receipts=receipts, progress=valuation_progress,
+                                          checkpoint_path=checkpoint,
+                                          checkpoint_identity=identity + ':' + public_state.get('joinquant_sync_generation', '')) as data:
                     stage[0] = '追加缺失估值历史，保留已有值'
                     report(stage[0], percent=65)
                     importer.publish(staged, state, moment, data, check)
@@ -127,6 +138,7 @@ def copy_history(cache, module, full=False):
                     'joinquant_import_at', 'joinquant_imported', 'joinquant_conflicts', 'joinquant_missing_days',
                     'joinquant_skipped_days')}
                 sync_metadata['joinquant_import_warning'] = state.get('error')
+                sync_metadata['joinquant_sync_generation'] = uuid.uuid4().hex
                 note = '新增 {} 天；跳过未变化 {} 天；冲突 {} 天未覆盖；源日历缺失 {} 天。'.format(
                     state['imported_days'], state['joinquant_skipped_days'], state['conflict_days'], state['joinquant_missing_days'])
             # A validated database import is not a successful public collection,
@@ -160,6 +172,11 @@ def copy_history(cache, module, full=False):
             # This is the commit boundary. Later cancellation must not mislabel an
             # already published import as cancelled or discard its cache receipt.
             cache.sync_notes[module] = note
+            if module == 'valuation-ruler':
+                try:
+                    checkpoint.unlink(missing_ok=True)
+                except OSError:
+                    logger.warning('Valuation checkpoint cleanup deferred; snapshot already published')
             return filename, rows
     except BaseException:
         snapshot.unlink(missing_ok=True)

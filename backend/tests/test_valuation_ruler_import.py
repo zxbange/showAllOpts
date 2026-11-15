@@ -157,6 +157,38 @@ def test_buffered_readonly_staging_cleanup(source,tmp_path):
     assert all(o.get('stream_results') is not True for o in engine.options)
 
 
+@pytest.mark.parametrize('phase', ['connect', 'schema', 'calendar', 'summary', 'members'])
+def test_progress_identifies_disconnect_phase_without_exposing_sql(source, monkeypatch, caplog, phase):
+    from pymysql.err import OperationalError as MysqlError
+    from sqlalchemy.exc import OperationalError
+    engine, _ = source
+    progress = []
+    def fail(*args, **kwargs):
+        raise OperationalError('SELECT private_sql', {'password': 'private_password'},
+                               MysqlError(2013, 'private_host'))
+    if phase == 'connect':
+        monkeypatch.setattr(engine, 'connect', fail)
+    elif phase == 'schema':
+        monkeypatch.setattr(imp, 'check_schema', fail)
+    else:
+        table = {'calendar': imp.CALENDAR.name, 'summary': imp.DAILY.name, 'members': imp.MEMBER.name}[phase]
+        execute = engine.execute
+        def disconnect(statement):
+            return fail() if statement.get_final_froms()[0].name == table else execute(statement)
+        monkeypatch.setattr(engine, 'execute', disconnect)
+    with caplog.at_level('INFO'), pytest.raises(OperationalError):
+        with imp.read_source(engine, DAY, lambda: None, progress=lambda message, percent: progress.append((message, percent))):
+            pytest.fail('Disconnected snapshot exposed')
+    expected = {'connect': '连接估值源数据库', 'schema': '检查估值表结构',
+                'calendar': '读取估值交易日历', 'summary': '读取每日估值汇总', 'members': '估值历史：'}
+    assert progress[-1][0].startswith(expected[phase])
+    if phase not in ('connect', 'schema'):
+        assert 'Valuation read start table=' + table in caplog.text
+        assert 'Valuation read failed table=' + table in caplog.text
+        assert 'code=MYSQL_2013' in caplog.text and 'frames=' in caplog.text
+    assert all(secret not in caplog.text for secret in ('private_sql', 'private_password', 'private_host'))
+
+
 @pytest.mark.parametrize('field,value', [('mean_pe_ttm','99'),('pe_sum','99'),('members_sha256','0'*64),
     ('positive_count',300),('loss_count',0),('member_count',299),('source','other'),('index_code','wrong'),
     ('method_version','wrong'),('updated_at',None)])

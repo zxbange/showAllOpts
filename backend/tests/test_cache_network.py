@@ -58,7 +58,7 @@ def test_reads_use_bounded_buffered_pages_across_composite_key_boundaries(cached
     assert_matches(cache, session, 'industry-momentum')
 
 
-def test_interrupted_second_data_page_retries_cleanly_without_publishing_partial_copy(cached, session, engine, monkeypatch):
+def test_interrupted_second_data_page_retries_cleanly_without_publishing_partial_copy(cached, session, engine, monkeypatch, caplog):
     _, cache = cached
     cache.refresh('industry-momentum', background=False)
     previous = cache.read_state()['modules']['industry-momentum']['file']
@@ -87,6 +87,9 @@ def test_interrupted_second_data_page_retries_cleanly_without_publishing_partial
     finally:
         event.remove(engine, 'before_cursor_execute', fail_once)
     assert waits==[2] and len(calls)==5
+    retries = [r.getMessage() for r in caplog.records if r.getMessage().startswith('Cache refresh retry')]
+    assert len(retries) == 1 and 'frames=' in retries[0] and 'fail_once' in retries[0]
+    assert 'secret_sql' not in caplog.text and 'secret_network_detail' not in caplog.text
     assert len(list(cache.root.glob('industry-momentum-*.sqlite')))==2
     assert_matches(cache, session, 'industry-momentum')
 

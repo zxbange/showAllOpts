@@ -11,7 +11,7 @@ import time
 
 from sqlalchemy import Column, Date, DateTime, Integer, LargeBinary, MetaData, Numeric, String, Table, cast, func, inspect, select
 from sqlalchemy.dialects.mysql import CHAR
-from app.core.cache_errors import SnapshotDataError
+from app.core.cache_errors import SnapshotDataError, failure_details
 from app.core.cache_sync import after_key
 from app.core.database import build_engine
 from app.core.mysql_payload import decompress_json
@@ -25,7 +25,8 @@ CHUNK_SIZE = 1000
 PACKED_DAYS = 50
 MAX_DAYS = 20000
 MAX_MEMBERS = MAX_DAYS * 300
-MAX_SECONDS = 1800
+MAX_SECONDS = 7200  # First imports over slow links may exceed 30 minutes.
+CHECKPOINT_FILE = '.valuation-sync-pending-v1.sqlite3'
 metadata = MetaData()
 logger = logging.getLogger(__name__)
 
@@ -88,11 +89,23 @@ def check_schema(connection):
 
 def _read_page(connection, statement, size, check):
     check()
-    result = connection.execution_options(stream_results=False).execute(statement.limit(size)).mappings()
+    table = statement.get_final_froms()[0].name
+    kind = 'compressed' if 'payload' in statement.selected_columns else 'dates' if len(statement.selected_columns) == 1 else 'rows'
+    started = time.monotonic()
+    logger.info('Valuation read start table=%s format=%s limit=%s', table, kind, size)
     try:
-        chunk = result.fetchmany(size)
-    finally:
-        result.close()
+        result = connection.execution_options(stream_results=False).execute(statement.limit(size)).mappings()
+        try:
+            chunk = result.fetchmany(size)
+        finally:
+            result.close()
+    except Exception as exc:
+        code, _, frames = failure_details(exc)
+        logger.warning('Valuation read failed table=%s format=%s limit=%s seconds=%.3f code=%s frames=%s',
+                       table, kind, size, time.monotonic()-started, code, frames)
+        raise
+    logger.info('Valuation read complete table=%s format=%s rows=%s seconds=%.3f',
+                table, kind, len(chunk), time.monotonic()-started)
     check()
     return chunk
 
@@ -214,15 +227,48 @@ class StagedSource:
             yield json.loads(daily), json.loads(members)
 
     def signature(self, day):
-        return fingerprint(json.loads(self.db.execute('SELECT payload FROM raw WHERE day=?', (day,)).fetchone()[0]))
+        return self.db.execute('SELECT signature FROM raw WHERE day=?', (day,)).fetchone()[0]
 
     def skipped(self):
         return self.db.execute('SELECT COUNT(*),COALESCE(SUM(conflict),0) FROM skipped').fetchone()
 
 
+def _prepare_stage(db, identity):
+    db.executescript('CREATE TABLE IF NOT EXISTS calendar(day TEXT PRIMARY KEY); '
+        'CREATE TABLE IF NOT EXISTS raw(day TEXT PRIMARY KEY,payload TEXT,signature TEXT); '
+        'CREATE TABLE IF NOT EXISTS validated(day TEXT PRIMARY KEY,daily TEXT,members TEXT,signature TEXT); '
+        'CREATE TABLE IF NOT EXISTS skipped(day TEXT PRIMARY KEY,conflict INTEGER); '
+        'CREATE TABLE IF NOT EXISTS checkpoint_source(id INTEGER PRIMARY KEY CHECK(id=1),identity TEXT);')
+    previous = db.execute('SELECT identity FROM checkpoint_source WHERE id=1').fetchone()
+    if previous is None or previous[0] != identity:
+        db.execute('DELETE FROM validated')
+        db.execute('INSERT OR REPLACE INTO checkpoint_source VALUES (1,?)', (identity,))
+    for table in ('calendar', 'raw', 'skipped'):
+        db.execute('DELETE FROM ' + table)
+
+
+def _resume_validated(db, check):
+    # Re-read source summaries on every attempt. Retain a completed day only
+    # when its source summary (including updated_at) is unchanged.
+    db.execute('DELETE FROM validated WHERE day IN (SELECT day FROM skipped) OR NOT EXISTS '
+               '(SELECT 1 FROM raw WHERE raw.day=validated.day AND raw.signature=validated.signature)')
+    resumed = 0
+    for day, members, payload in db.execute(
+            'SELECT v.day,v.members,r.payload FROM validated v JOIN raw r ON r.day=v.day'):
+        check()
+        expected = json.loads(payload)
+        daily = validate_day(date.fromisoformat(day), expected['index_close'], json.loads(members), SOURCE, expected=expected)
+        db.execute('UPDATE validated SET daily=? WHERE day=?', (json.dumps(daily), day))
+        resumed += 1
+    return resumed
+
+
 @contextmanager
-def read_source(engine, cutoff, check_cancel, *, stage_dir=None, receipts=None, progress=None):
-    """Only expose completely validated snapshots, with bounded memory and cleanup."""
+def read_source(engine, cutoff, check_cancel, *, stage_dir=None, receipts=None, progress=None,
+                checkpoint_path=None, checkpoint_identity=None):
+    """Validate a snapshot; optionally retain completed days under the caller's lock."""
+    if checkpoint_path is not None and not checkpoint_identity:
+        raise ImportError('估值续传缺少数据库来源标识，未发布。')
     started = time.monotonic()
     def check():
         check_cancel()
@@ -230,53 +276,85 @@ def read_source(engine, cutoff, check_cancel, *, stage_dir=None, receipts=None, 
             raise ImportError('估值标尺导入超过安全时间上限，未发布。')
     engine.echo, engine.hide_parameters = False, True
     with tempfile.TemporaryDirectory(prefix='valuation-import-', dir=stage_dir) as folder:
-        db = sqlite3.connect(str(Path(folder) / 'stage.sqlite3'))
+        db = sqlite3.connect(str(checkpoint_path or Path(folder) / 'stage.sqlite3'))
         try:
-            db.executescript('CREATE TABLE calendar(day TEXT PRIMARY KEY); CREATE TABLE raw(day TEXT PRIMARY KEY,payload TEXT); CREATE TABLE validated(day TEXT PRIMARY KEY,daily TEXT,members TEXT); CREATE TABLE skipped(day TEXT PRIMARY KEY,conflict INTEGER);')
+            _prepare_stage(db, checkpoint_identity)
+            check()
+            if progress:
+                progress('连接估值源数据库', 2)
             with engine.connect() as connection:
                 if connection.dialect.name == 'mysql':
                     connection = connection.execution_options(isolation_level='REPEATABLE READ')
                 with connection.begin():
+                    if progress:
+                        progress('建立估值只读快照', 3)
                     if connection.dialect.name == 'mysql':
                         connection.exec_driver_sql('SET TRANSACTION READ ONLY')
                         connection.exec_driver_sql('START TRANSACTION WITH CONSISTENT SNAPSHOT')
+                    if progress:
+                        progress('检查估值表结构', 4)
                     check_schema(connection)
+                    if progress:
+                        progress('读取估值交易日历', 5)
                     for row in _rows(connection, CALENDAR, MAX_DAYS, check):
                         day = _identity(row, cutoff, True)
                         db.execute('INSERT INTO calendar VALUES (?)', (day,))
+                    if progress:
+                        progress('读取每日估值汇总', 10)
                     for row in _rows(connection, DAILY, MAX_DAYS, check):
                         day = _identity(row, cutoff)
                         if not db.execute('SELECT 1 FROM calendar WHERE day=?', (day,)).fetchone():
                             raise ImportError('估值标尺日线日期不在源交易日历中。')
-                        db.execute('INSERT INTO raw VALUES (?,?)', (day, json.dumps(dict(row), default=str)))
+                        signature = fingerprint(dict(row))
+                        db.execute('INSERT INTO raw VALUES (?,?,?)', (day, json.dumps(dict(row), default=str), signature))
                         receipt = (receipts or {}).get(day)
-                        if receipt and receipt[0] == fingerprint(dict(row)):
+                        if receipt and receipt[0] == signature:
                             db.execute('INSERT INTO skipped VALUES (?,?)', (day, receipt[1]))
+                    if progress:
+                        progress('恢复已保存的估值校验进度', 15)
+                    resumed = _resume_validated(db, check)
                     needed = [date.fromisoformat(r[0]) for r in db.execute(
-                        'SELECT day FROM raw WHERE day NOT IN (SELECT day FROM skipped) ORDER BY day')]
+                        'SELECT day FROM raw WHERE day NOT IN '
+                        '(SELECT day FROM skipped UNION SELECT day FROM validated) ORDER BY day')]
                     skipped = db.execute('SELECT COUNT(*) FROM skipped').fetchone()[0]
                     if progress:
-                        progress('估值历史：跳过 {} 天，需读取 {} 天明细'.format(skipped, len(needed)), 20)
+                        progress('估值历史：续传 {} 天，跳过 {} 天，需读取 {} 天明细'.format(resumed, skipped, len(needed)), 20)
+                    logger.info('Valuation checkpoint resumed_days=%s needed_days=%s skipped_days=%s', resumed, len(needed), skipped)
                     current, members = None, {}
-                    completed = 0
+                    completed = resumed
+                    total = resumed + len(needed)
                     def finish():
                         nonlocal completed
                         if current is None:
                             return
                         check()
-                        raw = db.execute('SELECT payload FROM raw WHERE day=?', (current,)).fetchone()
+                        raw = db.execute('SELECT payload,signature FROM raw WHERE day=?', (current,)).fetchone()
                         if raw is None:
                             raise ImportError('估值标尺成分股缺少对应日线。')
                         expected = json.loads(raw[0])
                         daily = validate_day(date.fromisoformat(current), expected['index_close'], members, SOURCE, expected=expected)
-                        db.execute('INSERT INTO validated VALUES (?,?,?)', (current, json.dumps(daily, default=str), json.dumps(members, default=str)))
+                        db.execute('INSERT INTO validated VALUES (?,?,?,?)',
+                                   (current, json.dumps(daily), json.dumps(members, default=str), raw[1]))
+                        if checkpoint_path is not None:
+                            db.commit()  # A broken source connection must not discard completed days.
                         completed += 1
                         if progress:
-                            progress('校验估值明细 {}/{} 天；跳过 {} 天'.format(completed, len(needed), skipped),
-                                     20 + int(40 * completed / max(1, len(needed))))
+                            progress('校验估值明细 {}/{} 天；跳过 {} 天'.format(completed, total, skipped),
+                                     20 + int(40 * completed / max(1, total)))
                     # First/full sync checks the complete source (including orphan rows).
                     # Incremental queries use the primary-key date prefix, at most 50 days each.
-                    batches = [None] if not receipts else [needed[i:i+50] for i in range(0, len(needed), 50)]
+                    if resumed and not receipts:
+                        # Check source day/count coverage even for retained days.
+                        dates = select(MEMBER.c.trade_date, func.count().label('member_count')).group_by(MEMBER.c.trade_date)
+                        source_days = set()
+                        for page in _pages(connection, dates, [MEMBER.c.trade_date], MAX_DAYS, CHUNK_SIZE, check):
+                            for row in page:
+                                if row['member_count'] != 300:
+                                    raise ImportError('估值标尺成分股数量异常，未发布。')
+                                source_days.add(str(row['trade_date']))
+                        if source_days != {r[0] for r in db.execute('SELECT day FROM raw')}:
+                            raise ImportError('估值标尺成分股日期与日汇总不一致，未发布。')
+                    batches = [None] if not receipts and not resumed else [needed[i:i+50] for i in range(0, len(needed), 50)]
                     for batch in batches:
                         for row in _member_rows(connection, check, days=batch):
                             day = _identity(row, cutoff)

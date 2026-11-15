@@ -431,9 +431,9 @@ class SnapshotCache:
                     raise
                 report('网络重试 {}/{}'.format(attempt + 1, attempts))
                 delay = min(2 ** attempt, 16)
-                code, _, _ = failure_details(exc)
-                logger.warning('Cache refresh retry module=%s attempt=%s/%s code=%s delay_seconds=%s',
-                               module, attempt, attempts, code, delay)
+                code, _, frames = failure_details(exc)
+                logger.warning('Cache refresh retry module=%s attempt=%s/%s code=%s delay_seconds=%s frames=%s',
+                               module, attempt, attempts, code, delay, frames)
                 # A failed copy was removed; retry opens a new source transaction and fresh local copy.
                 if self.stop_event.wait(delay):
                     return None

@@ -127,7 +127,7 @@ def test_timestamp_change_rechecks_and_full_mode_detects_unannounced_member_edit
     assert sync(cache, full=True)['error'] and len(reads) == 1
 
 
-def test_cancel_before_publication_keeps_receipts_and_retry_reads_delta(context, engine, monkeypatch):
+def test_cancel_before_publication_keeps_receipts_and_retry_reuses_checkpoint(context, engine, monkeypatch):
     cache, service, reads = context
     sync(cache)
     seed_history_sources(engine, date(2020, 1, 3))
@@ -141,7 +141,7 @@ def test_cancel_before_publication_keeps_receipts_and_retry_reads_delta(context,
         assert sync(cache)['progress']['status'] == 'cancelled'
     assert len(imp.read_receipts(service)) == 1
     reads.clear()
-    assert not sync(cache)['error'] and len(reads) == 1
+    assert not sync(cache)['error'] and not reads
     assert len(imp.read_receipts(service)) == 2
 
 
