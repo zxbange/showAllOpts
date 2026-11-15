@@ -67,13 +67,25 @@ test('static yield history opens on hover or tap without clipping or changing th
     route.fulfill({ json: fixture }),
   )
   await page.goto('/dividend-selection')
-  for (const group of ['纯高股息', '高股息低估值（非银行业）', '高股息低估值（银行业）']) {
+  for (const [group, firstCode] of [
+    ['纯高股息', '000001.XSHE'],
+    ['高股息低估值（非银行业）', '000010.XSHE'],
+    ['高股息低估值（银行业）', '000100.XSHE'],
+  ]) {
     await page.getByRole('link', { name: group, exact: true }).click()
+    await expect(page.locator('tbody tr').first()).toContainText(firstCode)
     const marker = page.getByRole('button', { name: '查看近三年股息率' }).first()
     if (testInfo.project.name === 'desktop') await marker.hover()
     else await marker.click()
     const tip = page.getByRole('tooltip')
     await expect(tip).toContainText('2025 财年')
+    if (testInfo.project.name === 'mobile') {
+      // Touch browsers can synthesize mouseout/blur or finish focus scrolling after click.
+      await marker.dispatchEvent('mouseout', { relatedTarget: null })
+      await marker.evaluate((button) => (button as HTMLElement).blur())
+      await page.evaluate(() => window.dispatchEvent(new Event('scroll')))
+      await expect(tip).toBeVisible()
+    }
     await expect(tip).toContainText('2023 财年')
     await expect(tip).toContainText('6.00%')
     const box = await tip.boundingBox()

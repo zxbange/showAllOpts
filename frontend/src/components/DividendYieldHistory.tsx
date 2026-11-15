@@ -9,6 +9,7 @@ export function DividendYieldHistory({ history }: { history?: AnnualYield[] | nu
   const id = useId()
   const anchor = useRef<HTMLButtonElement>(null)
   const popup = useRef<HTMLDivElement>(null)
+  const pinned = useRef(false)
   const [position, setPosition] = useState<{ left: number; top: number } | null>(null)
   const open = () => {
     const rect = anchor.current?.getBoundingClientRect()
@@ -20,7 +21,10 @@ export function DividendYieldHistory({ history }: { history?: AnnualYield[] | nu
   }
   useEffect(() => {
     if (!position) return
-    const close = () => setPosition(null)
+    const close = () => {
+      pinned.current = false
+      setPosition(null)
+    }
     const outside = (event: PointerEvent) => {
       if (
         !anchor.current?.contains(event.target as Node) &&
@@ -31,15 +35,20 @@ export function DividendYieldHistory({ history }: { history?: AnnualYield[] | nu
     const escape = (event: KeyboardEvent) => {
       if (event.key === 'Escape') close()
     }
+    const scroll = () => {
+      const rect = anchor.current?.getBoundingClientRect()
+      if (rect && rect.bottom > 0 && rect.top < window.innerHeight) open()
+      else close()
+    }
     window.addEventListener('pointerdown', outside)
     window.addEventListener('keydown', escape)
     window.addEventListener('resize', close)
-    window.addEventListener('scroll', close, true)
+    window.addEventListener('scroll', scroll, true)
     return () => {
       window.removeEventListener('pointerdown', outside)
       window.removeEventListener('keydown', escape)
       window.removeEventListener('resize', close)
-      window.removeEventListener('scroll', close, true)
+      window.removeEventListener('scroll', scroll, true)
     }
   }, [position])
   return (
@@ -52,17 +61,21 @@ export function DividendYieldHistory({ history }: { history?: AnnualYield[] | nu
         aria-describedby={position ? id : undefined}
         onMouseEnter={open}
         onFocus={open}
-        onBlur={() => setPosition(null)}
+        onBlur={() => {
+          if (!pinned.current) setPosition(null)
+        }}
         onMouseLeave={(event) => {
           if (
-            !(event.relatedTarget instanceof Node) ||
-            !popup.current?.contains(event.relatedTarget)
+            !pinned.current &&
+            (!(event.relatedTarget instanceof Node) ||
+              !popup.current?.contains(event.relatedTarget))
           )
             setPosition(null)
         }}
         onClick={(event) => {
           event.preventDefault()
           event.stopPropagation()
+          pinned.current = true
           open()
         }}
       >
@@ -76,7 +89,9 @@ export function DividendYieldHistory({ history }: { history?: AnnualYield[] | nu
             role="tooltip"
             className="dividend-history-popup"
             style={position}
-            onMouseLeave={() => setPosition(null)}
+            onMouseLeave={() => {
+              if (!pinned.current) setPosition(null)
+            }}
           >
             <strong>近三年股息率</strong>
             {history?.length ? (
