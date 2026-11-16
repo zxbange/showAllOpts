@@ -24,6 +24,8 @@ from urllib.parse import urlsplit
 
 DATACENTER = 'https://datacenter-web.eastmoney.com/api/data/v1/get'
 UNIVERSE = 'https://82.push2.eastmoney.com/api/qt/clist/get'
+SELECTOR = 'https://datacenter.eastmoney.com/stock/selection/api/data/get'
+SELECTOR_PAGE_SIZE = 5000
 PRICES = 'https://push2his.eastmoney.com/api/qt/stock/kline/get'
 MAX_BYTES = 12 * 1024 * 1024
 MAX_REDIRECTS = 3
@@ -159,6 +161,11 @@ class EastmoneyCashCowSource:
         raise CashCowSourceError('数据源重试失败')
 
     def _get_once(self, url, params):
+        started = time.monotonic()
+        current = httpx.URL(url)
+        status = None
+        received = 0
+        stage = 'connect_or_headers'
         try:
             original = httpx.URL(url, params=params)
             current, visited = original, {str(original)}
@@ -166,11 +173,14 @@ class EastmoneyCashCowSource:
                 # Bound/cancel every hop and override an injected client's own
                 # automatic redirect setting before any destination is visited.
                 self._rate_limit()
+                status, received, stage = None, 0, 'connect_or_headers'
                 streaming = hasattr(self.client, 'stream')
                 context = (self.client.stream('GET', current, timeout=25, follow_redirects=False)
                            if streaming else nullcontext(self.client.get(
                                current, timeout=25, follow_redirects=False)))
                 with context as response:
+                    status = response.status_code
+                    stage = 'response_status'
                     if response.status_code in REDIRECT_STATUSES:
                         if redirects >= MAX_REDIRECTS:
                             raise CashCowSourceError('东方财富数据源重定向次数过多，已停止采集')
@@ -183,13 +193,16 @@ class EastmoneyCashCowSource:
                     response.raise_for_status()
                     # Streaming bounds decompressed bytes as well as JSON size,
                     # including the final response after a permitted redirect.
+                    stage = 'response_body'
                     chunks, size = [], 0
                     for chunk in response.iter_bytes() if streaming else [response.content]:
                         self.check_cancel()
                         size += len(chunk)
+                        received = size
                         if size > MAX_BYTES:
                             raise CashCowSourceError('数据源响应过大，已停止采集')
                         chunks.append(chunk)
+                    stage = 'decode_json'
                     data = json.loads(b''.join(chunks))
                     break
         except CashCowSourceError:
@@ -197,12 +210,18 @@ class EastmoneyCashCowSource:
         except Exception as exc:
             # Cancellation raised by caller must not be turned into a retry/error.
             self.check_cancel()
-            label = ('股票列表' if url == UNIVERSE else '历史行情' if url == PRICES else '分红与财报')
+            label = ('股票列表' if url in (UNIVERSE, SELECTOR) else '历史行情' if url == PRICES else '分红与财报')
             reason = ('请求超时' if isinstance(exc, httpx.TimeoutException) else
                       '连接被中断' if isinstance(exc, (httpx.NetworkError, httpx.RemoteProtocolError)) else
                       'HTTP {}'.format(exc.response.status_code) if isinstance(exc, httpx.HTTPStatusError) else
                       '返回内容不是有效JSON' if isinstance(exc, (ValueError, UnicodeError)) else '读取异常')
-            LOG.warning('Cash cow source failed endpoint=%s details=%s', label, diagnostic_details(exc))
+            # Log only fixed API coordinates and paging counters. Never log
+            # raw URLs, query filters, headers, credentials or response bodies.
+            page = params.get('pn', params.get('p', params.get('pageNumber', '-')))
+            LOG.warning('Cash cow source failed endpoint=%s host=%s path=%s stage=%s '
+                        'page=%s http_status=%s received_bytes=%s elapsed_seconds=%.3f details=%s',
+                        label, current.host, current.path, stage, page, status or '-', received,
+                        time.monotonic() - started, diagnostic_details(exc))
             raise CashCowSourceError('东方财富{}{}，请稍后重试。'.format(label, reason)) from exc
         if not isinstance(data, dict):
             raise CashCowSourceError('数据源响应格式异常')
@@ -300,7 +319,19 @@ class EastmoneyCashCowSource:
             if len({r['code'] for r in cached}) == len(cached):
                 self.secids.update({r['code']: f"{1 if r['exchange'] == 'SH' else 0}.{r['code']}" for r in cached})
                 return cached
-        stocks = self._universe_uncached()
+        try:
+            stocks = self._universe_uncached()
+        except CashCowSourceError as exc:
+            cause = exc.__cause__
+            # Alternate current-list service, not a fallback after access denial,
+            # malformed JSON, pagination errors, or cancellation.
+            if not (isinstance(cause, (httpx.TimeoutException, httpx.NetworkError,
+                                      httpx.RemoteProtocolError)) or
+                    isinstance(cause, httpx.HTTPStatusError) and cause.response.status_code >= 500):
+                raise
+            LOG.warning('Cash cow universe fallback source=eastmoney_selector reason=%s',
+                        type(cause).__name__)
+            stocks = self._selector_universe()
         self._save_cache('universe', [], stocks)
         return stocks
 
@@ -336,6 +367,65 @@ class EastmoneyCashCowSource:
             page += 1
             if self.progress:
                 self.progress(f'正在读取沪深京股票列表第 {page} 页')
+
+    def _selector_universe(self):
+        # This service exposes nextpage/currentpage, NOT a total count. Validate
+        # its entire pagination contract; do not claim an independent census.
+        stocks, seen, markets = [], set(), set()
+        quote_date, previous = None, None
+        today = date.fromisoformat(self.as_of)
+        for page in range(1, 6):
+            self.check_cancel()
+            payload = self._get(SELECTOR, dict(type='RPTA_APP_STOCKSELECT',
+                sty='SECUCODE,SECURITY_CODE,SECURITY_NAME_ABBR,LISTING_DATE',
+                p=page, ps=SELECTOR_PAGE_SIZE, sr=1, st='SECURITY_CODE',
+                source='SELECT_SECURITIES', client='APP'))
+            result = payload.get('result')
+            if (payload.get('success') is not True or payload.get('code') != 0
+                    or not isinstance(result, dict) or type(result.get('currentpage')) is not int
+                    or result['currentpage'] != page or type(result.get('nextpage')) is not bool):
+                raise CashCowSourceError('备用股票列表分页信息异常')
+            batch, more = result.get('data'), result['nextpage']
+            if (not isinstance(batch, list) or not 1 <= len(batch) <= SELECTOR_PAGE_SIZE
+                    or more and len(batch) != SELECTOR_PAGE_SIZE):
+                raise CashCowSourceError('备用股票列表分页不完整')
+            for row in batch:
+                if not isinstance(row, dict):
+                    raise CashCowSourceError('备用股票列表记录异常')
+                code, identity, name = row.get('SECURITY_CODE'), row.get('SECUCODE'), row.get('SECURITY_NAME_ABBR')
+                match = re.fullmatch(r'([0-9]{6})\.(SH|SZ|BJ)', str(identity))
+                if (not match or code != match[1] or code in seen
+                        or previous is not None and code <= previous
+                        or not isinstance(name, str) or not name.strip()):
+                    raise CashCowSourceError('备用股票列表含重复或无效证券')
+                exchange = match[2]
+                prefixes = {'SH': ('60', '68'), 'SZ': ('00', '30'), 'BJ': ('4', '8', '92')}
+                if not code.startswith(prefixes[exchange]):
+                    raise CashCowSourceError('备用股票列表包含非A股证券')
+                try:
+                    listed = date.fromisoformat(row['LISTING_DATE'])
+                    stamp = date.fromisoformat(row['MAX_TRADE_DATE'])
+                except (KeyError, TypeError, ValueError):
+                    raise CashCowSourceError('备用股票列表日期缺失或无效') from None
+                # Deliberately conservative during long holidays: do not use a
+                # week-old response as proof of a current list. These dates are
+                # quote freshness, not a historical membership guarantee.
+                if (listed > today or not 0 <= (today - stamp).days <= 7
+                        or quote_date is not None and stamp != quote_date):
+                    raise CashCowSourceError('备用股票列表已过期或日期不一致')
+                quote_date, previous = stamp, code
+                seen.add(code)
+                markets.add(exchange)
+                stocks.append(dict(code=code, name=name.strip(), exchange=exchange))
+            LOG.info('Cash cow universe page source=eastmoney_selector page=%s rows=%s '
+                     'collected=%s has_more=%s quote_date=%s', page, len(batch), len(stocks), more, quote_date)
+            if not more:
+                if markets != {'SH', 'SZ', 'BJ'}:
+                    raise CashCowSourceError('备用股票列表缺少沪深京市场')
+                # Replace, not merge with any partially fetched primary pages.
+                self.secids = {r['code']: f"{1 if r['exchange'] == 'SH' else 0}.{r['code']}" for r in stocks}
+                return stocks
+        raise CashCowSourceError('备用股票列表超过分页上限')
 
     def _annual(self, report, year, codes):
         # Annual batches are bounded to 500 rows/page and contain delisted and

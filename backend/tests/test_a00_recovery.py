@@ -91,7 +91,8 @@ def test_restart_preserves_floor_and_retries_source_unavailable_dates(setup, mon
     assert 'private-secret' not in str(job.status())
     clock[0] += timedelta(minutes=30)
     restarted = commodities.Commodities(settings)
-    calls, _ = install(monkeypatch, ['2026-11-06', '2026-11-09'])
+    # Keep immutable article URLs stable across the restart; add a new article.
+    calls, _ = install(monkeypatch, ['2026-11-05', '2026-11-06', '2026-11-09'])
     restarted.collect(restarted.lock())
     assert {'2026-11-05', '2026-11-06', '2026-11-09'} <= days(restarted)
     assert restarted.status()['recovery']['dateFrom'] == '2026-11-04'
@@ -160,3 +161,42 @@ def test_discovery_keeps_only_safe_relevant_interval_links():
             f'<a href="{article_url(3)}">铜价行情</a>'
             '<a href="https://evil.example/file">现铝早评</a>')
     assert recovery_links(body, start='2026-11-04', end='2026-11-10') == [article_url(1)]
+
+
+def test_parsed_articles_cool_down_but_requests_and_new_links_retry(setup, monkeypatch):
+    clock, settings, job = setup
+    calls, _ = install(monkeypatch, ['2026-11-05', '2026-11-06'], failing=[article_url(2)])
+    job.collect(job.lock())
+    restarted = commodities.Commodities(settings)
+    calls, _ = install(monkeypatch, ['2026-11-05', '2026-11-06', '2026-11-09'])
+    restarted.collect(restarted.lock())
+    assert article_url(1) not in calls
+    assert article_url(2) in calls and article_url(3) in calls
+    assert {'2026-11-05', '2026-11-06', '2026-11-09'} <= days(restarted)
+    calls.clear()
+    restarted.collect(restarted.lock())
+    assert calls == [HOME, CATALOG]
+    clock[0] += timedelta(days=1)
+    calls.clear()
+    restarted.collect(restarted.lock())
+    assert article_url(1) in calls
+
+
+def test_current_quote_is_logged_and_saved_before_recovery(setup, monkeypatch, caplog):
+    _, _, job = setup
+    calls, bodies = install(monkeypatch, ['2026-11-05'])
+    original = commodities.fetch
+    def fetch(client, url, catalog=False):
+        if url == CATALOG:
+            assert job.status()['currentVerified']
+            assert '2026-11-10' in days(job)
+        return original(client, url, catalog)
+    monkeypatch.setattr(commodities, 'fetch', fetch)
+    with caplog.at_level('INFO'):
+        job.collect(job.lock())
+    assert 'Commodity current quote target=2026-11-10 source_date=2026-11-10 result=current' in caplog.text
+
+
+def test_unrelated_article_has_specific_diagnostic():
+    from app.services.commodity_source import ArticleNotApplicable, diagnostic_reason
+    assert diagnostic_reason(ArticleNotApplicable('unrelated')) == 'article_not_applicable'

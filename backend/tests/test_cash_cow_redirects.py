@@ -234,3 +234,30 @@ def test_non_stream_client_is_also_constrained():
             return httpx.Response(200, json={}, request=request)
     assert m.EastmoneyCashCowSource(Client())._get(m.UNIVERSE, {}) == {}
     assert len(calls) == 2
+
+
+def test_protocol_disconnect_logs_attempt_coordinates_without_secret(caplog):
+    calls = []
+    def handler(request):
+        calls.append(request)
+        raise httpx.RemoteProtocolError('Server disconnected without sending a response', request=request)
+    with httpx.Client(transport=httpx.MockTransport(handler)) as client:
+        with pytest.raises(m.CashCowSourceError, match='连接被中断'):
+            m.EastmoneyCashCowSource(client)._get(m.UNIVERSE, {'pn': 3, 'token': 'do-not-log'})
+    assert len(calls) == 2
+    assert 'host=82.push2.eastmoney.com path=/api/qt/clist/get' in caplog.text
+    assert 'stage=connect_or_headers page=3 http_status=- received_bytes=0' in caplog.text
+    assert 'do-not-log' not in caplog.text
+
+
+def test_redirect_failure_logs_final_host_not_previous_http_status(caplog):
+    def handler(request):
+        if request.url.host == '82.push2.eastmoney.com':
+            return httpx.Response(302, headers={'Location': delayed(request)})
+        raise httpx.RemoteProtocolError('Disconnected', request=request)
+    with httpx.Client(transport=httpx.MockTransport(handler)) as client:
+        with pytest.raises(m.CashCowSourceError):
+            m.EastmoneyCashCowSource(client)._get(m.UNIVERSE, {'pn': 1})
+    assert 'host=82.push2delay.eastmoney.com' in caplog.text
+    assert 'http_status=-' in caplog.text
+    assert 'http_status=302' not in caplog.text

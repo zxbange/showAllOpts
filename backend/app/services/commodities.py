@@ -17,7 +17,7 @@ import httpx
 import portalocker
 from app.services.commodity_source import (HOME, CATALOG, START, fetch, home_date_reference,
     public_report_date, parse_home, QuoteError, QuoteIncomplete, explicit_home_date,
-    recovery_links, parse_recovery, diagnostic_reason)
+    recovery_links, parse_recovery, diagnostic_reason, ArticleNotApplicable)
 
 LOG = logging.getLogger(__name__)
 CHINA = ZoneInfo('Asia/Shanghai')
@@ -256,6 +256,10 @@ class Commodities:
                     current_verified = not self.stopping.is_set() and quote_date == target_day
                     target_result = ('current' if quote_date == target_day else
                                      'sourceNotPublished' if quote_date < target_day else 'targetDateUnavailable')
+                    status('最新现货报价已读取，检查缺失日期')
+                    LOG.info('Commodity current quote target=%s source_date=%s result=%s low=%s high=%s mean=%s inserted=%s changed=%s',
+                             target_day, quote_date, target_result, home_quote['low'], home_quote['high'],
+                             home_quote['mean'], inserted, changed)
                 except Exception as exc:
                     target_result = ('partial' if isinstance(exc, QuoteIncomplete) else
                                      'unverified' if isinstance(exc, (QuoteError, ValueError)) else 'sourceReadFailed')
@@ -278,8 +282,14 @@ class Commodities:
                             db.execute("INSERT OR IGNORE INTO a00_source_checks VALUES(?,'','pending')", (url,))
                         # Retain discovered links across catalog rotation/restarts;
                         # never let one unavailable article starve all later ones.
+                        # Parsed public articles do not change on each click. Retry
+                        # them daily (not never), while transport failures stay eligible.
+                        # This also bounds repeated scans caused by unpublished days.
+                        retry_before = (now() - timedelta(days=1)).isoformat()
                         candidates = [r[0] for r in db.execute(
-                            'SELECT url FROM a00_source_checks ORDER BY checked_at,url')]
+                            "SELECT url FROM a00_source_checks WHERE checked_at<=? "
+                            "OR result IN ('pending','source_request_or_processing_failed') "
+                            'ORDER BY checked_at,url', (retry_before,))]
                     attempted = 0
                     for url in candidates:
                         if not historical or should_stop():
@@ -301,7 +311,10 @@ class Commodities:
                             result = diagnostic_reason(exc)
                             if not isinstance(exc, QuoteError):
                                 failures += 1
-                            LOG.warning('Commodity recovery article type=%s reason=%s', type(exc).__name__, result)
+                            log = LOG.info if isinstance(exc, ArticleNotApplicable) else LOG.warning
+                            log('Commodity recovery article source=%s type=%s reason=%s %s',
+                                url, type(exc).__name__, result,
+                                diagnostic_details(exc) if not isinstance(exc, QuoteError) else '')
                         attempted += 1
                         recovery['articlesChecked'] += 1
                         with self.db() as db:

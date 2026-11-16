@@ -144,7 +144,11 @@ def test_only_transient_failures_retry(monkeypatch):
             return httpx.Response(status, json={})
         s = EastmoneyCashCowSource(httpx.Client(transport=httpx.MockTransport(handler)))
         with pytest.raises(CashCowSourceError): s.universe()
-        assert len(calls) == attempts
+        # A 5xx exhausts two quote attempts, then two counted-selector attempts.
+        # Denial/rate-limit responses must never switch to an alternate service.
+        assert len(calls) == (4 if status == 503 else attempts)
+        assert sum(r.url.host == '82.push2.eastmoney.com' for r in calls) == attempts
+        assert sum(r.url.host == 'datacenter.eastmoney.com' for r in calls) == (2 if status == 503 else 0)
 
 
 def test_malformed_json_not_retried():

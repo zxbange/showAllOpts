@@ -187,6 +187,8 @@ def parse_home(content, *, today, report_date, report_url):
 
 def diagnostic_reason(error):
     # Only fixed parser messages map to public codes; never echo upstream text.
+    if isinstance(error, ArticleNotApplicable):
+        return 'article_not_applicable'
     if isinstance(error, QuoteError):
         return {
             '未找到历史行情段落，保留已有记录': 'history_section_missing',
