@@ -125,8 +125,8 @@ test('notification channels can both run or independently stop while collection 
     feishu_webhook: 'https://open.feishu.cn/open-apis/bot/v2/hook/test-private-hook',
     feishu_secret: 'test-private-signing-key',
   })
-  await expect(page.getByRole('group', { name: '飞书 Webhook已配置' })).toContainText('***')
-  await expect(page.getByRole('group', { name: '飞书签名密钥已配置' })).toContainText('***')
+  await expect(page.getByRole('group', { name: '飞书 Webhook已配置' }).getByLabel('飞书 Webhook', { exact: true })).toHaveAttribute('placeholder', '********')
+  await expect(page.getByRole('group', { name: '飞书签名密钥已配置' }).getByLabel('飞书签名密钥', { exact: true })).toHaveAttribute('placeholder', '********')
   expect(await page.content()).not.toContain('test-private-hook')
   expect(await page.content()).not.toContain('test-private-signing-key')
   await feishu.click()
@@ -168,6 +168,15 @@ test('missing configuration prevents channel activation and blank edits preserve
   await page.getByRole('switch', { name: '启用飞书通知' }).click()
   await expect(page.getByRole('alert')).toContainText('请先保存飞书的飞书 Webhook和飞书签名密钥')
   expect(state.changes).toEqual([])
+  const errorDialog = page.getByRole('dialog', { name: '配置操作失败' })
+  await expect(errorDialog).toBeVisible()
+  await errorDialog.getByRole('button', { name: '知道了' }).click()
+  await expect(errorDialog).not.toBeVisible()
+  // A repeated validation error must reopen after dismissal, not leave an inert form.
+  await page.getByRole('switch', { name: '启用飞书通知' }).click()
+  await expect(errorDialog).toBeVisible()
+  await errorDialog.getByRole('button', { name: '知道了' }).click()
+  await expect(errorDialog).not.toBeVisible()
   await page
     .getByLabel('飞书 Webhook', { exact: true })
     .fill('https://open.feishu.cn/open-apis/bot/v2/hook/replaceable')

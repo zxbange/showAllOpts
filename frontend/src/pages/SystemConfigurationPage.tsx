@@ -85,7 +85,7 @@ function Editor() {
   }
   return (
     <div className="system-settings">
-      <ConfigurationErrorDialog message={error} />
+      <ConfigurationErrorDialog message={error} onDismiss={() => setError('')} />
       <PageHeader>
         <div>
           <h1>系统配置</h1>

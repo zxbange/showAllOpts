@@ -131,7 +131,7 @@ export function SystemNotificationConfiguration({
   return (
     <section id="settings-notifications" className="panel system-settings-section">
       <h2>社交监控通知</h2>
-      <ConfigurationErrorDialog message={error} />
+      <ConfigurationErrorDialog message={error} onDismiss={() => setError('')} />
       <p className="system-settings-muted">
         此区域独立保存，开关即时生效；Telegram 凭证与采集任务共用。
       </p>
