@@ -411,11 +411,14 @@ class EastmoneyCashCowSource:
                 # Deliberately conservative during long holidays: do not use a
                 # week-old response as proof of a current list. These dates are
                 # quote freshness, not a historical membership guarantee.
-                if (listed > today or not 0 <= (today - stamp).days <= 7
+                if (not 0 <= (today - stamp).days <= 7
                         or quote_date is not None and stamp != quote_date):
                     raise CashCowSourceError('备用股票列表已过期或日期不一致')
                 quote_date, previous = stamp, code
                 seen.add(code)
+                if listed > today:
+                    LOG.info('Cash cow universe prelisting excluded symbol=%s listed=%s as_of=%s', identity, listed, today)
+                    continue
                 markets.add(exchange)
                 stocks.append(dict(code=code, name=name.strip(), exchange=exchange, list_date=listed.isoformat()))
             LOG.info('Cash cow universe page source=eastmoney_selector page=%s rows=%s '

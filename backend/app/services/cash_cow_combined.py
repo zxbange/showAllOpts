@@ -84,20 +84,44 @@ class CombinedCashCowSource(EastmoneyCashCowSource):
         # The selector has a complete-page/nextpage contract and does not use
         # Tushare stock_basic's restrictive trial quota. Never reuse clist data.
         census = self._selector_universe()
-        verified = {f"{row['code']}.{row['exchange']}" for row in census}
-        if len(verified) != len(census) or verified != set(self.symbols.values()):
-            current = set(self.symbols.values())
-            LOG.warning('Cash cow universe mismatch asharehub=%s selector=%s asharehub_only=%s selector_only=%s', len(current), len(verified), sorted(current-verified)[:10], sorted(verified-current)[:10])
-            raise CashCowSourceError('AShareHub 与独立股票池覆盖不一致，未发布部分结果。')
-        # Compare date provenance before applying age: do not mistake a code
-        # migration or an earlier OTC admission for an exchange listing date.
-        census_dates = {row['code']: row.get('list_date') for row in census}
-        for stock in stocks:
-            if census_dates[stock['code']] != stock['list_date']:
+        from app.services.cash_cow_rules import listed_three_years
+        verified = {f"{row['code']}.{row['exchange']}": row for row in census}
+        current = {f"{row['code']}.{row['exchange']}": row for row in stocks}
+        if len(verified) != len(census):
+            raise CashCowSourceError('独立股票池存在重复，未发布部分结果。')
+        # Reconcile the full raw pools before eligibility. Shared-code date
+        # conflicts must not be hidden by filtering either provider first.
+        for symbol in current.keys() & verified.keys():
+            if current[symbol]['list_date'] != verified[symbol].get('list_date'):
                 LOG.warning('Cash cow listing date unverified symbol=%s asharehub_date=%s selector_date=%s',
-                            self.symbols[stock['code']], stock['list_date'], census_dates[stock['code']])
+                            symbol, current[symbol]['list_date'], verified[symbol].get('list_date'))
                 raise CashCowSourceError('上市日期跨来源不一致，无法核验上市年限，保留原结果。')
-        return stocks
+        missing = []
+        for provider, pool, other in [('asharehub', current, verified), ('eastmoney_selector', verified, current)]:
+            for symbol in sorted(pool.keys() - other.keys()):
+                listed = pool[symbol].get('list_date')
+                try:
+                    parsed = date.fromisoformat(listed)
+                except (TypeError, ValueError):
+                    raise CashCowSourceError('股票池上市日期缺失或无效，无法核验覆盖范围。') from None
+                if parsed > date.fromisoformat(self.as_of) or listed_three_years(listed, self.as_of):
+                    missing.append(symbol)
+                else:
+                    LOG.info('Cash cow universe ineligible difference source=%s symbol=%s listed=%s as_of=%s reason=listed_under_three_years',
+                             provider, symbol, listed, self.as_of)
+        if missing:
+            LOG.warning('Cash cow universe mismatch asharehub=%s selector=%s asharehub_only=%s selector_only=%s eligible_unverified=%s',
+                        len(current), len(verified), sorted(current.keys()-verified.keys())[:10],
+                        sorted(verified.keys()-current.keys())[:10], sorted(missing)[:10])
+            raise CashCowSourceError('AShareHub 与独立股票池覆盖不一致，未发布部分结果。')
+        # EM supplies the fully paginated current universe. All age-eligible
+        # members and their listing dates have been independently reconciled.
+        # EM-only young listings remain in exclusion totals, never fetched.
+        self.symbols = {row['code']: symbol for symbol, row in verified.items()}
+        self.listed_dates = {row['code']: row['list_date'] for row in census}
+        LOG.info('Cash cow universe reconciled asharehub=%s selector=%s eligible=%s as_of=%s',
+                 len(current), len(census), sum(listed_three_years(row['list_date'], self.as_of) for row in census), self.as_of)
+        return census
 
     def financials(self, year, codes=None):
         # All three monetary fields use the same CNY annual EM statement.

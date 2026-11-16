@@ -93,7 +93,7 @@ def test_stock_pool_partial_response_rejected():
     obj=source(lambda req:None)
     symbols=['600900.SH','000001.SZ','920000.BJ']
     obj._ash=lambda *a:[dict(symbol=s,name='Test',list_date='20200101',list_status='L')for s in symbols]
-    obj._selector_universe=lambda:[dict(code=s.split('.')[0],exchange=s.split('.')[1])for s in symbols+['600036.SH']]
+    obj._selector_universe=lambda:[dict(code=s.split('.')[0],exchange=s.split('.')[1],list_date='2020-01-01')for s in symbols+['600036.SH']]
     with pytest.raises(CashCowSourceError,match='覆盖不一致'):obj.universe()
 
 
@@ -316,3 +316,61 @@ def test_crosscheck_cancellation_is_not_swallowed(monkeypatch):
     obj.check_cancel = cancelled
     with pytest.raises(RuntimeError, match='cancelled'):
         obj.financials(2024)
+
+
+def pool_source(extra_date, side='eastmoney_selector'):
+    obj=source(lambda req:None)
+    symbols=['600900.SH','000001.SZ','920000.BJ']
+    ash=[dict(symbol=s,name='Test',list_date='20200101',list_status='L') for s in symbols]
+    em=[dict(code=s[:6],exchange=s[7:],name='Test',list_date='2020-01-01') for s in symbols]
+    if side=='eastmoney_selector':
+        em.append(dict(code='920309',exchange='BJ',name='Test',list_date=extra_date))
+    else:
+        ash.append(dict(symbol='920309.BJ',name='Test',list_date=extra_date.replace('-',''),list_status='L'))
+    obj._ash=lambda *a:ash
+    obj._selector_universe=lambda:em
+    return obj
+
+
+@pytest.mark.parametrize('side',['asharehub','eastmoney_selector'])
+@pytest.mark.parametrize('listed,allowed',[('2023-11-17',True),('2023-11-16',False),('2020-11-16',False)])
+def test_only_provably_young_pool_differences_allowed(side,listed,allowed):
+    obj=pool_source(listed,side)
+    if allowed:
+        stocks=obj.universe()
+        assert len(stocks)==(4 if side=='eastmoney_selector' else 3)
+    else:
+        with pytest.raises(CashCowSourceError,match='覆盖不一致'):obj.universe()
+
+
+@pytest.mark.parametrize('listed',[None,'','invalid','2026-02-30','2026-11-17'])
+def test_unverified_pool_difference_dates_fail(listed):
+    with pytest.raises(CashCowSourceError):pool_source(listed).universe()
+
+
+def test_em_only_new_listing_cannot_request_financials():
+    from app.services.cash_cow_rules import screen_cash_cows
+    obj=pool_source('2026-11-16')
+    def dividends(year,codes=None):
+        assert '920309' not in codes
+        return {code:{'cash_dividend':0} for code in codes}
+    obj.dividends=dividends
+    obj.financials=lambda *a,**k:{}
+    items,outcomes,stocks=screen_cash_cows(obj,2025,lambda *a:None)
+    assert all(outcomes[p]['920309']=='excluded' for p in (3,5,10))
+    assert len(stocks)==4
+
+
+def test_delisted_ash_record_not_silently_accepted():
+    obj=pool_source('2026-11-16','asharehub')
+    rows=obj._ash();rows[-1]['list_status']='D'
+    obj._ash=lambda *a:rows
+    with pytest.raises(CashCowSourceError):obj.universe()
+
+
+def test_shared_young_listing_date_conflict_not_hidden_by_age_filter():
+    obj=pool_source('2026-11-16')
+    rows=obj._ash()
+    rows.append(dict(symbol='920309.BJ',name='Test',list_date='20200101',list_status='L'))
+    obj._ash=lambda *a:rows
+    with pytest.raises(CashCowSourceError,match='上市日期跨来源不一致'):obj.universe()

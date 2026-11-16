@@ -361,3 +361,26 @@ def test_financial_duplicate_revisions_never_arbitrarily_select_one():
                KCFJCXSYJLR=1441714437.09, NETCASH_OPERATE_PK=2850716944.11)
     with pytest.raises(CashCowSourceError, match='重复'):
         source(report([row, dict(row, PARENTNETPROFIT=1557000775.65)])).financials(2024)
+
+
+def test_selector_prelisting_still_validated_but_not_in_current_pool(monkeypatch):
+    from app.services import cash_cow_source as module
+    monkeypatch.setattr(module,'SELECTOR_PAGE_SIZE',2)
+    obj=module.EastmoneyCashCowSource(None,as_of='2026-11-16')
+    rows=[dict(SECUCODE=s,SECURITY_CODE=s[:6],SECURITY_NAME_ABBR='Test',LISTING_DATE=listed,MAX_TRADE_DATE='2026-11-16') for s,listed in [('000001.SZ','1991-01-01'),('600900.SH','2003-01-01'),('920000.BJ','2020-01-01'),('920309.BJ','2026-11-17')]]
+    pages=[]
+    def get(url,params):
+        page=params['p'];pages.append(page)
+        return dict(success=True,code=0,result=dict(currentpage=page,nextpage=page==1,data=rows[(page-1)*2:page*2]))
+    obj._get=get
+    assert [s['code'] for s in obj._selector_universe()]==['000001','600900','920000']
+    assert pages==[1,2]
+    # A future listing never bypasses uniqueness or quote-date stability.
+    rows[-1]=dict(rows[-2],LISTING_DATE='2026-11-17')
+    with pytest.raises(module.CashCowSourceError):obj._selector_universe()
+    rows[-1]=dict(SECUCODE='920309.BJ',SECURITY_CODE='920309',SECURITY_NAME_ABBR='Test',LISTING_DATE='2026-11-17',MAX_TRADE_DATE='2026-11-15')
+    with pytest.raises(module.CashCowSourceError):obj._selector_universe()
+    # It enters the current pool on its listing day, not the day before.
+    rows[-1]['MAX_TRADE_DATE']='2026-11-16'
+    obj.as_of='2026-11-17'
+    assert len(obj._selector_universe())==4
