@@ -23,6 +23,7 @@ const initial = () => ({
   ],
   integrations: {
     asharehub: { token_set: true },
+    tushare: { token_set: true },
     telegram: { token_set: true, chat_id_set: true },
   },
   database: {
@@ -51,7 +52,7 @@ const initial = () => ({
       min_interval_minutes: 10,
       max_interval_minutes: 16,
     },
-    cash_cow: { enabled: true, times: ['21:00'], frequency: 'month_end' },
+    earnings_selection: { enabled: true, times: ['23:00'], telegram_notify: false },
   },
 })
 test('admin saves shared database, integrations and times without secret echo', async ({
@@ -84,11 +85,22 @@ test('admin saves shared database, integrations and times without secret echo', 
   await page.goto('/system-configuration')
   await expect(page.getByRole('heading', { name: '统一数据库' })).toBeVisible()
   await expect(page.getByLabel('密码', { exact: true })).toHaveValue('')
+  await expect(page.getByLabel('Tushare Token', { exact: true })).toHaveValue('')
   await expect(page.getByText(/TLS|读写账号必须分开/)).toHaveCount(0)
   await page.getByRole('button', { name: '测试数据库连接' }).click()
   await expect(page.getByRole('status')).toContainText('未验证写入权限')
   expect(tests).toBe(1)
   expect(saves).toHaveLength(0)
+  for (const label of [
+    '密码',
+    'AShareHub Token',
+    'Tushare Token',
+    'Telegram 机器人密钥',
+    'Telegram 接收会话编号',
+  ]) {
+    await expect(page.getByLabel(label, { exact: true })).toHaveAttribute('placeholder', '********')
+    await expect(page.getByLabel(label, { exact: true })).toHaveValue('')
+  }
   await page.getByLabel('日志级别', { exact: true }).selectOption('WARNING')
   await page.getByLabel('保留天数', { exact: true }).fill('45')
   await page.getByLabel('读取超时（秒）', { exact: true }).fill('900')
@@ -107,10 +119,16 @@ test('admin saves shared database, integrations and times without secret echo', 
   expect(saves[0]).not.toHaveProperty('data_sources')
   expect(saves[0].integrations).toEqual({
     asharehub: { token: null },
+    tushare: { token: null },
     telegram: { token: null, chat_id: null },
   })
   expect(saves[0].schedules.market.times).toEqual(['00:05'])
   await page.getByLabel('AShareHub Token', { exact: true }).fill('test-asharehub-token')
+  await page.getByLabel('Tushare Token', { exact: true }).fill('test-tushare-token')
+  await expect(page.getByLabel('Tushare Token', { exact: true })).toHaveAttribute(
+    'type',
+    'password',
+  )
   await page.getByLabel('Telegram 机器人密钥', { exact: true }).fill('test-telegram-token')
   await page.getByLabel('Telegram 接收会话编号', { exact: true }).fill('test-chat-id')
   await page.getByLabel('主机', { exact: true }).fill('new.example')
@@ -119,15 +137,25 @@ test('admin saves shared database, integrations and times without secret echo', 
   await expect.poll(() => saves.length).toBe(2)
   expect(saves[1].integrations).toEqual({
     asharehub: { token: 'test-asharehub-token' },
+    tushare: { token: 'test-tushare-token' },
     telegram: { token: 'test-telegram-token', chat_id: 'test-chat-id' },
   })
   await expect(page.getByLabel('AShareHub Token', { exact: true })).toHaveValue('')
   await expect(page.getByLabel('密码', { exact: true })).toHaveValue('')
+  await expect(page.getByLabel('Tushare Token', { exact: true })).toHaveValue('')
   expect(
     await page.evaluate(() => JSON.stringify({ ...localStorage, ...sessionStorage })),
   ).not.toContain('not-persisted-in-browser')
   await page.reload()
   await expect(market.getByLabel('每日时间')).toHaveValue('00:05')
+  await page.getByRole('button', { name: '清除Tushare Token', exact: true }).click()
+  await page.getByRole('button', { name: '保存系统配置' }).click()
+  await expect.poll(() => saves.length).toBe(3)
+  expect(saves[2].integrations.tushare.token).toBe('')
+  await page.getByRole('button', { name: '清除密码', exact: true }).click()
+  await page.getByRole('button', { name: '保存系统配置' }).click()
+  await expect.poll(() => saves.length).toBe(4)
+  expect(saves[3].database.password).toBe('')
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
 })
 test('save conflict retains all draft secrets and does not claim success', async ({ page }) => {
@@ -139,10 +167,18 @@ test('save conflict retains all draft secrets and does not claim success', async
   )
   await page.goto('/system-configuration')
   await page.getByLabel('AShareHub Token', { exact: true }).fill('retain-draft')
+  await page.getByLabel('Tushare Token', { exact: true }).fill('retain-tushare-draft')
   await page.getByLabel('主机', { exact: true }).fill('draft.example')
   await page.getByRole('button', { name: '保存系统配置' }).click()
   await expect(page.getByRole('alert')).toContainText('配置版本已更新')
+  await expect(page.getByRole('dialog', { name: '配置操作失败' })).toBeVisible()
+  await expect(page.getByRole('dialog')).toContainText('配置版本已更新')
+  await page.getByRole('button', { name: '知道了' }).click()
+  await expect(page.getByRole('dialog')).not.toBeVisible()
   await expect(page.getByLabel('AShareHub Token', { exact: true })).toHaveValue('retain-draft')
+  await expect(page.getByLabel('Tushare Token', { exact: true })).toHaveValue(
+    'retain-tushare-draft',
+  )
   await expect(page.getByRole('status')).toHaveCount(0)
 })
 test('viewer cannot request configuration or see navigation', async ({ page }) => {
@@ -172,6 +208,7 @@ test('reload discards drafts and invalid time cannot submit', async ({ page }) =
   await page.getByLabel('密码', { exact: true }).fill('discard-me')
   await page.getByRole('button', { name: '重新读取配置' }).click()
   await expect(page.getByLabel('密码', { exact: true })).toHaveValue('')
+  await expect(page.getByLabel('Tushare Token', { exact: true })).toHaveValue('')
   await expect(social.getByLabel('最短周期（分钟）')).toHaveValue('10')
   const etf = page.locator('.system-task').filter({ hasText: '国家队动态' })
   await expect(etf.getByLabel('每日时间')).toHaveCount(1)
@@ -234,7 +271,10 @@ test('schedule columns, explicit switches and 24-hour fields remain independent'
   await expect(time).toHaveValue('12:30')
   await page.getByRole('button', { name: '重新读取配置' }).click()
   await expect(time).toHaveValue('23:59')
-  await expect(page.getByRole('row', { name: '奶牛股', exact: true })).toContainText('每月最后一天')
+  const earnings = page.getByRole('row', { name: '业绩选股（高股息 / 奶牛股）', exact: true })
+  await expect(earnings).toContainText('每天')
+  await expect(earnings.getByLabel('每日时间')).toHaveValue('23:00')
+  await expect(page.getByText('每月最后一天', { exact: true })).toHaveCount(0)
   await expect(page.locator('form form')).toHaveCount(0)
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
   await page.screenshot({ path: `/tmp/settings-${testInfo.project.name}.png`, fullPage: true })

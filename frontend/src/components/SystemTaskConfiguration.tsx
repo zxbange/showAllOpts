@@ -10,6 +10,7 @@ const names: Record<string, string> = {
   valuation_ruler: '估值标尺',
   cci: 'CCI 动力煤',
   cash_cow: '奶牛股',
+  earnings_selection: '业绩选股（高股息 / 奶牛股）',
   holdings: '个人持仓',
   social: '微博 / 雪球动态',
   social_cubes: '雪球组合',

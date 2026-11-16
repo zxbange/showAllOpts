@@ -2,6 +2,7 @@ import { PageHeader } from '../components/PageHeader'
 import { SystemTaskConfiguration } from '../components/SystemTaskConfiguration'
 import { SystemRuntimeConfiguration } from '../components/SystemRuntimeConfiguration'
 import { useEffect, useState } from 'react'
+import { ConfigurationErrorDialog } from '../components/ConfigurationErrorDialog'
 import { useAuth } from '../components/AccountAccess'
 import { SystemNotificationConfiguration } from '../components/SystemNotificationConfiguration'
 import { systemConfigurationRequest } from '../api/systemConfiguration'
@@ -58,6 +59,7 @@ function Editor() {
       ...(config.runtime ? { runtime: config.runtime } : {}),
       integrations: {
         asharehub: { token: integrationDraft.asharehub_token ?? null },
+        tushare: { token: integrationDraft.tushare_token ?? null },
         telegram: {
           token: integrationDraft.telegram_token ?? null,
           chat_id: integrationDraft.telegram_chat_id ?? null,
@@ -83,6 +85,7 @@ function Editor() {
   }
   return (
     <div className="system-settings">
+      <ConfigurationErrorDialog message={error} />
       <PageHeader>
         <div>
           <h1>系统配置</h1>
@@ -139,6 +142,11 @@ function Editor() {
                     saved: config.integrations?.asharehub.token_set,
                   },
                   {
+                    key: 'tushare_token',
+                    label: 'Tushare Token',
+                    saved: config.integrations?.tushare?.token_set,
+                  },
+                  {
                     key: 'telegram_token',
                     label: 'Telegram 机器人密钥',
                     saved: config.integrations?.telegram.token_set,
@@ -156,7 +164,9 @@ function Editor() {
                       type="password"
                       autoComplete="new-password"
                       value={integrationDraft[item.key] ?? ''}
-                      placeholder={item.saved ? '已保存，未修改则保留' : '未配置'}
+                      placeholder={
+                        item.saved && integrationDraft[item.key] === undefined ? '********' : ''
+                      }
                       onChange={(e) =>
                         setIntegrationDraft((d) => ({ ...d, [item.key]: e.target.value }))
                       }
@@ -214,13 +224,23 @@ function Editor() {
                     type="password"
                     autoComplete="new-password"
                     value={password}
-                    placeholder={config.database.password_set ? '留空保留已保存密码' : ''}
+                    placeholder={config.database.password_set && !passwordEdited ? '********' : ''}
                     onChange={(e) => {
                       setPassword(e.target.value)
                       setPasswordEdited(true)
                     }}
                   />
                 </label>
+                <button
+                  type="button"
+                  className="button button-quiet"
+                  onClick={() => {
+                    setPassword('')
+                    setPasswordEdited(true)
+                  }}
+                >
+                  清除密码
+                </button>
               </div>
               <p className="system-settings-muted">
                 修改数据库目标或账号时，请重新输入密码。不会搬迁或删除旧库数据。

@@ -1,4 +1,4 @@
-﻿from datetime import date, datetime
+from datetime import date, datetime
 from decimal import Decimal
 import pytest
 from sqlalchemy import event
@@ -9,7 +9,7 @@ from test_dividend_collector import row, meta
 
 
 def seed(session,empty=False):
-    data=meta()
+    data=meta(rule_version='dividend_dps_proposal_age3_v9')
     if empty:data.update(value_count=0,value_candidates=0)
     session.add(DividendSnapshot(id=1,updated_at=datetime(2026,10,16,17),**data))
     if not empty:session.add_all([DividendStock(**row()),DividendStock(**row('bank', code='600000.XSHG'))])
@@ -72,6 +72,6 @@ def test_legacy_yields_are_not_mislabeled_as_static(client,session,version):
     session.commit()
     data=client.get('/api/v1/dividend-selection/latest').json()
     assert data['requires_refresh'] is True
-    assert not data['groups'][0]['items']
-    assert not data['groups'][1]['items']
+    assert data['groups'][0]['items']
+    assert data['groups'][1]['items']
     assert 'overlap_codes' not in data

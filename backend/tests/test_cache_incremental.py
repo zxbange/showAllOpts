@@ -26,11 +26,18 @@ def test_dividend_legacy_schema_and_new_history_refresh(cached, session, engine)
     session.add(DividendStock(**row())); session.commit()
     with engine.begin() as connection:
         connection.execute(text('ALTER TABLE dividend_selection_stock DROP COLUMN dividend_yield_history'))
+        connection.execute(text('ALTER TABLE dividend_selection_stock DROP COLUMN dividend_per_share'))
+        connection.execute(text('ALTER TABLE dividend_selection_stock DROP COLUMN dividend_fiscal_year'))
     cache.refresh('dividend-selection',background=False)
     with cache.session('dividend-selection') as local:
-        assert local.query(DividendStock).one().dividend_yield_history is None
+        legacy = local.query(DividendStock).one()
+        assert legacy.dividend_yield_history is None
+        assert legacy.dividend_per_share is None
+        assert legacy.dividend_fiscal_year is None
     with engine.begin() as connection:
         connection.execute(text('ALTER TABLE dividend_selection_stock ADD COLUMN dividend_yield_history JSON'))
+        connection.execute(text('ALTER TABLE dividend_selection_stock ADD COLUMN dividend_per_share NUMERIC(24,8)'))
+        connection.execute(text('ALTER TABLE dividend_selection_stock ADD COLUMN dividend_fiscal_year INTEGER'))
         connection.execute(DividendStock.__table__.update().values(dividend_yield_history=row()['dividend_yield_history']))
     cache.refresh('dividend-selection',background=False)
     with cache.session('dividend-selection') as local:

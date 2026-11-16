@@ -13,7 +13,7 @@ from dotenv.parser import parse_stream
 import portalocker
 
 KEYS = {'DB_HOST', 'DB_PORT', 'DB_NAME', 'DB_USER', 'DB_PASSWORD',
-        'ASHAREHUB_API_KEY', 'TELEGRAM_BOT_TOKEN', 'TELEGRAM_CHAT_ID'}
+        'ASHAREHUB_API_KEY', 'TUSHARE_TOKEN', 'TELEGRAM_BOT_TOKEN', 'TELEGRAM_CHAT_ID'}
 
 class EnvFileError(ValueError):
     pass

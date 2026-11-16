@@ -127,7 +127,7 @@ ExecStart=
 ExecStart=/home/ubuntu/showAllOpts/backend/.venv/bin/python /home/ubuntu/showAllOpts/backend/run.py --host 127.0.0.1 --port 8000 --workers 2
 ProtectHome=read-only
 ReadWritePaths=
-ReadWritePaths=/home/ubuntu/showAllOpts/log
+ReadWritePaths=/home/ubuntu/showAllOpts/log /home/ubuntu/showAllOpts/config
 EOF
 
 sudo systemctl daemon-reload
@@ -138,7 +138,21 @@ sudo systemctl status showallopts-api --no-pager
 curl --fail http://127.0.0.1:8000/api/v1/health
 ```
 
-`ExecStart=` 和 `ReadWritePaths=` 空行用于清除基础模板中的旧启动命令和旧日志路径，不能省略。覆盖文件将 `ProtectHome=true` 改成 `read-only`，允许服务读取 `/home` 中的代码，并通过 `ReadWritePaths` 单独允许写入项目日志目录；保留基础模板的 `ProtectSystem=strict`。这些设置遵循 [systemd 文件系统保护规则](https://github.com/systemd/systemd/blob/main/man/systemd.exec.xml)。
+`ExecStart=` 和 `ReadWritePaths=` 空行用于清除基础模板中的旧启动命令和旧日志路径，不能省略。覆盖文件将 `ProtectHome=true` 改成 `read-only`，允许服务读取 `/home` 中的代码，并通过 `ReadWritePaths` 单独允许写入项目日志和配置目录；保留基础模板的 `ProtectSystem=strict`。这些设置遵循 [systemd 文件系统保护规则](https://github.com/systemd/systemd/blob/main/man/systemd.exec.xml)。
+
+系统配置页面会原子写回配置文件，因此服务账号必须能写入 **实际配置文件所在目录**，只允许写入 `app.config` 文件本身不足以创建临时文件并重命名。`ReadWritePaths` 不会改变 Unix 所有权和权限；配置目录和文件仍需由服务账号管理，建议分别为 `750` 和 `600`。若 `APP_ENV_FILE` 指向自定义路径或软链接，应精确开放解析后目标所在的目录，不要开放整个项目、家目录或关闭 `ProtectSystem`。
+
+已有 Ubuntu 服务仅开放日志目录时，管理员审阅以下权限扩展后，可安装专用持久覆盖文件，不必覆盖现有浏览器或启动参数配置：
+
+```bash
+sudo install -m 0644 deploy/systemd/showallopts-config-write.conf \
+  /etc/systemd/system/showallopts-api.service.d/zzz-config-write.conf
+sudo systemctl daemon-reload
+sudo systemctl restart showallopts-api
+sudo systemctl show showallopts-api -p ProtectHome -p ProtectSystem -p ReadWritePaths
+```
+
+该覆盖文件只添加 `/home/ubuntu/showAllOpts/config` 的写权限，不清空既有允许列表。随后在管理员页面重新保存，确认 PUT 返回 200 和 `System configuration saved` 日志；409 代表保存被拒绝，应查看响应及日志中的具体原因。Git 推送或普通应用部署不会自动修改 `/etc/systemd/system`，已有服务器需执行上述一次性安装。不要打印配置文件中的密钥。
 
 `APP_ENV_FILE=config/app.config` 由应用按项目根目录解析。终端中的临时 `export` 不会改变 systemd 服务配置。覆盖文件只包含路径和运行参数，不要把数据库密码写入 service。
 

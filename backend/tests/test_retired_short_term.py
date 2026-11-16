@@ -34,7 +34,7 @@ def test_catalogue_cache_and_models_exclude_module(client, engine, tmp_path):
 
 def test_batch_keeps_current_collectors_without_restoring_short_term(batch):
     expected = {'行业动量','抱团拥挤度','市场情绪跟踪','微盘温度计',
-                '微盘新高新低','高股息选股','ETF动量热度','个股机构持仓','估值标尺'}
+                '微盘新高新低','ETF动量热度','个股机构持仓','估值标尺'}
     assert set(batch.STRATEGY_SPECS) == expected
     # ETF shares, cash cow and growth/dividend ratios use public-source collectors.
     # Their removal from the JoinQuant batch must not restore retired strategies.

@@ -319,3 +319,17 @@ def test_disconnected_request_retries_and_identifies_failed_stage(error, monkeyp
     with pytest.raises(CashCowSourceError, match='股票列表连接被中断') as exc:
         s.universe()
     assert 'private' not in str(exc.value)
+
+@pytest.mark.parametrize('name,host,path', [
+    ('RPT_F10_DIVIDEND_MAIN','datacenter.eastmoney.com','/securities/api/data/v1/get'),
+    ('RPT_F10_EH_EQUITY','datacenter.eastmoney.com','/securities/api/data/v1/get'),
+    ('RPT_F10_DIVIDEND_HISTOGRAM','datacenter-web.eastmoney.com','/api/data/v1/get')])
+def test_verified_report_endpoint_routing(name, host, path):
+    calls=[]
+    def handle(request):
+        calls.append(request)
+        return httpx.Response(200,json=dict(success=False,result=None,code=9201,message='返回数据为空'))
+    s=EastmoneyCashCowSource(httpx.Client(transport=httpx.MockTransport(handle)))
+    assert s._rows_uncached(name,'(SECURITY_CODE="600900")',lambda row:row['SECURITY_CODE'])==[]
+    assert calls[0].url.host==host and calls[0].url.path==path
+    assert calls[0].url.params['reportName']==name

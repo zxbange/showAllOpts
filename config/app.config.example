@@ -58,6 +58,8 @@ MARKET_COLLECTION_WRITER_URL=
 
 # Managed by the administrator system configuration page; never commit real credentials.
 ASHAREHUB_API_KEY=
+# Tushare API token, managed through administrator system settings.
+TUSHARE_TOKEN=
 
 # Managed by the administrator system configuration page; never commit real credentials.
 TELEGRAM_BOT_TOKEN=

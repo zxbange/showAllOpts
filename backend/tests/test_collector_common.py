@@ -1,4 +1,4 @@
-﻿"""Regression cases for shared collectors; no JoinQuant or remote database access."""
+"""Regression cases for shared collectors; no JoinQuant or remote database access."""
 import ast
 import datetime as dt
 import importlib.util
@@ -141,15 +141,10 @@ def test_page_retry_releases_objects_retained_by_failed_traceback(batch, monkeyp
 
 def test_numeric_policies_keep_decimal_precision_and_reject_bad_holdings(batch):
     micro = batch._microcap_strategy({}, batch.DB_CONFIG)
-    dividend = batch._dividend_strategy({}, batch.DB_CONFIG)
     heat = batch._etf_heat_strategy({}, batch.DB_CONFIG)
     ownership = batch._ownership_strategy({}, batch.DB_CONFIG)
     assert micro.number('-0.123456789123456789') == Decimal('-0.123456789123456789')
     assert micro.rounded(Decimal('1.00000000005')) == Decimal('1.0000000000')
-    assert dividend.rounded('1.2345675') == Decimal('1.234568')
-    assert dividend.rounded('-1.2345675') == Decimal('-1.234568')
-    assert dividend.number('Infinity') is None
-    assert dividend.number('NaN') is None
     assert batch._round_decimal('1.234567895', 8) == Decimal('1.23456790')
     assert heat.positive('-1') is None
     assert ownership.number(None) is None
@@ -169,7 +164,7 @@ def test_shared_helpers_match_standalone_files():
     main = {n.name:n for n in ast.parse(BATCH.read_text(encoding='utf-8'),feature_version=(3,6)).body
             if isinstance(n,ast.FunctionDef)}
     names = {'_source_pages','_decimal_number','_round_decimal','_optional_date','_closed_day','_checked_records',
-             '_require_append', '_save_record_set', '_replace_latest_snapshot', '_checked_trade_days'}
+             '_require_append', '_save_record_set', '_checked_trade_days'}
     checked = set()
     for path in (ROOT/'collectors').glob('*数据库版.py'):
         if path == BATCH:

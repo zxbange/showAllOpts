@@ -194,3 +194,56 @@ def test_joinquant_entries_are_retired_without_removing_database_models():
         assert not (root / 'collectors' / filename).exists()
     assert CashCowSnapshot.__tablename__ == 'cash_cow_snapshot'
     assert growth.PRICES.name == 'growth_dividend_index_history'
+
+
+def test_cash_dual_write_exposes_remote_first_window_then_repairs(screen, public_result_database):
+    """Two transactions, not cross-database atomicity; replay closes the gap."""
+    from datetime import timedelta
+    run(screen)
+    with public_result_database.connect() as conn:
+        old=conn.execute(select(CashCowSnapshot.payload)).scalar_one()
+    new=deepcopy(old)
+    for part in new.values():
+        part['snapshot']['run_id']='new-dual-write-run'
+        part['snapshot']['updated_at']=(datetime.fromisoformat(part['snapshot']['updated_at'])+timedelta(seconds=1)).isoformat()
+    publication=PublicPublication(screen)
+    try:
+        publication.stage(new)
+        def fail_local(payload, db):
+            db.execute('DELETE FROM snapshots')
+            raise RuntimeError('local write failed')
+        with pytest.raises(RuntimeError,match='local write failed'):
+            publication.resume(write_public,fail_local,lambda:None)
+        with public_result_database.connect() as conn:
+            assert conn.execute(select(CashCowSnapshot.payload)).scalar_one()==new
+        with screen.db() as db:
+            assert {str(p):json.loads(raw) for p,raw in db.execute('SELECT * FROM snapshots')}==old
+            assert db.execute('SELECT count(*) FROM public_publication').fetchone()[0]==1
+        def apply(payload,db):
+            for period,part in payload.items():
+                db.execute('INSERT OR REPLACE INTO snapshots VALUES(?,?)',(int(period),json.dumps(part)))
+        assert publication.resume(write_public,apply,lambda:None)
+        with screen.db() as db:
+            assert {str(p):json.loads(raw) for p,raw in db.execute('SELECT * FROM snapshots')}==new
+            assert db.execute('SELECT count(*) FROM public_publication').fetchone()[0]==0
+    finally:
+        publication.close()
+
+
+def test_cash_remote_failure_preserves_both_existing_results(screen, public_result_database):
+    run(screen)
+    with public_result_database.connect() as conn:
+        old=conn.execute(select(CashCowSnapshot.payload)).scalar_one()
+    publication=PublicPublication(screen)
+    try:
+        publication.stage(old)
+        def fail_remote(*args):raise RuntimeError('remote unavailable')
+        with pytest.raises(RuntimeError,match='remote unavailable'):
+            publication.resume(fail_remote,lambda *a:pytest.fail('local cannot publish before remote'),lambda:None)
+        with public_result_database.connect() as conn:
+            assert conn.execute(select(CashCowSnapshot.payload)).scalar_one()==old
+        with screen.db() as db:
+            assert {str(p):json.loads(raw) for p,raw in db.execute('SELECT * FROM snapshots')}==old
+            assert db.execute('SELECT count(*) FROM public_publication').fetchone()[0]==1
+    finally:
+        publication.close()

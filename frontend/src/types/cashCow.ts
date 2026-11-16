@@ -22,6 +22,10 @@ export interface CashCowYear {
   operating_cashflow: number
   year_average_close: number
   price_date: string
+  price_basis?: string | null
+  trading_days?: number | null
+  missing_open_days?: number | null
+  suspension_verified?: boolean | null
   payout_ratio: number
   cashflow_coverage: number
   dividend_yield: number
@@ -43,6 +47,7 @@ export interface CashCowStock {
   years: CashCowYear[]
 }
 export interface CashCowOverview {
+  rule_outdated?: boolean
   snapshot: {
     as_of: string
     updated_at: string

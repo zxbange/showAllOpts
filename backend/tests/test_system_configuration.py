@@ -265,3 +265,19 @@ def test_social_runtime_uses_central_settings(tmp_path):
         assert worker.config(db)['enabled'] and worker.config(db)['interval_min'] == 180
     moment = datetime(2026, 11, 12, 8, 20, tzinfo=ZoneInfo('Asia/Shanghai'))
     assert worker.night_time(moment) and not worker.night_time(moment.replace(minute=30))
+
+
+def test_earnings_share_daily_schedule_and_migrate_month_end(tmp_path):
+    config = service(tmp_path)
+    value = config.default()
+    value['schedules'].pop('earnings_selection')
+    value['schedules']['cash_cow'] = {'enabled': False, 'times': ['21:00'], 'frequency': 'month_end', 'telegram_notify': True}
+    config._persist(value, config.cipher())
+    migrated = config.public()
+    assert 'cash_cow' not in migrated['schedules']
+    assert migrated['schedules']['earnings_selection'] == {'enabled': False, 'times': ['23:00'], 'telegram_notify': True}
+    body = form(config)
+    body['schedules']['earnings_selection'].update(enabled=True, times=['22:30'])
+    config.save(body)
+    assert task_config(config.settings, 'cash_cow')['times'] == ['22:30']
+    assert task_config(config.settings, 'dividend_selection')['times'] == ['22:30']

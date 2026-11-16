@@ -17,7 +17,7 @@ def annual(year=2025, *, cash=50, adjusted=80, profit=100, flow=60):
 
 @pytest.mark.parametrize('kwargs,outcome', [
     ({}, 'eligible'), ({'cash': 30}, 'eligible'), ({'cash': 70, 'flow': 70}, 'eligible'),
-    ({'cash': 29.999}, 'excluded'), ({'cash': 70.001, 'flow': 100}, 'excluded'),
+    ({'cash': 29.999}, 'excluded'), ({'cash': 70.001, 'flow': 100}, 'eligible'), ({'cash': 100, 'flow': 100}, 'eligible'), ({'cash': 100.001, 'flow': 101}, 'excluded'),
     ({'flow': 50}, 'eligible'), ({'flow': 49.99}, 'excluded'),
     ({'cash': 0}, 'excluded'), ({'adjusted': 0}, 'excluded'),
     ({'profit': -1}, 'excluded'), ({'cash': None}, 'insufficient'),

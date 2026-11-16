@@ -1,4 +1,19 @@
 import math
+import logging
+from datetime import date
+
+LOG = logging.getLogger(__name__)
+
+def listed_three_years(listed, as_of):
+    """The third anniversary is Feb 28 for a Feb 29 listing."""
+    listed = date.fromisoformat(listed)
+    as_of = date.fromisoformat(as_of)
+    try:
+        anniversary = listed.replace(year=listed.year + 3)
+    except ValueError:
+        anniversary = listed.replace(year=listed.year + 3, day=28)
+    return as_of >= anniversary
+
 
 def numeric(value):
     return type(value) in (int, float) and math.isfinite(value)
@@ -17,7 +32,7 @@ def evaluate_year(year, dividend, financial):
     if numeric(cash) and numeric(operating) and operating < cash:
         return 'excluded', None
     payout = 100 * cash / profit if numeric(cash) and numeric(profit) and profit > 0 else None
-    if payout is not None and not 30 <= payout <= 70:
+    if payout is not None and not 30 <= payout <= 100:
         return 'excluded', None
     if not all(numeric(value) for value in (cash, adjusted, profit, operating)):
         return 'insufficient', None
@@ -38,12 +53,18 @@ def finish_stock(stock, years, dividends, prices, period=10):
         price = prices.get(year) or {}
         close = price.get('year_average_close')
         day = price.get('price_date')
-        # A suspended stock's stale monthly close is not its year-end close.
+        # New source uses the mean of returned actual trading days, not a
+        # mandatory December close. Legacy adapters retain their existing check.
         if (not numeric(dps) or dps <= 0 or not numeric(close) or close <= 0
-                or not isinstance(day, str) or not day.startswith(f'{year}-12-')):
+                or not isinstance(day, str) or not day.startswith(f'{year}-')
+                or (price.get('price_basis') != 'returned_unadjusted_trading_days'
+                    and not day.startswith(f'{year}-12-'))):
             return 'insufficient', None
         result.append(dict(annual, dividend_per_share=dps, year_average_close=close,
-                           price_date=day, dividend_yield=100 * dps / close))
+                           price_date=day, dividend_yield=100 * dps / close,
+                           price_basis=price.get('price_basis'), trading_days=price.get('trading_days'),
+                           missing_open_days=price.get('missing_open_days'),
+                           suspension_verified=price.get('suspension_verified')))
     average = sum(row['dividend_yield'] for row in result) / period
     if average <= 4:
         return 'excluded', None
@@ -69,6 +90,17 @@ def screen_cash_cows(source, end_year, progress, check_cancel=lambda: None):
     candidates = {period: set() for period in PERIODS}
     outcomes = {period: {} for period in PERIODS}
 
+    # The production source has already reconciled the full, unfiltered pool.
+    # Preserve excluded records in totals without fetching any financial/price
+    # data for them. Legacy test/import adapters without dates retain behavior.
+    for code, stock in list(pending.items()):
+        if 'list_date' in stock and not listed_three_years(stock['list_date'], source.as_of):
+            pending.pop(code)
+            for period in PERIODS:
+                outcomes[period][code] = 'excluded'
+    LOG.info('Cash cow listing age filter total=%s eligible=%s excluded=%s',
+             len(stocks), len(pending), len(stocks)-len(pending))
+
     def reject(code, outcome, depth):
         pending.pop(code)
         # An older failure belongs only to windows containing that
@@ -84,6 +116,14 @@ def screen_cash_cows(source, end_year, progress, check_cancel=lambda: None):
         if not pending:
             break
         year = end_year - depth + 1
+        # A partial listing year cannot count as a full fiscal year, even if
+        # the issuer publishes pre-IPO financials. Freeze shorter windows first.
+        for code in list(pending):
+            listed = universe[code].get('list_date')
+            if listed and listed > f'{year}-01-01':
+                reject(code, 'insufficient', depth)
+        if not pending:
+            break
         progress(f'初筛{year}年分红与财报（3/5/10年共用）',
                  len(stocks) - len(pending), len(stocks))
         dividends = source.dividends(year, codes=list(pending))

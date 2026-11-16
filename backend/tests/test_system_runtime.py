@@ -91,7 +91,7 @@ def test_logging_applies_levels_retention_and_keeps_secret_redaction(settings,mo
     from app.core.logging import StandardFormatter
     from app.services.system_configuration import SystemConfiguration
     config=m.default_runtime(settings);config['logging']=dict(level='DEBUG',retention_days=7)
-    value=dict(runtime=config,database={'password':'new-private-password'},integrations={'telegram':{'token':'new-private-token'}})
+    value=dict(runtime=config,database={'password':'new-private-password'},integrations={'telegram':{'token':'new-private-token'},'tushare':{'token':'new-private-tushare'}})
     monkeypatch.setattr(SystemConfiguration,'load',lambda _:value)
     root=logging.getLogger();old_handlers=root.handlers[:];old_level=root.level
     names=('uvicorn','uvicorn.error','uvicorn.access','app','launcher','frontend')
@@ -105,7 +105,7 @@ def test_logging_applies_levels_retention_and_keeps_secret_redaction(settings,mo
         assert m.apply_logging(settings)
         assert root.level==logging.DEBUG and app.level==logging.DEBUG and error.level==logging.ERROR
         assert app.backupCount==error.backupCount==7
-        record=logging.LogRecord('app',logging.INFO,'',1,'new-private-token new-private-password',(),None)
+        record=logging.LogRecord('app',logging.INFO,'',1,'new-private-token new-private-password new-private-tushare',(),None)
         assert 'new-private' not in app.format(record)
         count=len(app.formatter.secrets)
         m.apply_logging(settings)

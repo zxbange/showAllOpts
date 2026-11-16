@@ -9,8 +9,10 @@ from cryptography.fernet import Fernet
 
 LOG = logging.getLogger(__name__)
 FIELDS = {'asharehub': {'token': 'ASHAREHUB_API_KEY'},
+          'tushare': {'token': 'TUSHARE_TOKEN'},
           'telegram': {'token': 'TELEGRAM_BOT_TOKEN', 'chat_id': 'TELEGRAM_CHAT_ID'}}
 ATTRIBUTES = {'ASHAREHUB_API_KEY': 'asharehub_api_key',
+              'TUSHARE_TOKEN': 'tushare_token',
               'TELEGRAM_BOT_TOKEN': 'telegram_bot_token', 'TELEGRAM_CHAT_ID': 'telegram_chat_id'}
 
 

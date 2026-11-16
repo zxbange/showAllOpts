@@ -1,4 +1,5 @@
 """Administrator-only centralized configuration; credentials are write-only."""
+import logging
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from starlette.concurrency import run_in_threadpool
 from app.api.routes.accounts import require_admin
@@ -30,8 +31,12 @@ async def call(function, *args):
     try:
         return await run_in_threadpool(function, *args)
     except SystemConfigurationError as exc:
+        logging.getLogger(__name__).warning('System configuration rejected operation=%s reason=%s',
+                                           getattr(function, '__name__', 'unknown'), str(exc))
         raise HTTPException(409, str(exc)) from None
-    except Exception:
+    except Exception as exc:
+        logging.getLogger(__name__).error('System configuration operation failed operation=%s error_type=%s',
+                                         getattr(function, '__name__', 'unknown'), type(exc).__name__)
         raise HTTPException(503, '系统配置暂不可用，请查看服务日志') from None
 
 @router.get('')
@@ -74,6 +79,15 @@ def save_with_locks(request, value):
         stack.callback(lock.release)
         if not database_changed:
             return configuration.save(value)
+        earnings_root = configuration.settings.log_path / 'market-data'
+        earnings_root.mkdir(parents=True, exist_ok=True)
+        earnings_lock = portalocker.Lock(str(earnings_root / 'earnings-execution.lock'), timeout=0,
+                                         flags=portalocker.LOCK_EX | portalocker.LOCK_NB)
+        try:
+            earnings_lock.acquire()
+        except portalocker.exceptions.LockException:
+            raise SystemConfigurationError('业绩选股采集正在运行，请完成或取消后修改数据库') from None
+        stack.callback(earnings_lock.release)
         cache = request.app.state.cache
         lock = cache.acquire()
         if lock is None:

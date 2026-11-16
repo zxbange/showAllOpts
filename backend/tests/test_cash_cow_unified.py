@@ -247,6 +247,7 @@ def test_migrate_legacy_snapshots_readonly_and_preserve_history(tmp_path):
     screens = views(tmp_path)
     for period, screen in screens.items():
         assert screen.latest()['snapshot'] == originals[period][2]['snapshot']
+        assert screen.latest()['rule_outdated'] is True
         assert screen.status()['last_success_at'] == originals[period][2]['snapshot']['updated_at']
     class Broken(Source):
         def universe(self):
@@ -255,6 +256,7 @@ def test_migrate_legacy_snapshots_readonly_and_preserve_history(tmp_path):
     run(screens[3])
     for period, screen in screens.items():
         assert screen.latest()['snapshot'] == originals[period][2]['snapshot']
+        assert screen.latest()['rule_outdated'] is True
     run(screens[10])
     for period, screen in views(tmp_path).items():
         snapshot = screen.latest()['snapshot']
@@ -282,9 +284,8 @@ def test_api_refresh_from_any_period_updates_every_snapshot(client, monkeypatch)
     (['2026-09-30', None, '2026-09-30'], True),
     (['2026-08-31', '2026-09-30', '2026-09-30'], True),
 ])
-def test_completed_legacy_month_not_repeated_but_partial_month_recomputed(tmp_path, legacy_slots, should_run,
+def test_legacy_success_state_migrates_without_monthly_scheduler(tmp_path, legacy_slots, should_run,
                                                                         monkeypatch):
-    from app.services.cash_cow_schedule import MonthlyCashCowScheduler, CHINA
     settings = Settings(_env_file=None, log_dir=tmp_path)
     for period, slot in zip(PERIODS, legacy_slots):
         path = tmp_path / 'market-data' / 'cash-cow' / str(period) / 'screen.sqlite3'
@@ -295,13 +296,7 @@ def test_completed_legacy_month_not_repeated_but_partial_month_recomputed(tmp_pa
             db.execute('CREATE TABLE state (id INTEGER PRIMARY KEY, payload TEXT)')
             db.execute('INSERT INTO state VALUES(1,?)', (json.dumps(dict(scheduled_success_slot=slot)),))
     screens = views(tmp_path)
-    scheduler = MonthlyCashCowScheduler(settings, screens)
-    with scheduler.db() as db:
-        db.execute('INSERT INTO settings VALUES (?,?)', ('enabled_at', '2026-09-01T00:00:00+08:00'))
-    calls = []
-    monkeypatch.setattr(screens[10], 'refresh', lambda **kwargs: calls.append(kwargs) or True)
-    scheduler.tick(datetime(2026, 10, 1, tzinfo=CHINA))
-    assert bool(calls) == should_run
+    assert (screens[10].read_state().get('scheduled_success_slot') is None) == should_run
 
 
 def test_subprocess_lock_and_hard_interruption_preserve_all_snapshots(tmp_path):
@@ -389,3 +384,42 @@ def test_latest_holds_publication_lock_across_state_and_snapshot_read(tmp_path, 
     assert result['snapshot'] == previous
     assert result['status']['run_id'] == previous['run_id']
     assert writer.latest()['snapshot']['run_id'] != previous['run_id']
+
+
+def test_manual_cash_cow_respects_shared_earnings_execution(tmp_path, monkeypatch):
+    from app.services.earnings_schedule import acquire_execution
+    import portalocker
+    screen=views(tmp_path)[10]
+    def other():
+        lock=portalocker.Lock(str(tmp_path/'dividend-task.lock'),timeout=0)
+        lock.acquire()
+        return lock
+    lease=acquire_execution(screen.settings,other)
+    assert lease is not None
+    try:
+        assert screen.refresh(background=False) is False
+        assert not screen.running()
+    finally:
+        lease.release()
+    seen=[]
+    def collect(lock,state,moment):
+        assert acquire_execution(screen.settings,other) is None
+        seen.append(state['run_id'])
+        lock.release()
+    monkeypatch.setattr(screen,'_collect',collect)
+    assert screen.refresh(background=False) is True
+    assert len(seen)==1
+    next_lease=acquire_execution(screen.settings,other)
+    assert next_lease is not None
+    next_lease.release()
+
+
+def test_cash_cow_launch_failure_releases_shared_execution(tmp_path, monkeypatch):
+    from app.services.earnings_schedule import acquire_execution
+    screen=views(tmp_path)[10]
+    def failed(*a):raise RuntimeError('start failed')
+    monkeypatch.setattr(screen,'_collect',failed)
+    with pytest.raises(RuntimeError,match='start failed'):screen.refresh(background=False)
+    lease=acquire_execution(screen.settings,screen.acquire)
+    assert lease is not None
+    lease.release()

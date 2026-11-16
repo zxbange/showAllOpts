@@ -14,7 +14,7 @@ import portalocker
 LOG = logging.getLogger(__name__)
 LABELS = {'etf': '国家队动态', 'margin': '两融担保比例', 'commodities': 'A00 铝',
           'growth_dividend': '创红比和科创红利比', 'market': '市场热度和抱团拥挤度',
-          'valuation_ruler': '估值标尺', 'cci': 'CCI 动力煤', 'cash_cow': '奶牛股'}
+          'valuation_ruler': '估值标尺', 'cci': 'CCI 动力煤', 'cash_cow': '奶牛股', 'dividend_selection': '高股息（银行 / 非银行）'}
 _WORKERS = {}
 _WORKERS_LOCK = threading.Lock()
 

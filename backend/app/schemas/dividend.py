@@ -29,8 +29,10 @@ class DividendItem(BaseModel):
     industry_name: str | None
     industry_level: str | None
     dividend_yield_static: float = Field(validation_alias='dividend_yield_1y')
-    dividend_cash_annual: float = Field(validation_alias='dividend_cash_1y')
+    dividend_cash_annual: float | None = Field(validation_alias='dividend_cash_1y')
     dividend_yield_history: list[DividendAnnualYield] | None = None
+    dividend_per_share: float | None = None
+    dividend_fiscal_year: int | None = None
     pe_ttm: float
     pb: float | None
     market_cap: float

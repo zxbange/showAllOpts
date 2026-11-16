@@ -55,13 +55,11 @@ export function DividendPage() {
         <ErrorState message={error} retry={reload} />
       ) : !data?.snapshot ? (
         <EmptyState title="暂无高股息选股结果" description="请运行采集脚本，再同步本模块。" />
-      ) : data.requires_refresh ? (
-        <EmptyState
-          title="请更新选股结果"
-          description="PE 上限已调整为 12，请运行新版采集脚本并同步。"
-        />
       ) : (
         <>
+          {data.requires_refresh && (
+            <div className="panel" role="status">保留上次成功结果，采用旧版选股口径；新版采集成功后更新。</div>
+          )}
           <div className="stats-grid dividend-stats">
             <StatCard
               label="本组入选"
@@ -72,10 +70,10 @@ export function DividendPage() {
               accent
             />
             <StatCard
-              label="最高静态股息率"
+              label={data.requires_refresh ? "最高股息率（旧口径）" : "最高方案股息率"}
               value={number(group?.items[0]?.dividend_yield_static)}
               suffix="%"
-              note={`${Number(data.snapshot.trade_date.slice(0, 4)) - 1} 财年分红 / 当前市值`}
+              note={data.requires_refresh ? "旧版规则，详见数据日期" : "已公开税前每股分红 / 当日股价"}
               icon={<Coins size={18} />}
             />
             <StatCard
@@ -92,7 +90,7 @@ export function DividendPage() {
                 <h2>
                   {group?.name} · 前 {limit} 名
                 </h2>
-                <p>静态股息率从高到低排序</p>
+                <p>{data.requires_refresh ? "旧版股息率从高到低排序" : "方案股息率从高到低排序"}</p>
               </div>
               <span className="heading-tag">最新结果</span>
             </div>

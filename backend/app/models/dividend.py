@@ -30,7 +30,9 @@ class DividendStock(Base):
     industry_level = Column(String(16), nullable=True)
     # v4 起 *_1y 兼容列存上一财年已实施分红及静态股息率，由快照 rule_version 区分。
     dividend_yield_1y = Column(Numeric(24, 6), nullable=False)
-    dividend_cash_1y = Column(Numeric(28, 6), nullable=False)
+    dividend_cash_1y = Column(Numeric(28, 6), nullable=True)
+    dividend_per_share = Column(Numeric(24, 8), nullable=True)
+    dividend_fiscal_year = Column(Integer, nullable=True)
     dividend_yield_history = Column(JSON, nullable=True)
     pe_ttm = Column(Numeric(24, 6), nullable=False)
     pb = Column(Numeric(24, 6), nullable=True)

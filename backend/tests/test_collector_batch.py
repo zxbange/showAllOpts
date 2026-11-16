@@ -49,9 +49,9 @@ def test_factories_isolate_state_and_use_shared_config(batch, monkeypatch):
         if hasattr(ns, 'get_price'):
             assert ns.get_price is marker
         assert ns._config == CONFIG
-    fresh = batch.STRATEGIES['高股息选股']({}, CONFIG)
+    fresh = batch.STRATEGIES['行业动量']({}, CONFIG)
     assert fresh._config == CONFIG
-    assert namespaces[batch.STRATEGY_ORDER.index('高股息选股')].run is not fresh.run
+    assert namespaces[0].run is not fresh.run
 
 
 def test_loader_supplies_notebook_platform_and_builtin_apis(batch, monkeypatch):
@@ -128,7 +128,7 @@ def test_batch_configuration_and_local_entrypoints_have_one_definition():
                            for target in node.targets)]
     assert len(definitions) == 1
     config = ast.literal_eval(definitions[0].value)
-    assert len(config) == 9
+    assert len(config) == 8
     for scope in [tree] + [node for node in ast.walk(tree) if isinstance(node, (ast.FunctionDef, ast.ClassDef))]:
         names = [node.name for node in scope.body if isinstance(node, (ast.FunctionDef, ast.ClassDef))]
         assert len(names) == len(set(names)), names
@@ -150,7 +150,7 @@ def test_pasted_notebook_with_shared_connector_and_no_other_strategy_files(batch
         namespace.update({name: object() for name in
                           ('datetime', 'bool', 'int', 'float', 'str', 'type', 'isinstance', 'any', 'min')})
     exec(compile(source, '<ipython-input-test>', 'exec'), namespace)
-    assert len(namespace['STRATEGIES']) == 9
+    assert len(namespace['STRATEGIES']) == 8
     assert {'估值标尺'} <= namespace['STRATEGIES'].keys()
     # Construct every real strategy without accessing any project files.
     for name in namespace['STRATEGY_ORDER']:
@@ -158,7 +158,7 @@ def test_pasted_notebook_with_shared_connector_and_no_other_strategy_files(batch
     events = []
     def factory(name):
         def run(skip_existing=False):
-            assert skip_existing is (name not in ('高股息选股',))
+            assert skip_existing is True
             events.append(name)
             return []
         return lambda apis, config: SimpleNamespace(run=run)
@@ -213,7 +213,7 @@ def test_preview_only_displays_selected_fields_and_tail(batch, monkeypatch, caps
             assert index is False
             return '600000.XSHG example'
     monkeypatch.setattr(batch, '_load_strategy', lambda *_: lambda **kw: Frame())
-    summary = batch.run_all(['高股息选股'], db_config=CONFIG)
+    summary = batch.run_all(['ETF动量热度'], db_config=CONFIG)
     output = capsys.readouterr().out
     assert '最后 5 条' in output and '600000.XSHG example' in output
     assert summary[0]['rows'] == 20
@@ -311,7 +311,6 @@ def test_invalid_options_fail_before_any_execution(batch, monkeypatch, tmp_path,
     ('行业动量', {'start_date': '2025-02-01', 'end_date': '2026-10-16', 'industry_type': 'sw_l1'}),
     ('抱团拥挤度', {'start_date': '2024-01-01', 'top_pct': 0.1}),
     ('微盘温度计', {'start_date': '2022-01-01', 'micro_num': 500}),
-    ('高股息选股', {'end_date': '2026-10-16'}),
 ])
 def test_grouped_configuration_changes_run_defaults(batch, name, changes):
     import inspect
@@ -324,11 +323,9 @@ def test_grouped_configuration_changes_run_defaults(batch, name, changes):
 def test_internal_limits_use_central_config(batch):
     batch.STRATEGY_CONFIG['行业动量']['retention_trade_days'] = 200
     batch.STRATEGY_CONFIG['微盘温度计']['batch_size'] = 500
-    batch.STRATEGY_CONFIG['高股息选股']['page_size'] = 200
     namespaces = {name: factory({}, CONFIG) for name, factory in batch.STRATEGIES.items()}
     assert namespaces['行业动量'].RETENTION_TRADE_DAYS == 200
     assert namespaces['微盘温度计'].BATCH_SIZE == 500
-    assert namespaces['高股息选股'].PAGE_SIZE == 200
 
 
 @pytest.mark.parametrize('failures,interrupt', [(0, False), (2, False), (3, False), (0, True)])
@@ -406,7 +403,6 @@ def test_session_scope_closes_rolls_back_without_implicit_commit(batch, failure)
 
 @pytest.mark.parametrize('name,key', [
     ('行业动量', 'retention_trade_days'), ('微盘温度计', 'batch_size'),
-    ('高股息选股', 'page_size'),
 ])
 def test_invalid_loop_limits_fail_before_connecting(batch, monkeypatch, name, key):
     batch.STRATEGY_CONFIG[name][key] = 0
@@ -458,7 +454,7 @@ def test_shared_sessions_keep_insert_only_across_strategies(batch, monkeypatch, 
             assert session.query(model).count() == 1
 
 
-@pytest.mark.parametrize('name', ['行业动量', '抱团拥挤度', '微盘温度计', '高股息选股', '微盘新高新低'])
+@pytest.mark.parametrize('name', ['行业动量', '抱团拥挤度', '微盘温度计', '微盘新高新低'])
 def test_progress_visible_through_quiet_stream_for_each_strategy(batch, monkeypatch, capsys, name):
     processed = []
     def run(**kwargs):
@@ -472,7 +468,7 @@ def test_progress_visible_through_quiet_stream_for_each_strategy(batch, monkeypa
     output = capsys.readouterr().out
     assert '【1/1 ' + name + '】' in output
     assert '0/2 0%' in output and '2/2 100%' in output and '2026-10-16' in output
-    label = '当前选股结果' if name == '高股息选股' else '新增'
+    label = '新增'
     assert label + ' 1 条' in output and 'internal details' not in output
     assert len(processed) == 2 and result[0]['rows'] == 1
     assert batch._PROGRESS_LOCAL.current is None
@@ -613,16 +609,6 @@ def test_progress_thread_unavailable_falls_back_without_failing_strategy(batch, 
     assert '按任务推进刷新' in capsys.readouterr().out
 
 
-def test_latest_dividend_mode_does_not_receive_insert_only_flag(batch, monkeypatch, capsys):
-    received=[]
-    def loader(name,*args):
-        def run(**kwargs):received.append((name,kwargs));return [1,2]
-        return run
-    monkeypatch.setattr(batch,'_load_strategy',loader)
-    batch.run_all(['高股息选股','行业动量'],preview_rows=0)
-    assert received==[('高股息选股',{}),('行业动量',{'skip_existing':True})]
-    output=capsys.readouterr().out
-    assert '当前选股结果 2 条' in output and '新增 2 条' in output
 
 
 def test_history_entrypoints_default_to_insert_only():
@@ -653,7 +639,7 @@ def test_ownership_scope_messages_bypass_quiet_stream(batch, monkeypatch, capsys
 
 
 def test_interface_collectors_are_not_registered_in_joinquant_batch(batch, monkeypatch):
-    for name in ('ETF份额', '两融担保比例'):
+    for name in ('ETF份额', '两融担保比例', '高股息选股', '奶牛股', '高股息银行', '高股息非银行'):
         assert name not in batch.STRATEGY_ORDER
         assert name not in batch.STRATEGY_CONFIG
         assert name not in batch.STRATEGY_SPECS
@@ -662,29 +648,31 @@ def test_interface_collectors_are_not_registered_in_joinquant_batch(batch, monke
         with pytest.raises(ValueError):
             batch.run_all([name], db_config=CONFIG)
     assert not hasattr(batch, '_etf_strategy')
+    assert not hasattr(batch, '_dividend_strategy')
+    assert not hasattr(batch, '_selection_archive')
 
 
 @pytest.mark.parametrize('remaining,gaps,status', [(0, [], 'SUCCESS'), (3, [], 'PENDING'), (3, [{'date': '2026-01-05'}], 'PARTIAL')])
 def test_archive_summary_is_not_counted_as_latest_selection(batch, monkeypatch, capsys, remaining, gaps, status):
     report = dict(added=2, skipped=4, remaining=remaining, gaps=gaps, source_kind='revised_asof')
     monkeypatch.setattr(batch, '_load_strategy', lambda *args: lambda **kwargs: report)
-    rows = batch.run_all(['高股息选股'], options={'高股息选股': {'history_mode': True}},
+    rows = batch.run_all(['ETF动量热度'], options={'ETF动量热度': {'history_mode': True}},
                          db_config=CONFIG, raise_on_failure=False)
     assert rows[0]['rows'] == 2 and rows[0]['status'] == status
     output = capsys.readouterr().out
-    assert '未覆盖最新选股' in output and '当前选股结果' not in output.split('采集结果汇总')[0]
+    assert '历史档案：新增 2 日' in output and '当前选股结果' not in output
 
 
 def test_archive_report_invalid_counts_are_not_success(batch, monkeypatch):
     monkeypatch.setattr(batch, '_load_strategy', lambda *args: lambda **kwargs: {'added': True, 'skipped': 0, 'remaining': 0, 'gaps': []})
-    result = batch.run_all(['高股息选股'], db_config=CONFIG, raise_on_failure=False)
+    result = batch.run_all(['ETF动量热度'], db_config=CONFIG, raise_on_failure=False)
     assert result[0]['status'] == 'FAILED' and result[0]['rows'] is None
 
 
 def test_archive_prior_unresolved_gaps_cannot_report_complete(batch, monkeypatch):
     report = dict(added=0, skipped=4, remaining=0, gaps=[], unresolved_gaps=1)
     monkeypatch.setattr(batch, '_load_strategy', lambda *args: lambda **kwargs: report)
-    rows = batch.run_all(['高股息选股'], db_config=CONFIG, raise_on_failure=False)
+    rows = batch.run_all(['ETF动量热度'], db_config=CONFIG, raise_on_failure=False)
     assert rows[0]['status'] == 'PARTIAL' and rows[0]['gaps'] == 1
 
 

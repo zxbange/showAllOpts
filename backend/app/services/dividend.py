@@ -13,8 +13,8 @@ class DividendService:
             return DividendOverview(groups=groups)
         head = rows[0][0]
         by_id = {group.id: group for group in groups}
-        legacy = head.rule_version != 'dividend_value_pe12_v6'
+        legacy = head.rule_version != 'dividend_dps_proposal_age3_v9'
         for _, stock in rows:
-            if stock is not None and stock.method in by_id and not legacy:
-                by_id[stock.method].items.append(DividendItem.model_validate(stock))
+            if stock is not None and stock.method in by_id:
+                by_id[stock.method].items.append(DividendItem.model_validate({k: v for k, v in vars(stock).items() if not k.startswith('_')}))
         return DividendOverview(snapshot=DividendRun.model_validate(head), groups=groups, requires_refresh=legacy)

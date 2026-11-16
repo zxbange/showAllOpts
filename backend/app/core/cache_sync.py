@@ -92,9 +92,10 @@ def transfer_plan(source, target, table):
                for c in table.columns if c.name not in OMIT]
     if table.name == 'dividend_selection_stock':
         names = {c['name'] for c in inspect(source).get_columns(table.name)}
-        if 'dividend_yield_history' not in names:
-            columns = [literal(None).label(c.name) if c.name == 'dividend_yield_history' else c for c in columns]
-            compressed.discard('dividend_yield_history')
+        optional = {'dividend_yield_history', 'dividend_per_share', 'dividend_fiscal_year'}
+        missing = optional - names
+        columns = [literal(None).label(c.name) if c.name in missing else c for c in columns]
+        compressed.difference_update(missing)
     statement = table.insert()
     if json_names:
         statement = statement.values(**{name: bindparam(name, type_=Text) for name in json_names})

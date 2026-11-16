@@ -31,12 +31,12 @@ def default_schedules(settings, *, legacy=True, warnings=None):
         'market': daily('00:01', getattr(settings, 'market_collection_enabled', True) and getattr(settings, 'market_collection_worker_enabled', True)),
         'valuation_ruler': daily('18:30', getattr(settings, 'valuation_ruler_worker_enabled', True)),
         'cci': daily('21:00'),
-        'cash_cow': daily('21:00', getattr(settings, 'cash_cow_worker_enabled', True)) | {'frequency': 'month_end'},
+        'earnings_selection': daily('23:00', getattr(settings, 'cash_cow_worker_enabled', True)),
         'holdings': dict(enabled=False, start='09:25', end='15:10', interval_seconds=15, table=''),
         'social': dict(enabled=False, start='07:00', end='24:00', min_interval_minutes=10, max_interval_minutes=16),
         'social_cubes': dict(enabled=True, start='09:00', end='15:00'),
     }
-    for key in ('etf', 'margin', 'commodities', 'growth_dividend', 'market', 'valuation_ruler', 'cci', 'cash_cow'):
+    for key in ('etf', 'margin', 'commodities', 'growth_dividend', 'market', 'valuation_ruler', 'cci', 'earnings_selection'):
         result[key]['telegram_notify'] = False
     path = getattr(settings, 'cache_path', settings.log_path / 'cache') / 'schedule.json'
     if legacy and path.exists():
@@ -182,6 +182,11 @@ class SystemConfiguration:
             result.setdefault('integrations', integration_defaults(self.settings))
             from app.services.system_runtime import default_runtime
             result.setdefault('runtime', default_runtime(self.settings))
+            if 'earnings_selection' not in result['schedules']:
+                old = result['schedules'].pop('cash_cow', {})
+                result['schedules']['earnings_selection'] = {
+                    'enabled': old.get('enabled', True), 'times': ['23:00'],
+                    'telegram_notify': old.get('telegram_notify', False)}
             # Migrate only the previous default once; explicitly customized times survive.
             if not result.get('valuation_schedule_v2'):
                 if result['schedules']['valuation_ruler']['times'] == ['20:00']:
@@ -199,6 +204,7 @@ class SystemConfiguration:
             with env_transaction(self.settings) as transaction:
                 yield transaction
         except EnvFileError as exc:
+            LOG.warning('System configuration file operation failed reason=%s', str(exc))
             raise SystemConfigurationError(str(exc)) from None
 
     def _from_environment(self, value, environment):
@@ -298,8 +304,6 @@ class SystemConfiguration:
                 count = 2 if name == 'commodities' else 1
                 if not isinstance(times, list) or len(times) != count or any(not isinstance(t, str) or not TIME.fullmatch(t) for t in times) or times != sorted(set(times)):
                     raise SystemConfigurationError('任务时间须按顺序填写HH:MM')
-                if name == 'cash_cow' and value['frequency'] != 'month_end':
-                    raise SystemConfigurationError('奶牛股按每月最后一天运行')
             elif (not isinstance(value['start'], str) or not TIME.fullmatch(value['start']) or not isinstance(value['end'], str) or not (TIME.fullmatch(value['end']) or value['end'] == '24:00') or value['start'] >= value['end']):
                 raise SystemConfigurationError('时间窗口须按当日开始、结束顺序填写')
             if name == 'holdings':
@@ -320,7 +324,7 @@ class SystemConfiguration:
         return dict(revision=previous['revision'], database_revision=previous['database_revision'], timezone='Asia/Shanghai', database=db, schedules=schedules, integrations=integrations, runtime=runtime, valuation_schedule_v2=True)
 
     def save(self, body):
-        from app.services.system_integrations import integration_env_updates
+        from app.services.system_integrations import integration_env_updates, FIELDS
         with self.environment() as environment:
             current = self._reconcile(environment)
             candidate = self.validate(body, current)
@@ -331,6 +335,18 @@ class SystemConfiguration:
             keys = {'host': 'DB_HOST', 'port': 'DB_PORT', 'database': 'DB_NAME', 'username': 'DB_USER', 'password': 'DB_PASSWORD'}
             updates = {target: str(candidate['database'][key]) for key, target in keys.items() if candidate['database'][key] != current['database'][key]}
             updates.update(integration_env_updates(candidate.get('integrations', {}), current.get('integrations', {})))
+            # An explicitly submitted credential must agree with the file, not
+            # merely the effective value (which may come from the environment).
+            # Otherwise an environment override can turn a requested file edit
+            # into a silent no-op with a misleading successful response.
+            if environment.file_values is not None:
+                submitted = body.get('integrations') or {}
+                for group, fields in FIELDS.items():
+                    for field, key in fields.items():
+                        if submitted.get(group, {}).get(field) is not None:
+                            value = candidate['integrations'][group][field]
+                            if environment.file_values.get(key) != value:
+                                updates[key] = value
             if updates and environment.path is None and getattr(self.settings, 'resolved_env_file', None) is not None:
                 raise SystemConfigurationError('配置文件不存在，请先设置可读写配置文件；未保存凭据')
             with sqlite3.connect(self.path, timeout=10) as db:
@@ -343,6 +359,9 @@ class SystemConfiguration:
                 if environment.path is not None:
                     environment.write(updates)
                 db.execute('INSERT OR REPLACE INTO configuration VALUES(1,?,?)', (candidate['revision'], cipher.encrypt(json.dumps(candidate).encode())))
+        LOG.info('System configuration saved revision=%s config_file=%s updated_keys=%s',
+                 candidate['revision'], str(environment.path) if environment.path else '-',
+                 ','.join(sorted(updates)) or '-')
         return self.public(candidate)
 
     @staticmethod
@@ -371,6 +390,8 @@ def database_config(settings):
     return value['database'] | {'revision': value['database_revision']}
 
 def task_config(settings, key):
+    if key in ('cash_cow', 'dividend_selection'):
+        key = 'earnings_selection'
     return deepcopy(SystemConfiguration(settings).load()['schedules'][key])
 
 @contextmanager

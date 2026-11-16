@@ -233,6 +233,11 @@ def _replace_latest_snapshot(Session, Snapshot, Stock, meta, records,
 
     with session_scope(Session) as session:
         head = session.query(Snapshot).filter_by(id=1).with_for_update().first()
+        # Keep legacy JQ archives, but never downgrade a published DPS proposal snapshot.
+        if (Snapshot.__tablename__ == 'dividend_selection_snapshot' and head is not None
+                and head.rule_version == 'dividend_dps_proposal_age3_v9'
+                and meta.get('rule_version') != head.rule_version):
+            raise ValueError('Legacy JQ dividend rules cannot overwrite the v9 proposal snapshot; use history mode.')
         if head is not None and getattr(head, date_field) > meta[date_field]:
             raise ValueError('数据库已有更新日期，拒绝旧日期覆盖。')
         existing = session.query(Stock).all()
@@ -569,7 +574,7 @@ def _dividend_strategy(_apis, _config):
     if BATCH_SIZE > 3000 or PAGE_SIZE > 3000:
         raise ValueError('batch_size 和 page_size 不得超过 3000。')
     END_DATE = settings['end_date']
-    RULE_VERSION = 'dividend_value_pe12_v6'
+    RULE_VERSION = 'dividend_pe12_age3_active_v8'
     MIN_YIELD = Decimal('3')
     METHODS = ('value', 'bank')
     LIMITS = dict(value=25, bank=10)
@@ -600,7 +605,9 @@ def _dividend_strategy(_apis, _config):
         industry_name = Column(String(128), nullable=True)
         industry_level = Column(String(16), nullable=True)
         dividend_yield_1y = Column(Numeric(24, 6), nullable=False)
-        dividend_cash_1y = Column(Numeric(28, 6), nullable=False)
+        dividend_cash_1y = Column(Numeric(28, 6), nullable=True)
+        dividend_per_share = Column(Numeric(24, 8), nullable=True)
+        dividend_fiscal_year = Column(Integer, nullable=True)
         dividend_yield_history = Column(JSON, nullable=True)
         pe_ttm = Column(Numeric(24, 6), nullable=False)
         pb = Column(Numeric(24, 6), nullable=True)
@@ -631,16 +638,34 @@ def _dividend_strategy(_apis, _config):
             raise ValueError('{} 未完整返回，保留数据库原快照。'.format(label))
         return result
 
+    def listed_three_years(value, day):
+        if value is None or pd.isna(value):
+            raise ValueError('上市日期缺失，保留原快照。')
+        try:
+            listed = as_date(value)
+            if listed > day:
+                raise ValueError()
+            try:
+                anniversary = listed.replace(year=listed.year + 3)
+            except ValueError:
+                # February 29 reaches its anniversary on February 28.
+                anniversary = listed.replace(year=listed.year + 3, day=28)
+        except (ValueError, TypeError, OverflowError):
+            raise ValueError('上市日期无效，保留原快照。') from None
+        return day >= anniversary
+
     def universe(day):
         _progress_note('读取历史股票池')
         frame = get_all_securities(types=['stock'], date=day)
-        if frame is None or frame.empty or 'display_name' not in frame.columns:
+        if frame is None or frame.empty or 'display_name' not in frame.columns or 'start_date' not in frame.columns:
             raise ValueError('股票列表为空或缺少名称。')
-        names = {str(code): str(row['display_name']) for code, row in frame.iterrows()}
+        rows = list(frame.iterrows())
+        names = {str(code): str(row['display_name']) for code, row in rows}
+        mature = {str(code) for code, row in rows if listed_three_years(row['start_date'], day)}
         if len(names) != len(frame):
             raise ValueError('股票列表代码重复。')
         # 无真实持仓，不使用原交易策略的持仓豁免；两个筛选共用可选池。
-        codes = sorted(code for code, name in names.items() if not code.startswith(('4', '8'))
+        codes = sorted(code for code, name in names.items() if code in mature and not code.startswith(('4', '8'))
                        and not builtins.any(tag in name for tag in ('ST', '*', '退')))
         quotes, caps = {}, {}
         for offset in _progress_items(range(0, len(codes), BATCH_SIZE), '股票池批次'):
@@ -649,18 +674,21 @@ def _dividend_strategy(_apis, _config):
             if (st is None or len(st.index) != 1 or as_date(st.index[0]) != day
                     or set(st.columns) != set(batch) or len(st.columns) != len(batch)):
                 raise ValueError('ST 状态不完整。')
-            # 价格仅用于展示；不按停牌、开盘价或涨跌停状态筛选。
-            # skip_paused=False 保留停牌股票，由数据源提供填充后的收盘价。
+            # Validate daily suspension explicitly before valuation and ranking.
+            # Missing flags cannot be treated as suspension or normal trading.
             prices = by_code(get_price(batch, start_date=day, end_date=day, frequency='daily',
-                                      fields=['close'], fq=None, skip_paused=False, panel=False),
-                             batch, ('time', 'close'), '行情')
+                                      fields=['close', 'paused'], fq=None, skip_paused=False, panel=False),
+                             batch, ('time', 'close', 'paused'), '行情')
             eligible = []
             for code in batch:
                 flag = st.iloc[0][code]
                 bar = prices[code]
                 if pd.isna(flag) or flag not in (True, False) or as_date(bar['time']) != day:
                     raise ValueError('ST 状态或行情日期无效。')
-                if flag:
+                paused = bar['paused']
+                if pd.isna(paused) or paused not in (True, False, 0, 1):
+                    raise ValueError('Suspension state missing or invalid; previous snapshot retained.')
+                if flag or paused:
                     continue
                 closing = number(bar['close'])
                 if closing is None or closing <= 0:
@@ -765,6 +793,7 @@ def _dividend_strategy(_apis, _config):
                     industry_code=industry.get('industry_code'), industry_name=industry.get('industry_name'), industry_level=level,
                     dividend_yield_1y=rounded(yields[code]),
                     dividend_cash_1y=rounded(payout.get('cash_1y', 0)),
+                    dividend_per_share=None, dividend_fiscal_year=None,
                     dividend_yield_history=[dict(fiscal_year=year, yield_pct=float(rounded(
                         payout.get('annual_cash', {}).get(year, Decimal(0))/100/number(cap['market_cap']))))
                         for year in range(day.year-1, day.year-4, -1)],
@@ -795,6 +824,10 @@ def _dividend_strategy(_apis, _config):
             columns = {c['name'] for c in inspect(connection).get_columns(DividendStock.__tablename__)}
             if 'dividend_yield_history' not in columns:
                 connection.execute(sql_text('ALTER TABLE dividend_selection_stock ADD COLUMN dividend_yield_history JSON NULL'))
+            for name, sql_type in (('dividend_per_share', 'NUMERIC(24, 8)'),
+                                   ('dividend_fiscal_year', 'INTEGER')):
+                if name not in columns:
+                    connection.execute(sql_text('ALTER TABLE dividend_selection_stock ADD COLUMN {} {} NULL'.format(name, sql_type)))
         _progress_note('事务更新两组最新选股结果')
         return _replace_latest_snapshot(Session, DividendSnapshot, DividendStock, meta, records,
                                         RESULT_COLUMNS, META_COLUMNS, 'trade_date')

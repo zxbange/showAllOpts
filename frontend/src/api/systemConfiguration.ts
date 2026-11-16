@@ -33,6 +33,7 @@ export type SystemConfiguration = {
   schedules: Record<string, TaskConfiguration>
   integrations?: {
     asharehub: { token_set: boolean }
+    tushare?: { token_set: boolean }
     telegram: { token_set: boolean; chat_id_set: boolean }
   }
 }

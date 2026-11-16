@@ -28,7 +28,8 @@ from app.services.valuation_ruler import ValuationRuler
 from app.services.commodities import Commodities
 from app.services.cci_coal import CCICoal
 from app.services.cash_cow import CashCowScreen
-from app.services.cash_cow_schedule import MonthlyCashCowScheduler
+from app.services.earnings_schedule import EarningsScheduler
+from app.services.dividend_collection import DividendCollection
 from app.services.accounts import Accounts
 from app.services.etf_collection import ETFCollection
 from app.services.market_collection import MarketCollection
@@ -104,13 +105,16 @@ def create_app(settings: Settings | None = None, engine: Engine | None = None) -
             cci_coal = CCICoal(settings)
             cleanup.push_async_callback(stop_worker, 'cci_coal', cci_coal)
             application.state.cci_coal = cci_coal
+            dividend_collection = DividendCollection(settings, cache=cache)
+            cleanup.push_async_callback(stop_worker, 'dividend_collection', dividend_collection)
+            application.state.dividend_collection = dividend_collection
             cash_cow = {years: CashCowScreen(settings, years=years, cache=cache) for years in (3, 5, 10)}
             for screen in cash_cow.values():
                 cleanup.push_async_callback(stop_worker, f'cash_cow_{screen.years}', screen)
             application.state.cash_cow = cash_cow
-            cash_cow_schedule = MonthlyCashCowScheduler(settings, cash_cow)
-            cleanup.push_async_callback(stop_worker, 'cash_cow_schedule', cash_cow_schedule)
-            application.state.cash_cow_schedule = cash_cow_schedule
+            earnings_schedule = EarningsScheduler(settings, dividend_collection, cash_cow[10])
+            cleanup.push_async_callback(stop_worker, 'earnings_schedule', earnings_schedule)
+            application.state.earnings_schedule = earnings_schedule
             holdings = PersonalHoldings(settings)
             cleanup.push_async_callback(stop_worker, 'holdings', holdings)
             application.state.personal_holdings = holdings
@@ -131,7 +135,7 @@ def create_app(settings: Settings | None = None, engine: Engine | None = None) -
             start_worker('valuation_ruler', valuation_ruler)
             start_worker('commodities', commodities)
             start_worker('cci_coal', cci_coal)
-            start_worker('cash_cow_schedule', cash_cow_schedule)
+            start_worker('earnings_schedule', earnings_schedule)
             from app.services.collection_notifications import start_notifications, stop_notifications
             start_notifications(settings)
             from app.services.system_runtime import start_runtime, stop_runtime

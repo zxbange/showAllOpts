@@ -100,7 +100,7 @@ class EastmoneyCashCowSource:
             wrapper = json.loads(raw)
             if wrapper.get('as_of') != self.as_of or wrapper.get('complete') is not True:
                 return None
-            if kind == 'daily' or (kind == 'rows' and parameters[0] == 'RPT_F10_DIVIDEND_MAIN'):
+            if kind in ('daily', 'tushare_raw_v1') or (kind == 'rows' and parameters[0] == 'RPT_F10_DIVIDEND_MAIN'):
                 saved = number(wrapper.get('saved_at'))
                 if saved is None or not 0 <= time.time() - saved <= 300:
                     return None
@@ -416,7 +416,7 @@ class EastmoneyCashCowSource:
                 quote_date, previous = stamp, code
                 seen.add(code)
                 markets.add(exchange)
-                stocks.append(dict(code=code, name=name.strip(), exchange=exchange))
+                stocks.append(dict(code=code, name=name.strip(), exchange=exchange, list_date=listed.isoformat()))
             LOG.info('Cash cow universe page source=eastmoney_selector page=%s rows=%s '
                      'collected=%s has_more=%s quote_date=%s', page, len(batch), len(stocks), more, quote_date)
             if not more:

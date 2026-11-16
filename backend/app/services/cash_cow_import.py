@@ -7,8 +7,8 @@ from app.core.cache_errors import SnapshotDataError
 from app.models.cash_cow import CashCowSnapshot
 from app.services.cash_cow_rules import PERIODS, evaluate_year, finish_stock
 
-RULE_VERSION = 'cash_cow_static_display_v2'
-PUBLIC_SOURCE = '东方财富公开数据接口'
+RULE_VERSION = 'cash_cow_payout100_v3'
+PUBLIC_SOURCE = 'AShareHub财务与股票池 / 东方财富分红与股本 / Tushare不复权行情'
 
 
 def validate_snapshot(connection):

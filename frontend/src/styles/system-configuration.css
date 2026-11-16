@@ -552,3 +552,28 @@
     bottom: calc(84px + env(safe-area-inset-bottom));
   }
 }
+
+.configuration-error-dialog {
+  width: min(440px, calc(100vw - 32px));
+  padding: 24px;
+  border: 1px solid var(--border-color, #dbe1ea);
+  border-radius: 16px;
+  color: var(--text-primary, #172033);
+  background: var(--panel-bg, #fff);
+  box-shadow: 0 20px 70px #0004;
+}
+.configuration-error-dialog::backdrop {
+  background: #0f172a88;
+}
+.configuration-error-dialog h2 {
+  margin: 0 0 12px;
+  font-size: 18px;
+}
+.configuration-error-dialog p {
+  overflow-wrap: anywhere;
+}
+.configuration-error-dialog form {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 20px;
+}

@@ -164,7 +164,7 @@ def apply_logging(settings):
         logging.getLogger(name).setLevel(level)
     secrets = [value['database'].get('password', '')]
     integrations = value.get('integrations', {})
-    secrets.extend(integrations.get(group, {}).get('token', '') for group in ('telegram', 'asharehub'))
+    secrets.extend(integrations.get(group, {}).get('token', '') for group in ('telegram', 'asharehub', 'tushare'))
     for handler in root.handlers:
         if not isinstance(handler.formatter, StandardFormatter):
             continue

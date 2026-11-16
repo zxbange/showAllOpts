@@ -18,7 +18,7 @@
 
 ## Linux 部署约定
 
-当前部署目录为 `/home/ubuntu/showAllOpts`，systemd 服务名为 `showallopts-api`，运行账号和组为 `ubuntu`。基础 service 配合本机 `99-ubuntu-home.conf` 覆盖配置运行，最终读取 `config/app.config`，写入项目 `log/`。`ProtectHome=read-only` 允许读取家目录中的代码，`ReadWritePaths` 允许写入日志目录。
+当前部署目录为 `/home/ubuntu/showAllOpts`，systemd 服务名为 `showallopts-api`，运行账号和组为 `ubuntu`。基础 service 配合本机 `99-ubuntu-home.conf` 覆盖配置运行，最终读取 `config/app.config`，写入项目 `log/`。`ProtectHome=read-only` 允许读取家目录中的代码，`ReadWritePaths` 精确允许写入日志目录和配置目录，后者用于系统配置页面的原子写回。
 
 Nginx 从 `/var/www/showallopts` 提供前端静态资源，将 `/api` 代理到 `127.0.0.1:8000`。前端资源发布与后端进程启停分别管理。安装、权限、服务配置和升级步骤见 [Linux 部署指南](../operations/linux-deployment.md#4-systemd--nginx-后台服务)。
 

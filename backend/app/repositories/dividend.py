@@ -16,4 +16,7 @@ class DividendRepository:
         if 'dividend_yield_history' not in columns:
             # 旧快照只提示更新，不访问尚不存在的字段。
             query = query.options(defer(DividendStock.dividend_yield_history, raiseload=True))
+        for field in ('dividend_per_share', 'dividend_fiscal_year'):
+            if field not in columns:
+                query = query.options(defer(getattr(DividendStock, field), raiseload=True))
         return self.session.execute(query).all()

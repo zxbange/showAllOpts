@@ -26,7 +26,7 @@ def test_defaults_never_create_files_and_keep_secrets_out_of_public(settings):
     result=m.integration_defaults(settings,{'ASHAREHUB_API_KEY':'private-api'})
     assert not list(settings.log_path.iterdir())
     public=m.sanitize_integrations(result)
-    assert public==dict(asharehub=dict(token_set=True),telegram=dict(token_set=False,chat_id_set=False))
+    assert public==dict(asharehub=dict(token_set=True),tushare=dict(token_set=False),telegram=dict(token_set=False,chat_id_set=False))
     assert 'private-api' not in json.dumps(public)
 
 def test_legacy_fallback_is_read_only_and_empty_file_value_prevents_resurrection(settings):
@@ -43,7 +43,7 @@ def test_process_override_and_explicit_empty(settings,monkeypatch):
     assert result['telegram']['token']=='' and result['asharehub']['token']=='process-api'
 
 def test_null_retains_clear_is_explicit_and_env_updates_only_differences(settings):
-    previous=dict(asharehub=dict(token='api'),telegram=dict(token='bot',chat_id='chat'))
+    previous=dict(asharehub=dict(token='api'),tushare=dict(token=''),telegram=dict(token='bot',chat_id='chat'))
     assert m.validate_integrations(None,previous)==previous
     candidate=m.validate_integrations(dict(asharehub=dict(token=None),telegram=dict(token='',chat_id=None)),previous)
     assert candidate['telegram']==dict(token='',chat_id='chat')
@@ -96,3 +96,74 @@ def test_file_deleted_asharehub_key_is_not_restored_from_settings(tmp_path,monke
     path.write_text('TELEGRAM_BOT_TOKEN=\nTELEGRAM_CHAT_ID=\n')
     assert m.integrations_config(settings)['asharehub']['token']==''
     assert SystemConfiguration(settings).public()['integrations']['asharehub']['token_set'] is False
+
+
+def test_tushare_file_save_clear_override_and_redaction(tmp_path, monkeypatch):
+    from app.core.config import Settings
+    from app.core.logging import logging_config
+    from app.services.system_configuration import SystemConfiguration, SystemConfigurationError
+    from dotenv import dotenv_values
+    for fields in m.FIELDS.values():
+        for key in fields.values():
+            monkeypatch.delenv(key, raising=False)
+    path = tmp_path / 'app.config'
+    path.write_text('TUSHARE_TOKEN=initial-test-token\nUNRELATED=keep\n')
+    path.chmod(0o640)
+    settings = Settings(_env_file=path, log_dir=tmp_path / 'logs')
+    config = SystemConfiguration(settings)
+    assert config.public()['integrations']['tushare'] == {'token_set': True}
+    assert m.integrations_config(settings)['tushare']['token'] == 'initial-test-token'
+    assert 'initial-test-token' in logging_config(settings)['formatters']['standard']['secrets']
+    body = config.public()
+    body['database']['password'] = None
+    body['integrations'] = {'tushare': {'token': 'replacement-test-token'}}
+    saved = config.save(body)
+    assert 'replacement-test-token' not in json.dumps(saved)
+    assert b'replacement-test-token' not in config.path.read_bytes()
+    assert dotenv_values(path)['TUSHARE_TOKEN'] == 'replacement-test-token'
+    assert dotenv_values(path)['UNRELATED'] == 'keep'
+    assert path.stat().st_mode & 0o777 == 0o640
+    restarted = Settings(_env_file=path, log_dir=settings.log_dir)
+    assert restarted.tushare_token.get_secret_value() == 'replacement-test-token'
+    assert m.integrations_config(restarted)['tushare']['token'] == 'replacement-test-token'
+    body = config.public(); body['database']['password'] = None
+    body['integrations'] = {'tushare': {'token': None}}
+    config.save(body)
+    assert dotenv_values(path)['TUSHARE_TOKEN'] == 'replacement-test-token'
+    body = config.public(); body['database']['password'] = None
+    body['integrations'] = {'tushare': {'token': ''}}
+    config.save(body)
+    assert dotenv_values(path)['TUSHARE_TOKEN'] == ''
+    assert config.public()['integrations']['tushare']['token_set'] is False
+    monkeypatch.setenv('TUSHARE_TOKEN', 'environment-test-token')
+    assert m.integrations_config(settings)['tushare']['token'] == 'environment-test-token'
+    body = config.public(); body['database']['password'] = None
+    body['integrations'] = {'tushare': {'token': 'refused-test-token'}}
+    with pytest.raises(SystemConfigurationError, match='TUSHARE_TOKEN') as error:
+        config.save(body)
+    assert 'environment-test-token' not in str(error.value)
+    assert dotenv_values(path)['TUSHARE_TOKEN'] == ''
+
+
+@pytest.mark.parametrize('token', ['line\nbreak', 'x' * 4097, 123])
+def test_tushare_invalid_token_is_not_echoed(settings, token):
+    from app.services.system_configuration import SystemConfigurationError
+    with pytest.raises(SystemConfigurationError) as error:
+        m.validate_integrations({'tushare': {'token': token}}, m.integration_defaults(settings, {}))
+    assert str(token) not in str(error.value)
+
+
+def test_tushare_update_requires_admin(tmp_path):
+    from fastapi import FastAPI, HTTPException
+    from fastapi.testclient import TestClient
+    from app.api.routes.system_configuration import router
+    from app.api.routes.accounts import require_admin
+    app = FastAPI()
+    app.include_router(router)
+    def reject():
+        raise HTTPException(403, 'administrator required')
+    app.dependency_overrides[require_admin] = reject
+    client = TestClient(app, base_url='https://testserver')
+    response = client.put('/system-configuration', json={'integrations': {'tushare': {'token': 'test-private-token'}}})
+    assert response.status_code == 403
+    assert 'test-private-token' not in response.text

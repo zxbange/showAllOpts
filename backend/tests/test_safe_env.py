@@ -146,7 +146,7 @@ def test_explicit_clear_survives_reload_and_no_secret_in_public(tmp_path):
     cleared = form(config)
     cleared['integrations'] = {'asharehub': {'token': ''}, 'telegram': {'token': '', 'chat_id': ''}}
     config.save(cleared)
-    assert config.load()['integrations'] == {'asharehub': {'token': ''}, 'telegram': {'token': '', 'chat_id': ''}}
+    assert config.load()['integrations'] == {'asharehub': {'token': ''}, 'tushare': {'token': ''}, 'telegram': {'token': '', 'chat_id': ''}}
     assert 'key-123' not in json.dumps(config.public())
     assert dotenv_values(path)['TELEGRAM_CHAT_ID'] == ''
 
@@ -209,3 +209,58 @@ def test_old_record_without_runtime_migrates_in_memory(tmp_path):
     value.pop('runtime')
     config._persist(value, config.cipher())
     assert config.public()['runtime']['sources']['tdx']['request_timeout_seconds'] == 600
+
+@pytest.mark.parametrize('group,key', [('asharehub', 'ASHAREHUB_API_KEY'), ('tushare', 'TUSHARE_TOKEN')])
+def test_explicit_credential_equal_to_override_does_not_silently_skip_file(tmp_path, monkeypatch, caplog, group, key):
+    path, settings = configured(tmp_path)
+    path.write_text(path.read_text() + key + "='file-old-secret'\n")
+    monkeypatch.setenv(key, 'process-new-secret')
+    config = SystemConfiguration(settings)
+    body = form(config)
+    body['integrations'] = {group: {'token': 'process-new-secret'}}
+    before = path.read_bytes()
+    with pytest.raises(SystemConfigurationError, match=key):
+        config.save(body)
+    assert path.read_bytes() == before
+    assert config.load()['revision'] == body['revision']
+    assert 'file operation failed' in caplog.text
+    assert 'process-new-secret' not in caplog.text and 'file-old-secret' not in caplog.text
+    # Once the override is removed, refresh and save writes the requested file.
+    monkeypatch.delenv(key)
+    body = form(config)
+    body['integrations'] = {group: {'token': 'process-new-secret'}}
+    with caplog.at_level('INFO'):
+        config.save(body)
+    assert dotenv_values(path)[key] == 'process-new-secret'
+    assert 'System configuration saved' in caplog.text and key in caplog.text
+    assert 'process-new-secret' not in caplog.text
+
+
+def test_explicit_legacy_credential_is_written_even_when_effective_value_matches(tmp_path, monkeypatch):
+    path, settings = configured(tmp_path)
+    config = SystemConfiguration(settings)
+    from app.services import system_integrations
+    monkeypatch.setattr(system_integrations, '_legacy_telegram', lambda settings: {'token': 'legacy-test', 'chat_id': ''})
+    body = form(config)
+    body['integrations'] = {'telegram': {'token': 'legacy-test'}}
+    config.save(body)
+    assert dotenv_values(path)['TELEGRAM_BOT_TOKEN'] == 'legacy-test'
+
+
+def test_api_conflict_logs_safe_reason_and_keeps_file_unchanged(tmp_path, caplog):
+    import asyncio
+    from fastapi import HTTPException
+    from app.api.routes.system_configuration import call
+    path, settings = configured(tmp_path)
+    config = SystemConfiguration(settings)
+    body = form(config)
+    config.save(body)
+    before = path.read_bytes()
+    body['integrations'] = {'asharehub': {'token': 'never-log-private-token'}}
+    with pytest.raises(HTTPException) as caught:
+        asyncio.run(call(config.save, body))
+    assert caught.value.status_code == 409
+    assert caught.value.detail == '配置已更新，请刷新后重试'
+    assert caught.value.detail in caplog.text
+    assert 'never-log-private-token' not in caplog.text
+    assert path.read_bytes() == before

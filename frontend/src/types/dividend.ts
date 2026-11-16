@@ -14,7 +14,9 @@ export interface DividendItem {
   industry_level: string | null
   dividend_yield_static: number
   dividend_yield_history?: AnnualYield[] | null
-  dividend_cash_annual: number
+  dividend_cash_annual: number | null
+  dividend_per_share?: number | null
+  dividend_fiscal_year?: number | null
   pe_ttm: number
   pb: number | null
   market_cap: number

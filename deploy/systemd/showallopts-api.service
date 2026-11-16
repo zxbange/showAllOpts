@@ -24,7 +24,9 @@ NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
 ProtectHome=true
-ReadWritePaths=/opt/showallopts/log
+# Atomic configuration saves create a temporary sibling and rename it.
+# The config directory, not only app.config, must be writable.
+ReadWritePaths=/opt/showallopts/log /opt/showallopts/config
 StandardOutput=journal
 StandardError=journal
 

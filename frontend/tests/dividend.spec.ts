@@ -1,4 +1,4 @@
-﻿import { expect, test } from './fixtures'
+import { expect, test } from './fixtures'
 
 function stock(method: string, i: number) {
   return {
@@ -15,7 +15,9 @@ function stock(method: string, i: number) {
       fiscal_year: year,
       yield_pct: 8 - i * 0.1 - n,
     })),
-    dividend_cash_annual: 50000,
+    dividend_cash_annual: null,
+    dividend_per_share: (8 - i * 0.1) / 10,
+    dividend_fiscal_year: 2025,
     pe_ttm: 6.5,
     pb: 1.1,
     market_cap: 130,
@@ -33,7 +35,7 @@ const fixture = {
   snapshot: {
     trade_date: '2026-10-16',
     updated_at: '2026-10-16T17:30:00',
-    rule_version: 'dividend_value_pe12_v6',
+    rule_version: 'dividend_dps_proposal_age3_v9',
     universe_count: 5000,
     eligible_count: 4000,
     value_candidates: 60,
@@ -157,23 +159,24 @@ test('dividend uncollected, legitimate zero results and retry states', async ({ 
   await expect(page.locator('tbody tr')).toHaveCount(25)
 })
 
-test('legacy trailing yields are hidden until static results are collected', async ({ page }) => {
+test('legacy successful results remain visible with an old-rule warning', async ({ page }) => {
   await page.route('**/api/v1/dividend-selection/latest', (route) =>
     route.fulfill({
       json: {
         ...fixture,
         requires_refresh: true,
-        groups: groups.map((g) => ({ ...g, items: [] })),
+        snapshot: { ...fixture.snapshot, rule_version: 'dividend_value_pe12_age3_v7' },
+        groups,
       },
     }),
   )
   await page.goto('/dividend-selection')
-  await expect(page.getByText('PE 上限已调整为 12，请运行新版采集脚本并同步。')).toBeVisible()
-  await expect(page.locator('tbody tr')).toHaveCount(0)
-  await expect(page.getByRole('heading', { name: '请更新选股结果' })).toBeVisible()
-  await page.getByRole('link', { name: /高股息低估值（非银行业）/ }).click()
-  await expect(page.getByRole('heading', { name: '请更新选股结果' })).toBeVisible()
-  await expect(page.locator('tbody tr')).toHaveCount(0)
+  await expect(page.getByRole('status')).toContainText('保留上次成功结果，采用旧版选股口径')
+  await expect(page.locator('tbody tr')).toHaveCount(25)
+  await expect(page.getByText('最高股息率（旧口径）')).toBeVisible()
+  await page.getByRole('link', { name: /高股息低估值（银行业）/ }).click()
+  await expect(page.getByRole('status')).toContainText('保留上次成功结果')
+  await expect(page.locator('tbody tr')).toHaveCount(10)
 })
 
 test('retired method URL defaults to nonbank and has no obsolete controls', async ({ page }) => {

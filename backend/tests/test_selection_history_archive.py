@@ -20,7 +20,7 @@ def test_archive_rules_are_identical_in_all_standalone_entries():
     start, end = '# BEGIN SHARED SELECTION ARCHIVE', '# END SHARED SELECTION ARCHIVE'
     source = (ROOT/'collectors/rules/selection_archive.py').read_text(encoding='utf-8')
     expected = source[source.index(start):source.index(end) + len(end)]
-    for filename in ('策略批量采集_数据库版.py', '高股息选股_数据库版.py'):
+    for filename in ('高股息选股_数据库版.py',):
         text = (ROOT/'collectors'/filename).read_text(encoding='utf-8')
         assert text.count(start) == 1
         assert text[text.index(start):text.index(end)+len(end)] == expected

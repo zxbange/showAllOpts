@@ -78,6 +78,7 @@ class Settings(BaseSettings):
     market_collection_writer_url: SecretStr = SecretStr('')
     # Optional server-side raw daily source; never returned by configuration APIs.
     asharehub_api_key: SecretStr = SecretStr('')
+    tushare_token: SecretStr = SecretStr('')
     telegram_bot_token: SecretStr = SecretStr('')
     telegram_chat_id: SecretStr = SecretStr('')
     etf_collection_writer_url: SecretStr = SecretStr('')

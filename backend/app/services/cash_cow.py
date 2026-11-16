@@ -25,7 +25,7 @@ from app.core.diagnostics import diagnostic_details
 
 LOG = logging.getLogger(__name__)
 CHINA = timezone(timedelta(hours=8))
-RULE_VERSION = 'cash_cow_static_display_v2'
+RULE_VERSION = 'cash_cow_payout100_v3'
 
 
 def now():
@@ -126,15 +126,15 @@ class CashCowScreen:
         return None
 
     def _status(self, state, result):
-        from app.services.cash_cow_schedule import next_run
+        from app.services.earnings_schedule import daily_next_run
         from app.services.system_configuration import task_config
-        schedule = task_config(self.settings, 'cash_cow')
+        schedule = task_config(self.settings, 'earnings_selection')
         running = self.running()
         marker = self.cancel_path(state)
         snapshot = result.get('snapshot') or {}
         return dict(years=self.years, periods=list(PERIODS), collection_years=max(PERIODS),
                     run_id=state.get('run_id'),
-                    next_run_at=next_run(at=schedule['times'][0]).isoformat() if schedule['enabled'] else None,
+                    next_run_at=daily_next_run(at=schedule['times'][0]).isoformat() if schedule['enabled'] else None,
                     schedule_time=schedule['times'][0], running=running, cancelling=bool(running and marker and marker.exists()),
                     stage=('上次更新中断，请重新更新' if not running and state.get('active')
                            else state.get('stage', '尚未筛选')),
@@ -148,7 +148,7 @@ class CashCowScreen:
     def _read_result(self, db):
         row = db.execute('SELECT payload FROM snapshots WHERE years=?', (self.years,)).fetchone()
         result = json.loads(row[0]) if row else dict(snapshot=None, items=[])
-        if result.get('snapshot') and result['snapshot'].get('source') != PUBLIC_SOURCE:
+        if result.get('snapshot') and result['snapshot'].get('source') not in (PUBLIC_SOURCE, '东方财富公开数据接口'):
             result = dict(snapshot=None, items=[])
         if self.cache is not None:
             imported = latest_cached(self.cache, self.years)
@@ -159,6 +159,7 @@ class CashCowScreen:
                 result = imported
         # Keep the last successful screening, but never relabel its old TTM value.
         if result.get('snapshot', {}) and result['snapshot'].get('rule_version') != RULE_VERSION:
+            result['rule_outdated'] = True
             for item in result['items']:
                 item.update(current_yield=None, dividend_yield_history=None)
         return result
@@ -191,9 +192,10 @@ class CashCowScreen:
             return True
 
     def refresh(self, background=True, *, moment=None, slot=None):
+        from app.services.earnings_schedule import acquire_execution
         if self.stop_event.is_set():
             return False
-        lock = self.acquire()
+        lock = acquire_execution(self.settings, self.acquire)
         if lock is None:
             return False
         state = None
@@ -227,13 +229,14 @@ class CashCowScreen:
 
     @notify_collection('cash_cow')
     def _collect(self, lock, state, moment):
-        from app.services.cash_cow_source import EastmoneyCashCowSource, CashCowSourceError
+        from app.services.cash_cow_source import CashCowSourceError
+        from app.services.cash_cow_combined import CombinedCashCowSource
         marker = self.cancel_path(state)
         published = False
         publication = None
         started = monotonic()
         run_outcome = 'failed'
-        LOG.info('Cash cow collection started source=eastmoney periods=3,5,10')
+        LOG.info('Cash cow collection started source=asharehub+eastmoney+tushare periods=3,5,10')
 
         def check_cancel():
             if self.stop_event.is_set() or marker.exists():
@@ -282,7 +285,7 @@ class CashCowScreen:
                 self.write_state(state)
             end_year = moment.astimezone(CHINA).year - 1
             with self.client_factory() as client:
-                source = (self.source_factory or EastmoneyCashCowSource)(client, check_cancel=check_cancel,
+                source = (self.source_factory or (lambda client, **kw: CombinedCashCowSource(client, settings=self.settings, **kw)))(client, check_cancel=check_cancel,
                     as_of=moment.astimezone(CHINA).date(), progress=progress,
                     cache_dir=self.root / 'source-cache')
                 items, outcomes, stocks = screen_cash_cows(source, end_year, progress, check_cancel)

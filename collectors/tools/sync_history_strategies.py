@@ -66,7 +66,7 @@ def sync_selection_archive(check=False):
     start, end = '# BEGIN SHARED SELECTION ARCHIVE', '# END SHARED SELECTION ARCHIVE'
     source = (ROOT / 'collectors/rules/selection_archive.py').read_text(encoding='utf-8')
     source = source[source.index(start):source.index(end)+len(end)]
-    for filename in ('策略批量采集_数据库版.py', '高股息选股_数据库版.py'):
+    for filename in ('高股息选股_数据库版.py',):
         path = ROOT / 'collectors' / filename
         text = path.read_text(encoding='utf-8')
         updated = text[:text.index(start)] + source + text[text.index(end)+len(end):]

@@ -47,7 +47,7 @@ def ns(module):
 
 
 def meta(**changes):
-    return dict(dict(trade_date=DAY, rule_version='dividend_value_pe12_v6', universe_count=5000, eligible_count=4000,
+    return dict(dict(trade_date=DAY, rule_version='dividend_pe12_age3_active_v8', universe_count=5000, eligible_count=4000,
                 value_candidates=2, value_count=2), **changes)
 
 
@@ -55,7 +55,7 @@ def row(method='value', code=None, rank=1, **changes):
     code = code or ('600000.XSHG' if method == 'bank' else '000001.XSHE')
     data = dict(method=method,code=code,trade_date=DAY,rank=rank,name='示例股票',industry_code='801010',industry_name='农业',
                 industry_level='sw_l3',dividend_yield_1y=Decimal('5'),
-                dividend_cash_1y=Decimal('50000'),
+                dividend_cash_1y=Decimal('50000'), dividend_per_share=None, dividend_fiscal_year=None,
                 dividend_yield_history=[dict(fiscal_year=year,yield_pct=value) for year,value in [(2025,5),(2024,4),(2023,3)]],
                 pe_ttm=Decimal('7'),pb=Decimal('1'),market_cap=Decimal('100'),close=Decimal('10'))
     data.update(changes);return data
@@ -65,11 +65,9 @@ def test_schemas_and_embedded_factory_match(ns):
     for local,web in ((ns.DividendSnapshot,WebSnapshot),(ns.DividendStock,WebStock)):
         assert [(c.name,str(c.type),c.nullable,c.primary_key) for c in local.__table__.columns] == [
             (c.name,str(c.type),c.nullable,c.primary_key) for c in web.__table__.columns]
-    nodes=[]
-    for path in (SOURCE,ROOT/'collectors/策略批量采集_数据库版.py'):
-        tree=ast.parse(path.read_text(encoding='utf-8'),feature_version=(3,6))
-        nodes.append(ast.dump(next(n for n in tree.body if isinstance(n,ast.FunctionDef) and n.name=='_dividend_strategy')))
-    assert nodes[0]==nodes[1]
+    ast.parse(SOURCE.read_text(encoding='utf-8'), feature_version=(3,6))
+    batch = (ROOT/'collectors/策略批量采集_数据库版.py').read_text(encoding='utf-8')
+    assert 'def _dividend_strategy' not in batch
     assert '__file__' not in SOURCE.read_text(encoding='utf-8')
 
 
@@ -274,7 +272,7 @@ def test_rule_upgrade_replaces_old_yields_even_on_same_day(ns, old_rule):
         current=meta(value_count=1,value_candidates=1)
         assert ns.save_latest(Session,current,[row(dividend_yield_1y=Decimal('3.51'))])
         with Session() as db:
-            assert db.get(ns.DividendSnapshot,1).rule_version=='dividend_value_pe12_v6'
+            assert db.get(ns.DividendSnapshot,1).rule_version=='dividend_pe12_age3_active_v8'
             assert db.query(ns.DividendStock).count()==1
             assert db.query(ns.DividendStock).first().dividend_yield_1y==Decimal('3.51')
     finally:
@@ -293,15 +291,16 @@ def test_end_to_end_source_dates_filters_recompute_and_failure_keeps_snapshot(mo
     codes=['{:06d}.XSHE'.format(i) for i in range(40)]+['688001.XSHG','800001.XBSE']
     class Universe(Frame):
         def iterrows(self):
-            return iter((c,dict(display_name='ST示例' if c==codes[0] else '示例'+c[:6])) for c in codes)
-    dates=[];state={'fail':False,'price_calls':0}
+            return iter((c,dict(start_date=dt.date(2023,10,17) if c==codes[5] else dt.date(2000,1,1),display_name='ST示例' if c==codes[0] else '示例'+c[:6])) for c in codes)
+    dates=[];state={'fail':False,'price_calls':0,'bad_paused':False}
     def quote(batch,start_date,end_date,**kwargs):
         dates.append(end_date);state['price_calls']+=1
+        assert codes[5] not in batch  # Filter young listings before price/financial requests.
         if state['fail']:raise RuntimeError('source unavailable')
-        assert kwargs['fields']==['close'] and kwargs['skip_paused'] is False
-        # Paused, upper-limit and lower-limit stocks remain available. Only requested fields are returned.
+        assert kwargs['fields']==['close', 'paused'] and kwargs['skip_paused'] is False
+        # Paused stocks are excluded; upper/lower limits are not additional filters.
         bars=[dict(code=c,time=end_date,open=11 if c==codes[3] else 9 if c==codes[4] else 10,
-                   close=10,high_limit=11,low_limit=9,paused=1 if c==codes[2] else 0) for c in batch]
+                   close=10,high_limit=11,low_limit=9,paused=(None if state['bad_paused'] else 1) if c==codes[2] else 0) for c in batch]
         return Frame([{k:bar[k] for k in ['code','time']+kwargs['fields']} for bar in bars])
     def fundamentals(q,date):
         dates.append(date)
@@ -318,7 +317,7 @@ def test_end_to_end_source_dates_filters_recompute_and_failure_keeps_snapshot(mo
                       for i,c in enumerate(batch) if i+1>after],columns)
     apis=dict(query=select,valuation=val.c,indicator=ind.c,
               finance=SimpleNamespace(STK_XR_XD=payout.c,run_query=dividends),
-              get_all_securities=lambda **kw:Universe([{} for _ in codes],['display_name']),
+              get_all_securities=lambda **kw:Universe([{} for _ in codes],['display_name','start_date']),
               get_trade_days=lambda end_date,count:[DAY],
               get_extras=lambda _,batch,**kw:SimpleNamespace(index=[DAY],columns=batch,iloc=[{c:c==codes[1] for c in batch}]),
               get_price=quote,get_fundamentals=fundamentals,
@@ -328,8 +327,8 @@ def test_end_to_end_source_dates_filters_recompute_and_failure_keeps_snapshot(mo
     assert len(result)==25  # Nonbank top25; no growth/PEG query
     assert {r['trade_date'] for r in result.data}=={DAY}
     assert all(d==DAY for d in dates)
-    assert all(not r['code'].startswith(('4','8')) and r['code'] not in codes[:2] for r in result.data)
-    assert {r['method'] for r in result.data if r['code']==preferred}=={'value'}
+    assert all(not r['code'].startswith(('4','8')) and r['code'] not in codes[:3] for r in result.data)
+    assert {r['method'] for r in result.data if r['code']==preferred}== (set() if preferred == codes[2] else {'value'})
     assert all(r['rank']==1 for r in result.data if r['code']==preferred)
     assert [r['rank'] for r in result.data if r['method']=='value']==list(range(1,26))
     assert all(r['dividend_yield_1y']==(10 if r['code']==preferred else 5) for r in result.data)
@@ -348,3 +347,62 @@ def test_end_to_end_source_dates_filters_recompute_and_failure_keeps_snapshot(mo
     with pytest.raises(ValueError):earlier.run()  # fixture ST date intentionally mismatches the prior date
     assert cutoff==[dt.date(2026,10,15)]
     with pytest.raises(ValueError,match='晚于今天'):earlier.run(end_date='2026-10-17')
+
+
+@pytest.mark.parametrize('listed,day,expected', [
+    ('2023-11-16', dt.date(2026,11,15), False),
+    ('2023-11-16', dt.date(2026,11,16), True),
+    ('2023-11-16', dt.date(2026,11,17), True),
+    ('2020-02-29', dt.date(2023,2,27), False),
+    ('2020-02-29', dt.date(2023,2,28), True),
+    ('2021-03-01', dt.date(2024,2,29), False),
+    ('2021-03-01', dt.date(2024,3,1), True),
+    ('2010-06-01', dt.date(2013,5,31), False),
+    ('2010-06-01', dt.date(2013,6,1), True),
+])
+def test_listing_age_exact_anniversary_and_historical_cutoff(ns, listed, day, expected):
+    assert ns.listed_three_years(listed, day) is expected
+
+
+@pytest.mark.parametrize('listed', [None, 'NaT', 'invalid', '2026-02-30', '2027-01-01'])
+def test_invalid_listing_date_never_silently_qualifies(ns, listed):
+    with pytest.raises(ValueError, match='上市日期'):
+        ns.listed_three_years(listed, DAY)
+
+
+def test_legacy_jq_cannot_downgrade_proposal_snapshot(ns):
+    engine = create_engine('sqlite://')
+    ns.Base.metadata.create_all(engine)
+    Session = sessionmaker(bind=engine)
+    proposal = meta(rule_version='dividend_dps_proposal_age3_v9')
+    records = [row(dividend_cash_1y=None, dividend_per_share=Decimal('0.5'), dividend_fiscal_year=2025),
+               row('bank', dividend_cash_1y=None, dividend_per_share=Decimal('0.5'), dividend_fiscal_year=2025)]
+    ns.save_latest(Session, proposal, records)
+    with pytest.raises(ValueError, match='cannot overwrite'):
+        ns.save_latest(Session, meta(), [row(), row('bank')])
+    tomorrow = DAY + dt.timedelta(days=1)
+    with pytest.raises(ValueError, match='cannot overwrite'):
+        ns.save_latest(Session, meta(trade_date=tomorrow),
+                       [row(trade_date=tomorrow), row('bank', trade_date=tomorrow)])
+    with Session() as db:
+        assert db.query(ns.DividendSnapshot).one().rule_version == proposal['rule_version']
+        assert db.query(ns.DividendStock).count() == 2
+        assert all(r.dividend_per_share == Decimal('0.5') for r in db.query(ns.DividendStock))
+    engine.dispose()
+
+
+def test_legacy_schema_adds_nullable_dps_columns_without_erasing_data(ns):
+    engine = create_engine('sqlite://')
+    ns.Base.metadata.create_all(engine)
+    Session = sessionmaker(bind=engine)
+    ns.save_latest(Session, meta(), [row(), row('bank')])
+    with engine.begin() as conn:
+        conn.exec_driver_sql('ALTER TABLE dividend_selection_stock DROP COLUMN dividend_per_share')
+        conn.exec_driver_sql('ALTER TABLE dividend_selection_stock DROP COLUMN dividend_fiscal_year')
+    assert ns.save_latest(Session, meta(), [row(), row('bank')]) is False
+    with Session() as db:
+        values = db.query(ns.DividendStock).all()
+        assert len(values) == 2
+        assert all(r.dividend_per_share is None and r.dividend_fiscal_year is None for r in values)
+        assert all(r.dividend_cash_1y == Decimal('50000') for r in values)
+    engine.dispose()

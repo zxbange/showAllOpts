@@ -1,3 +1,4 @@
+import { ConfigurationErrorDialog } from './ConfigurationErrorDialog'
 import { SettingsSwitch } from './SystemTaskConfiguration'
 import { useEffect, useState } from 'react'
 import { Send } from 'lucide-react'
@@ -130,6 +131,7 @@ export function SystemNotificationConfiguration({
   return (
     <section id="settings-notifications" className="panel system-settings-section">
       <h2>社交监控通知</h2>
+      <ConfigurationErrorDialog message={error} />
       <p className="system-settings-muted">
         此区域独立保存，开关即时生效；Telegram 凭证与采集任务共用。
       </p>
@@ -200,9 +202,33 @@ export function SystemNotificationConfiguration({
                           role="group"
                           aria-label={`${title}已配置`}
                         >
-                          <span className="social-secret-mask" aria-hidden="true">
-                            ***
-                          </span>
+                          <input
+                            type="password"
+                            aria-label={title}
+                            value=""
+                            placeholder="********"
+                            readOnly
+                          />
+                          <button
+                            type="button"
+                            className="button button-quiet"
+                            disabled={busy}
+                            aria-label={`清除${title}`}
+                            onClick={() =>
+                              void action(async () => {
+                                setStatus(
+                                  await api<Status>('/config', {
+                                    [key]: '',
+                                    feishu_enabled: false,
+                                  }),
+                                )
+                                setSecrets((current) => ({ ...current, [key]: '' }))
+                                setNotice(`${title}已清除，飞书通知已关闭。`)
+                              })
+                            }
+                          >
+                            清除
+                          </button>
                           <button
                             type="button"
                             className="button"
@@ -226,7 +252,7 @@ export function SystemNotificationConfiguration({
                           onChange={(event) =>
                             setSecrets((current) => ({ ...current, [key]: event.target.value }))
                           }
-                          placeholder={saved ? `填写新的${title}` : `填写 ${title}`}
+                          placeholder={saved ? '********' : `填写 ${title}`}
                           maxLength={maxLength}
                         />
                       )}
