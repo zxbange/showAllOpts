@@ -345,3 +345,47 @@ def test_authenticated_api_reads_offline_and_uses_existing_csrf_protection(clien
     assert client.post('/api/v1/growth-dividend/cancel').json() == {'cancelled': False}
     client.headers.pop('X-CSRF-Token')
     assert client.post('/api/v1/growth-dividend/refresh').status_code == 403
+
+
+def test_automatic_startup_notifies_once_across_workers_and_later_daily_slot(monitor, monkeypatch):
+    from app.services import collection_notifications as notifications
+    monkeypatch.setattr(notifications, 'enabled', lambda *_: True)
+    monkeypatch.setattr(notifications, 'start_notifications', lambda *_: None)
+    monitor.settings.growth_dividend_worker_enabled = True
+    provider(monkeypatch)
+    monitor.tick(MOMENT)
+    assert monitor.read_state()['trigger'] == 'startup'
+    assert monitor.read_state()['scheduled_slot'] == m.slot_for(MOMENT.date(), monitor.settings)
+    with notifications._database(monitor.settings) as db:
+        rows = db.execute('SELECT * FROM outbox').fetchall()
+    assert len(rows) == 1
+    assert '创红比：0.500000' in rows[0]['message']
+    # Another worker sees the same published data and consumed daily slot.
+    replacement = m.GrowthDividend(monitor.settings, client_factory=lambda: nullcontext(object()))
+    try:
+        replacement.tick(MOMENT)
+        monitor.tick(MOMENT.replace(hour=19))
+        # A later explicit refresh is still manual, and never sends.
+        monitor.refresh(background=False, moment=MOMENT)
+        with notifications._database(monitor.settings) as db:
+            assert db.execute('SELECT count(*) FROM outbox').fetchone()[0] == 1
+    finally:
+        replacement.stop()
+
+
+@pytest.mark.parametrize('notify_enabled,preload', [(False, False), (True, True)])
+def test_startup_no_notification_when_disabled_or_no_business_changes(monitor, monkeypatch, notify_enabled, preload):
+    from app.services import collection_notifications as notifications
+    monkeypatch.setattr(notifications, 'enabled', lambda *_: notify_enabled)
+    monkeypatch.setattr(notifications, 'start_notifications', lambda *_: None)
+    monitor.settings.growth_dividend_worker_enabled = True
+    provider(monkeypatch)
+    if preload:
+        monitor.refresh(background=False, moment=MOMENT)
+        state = monitor.read_state()
+        state['initialized'] = False
+        monitor.write_state(state)
+    monitor.tick(MOMENT)
+    assert monitor.read_state()['trigger'] == 'startup'
+    with notifications._database(monitor.settings) as db:
+        assert db.execute('SELECT count(*) FROM outbox').fetchone()[0] == 0

@@ -224,7 +224,9 @@ def notify_collection(task):
             bound = call.arguments
             state = bound.get('state') or {}
             slot = bound.get('slot') or state.get('current_scheduled_slot')
-            scheduled = slot is not None
+            # Startup gap recovery is automatic and may consume today's schedule
+            # in GrowthDividend.collect. It must not silently swallow its result.
+            scheduled = slot is not None or (task == 'growth_dividend' and state.get('trigger') == 'startup')
             before = None
             try:
                 reason = 'not_scheduled' if not scheduled else 'disabled' if not enabled(self.settings, task) else None
