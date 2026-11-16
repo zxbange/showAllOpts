@@ -120,13 +120,104 @@ def test_growth_mid_history_gap_is_partial_then_filled_without_rereading_good_da
     assert c.calls == [('price', '399006.XSHE', DAYS[1], DAYS[1])]
 
 
-def growth_runner(c, entry):
+def growth_runner(c, entry, **overrides):
+    options = dict(start_date=DAYS[0], end_date=DAYS[-1], preview=False,
+                   api_namespace=c.apis, engine_factory=lambda: c.engine)
+    options.update(overrides)
     if entry == 'standalone':
         module = load(ROOT / 'collectors/创红比历史补采_聚宽研究版.py', 'growth_recovery_test')
-        return lambda: module.run(start_date=DAYS[0], end_date=DAYS[-1], preview=False,
-                                 api_namespace=c.apis, engine_factory=lambda: c.engine)
-    return lambda: c.batch._growth_dividend_strategy(c.apis, CONFIG).collect(
-        start_date=DAYS[0], end_date=DAYS[-1], preview=False, api_namespace=c.apis, engine_factory=lambda: c.engine)
+        return lambda: module.run(**options)
+    return lambda: c.batch._growth_dividend_strategy(c.apis, CONFIG).collect(**options)
+
+
+def prepare_growth_prices(c):
+    days = list(pd.bdate_range('2018-01-02', periods=502).date)
+    c.apis['get_trade_days'] = lambda **kwargs: days
+    def prices(code, start_date, end_date, **kwargs):
+        c.calls.append((code, start_date, end_date))
+        selected = [day for day in days if start_date <= day <= end_date]
+        return pd.DataFrame({'close': [1234.5]*len(selected)}, index=selected)
+    c.apis['get_price'] = prices
+    return days
+
+
+@pytest.mark.parametrize('entry', ['standalone', 'batch'])
+def test_growth_prices_bulk_commit_then_repeat_without_quotes_or_writes(collectors, entry):
+    c = collectors
+    days = prepare_growth_prices(c)
+    statements, stages = [], []
+    def record(conn, cursor, statement, parameters, context, executemany):
+        if 'growth_dividend_index_history' in statement and statement.startswith(('SELECT', 'INSERT', 'UPDATE', 'DELETE')):
+            statements.append(statement)
+    event.listen(c.engine, 'before_cursor_execute', record)
+    collect = growth_runner(c, entry, start_date=days[0], end_date=days[-1], progress=stages.append)
+    try:
+        assert collect()['added'] == 1506
+        assert len(c.calls) == 9
+        assert len(statements) == 19  # One saved-date list, then one SELECT + bulk INSERT per window.
+        assert any('本批新增 250 条，跳过已有 0 条' in message for message in stages)
+        c.calls.clear()
+        statements.clear()
+        result = collect()
+        assert result['added'] == 0 and result['skipped'] == 1506
+        assert not c.calls
+        assert len(statements) == 1 and statements[0].startswith('SELECT')
+    finally:
+        event.remove(c.engine, 'before_cursor_execute', record)
+
+
+@pytest.mark.parametrize('entry', ['standalone', 'batch'])
+def test_growth_bulk_write_preserves_rows_committed_during_source_read(collectors, entry):
+    c = collectors
+    original, inserted = c.apis['get_price'], []
+    stamp = dt.datetime(2020, 1, 1)
+    def prices(code, **kwargs):
+        if not inserted:
+            with c.engine.begin() as conn:
+                conn.execute(growth.PRICES.insert().values(index_code=code, trade_date=DAYS[0],
+                             close=123, source=growth.SOURCE, updated_at=stamp))
+            inserted.append(code)
+        return original(code, **kwargs)
+    c.apis['get_price'] = prices
+    result = growth_runner(c, entry)()
+    assert result['added'] == 8 and result['skipped'] == 1
+    with c.engine.connect() as conn:
+        row = conn.execute(select(growth.PRICES.c.close, growth.PRICES.c.updated_at).where(
+            (growth.PRICES.c.index_code == inserted[0]) & (growth.PRICES.c.trade_date == DAYS[0]))).one()
+        assert tuple(row) == (123, stamp)
+
+
+@pytest.mark.parametrize('entry', ['standalone', 'batch'])
+@pytest.mark.parametrize('failure', ['write', 'cancel'])
+def test_growth_price_batch_rollback_keeps_prior_window_and_resumes(collectors, entry, failure):
+    c = collectors
+    days = prepare_growth_prices(c)
+    growth.metadata.create_all(c.engine)
+    if failure == 'write':
+        with c.engine.begin() as conn:
+            conn.exec_driver_sql("CREATE TRIGGER fail_price BEFORE INSERT ON growth_dividend_index_history "
+                                "WHEN NEW.trade_date = '{}' BEGIN SELECT RAISE(ABORT, 'test'); END".format(days[300]))
+    inserted = []
+    def after_write(conn, cursor, statement, parameters, context, executemany):
+        if statement.startswith('INSERT INTO growth_dividend_index_history'):
+            inserted.append(True)
+    def cancel():
+        if failure == 'cancel' and len(inserted) == 2:
+            raise KeyboardInterrupt()
+    event.listen(c.engine, 'after_cursor_execute', after_write)
+    try:
+        with pytest.raises(KeyboardInterrupt if failure == 'cancel' else RuntimeError):
+            growth_runner(c, entry, start_date=days[0], end_date=days[-1], check_cancel=cancel)()
+        with c.engine.begin() as conn:
+            assert conn.scalar(select(func.count()).select_from(growth.PRICES)) == 250
+            if failure == 'write':
+                conn.exec_driver_sql('DROP TRIGGER fail_price')
+    finally:
+        event.remove(c.engine, 'after_cursor_execute', after_write)
+    c.calls.clear()
+    result = growth_runner(c, entry, start_date=days[0], end_date=days[-1])()
+    assert result['added'] == 1256 and result['skipped'] == 250
+    assert c.calls[0] == ('399006.XSHE', days[250], days[499])
 
 
 @pytest.mark.parametrize('entry', ['standalone', 'batch'])

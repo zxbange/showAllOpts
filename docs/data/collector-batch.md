@@ -49,7 +49,7 @@
 - 微盘新高新低：首次近 180 个自然日、`micro_num=400`，每天采样，后续只新增并保留历史；配置组包含 `initial_days`、`batch_size`、`price_batch_size`。详见 [微盘新高新低说明](microcap-breadth.md)。
 - 高股息选股：`end_date=None`、`batch_size=300`、`page_size=2000`；静态股息率按上一财年已实施分红 / 当前市值计算；低估值非银行25只、银行10只，见 [高股息选股说明](dividend-selection.md)。
 - 估值标尺：`start_date='2010-01-01'`、`end_date=None`、`max_days=None`、`indices=('000300.XSHG', '000016.XSHG', '000852.XSHG')`；默认一次补齐，按各指数最后完成日续采。
-- 创红比：`start_date='2018-01-01'`，首次补2018起三条指数的可见历史；传入 None 也使用2018起点。`window_days=250`、`max_days=20000`、`max_windows=1000`。日常补中间缺口及新日期；`retry_earlier_missing=False` 跳过已有起点之前的未知空白，手动复查区间内早期数据可改为 True。
+- 创红比：`start_date='2018-01-01'`，首次补2018起三条指数的可见历史；传入 None 也使用2018起点。`window_days=250`、`max_days=20000`、`max_windows=1000`。按指数和日期只补缺口，每批一次查重并整体提交，进度显示实际新增及跳过条数；失败只回滚当前批。`retry_earlier_missing=False` 跳过已有起点之前的未知空白，手动复查区间内早期数据可改为 True。
 
 各策略 `end_date=None` 均表示**每次运行时**计算北京时间当天，不在导入时固定日期。需要修改参数时，例如：
 

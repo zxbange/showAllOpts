@@ -104,7 +104,7 @@ def diagnostic(exc, stage):
 def run(start_date=DEFAULT_START_DATE, end_date=None, preview=True, max_days=20000,
         max_windows=1000, window_days=250, check_cancel=None,
         api_namespace=None, engine_factory=None, progress=None, retry_earlier_missing=True):
-    """先预览。写库 run(preview=False)，取消回调抛异常；逐日提交，可重复补洞。"""
+    """先预览。写库 run(preview=False)，取消回调抛异常；分批提交，只补缺口。"""
     get_trade_days, get_price = api('get_trade_days', api_namespace), api('get_price', api_namespace)
     check_cancel = check_cancel or (lambda: None)
     notify = progress or (lambda message: None)
@@ -156,7 +156,7 @@ def run(start_date=DEFAULT_START_DATE, end_date=None, preview=True, max_days=200
                 keys = select([PRICES.c.index_code, PRICES.c.trade_date]) if sqlalchemy.__version__.startswith('1.') else select(PRICES.c.index_code, PRICES.c.trade_date)
                 for code, day in conn.execute(keys.where((PRICES.c.trade_date >= days[0]) & (PRICES.c.trade_date <= days[-1]))):
                     if code in stored:
-                        stored[code].add(day)
+                        stored[code].add(as_day(day))
         if engine:
             update('创红比：读取已保存交易日历')
             calendar_keys = CALENDAR.select().with_only_columns(
@@ -218,14 +218,23 @@ def run(start_date=DEFAULT_START_DATE, end_date=None, preview=True, max_days=200
                         quotes[day] = positive(row['close'])
                 observed.extend(quotes)
                 if engine:
-                    update('{}：写入 {} 至 {} 行情（{} 条）'.format(code, target[0], target[-1], len(quotes)))
-                for day in target:
+                    update('{}：核对待保存行情 {} 至 {}（{} 条）'.format(code, target[0], target[-1], len(quotes)))
                     check_cancel()
-                    if engine:
+                    rows = []
+                    if quotes:
                         with engine.begin() as conn:
-                            if day in quotes and conn.execute(PRICES.select().where((PRICES.c.index_code == code) & (PRICES.c.trade_date == day))).first() is None:
-                                conn.execute(PRICES.insert().values(index_code=code, trade_date=day, close=quotes[day], source=SOURCE, updated_at=datetime.utcnow()))
-                                report['added'] += 1
+                            dates_query = select([PRICES.c.trade_date]) if sqlalchemy.__version__.startswith('1.') else select(PRICES.c.trade_date)
+                            existing = {as_day(row[0]) for row in conn.execute(dates_query.where(
+                                (PRICES.c.index_code == code) & PRICES.c.trade_date.in_(list(quotes))))}
+                            now = datetime.utcnow()
+                            rows = [dict(index_code=code, trade_date=day, close=quotes[day], source=SOURCE, updated_at=now)
+                                    for day in target if day in quotes and day not in existing]
+                            if rows:
+                                conn.execute(PRICES.insert(), rows)
+                            check_cancel()
+                    report['added'] += len(rows)
+                    report['skipped'] += len(quotes) - len(rows)
+                    update('{}：本批新增 {} 条，跳过已有 {} 条'.format(code, len(rows), len(quotes) - len(rows)))
             known = set(observed) | (stored[code] & set(days))
             report['indices'][code] = dict(observed_first_day=str(min(known)) if known else None,
                 available=len(known), missing=len(set(days) - known), earlier_missing='unknown')
