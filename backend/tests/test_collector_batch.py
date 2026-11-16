@@ -234,6 +234,7 @@ def test_failure_continues_and_marks_partial_completion(batch, monkeypatch, caps
         with pytest.raises(batch.BatchRunError) as caught:
             batch.run_all(db_config=CONFIG)
         result = caught.value.summary
+        assert '抱团拥挤度（执行失败）' in str(caught.value)
     else:
         result = batch.run_all(db_config=CONFIG, raise_on_failure=False)
     assert called == batch.STRATEGY_ORDER
@@ -685,3 +686,39 @@ def test_archive_prior_unresolved_gaps_cannot_report_complete(batch, monkeypatch
     monkeypatch.setattr(batch, '_load_strategy', lambda *args: lambda **kwargs: report)
     rows = batch.run_all(['高股息选股'], db_config=CONFIG, raise_on_failure=False)
     assert rows[0]['status'] == 'PARTIAL' and rows[0]['gaps'] == 1
+
+
+@pytest.mark.parametrize('saved_gaps', [False, True])
+def test_partial_archive_error_names_strategy_and_gap_count(batch, monkeypatch, saved_gaps):
+    report = dict(added=2, skipped=4, remaining=0, gaps=[{'date': '2026-01-05'}], unit='指数日')
+    if saved_gaps:
+        report.update(gaps=[], unresolved_gaps=3)
+    monkeypatch.setattr(batch, '_load_strategy', lambda *args: lambda **kwargs: report)
+    with pytest.raises(batch.BatchRunError) as caught:
+        batch.run_all(['创红比'], db_config=CONFIG)
+    gap_count = 3 if saved_gaps else 1
+    assert '创红比（缺口 {} 指数日）'.format(gap_count) in str(caught.value)
+    assert caught.value.summary[0]['status'] == 'PARTIAL'
+    assert caught.value.summary[0]['rows'] == 2
+
+
+def test_mixed_batch_error_lists_failures_and_gaps_after_later_tasks_finish(batch, monkeypatch):
+    called = []
+    names = ['行业动量', '创红比', '估值标尺', '抱团拥挤度']
+    def loader(name, *_):
+        def run(**kwargs):
+            called.append(name)
+            if name == '行业动量':
+                raise RuntimeError('synthetic failure')
+            if name == '创红比':
+                return dict(added=1, skipped=0, remaining=0, gaps=[{}], unit='指数日')
+            if name == '估值标尺':
+                return dict(added=0, skipped=0, remaining=2, gaps=[])
+            return []
+        return run
+    monkeypatch.setattr(batch, '_load_strategy', loader)
+    with pytest.raises(batch.BatchRunError) as caught:
+        batch.run_all(names, db_config=CONFIG)
+    assert called == names
+    assert [row['status'] for row in caught.value.summary] == ['FAILED', 'PARTIAL', 'PENDING', 'SUCCESS']
+    assert str(caught.value) == '采集未全部完成：行业动量（执行失败）、创红比（缺口 1 指数日）；请查看控制台结果。'

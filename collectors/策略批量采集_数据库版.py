@@ -5756,7 +5756,11 @@ STRATEGIES = {name: spec[0] for name, spec in STRATEGY_SPECS.items()}
 class BatchRunError(RuntimeError):
     def __init__(self, summary):
         self.summary = summary
-        failed = [r['strategy'] for r in summary if r['status'] == 'FAILED']
+        failed = [
+            '{}（{}）'.format(r['strategy'], '执行失败' if r['status'] == 'FAILED'
+                             else '缺口 {} {}'.format(r['gaps'], r['unit']))
+            for r in summary if r['status'] in ('FAILED', 'PARTIAL')
+        ]
         super(BatchRunError, self).__init__('采集未全部完成：{}；请查看控制台结果。'.format('、'.join(failed)))
 
 
