@@ -1,14 +1,26 @@
-"""Dated Eastmoney inputs. Current constituents are never used to invent past rosters."""
+"""Dated Eastmoney valuations; Tencent unadjusted index-close transport fallback.
+
+Current constituents are never used to invent past rosters. Quote provenance is
+logged separately; the existing source identifier denotes the PE/member dataset.
+"""
 from datetime import date, timedelta
 from decimal import Decimal
 import json
+import logging
+import time
+from urllib.parse import urlsplit
 import httpx
+
+from app.core.diagnostics import diagnostic_details
+
+LOG = logging.getLogger(__name__)
 
 from app.services.index_valuation_rules import INDEXES, PUBLIC_SOURCE, number, summarize, valid_code
 from app.services.valuation_ruler_model import ValuationError
 
 DATA_URL = 'https://datacenter-web.eastmoney.com/api/data/v1/get'
 PRICE_URL = 'https://push2his.eastmoney.com/api/qt/stock/kline/get'
+TENCENT_URL = 'https://proxy.finance.qq.com/ifzqgtimg/appstock/app/newfqkline/get'
 TYPES = dict(zip(INDEXES, ('1', '2', '7')))
 
 
@@ -23,22 +35,53 @@ class EastmoneySource:
         self.client, self.monitor, self.check = client, monitor, check
 
     def request(self, url, params):
+        # Never log the URL query, response body or configuration credentials.
+        provider = 'tencent' if url == TENCENT_URL else 'eastmoney'
+        endpoint = ('index_closes' if url in (PRICE_URL, TENCENT_URL) else
+                    {'RPT_INDEX_TS_COMPONENT': 'index_members',
+                     'RPT_VALUEANALYSIS_DET': 'member_valuations'}.get(params.get('reportName'), 'report'))
+        host, path = urlsplit(url).hostname, urlsplit(url).path
+        symbol = (params.get('param', '').split(',')[0] if url == TENCENT_URL else
+                  params.get('secid', '-') if url == PRICE_URL else '-')
+        page = params.get('pageNumber', '-')
         for attempt in range(3):
             self.check()
+            started = time.monotonic()
+            response = None
+            LOG.info('Valuation source request provider=%s endpoint=%s host=%s path=%s '
+                     'symbol=%s page=%s attempt=%s/3', provider, endpoint, host, path, symbol, page, attempt+1)
             try:
                 response = self.client.get(url, params=params)
                 response.raise_for_status()
-                break
-            except (httpx.TransportError, httpx.HTTPStatusError) as exc:
-                transient = isinstance(exc, httpx.TransportError) or exc.response.status_code == 429 or exc.response.status_code >= 500
+                if len(response.content) > 4_000_000:
+                    raise ValuationError('东方财富响应超过预期范围。')
+                result = json.loads(response.content, parse_float=Decimal)
+                if not isinstance(result, dict):
+                    raise ValuationError('东方财富响应结构无效。')
+                self.check()
+                LOG.info('Valuation source complete provider=%s endpoint=%s symbol=%s page=%s '
+                         'attempt=%s/3 http_status=%s received_bytes=%s elapsed_seconds=%.3f',
+                         provider, endpoint, symbol, page, attempt+1, response.status_code, len(response.content),
+                         time.monotonic()-started)
+                return result
+            except (httpx.HTTPError, ValueError) as exc:
+                transient = isinstance(exc, httpx.TransportError) or (
+                    isinstance(exc, httpx.HTTPStatusError) and
+                    (exc.response.status_code == 429 or exc.response.status_code >= 500))
+                LOG.warning('Valuation source failed provider=%s endpoint=%s host=%s path=%s '
+                            'symbol=%s page=%s attempt=%s/3 http_status=%s received_bytes=%s '
+                            'elapsed_seconds=%.3f retryable=%s %s',
+                            provider, endpoint, host, path, symbol, page, attempt+1,
+                            response.status_code if response is not None else '-',
+                            len(response.content) if response is not None else 0,
+                            time.monotonic()-started, transient, diagnostic_details(exc))
                 if not transient or attempt == 2:
-                    raise
+                    labels = {'index_closes': '指数日线', 'index_members': '指数成分',
+                              'member_valuations': '成分股估值', 'report': '数据'}
+                    raise ValuationError('{}{}读取失败，已有数据保留；请查看采集日志。'.format(
+                        '腾讯' if provider == 'tencent' else '东方财富', labels[endpoint])) from exc
                 self.monitor.stop_event.wait(attempt+1)
-        if len(response.content) > 4_000_000:
-            raise ValuationError('东方财富响应超过预期范围。')
-        result = json.loads(response.content, parse_float=Decimal)
-        self.check()
-        return result
+                self.check()
 
     def report(self, name, fields, filters, expected=None):
         rows, count, pages = [], None, None
@@ -63,23 +106,68 @@ class EastmoneySource:
         raise ValuationError('东方财富分页超出预期。')
 
     def closes(self, code, cutoff):
-        response = self.request(PRICE_URL, dict(secid='1.'+code[:6], klt=101, fqt=0,
-            beg=(cutoff-timedelta(days=45)).strftime('%Y%m%d'), end=cutoff.strftime('%Y%m%d'), lmt=40,
-            fields1='f1,f2,f3,f4,f5,f6', fields2='f51,f52,f53,f54,f55,f56'))
+        try:
+            response = self.request(PRICE_URL, dict(secid='1.'+code[:6], klt=101, fqt=0,
+                beg=(cutoff-timedelta(days=45)).strftime('%Y%m%d'), end=cutoff.strftime('%Y%m%d'), lmt=40,
+                fields1='f1,f2,f3,f4,f5,f6', fields2='f51,f52,f53,f54,f55,f56'))
+        except ValuationError as exc:
+            # Do not hide invalid, stale or inconsistent vendor data with a fallback.
+            cause = exc.__cause__
+            transient = isinstance(cause, httpx.TransportError) or (
+                isinstance(cause, httpx.HTTPStatusError) and
+                (cause.response.status_code == 429 or cause.response.status_code >= 500))
+            if not transient:
+                raise
+            LOG.warning('Valuation close fallback index=%s cutoff=%s from=eastmoney to=tencent', code, cutoff)
+            return self.tencent_closes(code, cutoff)
         data = response.get('data')
-        if response.get('rc') != 0 or not isinstance(data, dict) or data.get('code') != code[:6]:
+        if response.get('rc') != 0 or not isinstance(data, dict) or data.get('code') != code[:6] or data.get('market') != 1:
             raise ValuationError('东方财富指数收盘行情缺失。')
         rows = data.get('klines')
         if not isinstance(rows, list) or not rows:
             raise ValuationError('东方财富指数日线为空。')
         values = {}
         for row in rows:
+            if not isinstance(row, str) or len(row.split(',')) < 3:
+                raise ValuationError('东方财富指数日线记录不完整。')
             parts = row.split(',')
             day = source_date(parts[0])
             close = number(parts[2], 24, 8)
             if day > cutoff or day.weekday() >= 5 or close <= 0 or (values and day <= max(values)):
                 raise ValuationError('东方财富指数日线日期或价格无效。')
             values[day] = close
+        LOG.info('Valuation close selected provider=eastmoney index=%s start=%s end=%s rows=%s adjustment=none',
+                 code, min(values), max(values), len(values))
+        return values
+
+    def tencent_closes(self, code, cutoff):
+        if code not in INDEXES:
+            raise ValuationError('指数不在支持范围。')
+        start = cutoff-timedelta(days=45)
+        symbol = 'sh'+code[:6]
+        payload = self.request(TENCENT_URL, {'param': '{},day,{},{},50,'.format(symbol, start, cutoff)})
+        data = payload.get('data')
+        item = data.get(symbol) if isinstance(data, dict) else None
+        rows = item.get('day') if isinstance(item, dict) else None
+        if payload.get('code') not in (0, '0') or not isinstance(rows, list) or not rows or len(rows) > 640:
+            raise ValuationError('腾讯未返回指定指数的不复权日线。')
+        values, previous = {}, None
+        for row in rows:
+            if (not isinstance(row, list) or len(row) < 3 or
+                    not isinstance(row[0], str) or len(row[0]) != 10):
+                raise ValuationError('腾讯指数日线记录不完整。')
+            day = source_date(row[0])
+            close = number(row[2], 24, 8)
+            if day > cutoff or day.weekday() >= 5 or close <= 0 or (previous and day <= previous):
+                raise ValuationError('腾讯指数日线日期或价格无效。')
+            previous = day
+            # Tencent may include rows earlier than the requested start.
+            if day >= start:
+                values[day] = close
+        if not values or (cutoff.weekday() < 5 and max(values) != cutoff):
+            raise ValuationError('腾讯目标日收盘行情尚未发布，已有数据保留。')
+        LOG.info('Valuation close selected provider=tencent index=%s start=%s end=%s rows=%s adjustment=none',
+                 code, min(values), max(values), len(values))
         return values
 
     def snapshot(self, code, day):

@@ -152,3 +152,58 @@ def test_metadata_only_changes_never_notify(settings,task,table,rows_sql,first,s
     before=n.published_values(monitor,task)
     with connection() as db:db.execute('DELETE FROM '+table.split('(')[0]);db.execute(rows_sql,second)
     assert before==n.published_values(monitor,task)
+
+
+def test_skip_and_queue_reasons_are_observable_without_payload(settings, monkeypatch, caplog):
+    import logging
+    caplog.set_level(logging.INFO, logger=n.__name__)
+    emit(settings, scheduled=False, summary=['DO_NOT_LOG_PAYLOAD'])
+    emit(settings, changed_count=0)
+    monkeypatch.setattr(n, 'enabled', lambda *_: False)
+    emit(settings)
+    monkeypatch.setattr(n, 'enabled', lambda *_: True)
+    emit(settings, summary=['DO_NOT_LOG_PAYLOAD'])
+    emit(settings)
+    for reason in ('not_scheduled', 'no_business_change', 'disabled'):
+        assert 'reason='+reason in caplog.text
+    assert 'notification enqueued task=cci changed_count=1' in caplog.text
+    assert 'notification duplicate task=cci' in caplog.text
+    assert 'DO_NOT_LOG_PAYLOAD' not in caplog.text
+
+
+def test_valuation_current_store_changes_notify_and_metadata_does_not(settings):
+    monitor = Monitor(settings)
+    with monitor.db() as db:
+        db.execute('CREATE TABLE index_points_v2(index_code TEXT, trade_date TEXT, payload TEXT)')
+        payload = dict(index_close='4000', mean_pe_ttm='20', member_count=300,
+                       statistics={'ttm': {'eligible': 290}}, updated_at='old')
+        db.execute('INSERT INTO index_points_v2 VALUES (?,?,?)',
+                   ('000300.XSHG', '2026-11-16', json.dumps(payload)))
+    before = n.published_values(monitor, 'valuation_ruler')
+    assert before[('2026-11-16', '000300.XSHG')]['mean_pe_ttm'] == '20'
+    assert '沪深300：4000；等权平均 PE(TTM)：20' in n.summarize_changes('valuation_ruler', before, before)
+    payload['updated_at'] = 'new'
+    with monitor.db() as db:
+        db.execute('UPDATE index_points_v2 SET payload=?', (json.dumps(payload),))
+    assert before == n.published_values(monitor, 'valuation_ruler')
+    payload['mean_pe_ttm'] = '21'
+    with monitor.db() as db:
+        db.execute('UPDATE index_points_v2 SET payload=?', (json.dumps(payload),))
+    assert before != n.published_values(monitor, 'valuation_ruler')
+
+
+def test_valuation_current_hook_emits_after_current_store_publish(settings):
+    monitor = Monitor(settings)
+    with monitor.db() as db:
+        db.execute('DROP TABLE points')
+        db.execute('CREATE TABLE points(trade_date TEXT, payload TEXT)')
+        db.execute('CREATE TABLE index_points_v2(index_code TEXT, trade_date TEXT, payload TEXT)')
+    @n.notify_collection('valuation_ruler')
+    def collect(self, lock, state, slot):
+        with self.db() as db:
+            db.execute('INSERT INTO index_points_v2 VALUES (?,?,?)',
+                       ('000016.XSHG', '2026-11-16', json.dumps(dict(index_close='3000', mean_pe_ttm='15'))))
+        lock.release()
+    collect(monitor, Lock(), {'run_id': 'v2'}, 'scheduled-slot')
+    row, = rows(settings)
+    assert '上证50：3000；等权平均 PE(TTM)：15' in row['message']

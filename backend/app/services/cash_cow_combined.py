@@ -100,51 +100,85 @@ class CombinedCashCowSource(EastmoneyCashCowSource):
         return stocks
 
     def financials(self, year, codes=None):
-        # Eastmoney remains authoritative for absolute adjusted profit. Read it
-        # in bulk; do not substitute ROE or growth rates for adjusted earnings.
+        # All three monetary fields use the same CNY annual EM statement.
+        # AS report_type=1 is an original statement, while EM can incorporate
+        # subsequently restated comparatives. Equality is not a validity gate:
+        # a mismatch is evidence of a discrepancy, not proof of bad data or of
+        # a restatement. Never mix one provider's profit with another's CFO.
         result = super().financials(year, codes)
         for endpoint, field, target in [('financials/income', 'n_income_attr_p', 'net_profit'),
                                         ('financials/cash-flow', 'n_cashflow_act', 'operating_cashflow')]:
-            rows = self._ash(endpoint, {'period': f'{year}1231', 'report_type': '1'})
-            wanted = set(codes or result)
-            selected, versions = {}, {}
-            for row in rows:
-                symbol = row.get('symbol', '')
-                code = symbol.split('.')[0] if isinstance(symbol, str) else ''
-                if code not in wanted:
-                    continue
-                if (row.get('end_date') != f'{year}1231' or symbol != self.symbols.get(code)
-                        or row.get('report_type') != '1'
-                        or number(row.get(field)) is None):
-                    raise CashCowSourceError('AShareHub 年报字段缺失、重复或口径不一致。')
-                announced = row.get('f_ann_date') or row.get('ann_date')
-                if not isinstance(announced, str) or not re.fullmatch(r'\d{8}', announced):
-                    raise CashCowSourceError('财报公告日期无效。')
-                if announced > self.as_of.replace('-', ''):
-                    continue
-                if code in versions and announced < versions[code]:
-                    continue
-                value = number(row[field])
-                if versions.get(code) == announced and selected[code] != value:
-                    raise CashCowSourceError('同日财报版本冲突。')
-                versions[code] = announced
-                selected[code] = value
-            # The fully paginated EM report remains the authoritative annual
-            # source. AS is a cross-check, not proof that every issuer must have
-            # a report in this period. Missing EM fields retain original
-            # 'insufficient' semantics; never invent zeros or infer no dividend.
-            missing = wanted - set(selected)
-            if missing:
-                LOG.info('Cash cow financial crosscheck unavailable endpoint=%s year=%s count=%s sample=%s authoritative=eastmoney',
-                         endpoint, year, len(missing), sorted(missing)[:10])
-            for code in wanted & set(selected) & set(result):
-                expected = result[code][target]
-                if expected is None:
-                    continue
-                if abs(selected[code] - expected) > max(.01, abs(expected) * 1e-8):
-                    raise CashCowSourceError('财报跨来源数值不一致，保留原结果。')
-                result[code][target] = selected[code]
+            try:
+                self._financial_crosscheck(year, codes, result, endpoint, field, target)
+            except CashCowSourceError:
+                self.check_cancel()
+                # Cross-check availability cannot veto a validated EM report.
+                # Do not log exception text or request objects with credentials.
+                LOG.warning('Cash cow financial crosscheck unavailable endpoint=%s year=%s '
+                            'authoritative=eastmoney policy=single_source_annual comparison_basis=unverified',
+                            endpoint, year)
         return result
+
+    def _financial_crosscheck(self, year, codes, result, endpoint, field, target):
+        rows = self._ash(endpoint, {'period': f'{year}1231', 'report_type': '1'})
+        wanted = set(result if codes is None else codes)
+        selected, versions, metadata = {}, {}, {}
+        for row in rows:
+            symbol = row.get('symbol', '')
+            code = symbol.split('.')[0] if isinstance(symbol, str) else ''
+            if code not in wanted:
+                continue
+            if (row.get('end_date') != f'{year}1231' or symbol != self.symbols.get(code)
+                    or row.get('report_type') != '1'
+                    or number(row.get(field)) is None):
+                raise CashCowSourceError('AShareHub 年报字段缺失、重复或口径不一致。')
+            announced = row.get('f_ann_date') or row.get('ann_date')
+            if not isinstance(announced, str) or not re.fullmatch(r'\d{8}', announced):
+                raise CashCowSourceError('财报公告日期无效。')
+            if announced > self.as_of.replace('-', ''):
+                continue
+            if code in versions and announced < versions[code]:
+                continue
+            value = number(row[field])
+            if versions.get(code) == announced and selected[code] != value:
+                raise CashCowSourceError('同日财报版本冲突。')
+            versions[code] = announced
+            selected[code] = value
+            metadata[code] = {
+                key: row[key] if isinstance(row.get(key), str) and re.fullmatch(r'\d{8}', row[key]) else '-'
+                for key in ('ann_date', 'f_ann_date')
+            }
+        missing = wanted - set(selected)
+        if missing:
+            LOG.info('Cash cow financial crosscheck unavailable endpoint=%s year=%s count=%s sample=%s authoritative=eastmoney',
+                     endpoint, year, len(missing), sorted(missing)[:10])
+        mismatches, compared = 0, 0
+        for code in sorted(wanted & set(selected) & set(result)):
+            expected = result[code][target]
+            if expected is None:
+                continue
+            compared += 1
+            difference = selected[code] - expected
+            tolerance = max(.01, abs(expected) * 1e-8)
+            if abs(difference) > tolerance:
+                mismatches += 1
+                if mismatches <= 20:
+                    em_dates = {}
+                    for key in ('NOTICE_DATE', 'UPDATE_DATE'):
+                        value = self.financial_metadata.get(year, {}).get(code, {}).get(key)
+                        em_dates[key] = value[:10] if isinstance(value, str) and re.fullmatch(r'\d{4}-\d{2}-\d{2}(?: 00:00:00)?', value) else '-'
+                    LOG.warning(
+                        'Cash cow financial mismatch symbol=%s year=%s endpoint=%s field=%s '
+                        'asharehub_value=%.17g eastmoney_value=%.17g difference=%.17g tolerance=%.17g '
+                        'asharehub_report_type=1 asharehub_ann_date=%s asharehub_f_ann_date=%s '
+                        'eastmoney_notice_date=%s eastmoney_update_date=%s eastmoney_report_version=unavailable authoritative=eastmoney '
+                        'comparison_basis=unverified action=use_authoritative_annual',
+                        self.symbols[code], year, endpoint, target, selected[code], expected,
+                        difference, tolerance, metadata[code]['ann_date'], metadata[code]['f_ann_date'],
+                        em_dates['NOTICE_DATE'], em_dates['UPDATE_DATE'])
+        LOG.info('Cash cow financial crosscheck summary endpoint=%s year=%s compared=%s mismatches=%s '
+                 'detail_limit=20 authoritative=eastmoney policy=single_source_annual',
+                 endpoint, year, compared, mismatches)
 
     def _calendar(self, start_year, end_year, exchange):
         requested_start, requested_end = start_year, end_year

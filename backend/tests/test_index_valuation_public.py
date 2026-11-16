@@ -175,3 +175,117 @@ def test_default_1830_and_failed_slots_retry_after_15_minutes(service):
     assert monitor.status()['status'] == 'idle'
     assert not monitor.tick(MOMENT+timedelta(minutes=17), background=False)
     assert monitor.status()['schedule'] == '18:30 Asia/Shanghai'
+
+
+def test_transport_failure_falls_back_to_same_unadjusted_index(service, monkeypatch, caplog):
+    from app.services.index_valuation_source import PRICE_URL, TENCENT_URL
+    monitor, _ = service
+    monkeypatch.setattr(monitor.stop_event, 'wait', lambda seconds: False)
+    calls = []
+    def handle(request):
+        calls.append(request)
+        if request.url.host == 'push2his.eastmoney.com':
+            raise httpx.RemoteProtocolError('private-response-must-not-be-logged')
+        symbol = request.url.params['param'].split(',')[0]
+        return httpx.Response(200, json={'code': 0, 'data': {symbol: {'day': [
+            ['2026-11-12', '4000', '4010'], ['2026-11-13', '4010', '4020']]}}})
+    with httpx.Client(transport=httpx.MockTransport(handle)) as client:
+        source = EastmoneySource(client, monitor, lambda: None)
+        with caplog.at_level('INFO'):
+            for code in INDEXES:
+                prices = source.closes(code, DAY)
+                assert prices[DAY] == 4020
+    assert len(calls) == 12
+    assert 'provider=tencent' in caplog.text
+    assert 'endpoint=index_closes' in caplog.text
+    assert 'private-response-must-not-be-logged' not in caplog.text
+    assert all(r.url.params['param'].endswith(',50,') for r in calls if r.url.host == 'proxy.finance.qq.com')
+
+
+@pytest.mark.parametrize('fault', ['stale', 'future', 'duplicate', 'qfq_only', 'wrong_symbol', 'zero', 'missing_close'])
+def test_tencent_bad_data_never_publishes(service, monkeypatch, fault):
+    monitor, _ = service
+    monkeypatch.setattr(monitor.stop_event, 'wait', lambda seconds: False)
+    def handle(request):
+        if request.url.host == 'push2his.eastmoney.com':
+            raise httpx.RemoteProtocolError('closed')
+        symbol = request.url.params['param'].split(',')[0]
+        rows = [['2026-11-13', '4010', '4020']]
+        if fault == 'stale': rows[0][0] = '2026-11-12'
+        if fault == 'future': rows[0][0] = '2026-11-16'
+        if fault == 'duplicate': rows *= 2
+        if fault == 'zero': rows[0][2] = '0'
+        if fault == 'missing_close': rows[0].pop()
+        data = {symbol: {'qfqday' if fault == 'qfq_only' else 'day': rows}}
+        if fault == 'wrong_symbol': data = {'sh999999': {'day': rows}}
+        return httpx.Response(200, json={'code': 0, 'data': data})
+    with httpx.Client(transport=httpx.MockTransport(handle)) as client:
+        with pytest.raises(ValueError):
+            EastmoneySource(client, monitor, lambda: None).closes('000300.XSHG', DAY)
+
+
+def test_invalid_eastmoney_data_does_not_trigger_fallback(service):
+    monitor, _ = service
+    calls = []
+    def handle(request):
+        calls.append(request)
+        return httpx.Response(200, json={'rc': 0, 'data': {'code': '000300', 'klines': []}})
+    with httpx.Client(transport=httpx.MockTransport(handle)) as client:
+        with pytest.raises(ValuationError):
+            EastmoneySource(client, monitor, lambda: None).closes('000300.XSHG', DAY)
+    assert len(calls) == 1
+
+
+def test_report_transport_error_has_safe_context_and_three_attempts(service, monkeypatch, caplog):
+    monitor, _ = service
+    monkeypatch.setattr(monitor.stop_event, 'wait', lambda seconds: False)
+    calls = []
+    def handle(request):
+        calls.append(request)
+        raise httpx.RemoteProtocolError('secret-token-query')
+    with httpx.Client(transport=httpx.MockTransport(handle)) as client:
+        with pytest.raises(ValuationError, match='成分股估值读取失败'):
+            EastmoneySource(client, monitor, lambda: None).valuations({'000001.XSHE'}, DAY)
+    assert len(calls) == 3
+    assert 'endpoint=member_valuations' in caplog.text
+    assert 'secret-token-query' not in caplog.text
+
+
+def test_complete_collection_uses_fallback_without_bypassing_pe_checks(service, monkeypatch):
+    monitor, engine = service
+    monkeypatch.setattr(monitor.stop_event, 'wait', lambda seconds: False)
+    base, _ = vendor()
+    def handle(request):
+        if request.url.host == 'push2his.eastmoney.com':
+            raise httpx.RemoteProtocolError('closed')
+        if request.url.host == 'proxy.finance.qq.com':
+            symbol = request.url.params['param'].split(',')[0]
+            return httpx.Response(200, json={'code': 0, 'data': {symbol: {'day': [
+                ['2026-11-12', '4000', '4010'], ['2026-11-13', '4010', '4020']]}}})
+        return base.send(request)
+    with httpx.Client(transport=httpx.MockTransport(handle)) as client:
+        monitor.client_factory = lambda: nullcontext(client)
+        assert monitor.refresh(background=False, moment=MOMENT)
+        assert monitor.status()['status'] == 'idle', monitor.read_state()
+    base.close()
+    with engine.connect() as db:
+        assert len(db.execute(select(collection.DAILY)).all()) == 3
+        assert len(db.execute(select(collection.MEMBER)).all()) == 3
+    assert monitor.history(MOMENT)['latest']['mean_pe'] == 10
+
+
+def test_retry_wait_remains_cancellable(service, monkeypatch):
+    from app.services.valuation_ruler import CollectionCancelled
+    monitor, _ = service
+    stopped = []
+    def check():
+        if stopped: raise CollectionCancelled()
+    monkeypatch.setattr(monitor.stop_event, 'wait', lambda seconds: stopped.append(True))
+    calls = []
+    def handle(request):
+        calls.append(request)
+        raise httpx.RemoteProtocolError('closed')
+    with httpx.Client(transport=httpx.MockTransport(handle)) as client:
+        with pytest.raises(CollectionCancelled):
+            EastmoneySource(client, monitor, check).closes('000300.XSHG', DAY)
+    assert len(calls) == 1

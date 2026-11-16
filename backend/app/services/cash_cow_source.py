@@ -76,6 +76,7 @@ class EastmoneyCashCowSource:
         self.events = {}
         self.daily = {}
         self.capital = {}
+        self.financial_metadata = {}
         self.cache_dir = Path(cache_dir) if cache_dir is not None else None
         self.last_request = 0.0
 
@@ -448,7 +449,7 @@ class EastmoneyCashCowSource:
             filter_text += '(SECURITY_CODE in (' + ','.join('\"' + code + '\"' for code in codes) + '))'
         columns = ('SECUCODE,SECURITY_CODE,REPORT_DATE,DIVIDEND_IMPLE,PARENTNETPROFIT,DIVIDEND_PAY_IMPLE'
                    if report == 'RPT_F10_DIVIDEND_HISTOGRAM' else
-                   'SECUCODE,SECURITY_CODE,REPORT_DATE,KCFJCXSYJLR,PARENTNETPROFIT,NETCASH_OPERATE_PK')
+                   'SECUCODE,SECURITY_CODE,REPORT_DATE,KCFJCXSYJLR,PARENTNETPROFIT,NETCASH_OPERATE_PK,NOTICE_DATE,UPDATE_DATE,CURRENCY,REPORT_TYPE')
         rows = self._rows(report, filter_text,
                           lambda r: r.get('SECUCODE'), columns=columns)
         if any(str(r.get('REPORT_DATE') or '')[:10] != f'{int(year)}-12-31' for r in rows):
@@ -467,10 +468,15 @@ class EastmoneyCashCowSource:
                 for r in self._annual('RPT_F10_DIVIDEND_HISTOGRAM', year, codes)}
 
     def financials(self, year, codes=None):
+        rows = self._annual('RPT_F10_FINANCE_MAINFINADATA', year, codes)
+        if any(r.get('CURRENCY') != 'CNY' or r.get('REPORT_TYPE') != '年报' for r in rows):
+            raise CashCowSourceError('年度财报币种或报表口径不一致，保留原结果。')
+        self.financial_metadata[year] = {r['SECURITY_CODE']: {key: r.get(key)
+            for key in ('NOTICE_DATE', 'UPDATE_DATE')} for r in rows}
         return {r['SECURITY_CODE']: dict(adjusted_profit=number(r.get('KCFJCXSYJLR')),
                 net_profit=number(r.get('PARENTNETPROFIT')),
                 operating_cashflow=number(r.get('NETCASH_OPERATE_PK')))
-                for r in self._annual('RPT_F10_FINANCE_MAINFINADATA', year, codes)}
+                for r in rows}
 
     def _capital_stable(self, code, start_date):
         if code not in self.capital:

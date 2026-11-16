@@ -73,12 +73,12 @@ def test_three_periods_share_new_boundary():
     assert all(len(items[p])==1 and outcomes[p]['600900']=='matched' for p in (3,5,10))
 
 
-def test_conflicting_same_day_financials_rejected(monkeypatch):
+def test_conflicting_same_day_crosscheck_does_not_replace_authoritative(monkeypatch):
     monkeypatch.setattr(EastmoneyCashCowSource,'financials',lambda *a,**kw:{'600900':dict(net_profit=100,operating_cashflow=120,adjusted_profit=90)})
     obj=source(lambda req:None)
     row=dict(symbol='600900.SH',end_date='20241231',ann_date='20250401',report_type='1',n_income_attr_p=100,n_cashflow_act=120)
     obj._ash=lambda ep,p:[row,dict(row,n_income_attr_p=101)]
-    with pytest.raises(CashCowSourceError):obj.financials(2024,['600900'])
+    assert obj.financials(2024,['600900'])['600900']['net_profit'] == 100
 
 
 def test_live_configuration_snapshot_not_startup_settings():
@@ -213,3 +213,106 @@ def test_returned_day_mean_accepts_non_december_last_trade():
     prices={y:dict(year_average_close=10,price_date=f'{y}-10-01',price_basis='returned_unadjusted_trading_days',trading_days=190,missing_open_days=53,suspension_verified=False) for y in (2023,2024,2025)}
     outcome,item=finish_stock(dict(code='600900',name='Test',exchange='SH'),years,{y:1 for y in (2023,2024,2025)},prices,3)
     assert outcome=='matched' and item['years'][0]['missing_open_days']==53
+
+
+@pytest.mark.parametrize('endpoint,field,target,expected,actual', [
+    ('financials/income', 'n_income_attr_p', 'net_profit', 100, 102),
+    ('financials/cash-flow', 'n_cashflow_act', 'operating_cashflow', 120, 123),
+])
+def test_financial_mismatch_logs_public_provenance_only(monkeypatch, caplog, endpoint, field, target, expected, actual):
+    monkeypatch.setattr(EastmoneyCashCowSource, 'financials', lambda *a, **kw: {
+        '600900': dict(net_profit=100, operating_cashflow=120, adjusted_profit=90)})
+    obj = source(lambda req: None)
+    def rows(ep, params):
+        row = dict(symbol='600900.SH', end_date='20241231', ann_date='20250401',
+                   f_ann_date='20250402', report_type='1', n_income_attr_p=100,
+                   n_cashflow_act=120, token='never-log-this', raw_url='secret-url')
+        if ep == endpoint:
+            row[field] = actual
+        return [row]
+    obj._ash = rows
+    obj.financial_metadata[2024] = {'600900': {'NOTICE_DATE': '2025-04-01 00:00:00', 'UPDATE_DATE': '2026-04-01 00:00:00'}}
+    assert obj.financials(2024, ['600900'])['600900']['net_profit'] == 100
+    message = caplog.text
+    for fragment in ('Cash cow financial mismatch', 'symbol=600900.SH', 'year=2024',
+                     'endpoint=' + endpoint, 'field=' + target,
+                     'asharehub_value=' + str(actual), 'eastmoney_value=' + str(expected),
+                     'difference=' + str(actual - expected), 'tolerance=0.01',
+                     'asharehub_ann_date=20250401', 'asharehub_f_ann_date=20250402',
+                     'eastmoney_report_version=unavailable', 'action=use_authoritative_annual',
+                     'eastmoney_notice_date=2025-04-01', 'eastmoney_update_date=2026-04-01'):
+        assert fragment in message
+    assert 'never-log-this' not in message and 'secret-url' not in message
+    assert 'private-ash' not in message and 'private-ts' not in message
+
+
+def test_financial_mismatch_uses_selected_version_and_sanitizes_unused_date(monkeypatch, caplog):
+    monkeypatch.setattr(EastmoneyCashCowSource, 'financials', lambda *a, **kw: {
+        '600900': dict(net_profit=100, operating_cashflow=120, adjusted_profit=90)})
+    obj = source(lambda req: None)
+    row = dict(symbol='600900.SH', end_date='20241231', report_type='1',
+               n_income_attr_p=102, n_cashflow_act=120, f_ann_date='20250402',
+               ann_date='private-ash\nBAD')
+    obj._ash = lambda *a: [row, dict(row, f_ann_date='20250401', n_income_attr_p=100)]
+    assert obj.financials(2024, ['600900'])['600900']['net_profit'] == 100
+    assert 'asharehub_value=102' in caplog.text
+    assert 'asharehub_f_ann_date=20250402' in caplog.text
+    assert 'asharehub_ann_date=-' in caplog.text and 'private-ash' not in caplog.text
+
+
+def test_financial_crosscheck_tolerance_not_relaxed(monkeypatch, caplog):
+    expected = 100_000_000
+    monkeypatch.setattr(EastmoneyCashCowSource, 'financials', lambda *a, **kw: {
+        '600900': dict(net_profit=expected, operating_cashflow=120, adjusted_profit=90)})
+    obj = source(lambda req: None)
+    row = dict(symbol='600900.SH', end_date='20241231', ann_date='20250401', report_type='1',
+               n_income_attr_p=expected + 1, n_cashflow_act=120)
+    obj._ash = lambda *a: [row]
+    assert obj.financials(2024, ['600900'])['600900']['net_profit'] == expected
+    row['n_income_attr_p'] += .01
+    assert obj.financials(2024, ['600900'])['600900']['net_profit'] == expected
+    assert 'tolerance=1 ' in caplog.text
+
+
+@pytest.mark.parametrize('missing,actual', [(False, 1557000775.65), (True, None)])
+def test_restated_em_basis_is_not_mixed_with_original_crosscheck(monkeypatch, missing, actual):
+    authoritative = dict(net_profit=1557132327.91, operating_cashflow=2850716944.11,
+                         adjusted_profit=1441714437.09)
+    monkeypatch.setattr(EastmoneyCashCowSource, 'financials', lambda *a, **kw: {'600900': dict(authoritative)})
+    obj = source(lambda req: None)
+    obj._ash = lambda *a: ([] if missing else [dict(symbol='600900.SH', end_date='20241231',
+        ann_date='20250318', report_type='1', n_income_attr_p=actual, n_cashflow_act=2170810025.93)])
+    assert obj.financials(2024, ['600900']) == {'600900': authoritative}
+
+
+def test_crosscheck_unavailable_does_not_invent_missing_em_fields(monkeypatch, caplog):
+    authoritative = dict(net_profit=None, operating_cashflow=120, adjusted_profit=90)
+    monkeypatch.setattr(EastmoneyCashCowSource, 'financials', lambda *a, **kw: {'600900': dict(authoritative)})
+    obj = source(lambda req: None)
+    def unavailable(*a):
+        raise CashCowSourceError('secret-url private-ash')
+    obj._ash = unavailable
+    assert obj.financials(2024, ['600900']) == {'600900': authoritative}
+    assert 'comparison_basis=unverified' in caplog.text
+    assert 'secret-url' not in caplog.text and 'private-ash' not in caplog.text
+
+
+def test_authoritative_financial_failure_still_fails_closed(monkeypatch):
+    def invalid(*a, **kw):
+        raise CashCowSourceError('年度报表日期缺失或与请求年份不符')
+    monkeypatch.setattr(EastmoneyCashCowSource, 'financials', invalid)
+    obj = source(lambda req: None)
+    obj._ash = lambda *a: pytest.fail('must not replace authoritative failure')
+    with pytest.raises(CashCowSourceError, match='年度报表'):
+        obj.financials(2024, ['600900'])
+
+
+def test_crosscheck_cancellation_is_not_swallowed(monkeypatch):
+    monkeypatch.setattr(EastmoneyCashCowSource, 'financials', lambda *a, **kw: {})
+    obj = source(lambda req: None)
+    def unavailable(*a):raise CashCowSourceError('unavailable')
+    def cancelled():raise RuntimeError('cancelled')
+    obj._ash = unavailable
+    obj.check_cancel = cancelled
+    with pytest.raises(RuntimeError, match='cancelled'):
+        obj.financials(2024)

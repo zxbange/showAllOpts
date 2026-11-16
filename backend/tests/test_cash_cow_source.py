@@ -24,7 +24,7 @@ def test_live_histogram_units_and_missing():
     assert row['payout_ratio'] == 43.066934615984
     assert s.dividends(2015, codes=['000001']) == {}
     s = source(report([dict(SECUCODE='600900.SH', SECURITY_CODE='600900',
-                           REPORT_DATE='2015-12-31', KCFJCXSYJLR=None, PARENTNETPROFIT=1, NETCASH_OPERATE_PK='-')]))
+                           REPORT_DATE='2015-12-31', CURRENCY='CNY', REPORT_TYPE='年报', KCFJCXSYJLR=None, PARENTNETPROFIT=1, NETCASH_OPERATE_PK='-')]))
     assert s.financials(2015)['600900'] == dict(adjusted_profit=None, net_profit=1, operating_cashflow=None)
 
 
@@ -333,3 +333,31 @@ def test_verified_report_endpoint_routing(name, host, path):
     assert s._rows_uncached(name,'(SECURITY_CODE="600900")',lambda row:row['SECURITY_CODE'])==[]
     assert calls[0].url.host==host and calls[0].url.path==path
     assert calls[0].url.params['reportName']==name
+
+
+@pytest.mark.parametrize('currency,report_type', [('USD', '年报'), (None, '年报'), ('CNY', '季报'), ('CNY', None)])
+def test_financial_authoritative_currency_and_annual_basis_required(currency, report_type):
+    row = dict(SECUCODE='000423.SZ', SECURITY_CODE='000423', REPORT_DATE='2024-12-31',
+               CURRENCY=currency, REPORT_TYPE=report_type, PARENTNETPROFIT=100,
+               KCFJCXSYJLR=90, NETCASH_OPERATE_PK=120)
+    with pytest.raises(CashCowSourceError, match='币种或报表口径'):
+        source(report([row])).financials(2024)
+
+
+def test_financial_report_preserves_cny_units_and_revision_metadata():
+    row = dict(SECUCODE='000423.SZ', SECURITY_CODE='000423', REPORT_DATE='2024-12-31',
+               CURRENCY='CNY', REPORT_TYPE='年报', PARENTNETPROFIT=1557132327.91,
+               KCFJCXSYJLR=1441714437.09, NETCASH_OPERATE_PK=2850716944.11,
+               NOTICE_DATE='2025-03-18 00:00:00', UPDATE_DATE='2026-03-20 00:00:00')
+    obj = source(report([row]))
+    assert obj.financials(2024)['000423'] == dict(net_profit=1557132327.91,
+        adjusted_profit=1441714437.09, operating_cashflow=2850716944.11)
+    assert obj.financial_metadata[2024]['000423']['UPDATE_DATE'] == row['UPDATE_DATE']
+
+
+def test_financial_duplicate_revisions_never_arbitrarily_select_one():
+    row = dict(SECUCODE='000423.SZ', SECURITY_CODE='000423', REPORT_DATE='2024-12-31',
+               CURRENCY='CNY', REPORT_TYPE='年报', PARENTNETPROFIT=1557132327.91,
+               KCFJCXSYJLR=1441714437.09, NETCASH_OPERATE_PK=2850716944.11)
+    with pytest.raises(CashCowSourceError, match='重复'):
+        source(report([row, dict(row, PARENTNETPROFIT=1557000775.65)])).financials(2024)

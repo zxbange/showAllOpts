@@ -423,3 +423,34 @@ def test_cash_cow_launch_failure_releases_shared_execution(tmp_path, monkeypatch
     lease=acquire_execution(screen.settings,screen.acquire)
     assert lease is not None
     lease.release()
+
+
+def test_success_replaces_entire_batch_without_retaining_prior_stock_rows(tmp_path, public_result_database):
+    """Only one remote result and three current windows survive successful refresh."""
+    from sqlalchemy import select
+    from app.models.cash_cow import CashCowSnapshot
+    screens = views(tmp_path)
+    assert run(screens[3])
+    old_run = screens[3].latest()['snapshot']['run_id']
+    assert screens[3].latest()['items']
+
+    class NoMatches(Source):
+        def dividends(self, year, codes):
+            return {code: {'cash_dividend': 0} for code in codes}
+
+    screens[3].source_factory = NoMatches
+    assert run(screens[3])
+    with screens[3].db() as db:
+        rows = db.execute('SELECT years,payload FROM snapshots ORDER BY years').fetchall()
+        assert [row[0] for row in rows] == [3, 5, 10]
+        assert db.execute('SELECT count(*) FROM public_publication').fetchone()[0] == 0
+        local = {str(years): json.loads(payload) for years, payload in rows}
+    with public_result_database.connect() as connection:
+        remote = connection.execute(select(CashCowSnapshot.__table__)).mappings().all()
+    assert len(remote) == 1
+    assert remote[0]['id'] == 1
+    assert remote[0]['payload'] == local
+    for period in ('3', '5', '10'):
+        assert local[period]['items'] == []
+        assert local[period]['snapshot']['run_id'] != old_run
+        assert local[period]['snapshot']['matched_count'] == 0

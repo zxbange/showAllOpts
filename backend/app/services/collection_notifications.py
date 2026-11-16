@@ -48,7 +48,10 @@ def emit_collection_result(settings, task_id, *, scheduled, run_key, outcome,
                            changed_count, summary, collected_at=None):
     """Persist a deduplicated event describing committed business changes."""
     try:
-        if not scheduled or changed_count <= 0 or not enabled(settings, task_id):
+        reason = ('not_scheduled' if not scheduled else 'no_business_change' if changed_count <= 0
+                  else 'disabled' if not enabled(settings, task_id) else None)
+        if reason:
+            LOG.info('Collection notification skipped task=%s reason=%s', task_id, reason)
             return False
         message = format_result(task_id, outcome, changed_count, summary, collected_at)
         db = _database(settings)
@@ -58,6 +61,8 @@ def emit_collection_result(settings, task_id, *, scheduled, run_key, outcome,
                                       (task_id, str(run_key), message, 'pending')).rowcount
         finally:
             db.close()
+        LOG.info('Collection notification %s task=%s changed_count=%s',
+                 'enqueued' if inserted else 'duplicate', task_id, changed_count)
         start_notifications(settings)
         return bool(inserted)
     except Exception as exc:
@@ -78,6 +83,7 @@ def deliver_pending(settings):
                                   (time.time(),)).fetchall()
                 for row in rows:
                     if not enabled(settings, row['task']):
+                        LOG.info('Collection notification skipped task=%s reason=disabled_before_delivery', row['task'])
                         with db:
                             db.execute("UPDATE outbox SET status='skipped' WHERE task=? AND run=?", (row['task'], row['run']))
                         continue
@@ -154,6 +160,13 @@ def published_values(monitor, task):
             return {(r[0],r[1]): {k: json.loads(r[2]).get(k) for k in ('price','change')}
                     for r in db.execute('SELECT day,grade,payload FROM cci_quotes')}
         if task == 'valuation_ruler':
+            if db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='index_points_v2'").fetchone():
+                from app.services.index_valuation import METRICS
+                keys = ('index_close', 'member_count', 'statistics', *METRICS)
+                current = {(r[0], r[1]): {k: json.loads(r[2]).get(k) for k in keys}
+                           for r in db.execute('SELECT trade_date,index_code,payload FROM index_points_v2')}
+                if current:
+                    return current
             keys = ('index_close','mean_pe_ttm','pe_sum','positive_count','loss_count')
             return {r[0]: {k: json.loads(r[1]).get(k) for k in keys}
                     for r in db.execute('SELECT trade_date,payload FROM points')}
@@ -182,6 +195,14 @@ def summarize_changes(task, changes, after):
     elif task == 'cci':
         lines.extend(f'{grade}：{after[(day,grade)]["price"]} 元/吨' for grade in ('CCI5500','CCI5000','CCI4500') if (day,grade) in after)
     elif task == 'valuation_ruler':
+        if any(isinstance(key, tuple) for key in after):
+            from app.services.index_valuation import INDICES
+            for code, (label, _, _) in INDICES.items():
+                q = after.get((day, code))
+                if q is not None:
+                    value = q.get('mean_pe_ttm')
+                    lines.append(f"{label}：{q['index_close']}；等权平均 PE(TTM)：{value if value is not None else '—'}")
+            return lines
         q = after[day]
         lines.extend([f"沪深300：{q['index_close']}", f"等权平均 PE(TTM)：{q['mean_pe_ttm']}", f"盈利股：{q['positive_count']} 只"])
     elif task == 'growth_dividend':
@@ -206,7 +227,10 @@ def notify_collection(task):
             scheduled = slot is not None
             before = None
             try:
-                if scheduled and enabled(self.settings, task):
+                reason = 'not_scheduled' if not scheduled else 'disabled' if not enabled(self.settings, task) else None
+                if reason:
+                    LOG.info('Collection notification skipped task=%s reason=%s', task, reason)
+                else:
                     before = published_values(self, task)
             except Exception as exc:
                 LOG.warning('Collection notification snapshot failed task=%s error_type=%s', task, type(exc).__name__)
@@ -246,6 +270,8 @@ def notify_collection(task):
                         if changes:
                             emit_collection_result(self.settings,task,scheduled=True,run_key=run,outcome=outcome,
                                                    changed_count=len(changes),summary=summarize_changes(task,changes,after))
+                        else:
+                            LOG.info('Collection notification skipped task=%s reason=no_business_change', task)
                     except Exception as exc:
                         LOG.warning('Collection notification result failed task=%s error_type=%s', task, type(exc).__name__)
         return wrapped
