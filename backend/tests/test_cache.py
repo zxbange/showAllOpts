@@ -19,7 +19,7 @@ from test_dividend_api import seed as dividend_seed
 def seed_cash_cow(session):
     from app.models.cash_cow import CashCowSnapshot
     payload = {str(p): dict(snapshot=dict(years=p, as_of='2026-01-06', updated_at='2026-01-06T18:00:00+08:00',
-        run_id='test-cow-run', rule_version='cash_cow_static_display_v2', source='聚宽',
+        run_id='test-cow-run', rule_version='cash_cow_static_display_v2', source='东方财富公开数据接口',
         start_year=2026-p, end_year=2025, universe_count=1, evaluated_count=1,
         excluded_count=1, insufficient_count=0, matched_count=0), items=[]) for p in (3,5,10)}
     session.add(CashCowSnapshot(id=1, as_of_date=datetime(2026,1,6).date(),

@@ -239,7 +239,7 @@ def test_migrate_legacy_snapshots_readonly_and_preserve_history(tmp_path):
         path = tmp_path / 'market-data' / 'cash-cow' / str(period) / 'screen.sqlite3'
         path.parent.mkdir(parents=True)
         payload = dict(snapshot=dict(updated_at=f'2026-0{period % 7 + 1}-01T21:00:00+08:00',
-                                     previous_updated_at='2025-12-31T21:00:00+08:00', years=period), items=[])
+                                     previous_updated_at='2025-12-31T21:00:00+08:00', years=period, source='东方财富公开数据接口'), items=[])
         with sqlite3.connect(path) as db:
             db.execute('CREATE TABLE snapshot (id INTEGER PRIMARY KEY, payload TEXT)')
             db.execute('INSERT INTO snapshot VALUES(1,?)', (json.dumps(payload),))
@@ -319,6 +319,9 @@ import sys
 import time
 from app.core.config import Settings
 from app.services.cash_cow import CashCowScreen
+from app.services import public_publication
+from sqlalchemy import create_engine
+public_publication.build_engine = lambda *a, **kw: create_engine('sqlite:///' + str(Path(sys.argv[1]) / 'child-source.sqlite'))
 class Blocked:
     def __init__(self, *args, **kwargs): pass
     def universe(self):

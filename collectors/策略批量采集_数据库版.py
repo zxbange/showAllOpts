@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """聚宽单文件串行采集：直接粘贴到 Notebook，或 %run -i 本文件。
-十一个策略在本文件内独立实现；仅依赖 mysql_connector 获取统一数据库配置。
+九个策略在本文件内独立实现；仅依赖 mysql_connector 获取统一数据库配置。
 策略参数集中在开头；共用连接、会话及日期工具。用法见 docs/data/collector-batch.md。
 """
 import bisect
@@ -24,7 +24,7 @@ from builtins import (
 )
 from contextlib import contextmanager, redirect_stderr, redirect_stdout
 from copy import deepcopy
-from datetime import date, datetime as _growth_datetime, timedelta
+from datetime import date, timedelta
 from decimal import Decimal, InvalidOperation, ROUND_HALF_EVEN, ROUND_HALF_UP, localcontext
 from statistics import median
 from types import SimpleNamespace
@@ -62,7 +62,6 @@ DB_OPTIONS = get_database_options()
 
 # end_date=None：每次运行取北京时间当天。下列参数按策略分组配置。
 STRATEGY_CONFIG = {
-    '奶牛股': {'end_date': None, 'batch_size': 300},
     '行业动量': {
         'start_date': '2025-01-01', 'end_date': None, 'industry_type': 'sw_l2',
         'retention_trade_days': 180, 'history_mode': False,
@@ -97,15 +96,11 @@ STRATEGY_CONFIG = {
         'start_date': '2010-01-01', 'end_date': None, 'max_days': None,
         'indices': ('000300.XSHG', '000016.XSHG', '000852.XSHG'),
     },
-    '创红比': {
-        'start_date': '2018-01-01', 'end_date': None, 'window_days': 250, 'max_days': 20000,
-        'max_windows': 1000, 'retry_earlier_missing': False,
-    },
 }
 
-# ETF份额和两融担保比例由项目接口任务采集，不在此注册。
-STRATEGY_ORDER = ['行业动量', '抱团拥挤度', '市场情绪跟踪', '微盘温度计', '微盘新高新低', '高股息选股', '奶牛股', 'ETF动量热度', '个股机构持仓', '估值标尺', '创红比']
-STRATEGY_OPTIONS = {}  # 历史策略固定只新增；高股息选股和奶牛股每次重算并替换最新快照。
+# ETF份额、两融担保比例、创红比及奶牛股由项目外部接口采集，不在此注册。
+STRATEGY_ORDER = ['行业动量', '抱团拥挤度', '市场情绪跟踪', '微盘温度计', '微盘新高新低', '高股息选股', 'ETF动量热度', '个股机构持仓', '估值标尺']
+STRATEGY_OPTIONS = {}  # 历史策略固定只新增；高股息选股每次重算并替换最新快照。
 PREVIEW_ROWS = 5  # 每个策略展示最后几条新增记录；0 表示仅展示条数。
 PROGRESS_ENABLED = True  # 控制台进度条；关闭后仍保留各策略结果和最终汇总。
 PROGRESS_INTERVAL_SECONDS = 5.0  # 最多每隔多少秒刷新；等待接口/数据库时也刷新耗时。
@@ -672,14 +667,6 @@ def _decimal_number(value):
         result = Decimal(str(value))
         return result if result.is_finite() else None
     except (InvalidOperation, ValueError, TypeError):
-        return None
-
-
-def _float_number(value):
-    try:
-        result = float(value)
-        return result if math.isfinite(result) else None
-    except (TypeError, ValueError):
         return None
 
 
@@ -5066,673 +5053,14 @@ def _valuation_ruler_strategy(_apis, _config):
                        max_days=max_days, indices=indices, return_report=True)
 
     return SimpleNamespace(**locals())
-
-
-def _growth_dividend_strategy(_apis, _config):
-    DEFAULT_START_DATE = '2018-01-01'
-    CODES = ('399006.XSHE', '000922.XSHG', '000688.XSHG')
-    SOURCE = 'JQDATA.GET_PRICE.INDEX_CLOSE.V1'
-    CALENDAR_SOURCE = 'JQDATA.GET_TRADE_DAYS'
-    metadata = MetaData()
-    PRICES = Table('growth_dividend_index_history', metadata,
-        Column('index_code', String(16), primary_key=True), Column('trade_date', Date, primary_key=True),
-        Column('close', Float(53), nullable=False), Column('source', String(48), nullable=False),
-        Column('updated_at', DateTime, nullable=False), mysql_engine='InnoDB')
-    CALENDAR = Table('growth_dividend_trading_day', metadata,
-        Column('trade_date', Date, primary_key=True), Column('source', String(48), nullable=False),
-        Column('updated_at', DateTime, nullable=False), mysql_engine='InnoDB')
-
-    def check_schema(connection):
-        inspector = inspect(connection)
-        for table in (PRICES, CALENDAR):
-            columns = {c['name']: c for c in inspector.get_columns(table.name)}
-            if set(columns) != set(c.name for c in table.columns):
-                raise ValueError('源表字段不兼容')
-            if set(inspector.get_pk_constraint(table.name)['constrained_columns']) != set(c.name for c in table.primary_key):
-                raise ValueError('源表主键不兼容')
-            for col in table.columns:
-                actual = columns[col.name]
-                typ = actual['type']
-                if getattr(typ, 'unsigned', False):
-                    raise ValueError('源表数值类型不得为无符号')
-                if actual['nullable'] or typ._type_affinity is not col.type._type_affinity:
-                    raise ValueError('源表类型或非空约束不兼容')
-                if isinstance(col.type, String) and typ.length != col.type.length:
-                    raise ValueError('源表字符串长度不兼容')
-                if isinstance(col.type, Float) and connection.dialect.name == 'mysql' and type(typ).__name__.upper() not in ('DOUBLE', 'DOUBLE_PRECISION'):
-                    raise ValueError('收盘点位必须为双精度')
-            if connection.dialect.name == 'mysql' and str(inspector.get_table_options(table.name).get('mysql_engine', '')).lower() != 'innodb':
-                raise ValueError('源表必须为 InnoDB')
-
-    def positive(value):
-        if isinstance(value, (bool, str)):
-            raise ValueError('无效点位')
-        number = float(value)
-        if not math.isfinite(number) or number <= 0 or (isinstance(value, Decimal) and Decimal(str(number)) != value):
-            raise ValueError('无效点位')
-        return number
-
-    def as_day(value):
-        if isinstance(value, _growth_datetime):
-            return value.date()
-        if isinstance(value, date):
-            return value
-        return _growth_datetime.strptime(str(value), '%Y-%m-%d').date()
-
-    def china_now():
-        return _growth_datetime.utcnow() + timedelta(hours=8)
-
-    def api(name, namespace=None):
-        for value in ((namespace or {}).get(name), globals().get(name),
-                      getattr(jq, name, None), getattr(builtins, name, None)):
-            if callable(value):
-                return value
-        raise ValueError('聚宽研究环境缺少接口：{}'.format(name))
-
-    def database():
-        return connect_database(_config)
-
-    def diagnostic(exc, stage):
-        """Only report phase, type, numeric codes and function locations; never SQL or credentials."""
-        original = getattr(exc, 'orig', exc)
-        kind = type(original).__name__
-        if not re.match(r'^[A-Za-z_][A-Za-z_0-9]{0,63}$', kind):
-            kind = 'Exception'
-        args = getattr(original, 'args', ())
-        code = args[0] if args and type(args[0]) is int and 1000 <= args[0] <= 9999 else None
-        number = getattr(original, 'errno', None)
-        details = '；数据库错误码={}'.format(code) if code is not None else ''
-        if isinstance(original, OSError) and type(number) is int:
-            details += '；系统错误码={}'.format(number)
-        frames, trace = [], exc.__traceback__
-        while trace is not None:
-            frames.append('{}:{}'.format(trace.tb_frame.f_code.co_name, trace.tb_lineno))
-            trace = trace.tb_next
-        return '阶段={}；异常={}{}；位置={}'.format(stage, kind, details, ' > '.join(frames[-6:]))
-
-    def collect(start_date=DEFAULT_START_DATE, end_date=None, preview=True, max_days=20000,
-            max_windows=1000, window_days=250, check_cancel=None,
-            api_namespace=None, engine_factory=None, progress=None, retry_earlier_missing=True):
-        """先预览。写库 run(preview=False)，取消回调抛异常；分批提交，只补缺口。"""
-        get_trade_days, get_price = api('get_trade_days', api_namespace), api('get_price', api_namespace)
-        check_cancel = check_cancel or (lambda: None)
-        notify = progress or (lambda message: None)
-        stage = '初始化'
-        def update(message):
-            nonlocal stage
-            stage = message
-            notify(message)
-        if any(type(n) is not int or n <= 0 for n in (max_days, max_windows, window_days)):
-            raise ValueError('运行上限必须为正整数')
-        if not isinstance(retry_earlier_missing, bool):
-            raise ValueError('retry_earlier_missing 必须是布尔值')
-        moment = china_now()
-        closed = moment.date() if moment.hour >= 18 else moment.date() - timedelta(days=1)
-        end = as_day(end_date) if end_date is not None else closed
-        if end > closed:
-            raise ValueError('结束日期尚未在北京时间18:00收盘确认')
-        start = as_day(DEFAULT_START_DATE if start_date is None else start_date)
-        if start > end:
-            raise ValueError('开始日期不能晚于结束日期')
-        update('创红比：读取 {} 至 {} 交易日历'.format(start, end))
-        raw_days = get_trade_days(start_date=start, end_date=end)
-        if raw_days is None or any(d is None for d in raw_days):
-            raise ValueError('创红比交易日历返回空值，未开始写入；请重试聚宽日历接口')
-        all_days = [as_day(d) for d in raw_days]
-        if not all_days or all_days != sorted(set(all_days)) or all_days[-1] > end:
-            raise ValueError('平台交易日历无效')
-        days = [d for d in all_days if start <= d <= end]
-        if not days or len(days) > max_days:
-            raise ValueError('区间为空或超过交易日上限')
-        report = dict(start=str(days[0]), end=str(days[-1]), preview=preview,
-                      added=0, skipped=0, remaining=0, gaps=[], unit='条',
-                      source=SOURCE, warning='当前平台可见历史，可能含历史修订；更早缺失原因未知，不保证最早完整覆盖。', indices={})
-        engine = None
-        try:
-            if not preview:
-                update('连接数据库并核对指数历史')
-                engine = (engine_factory or database)()
-                engine.echo = False
-                engine.hide_parameters = True
-                with engine.connect() as conn:
-                    update('数据库已连接：检查创红比表结构')
-                    metadata.create_all(conn)
-                    check_schema(conn)
-            stored = {code: set() for code in CODES}
-            if engine:
-                update('创红比：读取已有指数日期')
-                with engine.connect() as conn:
-                    keys = select([PRICES.c.index_code, PRICES.c.trade_date]) if sqlalchemy.__version__.startswith('1.') else select(PRICES.c.index_code, PRICES.c.trade_date)
-                    for code, day in conn.execute(keys.where((PRICES.c.trade_date >= days[0]) & (PRICES.c.trade_date <= days[-1]))):
-                        if code in stored:
-                            stored[code].add(as_day(day))
-            if engine:
-                update('创红比：读取已保存交易日历')
-                calendar_keys = CALENDAR.select().with_only_columns(
-                    [CALENDAR.c.trade_date] if sqlalchemy.__version__.startswith('1.') else CALENDAR.c.trade_date)
-                with engine.connect() as conn:
-                    saved_days = {row[0] for row in conn.execute(calendar_keys.where(
-                        (CALENDAR.c.trade_date >= days[0]) & (CALENDAR.c.trade_date <= days[-1])))}
-                pending_days = [day for day in days if day not in saved_days]
-                for offset in range(0, len(pending_days), 250):
-                    check_cancel()
-                    target_days = pending_days[offset:offset + 250]
-                    update('创红比：补写交易日历 {}/{} 日'.format(offset, len(pending_days)))
-                    with engine.begin() as conn:
-                        # 重读本批键，保留其他任务已写入的日历；每批一起提交。
-                        existing = {row[0] for row in conn.execute(calendar_keys.where(CALENDAR.c.trade_date.in_(target_days)))}
-                        now = _growth_datetime.utcnow()
-                        rows = [dict(trade_date=day, source=CALENDAR_SOURCE, updated_at=now)
-                                for day in target_days if day not in existing]
-                        if rows:
-                            conn.execute(CALENDAR.insert(), rows)
-                    update('创红比：补写交易日历 {}/{} 日'.format(offset + len(target_days), len(pending_days)))
-            windows = 0
-            for code in CODES:
-                observed = []
-                first_saved = min(stored[code]) if stored[code] else None
-                missing = [d for d in days if d not in stored[code]
-                           and (retry_earlier_missing or first_saved is None or d >= first_saved)]
-                report['skipped'] += len(stored[code])
-                update('{}：已有 {} 日，待查询 {} 日'.format(code, len(stored[code]), len(missing)))
-                for offset in range(0, len(missing), window_days):
-                    check_cancel()
-                    windows += 1
-                    if windows > max_windows:
-                        raise ValueError('超过查询窗口上限，已保存数据保留')
-                    target = missing[offset:offset + window_days]
-                    update('{}：读取 {} 至 {}'.format(code, target[0], target[-1]))
-                    for attempt in range(2):
-                        try:
-                            frame = get_price(code, start_date=target[0], end_date=target[-1], frequency='daily', fields=['close'], skip_paused=False, fq=None)
-                        except OSError as exc:
-                            if exc.errno != 24 or attempt:
-                                raise
-                        else:
-                            break
-                        gc.collect()
-                        update('{}：读取 {} 至 {}（句柄回收后重试一次）'.format(code, target[0], target[-1]))
-                    update('{}：校验 {} 至 {} 行情'.format(code, target[0], target[-1]))
-                    quotes = {}
-                    if frame is not None and not frame.empty:
-                        for stamp, row in frame.iterrows():
-                            day = as_day(stamp)
-                            if day not in target:
-                                continue
-                            if day in quotes:
-                                raise ValueError('重复行情日期')
-                            # NaN is an unavailable observation; never fabricate a close.
-                            if row['close'] is None or math.isnan(float(row['close'])):
-                                continue
-                            quotes[day] = positive(row['close'])
-                    observed.extend(quotes)
-                    if engine:
-                        update('{}：核对待保存行情 {} 至 {}（{} 条）'.format(code, target[0], target[-1], len(quotes)))
-                        check_cancel()
-                        rows = []
-                        if quotes:
-                            with engine.begin() as conn:
-                                dates_query = select([PRICES.c.trade_date]) if sqlalchemy.__version__.startswith('1.') else select(PRICES.c.trade_date)
-                                existing = {as_day(row[0]) for row in conn.execute(dates_query.where(
-                                    (PRICES.c.index_code == code) & PRICES.c.trade_date.in_(list(quotes))))}
-                                now = _growth_datetime.utcnow()
-                                rows = [dict(index_code=code, trade_date=day, close=quotes[day], source=SOURCE, updated_at=now)
-                                        for day in target if day in quotes and day not in existing]
-                                if rows:
-                                    conn.execute(PRICES.insert(), rows)
-                                check_cancel()
-                        report['added'] += len(rows)
-                        report['skipped'] += len(quotes) - len(rows)
-                        update('{}：本批新增 {} 条，跳过已有 {} 条'.format(code, len(rows), len(quotes) - len(rows)))
-                known = set(observed) | (stored[code] & set(days))
-                report['indices'][code] = dict(observed_first_day=str(min(known)) if known else None,
-                    available=len(known), missing=len(set(days) - known), earlier_missing='unknown')
-                # Do not turn an unknown prehistory prefix into fabricated missing prices.
-                # Gaps inside/after observed history (or an entirely empty index) remain failures.
-                report['gaps'].extend((code, str(day)) for day in days
-                                      if day not in known and (not known or day >= min(known)))
-            return report
-        except Exception as exc:
-            raise RuntimeError('创红比采集中止；{}；已提交数据保留。'.format(diagnostic(exc, stage))) from None
-        finally:
-            if engine:
-                engine.dispose()
-
-    settings = strategy_settings('创红比')
-    Base = SimpleNamespace(metadata=metadata)
-
-    def run(start_date=settings['start_date'], end_date=settings['end_date'],
-            window_days=settings['window_days'], max_days=settings['max_days'],
-            max_windows=settings['max_windows'], retry_earlier_missing=settings['retry_earlier_missing'],
-            skip_existing=True):
-        _require_append(skip_existing)
-        return collect(start_date=start_date, end_date=end_date, preview=False,
-                       window_days=window_days, max_days=max_days, max_windows=max_windows,
-                       api_namespace=_apis, engine_factory=lambda: connect_database(_config),
-                       progress=_progress_note, retry_earlier_missing=retry_earlier_missing)
-
-    return SimpleNamespace(**locals())
 # END EMBEDDED INDEX HISTORY
 
 
-# BEGIN EMBEDDED CASH COW
-def _cash_cow_strategy(_apis, _config):
-    settings = strategy_settings('奶牛股')
-    Base = declarative_base()
-    RULE_VERSION = 'cash_cow_static_display_v2'
-    get_price = _apis.get('get_price')
 
-    class CashCowSnapshot(Base):
-        __tablename__ = 'cash_cow_snapshot'
-        __table_args__ = {'mysql_engine': 'InnoDB', 'mysql_charset': 'utf8mb4'}
-        id = Column(Integer, primary_key=True)
-        as_of_date = Column(Date, nullable=False)
-        updated_at = Column(DateTime, nullable=False)
-        payload = Column(JSON, nullable=False)
-
-    # BEGIN CASH COW RULES
-    def numeric(value):
-        return type(value) in (int, float) and math.isfinite(value)
-
-
-    def evaluate_year(year, dividend, financial):
-        """A known failing predicate is a rejection, null data are never zero."""
-        dividend = dividend or {}
-        financial = financial or {}
-        cash = dividend.get('cash_dividend')
-        adjusted = financial.get('adjusted_profit')
-        profit = financial.get('net_profit')
-        operating = financial.get('operating_cashflow')
-        if any(numeric(value) and value <= 0 for value in (cash, adjusted, profit)):
-            return 'excluded', None
-        if numeric(cash) and numeric(operating) and operating < cash:
-            return 'excluded', None
-        payout = 100 * cash / profit if numeric(cash) and numeric(profit) and profit > 0 else None
-        if payout is not None and not 30 <= payout <= 70:
-            return 'excluded', None
-        if not all(numeric(value) for value in (cash, adjusted, profit, operating)):
-            return 'insufficient', None
-        return 'eligible', dict(year=year, cash_dividend=cash, adjusted_profit=adjusted,
-                               net_profit=profit, operating_cashflow=operating,
-                               payout_ratio=payout, cashflow_coverage=operating / cash)
-
-
-    def finish_stock(stock, years, dividends, prices, period=10):
-        """Dividend per share and unadjusted close must share a valid share basis."""
-        window = [row['year'] for row in years]
-        if len(window) != period or sorted(window) != list(range(min(window), min(window) + period)):
-            return 'insufficient', None
-        result = []
-        for annual in years:
-            year = annual['year']
-            dps = dividends.get(year)
-            price = prices.get(year) or {}
-            close = price.get('year_average_close')
-            day = price.get('price_date')
-            # A suspended stock's stale monthly close is not its year-end close.
-            if (not numeric(dps) or dps <= 0 or not numeric(close) or close <= 0
-                    or not isinstance(day, str) or not day.startswith(f'{year}-12-')):
-                return 'insufficient', None
-            result.append(dict(annual, dividend_per_share=dps, year_average_close=close,
-                               price_date=day, dividend_yield=100 * dps / close))
-        average = sum(row['dividend_yield'] for row in result) / period
-        if average <= 4:
-            return 'excluded', None
-        return 'matched', dict(code=stock['code'], name=stock['name'], exchange=stock['exchange'],
-                               average_yield=average,
-                               payout_min=min(row['payout_ratio'] for row in result),
-                               payout_max=max(row['payout_ratio'] for row in result),
-                               coverage_min=min(row['cashflow_coverage'] for row in result),
-                               years=result)
-
-
-    PERIODS = (3, 5, 10)
-
-    def screen_cash_cows(source, end_year, progress, check_cancel=lambda: None):
-        stocks = source.universe()
-        if not stocks:
-            raise ValueError('股票池为空，未替换已有结果。')
-        universe = {stock['code']: stock for stock in stocks}
-        if len(universe) != len(stocks):
-            raise ValueError('股票池代码重复，未替换已有结果。')
-        pending = dict(universe)
-        annual = {code: [] for code in universe}
-        candidates = {period: set() for period in PERIODS}
-        outcomes = {period: {} for period in PERIODS}
-
-        def reject(code, outcome, depth):
-            pending.pop(code)
-            # An older failure belongs only to windows containing that
-            # year. Shorter windows' survivors are already frozen.
-            for period in PERIODS:
-                if period >= depth:
-                    outcomes[period][code] = outcome
-
-        # Cheap, newest-first annual predicates are evaluated once. At
-        # each boundary freeze the eligible set, then prune only longer
-        # windows. Never prune by a shorter window's average yield.
-        for depth in range(1, max(PERIODS) + 1):
-            if not pending:
-                break
-            year = end_year - depth + 1
-            progress(f'初筛{year}年分红与财报（3/5/10年共用）',
-                     len(stocks) - len(pending), len(stocks))
-            dividends = source.dividends(year, codes=list(pending))
-            for code in list(pending):
-                cash = (dividends.get(code) or {}).get('cash_dividend')
-                if numeric(cash) and cash <= 0:
-                    reject(code, 'excluded', depth)
-            financials = source.financials(year, codes=list(pending)) if pending else {}
-            for code in list(pending):
-                outcome, row = evaluate_year(year, dividends.get(code), financials.get(code))
-                if outcome == 'eligible':
-                    annual[code].append(row)
-                else:
-                    reject(code, outcome, depth)
-            if depth in candidates:
-                candidates[depth] = set(pending)
-
-        items = {period: [] for period in PERIODS}
-        survivors = set().union(*candidates.values())
-        for index, code in enumerate(sorted(survivors)):
-            check_cancel()
-            stock = universe[code]
-            periods = [period for period in PERIODS if code in candidates[period]]
-            progress(f'核对候选{stock["name"]}的股息率（共用分红与行情）',
-                     len(stocks) - len(survivors) + index, len(stocks))
-            dps = source.per_share_dividends_by_period(code, end_year, periods)
-            usable = []
-            for period in periods:
-                window = range(end_year - period + 1, end_year + 1)
-                if all(numeric(dps[period].get(year)) and dps[period][year] > 0 for year in window):
-                    usable.append(period)
-                else:
-                    outcomes[period][code] = 'insufficient'
-            # Invalid share basis needs no expensive historical prices.
-            if not usable:
-                continue
-            prices = source.prices(code, end_year - max(usable) + 1, end_year)
-            matched = []
-            for period in usable:
-                rows = sorted((row for row in annual[code] if row['year'] > end_year - period),
-                              key=lambda row: row['year'])
-                outcome, item = finish_stock(stock, rows, dps[period], prices, period)
-                outcomes[period][code] = outcome
-                if outcome == 'matched':
-                    matched.append(item)
-                    items[period].append(item)
-            if matched:
-                current = source.current_dividend_yield(code)
-                for item in matched:
-                    item.update(current)
-        return items, outcomes, stocks
-    # END CASH COW RULES
-
-    class JoinQuantSource:
-        def __init__(self, day, batch_size):
-            self.day, self.as_of, self.batch_size = day, day.isoformat(), batch_size
-            self.codes, self.events, self.capital, self.daily = {}, {}, {}, {}
-            self.finance, self.query = _apis['finance'], _apis['query']
-
-        def universe(self):
-            frame = _apis['get_all_securities'](types=['stock'], date=self.day)
-            if frame is None or frame.empty or 'display_name' not in frame.columns:
-                raise ValueError('聚宽股票池缺失，保留已有结果。')
-            result = []
-            for full_code, row in frame.iterrows():
-                code = str(full_code).split('.')[0]
-                if not re.fullmatch(r'\d{6}', code) or code in self.codes:
-                    raise ValueError('股票池包含无效或重复代码。')
-                self.codes[code] = str(full_code)
-                exchange = 'SH' if code.startswith('6') else 'BJ' if code.startswith(('4', '8', '92')) else 'SZ'
-                result.append(dict(code=code, name=str(row['display_name']), exchange=exchange))
-            return result
-
-        def read(self, table, fields, conditions):
-            selection = self.query(*[getattr(table, key) for key in fields]).filter(*conditions)
-            fetch = lambda cursor: self.finance.run_query(selection.filter(table.id > cursor).order_by(table.id).limit(2000))
-            for page in _source_pages(fetch, fields=fields, label='奶牛股公开报表', page_size=2000):
-                for row in page.to_dict('records'):
-                    yield row
-
-        def dividend_rows(self, codes, start_year=None, end_year=None):
-            table = self.finance.STK_XR_XD
-            fields = ('id', 'code', 'report_date', 'implementation_pub_date', 'a_bonus_date', 'a_xr_date',
-                      'bonus_amount_rmb', 'bonus_ratio_rmb', 'dividend_ratio', 'transfer_ratio',
-                      'implementation_bonusnote', 'bonus_cancel_pub_date')
-            for offset in range(0, len(codes), self.batch_size):
-                batch = codes[offset:offset + self.batch_size]
-                conditions = [table.code.in_([self.codes[c] for c in batch]),
-                              table.implementation_pub_date <= self.day]
-                if start_year is not None:
-                    conditions += [table.report_date >= datetime.date(start_year, 1, 1),
-                                   table.report_date <= datetime.date(end_year, 12, 31)]
-                for row in self.read(table, fields, conditions):
-                    code = str(row['code']).split('.')[0]
-                    if code not in batch:
-                        raise ValueError('分红记录包含范围外股票。')
-                    row['paid'] = _optional_date(row['a_bonus_date']) or _optional_date(row['a_xr_date'])
-                    cancelled = _optional_date(row['bonus_cancel_pub_date'])
-                    if row['paid'] and row['paid'] <= self.day and not (cancelled and cancelled <= self.day):
-                        yield row
-
-        def dividends(self, year, codes):
-            result, seen, invalid = {}, set(), set()
-            for row in self.dividend_rows(codes, year, year):
-                code = str(row['code']).split('.')[0]
-                fiscal = _optional_date(row['report_date'])
-                key = (code, fiscal, row['paid'])
-                value = _float_number(row['bonus_amount_rmb'])
-                if fiscal is None or fiscal.year != year or key in seen or value is None or value < 0:
-                    invalid.add(code)
-                else:
-                    result[code] = result.get(code, 0.0) + value * 10000  # 万元 -> 元
-                seen.add(key)
-            return {code: dict(cash_dividend=None if code in invalid else result.get(code)) for code in codes}
-
-        def financials(self, year, codes):
-            result = {}
-            tables = [('indicator', 'adjusted_profit'), ('income', 'np_parent_company_owners'),
-                      ('cash_flow', 'net_operate_cash_flow')]
-            for offset in range(0, len(codes), self.batch_size):
-                batch = codes[offset:offset + self.batch_size]
-                values = {c: {} for c in batch}
-                # Separate tables preserve a missing statement as missing, not an inner-join disappearance.
-                for name, field in tables:
-                    table = _apis[name]
-                    q = self.query(table.code, table.statDate, table.pubDate, getattr(table, field)).filter(
-                        table.code.in_([self.codes[c] for c in batch]))
-                    frame = _apis['get_fundamentals'](q, statDate=str(year))
-                    rows = _checked_records(frame, ('code', 'statDate', 'pubDate', field), name)
-                    seen = set()
-                    for row in rows:
-                        code = str(row['code']).split('.')[0]
-                        if code not in batch or code in seen:
-                            raise ValueError('年度财报代码重复或越界。')
-                        seen.add(code)
-                        published = _optional_date(row['pubDate'])
-                        if (_optional_date(row['statDate']) == datetime.date(year, 12, 31)
-                                and published is not None and published <= self.day):
-                            values[code][field] = _float_number(row[field])
-                for code, row in values.items():
-                    result[code] = dict(adjusted_profit=row.get('adjusted_profit'),
-                        net_profit=row.get('np_parent_company_owners'), operating_cashflow=row.get('net_operate_cash_flow'))
-            return result
-
-        def capital_stable(self, code, start_year):
-            if code not in self.capital:
-                t = self.finance.STK_CAPITAL_CHANGE
-                self.capital[code] = sorted(self.read(t,
-                    ('id', 'change_date', 'pub_date', 'share_total', 'change_reason'),
-                    [t.code == self.codes[code], t.change_date <= self.day, t.pub_date <= self.day]),
-                    key=lambda row: (str(row['change_date']), int(row['id'])))
-            baseline = None
-            for row in self.capital[code]:
-                day, shares = _optional_date(row['change_date']), _float_number(row['share_total'])
-                if day is None or shares is None or shares <= 0:
-                    return False
-                if day <= datetime.date(start_year, 1, 1):
-                    baseline = shares
-                    continue
-                reason = str(row['change_reason'] or '')
-                ordinary = reason in ('增发A股上市', '增发上市', '超额配售', '回购注销',
-                                      '股份回购注销', '股权激励股份回购注销')
-                if (baseline is None or (shares != baseline and not ordinary)
-                        or re.search(r'拆|合股|缩股|配股|送股|转增', reason)):
-                    return False
-                baseline = shares
-            return baseline is not None
-
-        def per_share_dividends(self, code, start_year, end_year):
-            if code not in self.events:
-                self.events[code] = list(self.dividend_rows([code]))
-            annual, seen, invalid, action = {}, set(), set(), False
-            for row in self.events[code]:
-                # A corporate action after the fiscal window also invalidates comparison with today's price.
-                if row['paid'].year >= start_year:
-                    note = str(row['implementation_bonusnote'] or '')
-                    if (any((_float_number(row[f]) or 0) > 0 for f in ('dividend_ratio', 'transfer_ratio'))
-                            or re.search(r'送\s*[1-9]|转增?\s*[1-9]|配股|拆股|合股', note)):
-                        action = True
-                fiscal = _optional_date(row['report_date'])
-                if fiscal is None or not start_year <= fiscal.year <= end_year:
-                    continue
-                year, key = fiscal.year, (fiscal, row['paid'])
-                rate = _float_number(row['bonus_ratio_rmb'])
-                note = str(row['implementation_bonusnote'] or '')
-                if key in seen or rate is None or rate < 0 or re.search(r'差异|部分股东|公众股|不参与', note):
-                    invalid.add(year)
-                else:
-                    annual[year] = annual.get(year, 0.0) + rate / 10  # 元/10股 -> 元/股
-                seen.add(key)
-            if action or not self.capital_stable(code, start_year):
-                return {year: None for year in range(start_year, end_year + 1)}
-            return {year: None if year in invalid else annual.get(year) for year in range(start_year, end_year + 1)}
-
-        def per_share_dividends_by_period(self, code, end_year, periods):
-            return {p: self.per_share_dividends(code, end_year - p + 1, end_year) for p in periods}
-
-        def prices(self, code, start_year, end_year):
-            if code not in self.daily:
-                frame = get_price(self.codes[code], start_date=datetime.date(start_year, 1, 1),
-                    end_date=self.day, frequency='daily', fields=['close'], fq=None, skip_paused=True, panel=False)
-                if frame is None or 'close' not in frame.columns:
-                    raise ValueError('历史日线缺失。')
-                daily = [(as_date(day), _float_number(row['close'])) for day, row in frame.iterrows()]
-                days = [day for day, _ in daily]
-                if days != sorted(set(days)) or any(not datetime.date(start_year, 1, 1) <= d <= self.day for d in days):
-                    raise ValueError('日线日期重复、乱序或越界。')
-                self.daily[code] = daily
-            output = {}
-            for year in range(start_year, end_year + 1):
-                values = [(d, v) for d, v in self.daily[code] if d.year == year]
-                valid = (values and values[0][0].month == 1 and values[-1][0].month == 12
-                         and all(v is not None and v > 0 for _, v in values))
-                output[year] = dict(year_average_close=sum(v for _, v in values) / len(values) if valid else None,
-                    price_date=values[-1][0].isoformat() if values else None)
-            return output
-
-        def current_dividend_yield(self, code):
-            year = self.day.year - 1
-            annual = self.per_share_dividends(code, year - 2, year)
-            daily = self.daily.get(code, [])
-            day, close = daily[-1] if daily else (None, None)
-            fresh = day is not None and (self.day - day).days <= 10 and close is not None and close > 0
-            history = [dict(fiscal_year=y, yield_pct=100 * annual[y] / close
-                            if annual.get(y) is not None and fresh else None) for y in range(year, year - 3, -1)]
-            return dict(current_yield=history[0]['yield_pct'], dividend_yield_history=history,
-                latest_price=close, latest_price_date=day.isoformat() if day else None,
-                dividend_annual_per_share=annual.get(year), dividend_fiscal_year=year)
-
-    def calculate(day, source=None):
-        source = source or JoinQuantSource(day, settings['batch_size'])
-        def progress(stage, processed=None, total=None):
-            suffix = ' · {}/{} 只'.format(processed, total) if total is not None else ''
-            _progress_note(stage + suffix)
-        items, outcomes, stocks = screen_cash_cows(source, day.year - 1, progress)
-        updated = china_now().isoformat() + '+08:00'
-        run_id, payload = uuid.uuid4().hex, {}
-        for period in PERIODS:
-            if len(outcomes[period]) != len(stocks):
-                raise ValueError('奶牛股分类未完成，不替换数据库结果。')
-            items[period].sort(key=lambda row: (-row['average_yield'], row['code']))
-            excluded = sum(v == 'excluded' for v in outcomes[period].values())
-            insufficient = sum(v == 'insufficient' for v in outcomes[period].values())
-            snapshot = dict(as_of=day.isoformat(), updated_at=updated, run_id=run_id,
-                years=period, start_year=day.year - period, end_year=day.year - 1,
-                universe_count=len(stocks), evaluated_count=excluded + len(items[period]),
-                excluded_count=excluded, insufficient_count=insufficient, matched_count=len(items[period]),
-                source='聚宽', rule_version=RULE_VERSION)
-            payload[str(period)] = dict(snapshot=snapshot, items=items[period])
-        # Do not let an unavailable data source turn the whole market into a valid empty selection.
-        if all(row['snapshot']['evaluated_count'] == 0 for row in payload.values()):
-            raise ValueError('全市场均缺少可判定资料，保留已有结果。')
-        json.dumps(payload, allow_nan=False)
-        return payload
-
-    def save(Session, day, payload):
-        with session_scope(Session) as session:
-            old = session.query(CashCowSnapshot).filter_by(id=1).with_for_update().first()
-            if old is not None and old.as_of_date > day:
-                raise ValueError('历史日期不能覆盖更新的奶牛股快照。')
-            for period, result in payload.items():
-                previous = (old.payload.get(period, {}).get('snapshot', {}) if old else {})
-                result['snapshot'].update(previous_updated_at=previous.get('updated_at'),
-                    previous_previous_updated_at=previous.get('previous_updated_at'))
-            if old is None:
-                old = CashCowSnapshot(id=1)
-                session.add(old)
-            old.as_of_date, old.updated_at, old.payload = day, china_now(), payload
-            session.commit()
-
-    def run(end_date=settings['end_date'], write_database=True, force_refresh=False):
-        if not all(isinstance(value, bool) for value in (write_database, force_refresh)):
-            raise ValueError('write_database、force_refresh 必须为布尔值。')
-        moment = china_now()
-        day = as_date(end_date) if end_date else moment.date()
-        if day > moment.date():
-            raise ValueError('采集日期不能晚于今天。')
-        days = _apis['get_trade_days'](end_date=_closed_day(day, moment), count=1)
-        if days is None or len(days) != 1:
-            raise ValueError('交易日历不可用。')
-        day = as_date(days[0])
-        if day > _closed_day(as_date(end_date) if end_date else moment.date(), moment):
-            raise ValueError('交易日历返回未收市或未来日期。')
-        _progress_note('检查奶牛股最近结果')
-        engine = connect_database(_config) if write_database else None
-        try:
-            if engine is not None:
-                Base.metadata.create_all(engine)
-                Session = sessionmaker(bind=engine)
-                with session_scope(Session) as session:
-                    old = session.query(CashCowSnapshot).filter_by(id=1).first()
-                    if (not force_refresh and old is not None and old.as_of_date == day
-                            and set(old.payload) == {'3', '5', '10'}
-                            and all(r['snapshot'].get('rule_version') == RULE_VERSION for r in old.payload.values())):
-                        _progress_note('奶牛股当日已采集，跳过重复计算')
-                        return preview(old.payload)
-            payload = calculate(day)
-            if engine is not None:
-                save(Session, day, payload)
-            return preview(payload)
-        finally:
-            if engine is not None:
-                engine.dispose()
-
-    def preview(payload):
-        return pd.DataFrame([dict(years=int(p), code=r['code'], name=r['name'],
-            average_yield=r['average_yield'], current_yield=r.get('current_yield'))
-            for p, result in payload.items() for r in result['items']],
-            columns=['years', 'code', 'name', 'average_yield', 'current_yield'])
-
-    return SimpleNamespace(**locals())
-# END EMBEDDED CASH COW
 
 # 注册信息：(策略工厂, 写入模式, 预览字段)。顺序由顶部 STRATEGY_ORDER 控制。
 STRATEGY_SPECS = {
-    '奶牛股': (_cash_cow_strategy, 'latest', ('years', 'code', 'name', 'average_yield', 'current_yield')),
     '估值标尺': (_valuation_ruler_strategy, 'history', ()),
-    '创红比': (_growth_dividend_strategy, 'history', ()),
     '个股机构持仓': (_ownership_strategy, 'changes',
         ('kind', 'code', 'date')),
     '行业动量': (_momentum_strategy, 'append',
@@ -5865,8 +5193,6 @@ def run_all(strategy_names=None, options=None, db_config=None, preview_rows=None
                         row.update(status='PARTIAL' if unresolved else ('PENDING' if result['remaining'] else 'SUCCESS'),
                                    rows=result['added'], archive=True, remaining=result['remaining'],
                                    skipped=result['skipped'], gaps=unresolved, unit=result.get('unit', '日'))
-                        if name == '创红比':
-                            row['coverage'] = result.get('indices', {})
                     else:
                         row.update(status='SUCCESS', rows=len(result))
             except KeyboardInterrupt:
@@ -5885,9 +5211,7 @@ def run_all(strategy_names=None, options=None, db_config=None, preview_rows=None
                 print('\n【{}】历史档案：新增 {} {}，已完成跳过 {} {}，待续跑 {} {}，失败缺口 {} {}{}。'.format(
                     name, row['rows'], row['unit'], row['skipped'], row['unit'], row['remaining'], row['unit'],
                     row['gaps'], row['unit'], '；未覆盖最新选股' if write_mode != 'history' else ''))
-                for code, coverage in row.get('coverage', {}).items():
-                    print('  {}：可见起点 {}，可用 {} 日；起点之前是否存在更早行情未知。'.format(
-                        code, coverage['observed_first_day'] or '无', coverage['available']))
+
             elif row['status'] == 'SUCCESS':
                 label = {'changes': '新增或更新', 'latest': '当前选股结果', 'append': '新增', 'history': '新增'}[write_mode]
                 print('\n【{}】成功：{} {} 条，耗时 {:.2f} 秒。'.format(name, label, row['rows'], row['elapsed_seconds']))
@@ -5904,7 +5228,7 @@ def run_all(strategy_names=None, options=None, db_config=None, preview_rows=None
             else:
                 print('\n【{}】失败：{}；已提交部分保留，继续后续策略。'.format(name, row['error']))
             del result
-        print('\n采集结果汇总\n策略 | 结果 | 条数（高股息/奶牛股为当前结果，机构持仓为新增或更新，其余为新增） | 耗时（秒）')
+        print('\n采集结果汇总\n策略 | 结果 | 条数（高股息为当前结果，机构持仓为新增或更新，其余为新增） | 耗时（秒）')
         for row in summary:
             print('{} | {} | {} | {:.2f}'.format(row['strategy'], row['status'],
                   row['rows'] if row['rows'] is not None else '未完成', row['elapsed_seconds']))

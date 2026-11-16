@@ -78,7 +78,7 @@ def test_empty_growth_prices_explain_missing_collection_and_keep_cached_page(set
     assert after['file'] == previous['file'] and after['updated_at'] == previous['updated_at']
     assert after['progress']['status'] == 'failed'
     assert 'SOURCE_DATA_INCOMPLETE' in after['error']
-    assert '仅写入交易日历不能同步' in after['error']
+    assert '请在页面更新' in after['error']
     assert count(service) == saved_count and entry(cache, module)['ready']
 
 
@@ -149,11 +149,12 @@ def test_append_preserves_public_history_and_conflicts_and_old_snapshots(setup, 
     cache.refresh(module,background=False,full=full)
     assert digest(first) == before  # Published snapshots are immutable.
     assert entry(cache,module)['ready'] and not entry(cache,module)['error']
-    assert '冲突' in entry(cache,module)['sync_note'] and '缺失' in entry(cache,module)['sync_note']
+    assert ('更新' if module == 'growth-dividend' else '冲突') in entry(cache,module)['sync_note']
+    assert '缺失' in entry(cache,module)['sync_note']
     with service.db() as db:
         assert db.execute('SELECT COUNT(*) FROM comparisons').fetchone()[0] > 0
         if module == 'growth-dividend':
-            assert db.execute('SELECT close FROM points WHERE code=? AND trade_date=?',('399006',str(DAY))).fetchone()[0] == 888
+            assert db.execute('SELECT close FROM points WHERE code=? AND trade_date=?',('399006',str(DAY))).fetchone()[0] == 1000
             assert db.execute('SELECT source FROM points WHERE trade_date=?',(str(public_day),)).fetchone()[0] == 'public'
             assert db.execute('SELECT close FROM points WHERE code=? AND trade_date=?',('000922',str(DAY))).fetchone()[0] == 1001
         else:
@@ -358,7 +359,7 @@ def test_history_sync_preserves_public_status_and_success_time(setup,engine,modu
     assert entry(cache,module)['updated_at']==MOMENT.isoformat()
     if module=='growth-dividend':
         assert after['sync_summary']['imported_at']==MOMENT.isoformat()
-        assert bool(after['sync_summary']['conflicts'])==(outcome=='conflict')
+        assert bool(after['sync_summary']['updated'])==(outcome=='conflict')
         assert bool(sum(value['missing'] for value in after['sync_summary']['indices'].values()))==(outcome=='missing')
     else:
         assert after['joinquant_import_at']==MOMENT.isoformat()

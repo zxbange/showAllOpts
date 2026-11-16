@@ -33,7 +33,7 @@ def provider(monkeypatch, days=DAYS, failures=None):
         check_cancel()
         calls.append((index.code, start, end, set(expected_dates)))
         close = {'399006': 2500, '000922': 5000, '000688': 1250}[index.code]
-        return {day: IndexQuote(day, close, 'fixture', 'https://example.test/index')
+        return {day: IndexQuote(day, close, '腾讯财经', 'https://example.test/index')
                 for day in expected_dates if day in days and (index.code, day) not in failures}
     monkeypatch.setattr(m, 'fetch_prices', prices)
     return calls
@@ -67,8 +67,8 @@ def test_incremental_only_requests_today_and_never_reloads_completed_years(monit
     assert calls == []
 
 
-@pytest.mark.parametrize('original_source', ['聚宽（当前平台可见历史）', 'fixture'])
-def test_public_today_comparison_never_overwrites_confirmed_history(monitor, monkeypatch, original_source):
+@pytest.mark.parametrize('original_source', ['聚宽（当前平台可见历史）', '腾讯财经'])
+def test_public_today_replaces_legacy_and_records_corrections(monitor, monkeypatch, original_source):
     provider(monkeypatch)
     day = MOMENT.date()
     saved = ('399006', str(day), 2345.123456789, original_source,
@@ -78,13 +78,13 @@ def test_public_today_comparison_never_overwrites_confirmed_history(monitor, mon
     monitor.refresh(background=False, moment=MOMENT)
     with monitor.db() as db:
         assert tuple(db.execute("SELECT * FROM points WHERE code='399006' AND trade_date=?",
-                                (str(day),)).fetchone()) == saved
+                                (str(day),)).fetchone())[2:4] == (2500, '腾讯财经')
     status = monitor.status(MOMENT)
     assert status['comparison_conflicts'] == 1
     assert status['recent_conflicts'][0]['published_close'] == saved[2]
     assert status['recent_conflicts'][0]['candidate_close'] == 2500
-    assert status['error'] and '未覆盖' in status['error']
-    assert status['last_success_at'] is None
+    assert status['error'] is None
+    assert status['last_success_at']
     # Repeated candidates are not duplicated, and the audit survives a new service.
     monitor.refresh(background=False, moment=MOMENT)
     replacement = m.GrowthDividend(monitor.settings, client_factory=lambda: nullcontext(object()))
@@ -92,7 +92,7 @@ def test_public_today_comparison_never_overwrites_confirmed_history(monitor, mon
     replacement.stop()
 
 
-def test_equal_public_today_does_not_replace_joinquant_provenance(monitor, monkeypatch):
+def test_equal_public_today_replaces_joinquant_provenance(monitor, monkeypatch):
     provider(monkeypatch)
     saved = ('399006', str(MOMENT.date()), 2500.0, '聚宽（当前平台可见历史）',
              'https://example.test/original', '2026-11-10T10:00:00+00:00')
@@ -101,7 +101,7 @@ def test_equal_public_today_does_not_replace_joinquant_provenance(monitor, monke
     monitor.refresh(background=False, moment=MOMENT)
     with monitor.db() as db:
         assert tuple(db.execute("SELECT * FROM points WHERE code='399006' AND trade_date=?",
-                                (str(MOMENT.date()),)).fetchone()) == saved
+                                (str(MOMENT.date()),)).fetchone())[2:4] == (2500, '腾讯财经')
     assert monitor.status(MOMENT)['comparison_conflicts'] == 0
     assert monitor.status(MOMENT)['error'] is None
 

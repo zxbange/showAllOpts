@@ -114,12 +114,12 @@ def copy_history(cache, module, full=False):
                 from app.services import growth_dividend_import as importer
                 from app.services.growth_dividend import close_cutoff
                 days, points = importer.read_source(source, close_cutoff(moment), check)
-                stage[0] = '追加缺失指数历史，保留已有值'
+                stage[0] = '同步外部指数历史'
                 report(stage[0], percent=65)
                 summary = importer.publish(staged, days, points, check)
                 missing = sum(item['missing'] for item in summary['indices'].values())
-                note = '新增 {} 条；冲突 {} 条未覆盖；源日历缺失 {} 条。'.format(
-                    summary['inserted'], summary['conflicts'], missing)
+                note = '新增 {} 条；更新 {} 条；缺失 {} 条。'.format(
+                    summary['inserted'], summary['updated'], missing)
                 summary['imported_at'] = moment.isoformat()
                 sync_metadata = dict(sync_summary=summary)
             elif index_valuation.available(source):

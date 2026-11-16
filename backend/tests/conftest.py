@@ -66,3 +66,13 @@ def valuation_worker_offline(monkeypatch):
     # Production worker is tested explicitly with a stub source; never call HTTP
     # from unrelated app/lifespan suites.
     monkeypatch.setenv('VALUATION_RULER_WORKER_ENABLED', 'false')
+
+
+@pytest.fixture(autouse=True)
+def public_result_database(tmp_path, monkeypatch):
+    """Public collectors exercise real persistence without touching configured MySQL."""
+    from app.services import public_publication
+    database = create_engine('sqlite:///' + str(tmp_path / 'public-source.sqlite'))
+    monkeypatch.setattr(public_publication, 'build_engine', lambda *a, **kw: database)
+    yield database
+    database.dispose()

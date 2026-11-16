@@ -1,4 +1,3 @@
-"""Generated from collectors/rules/cash_cow.py; use sync_cash_cow.py."""
 import math
 
 def numeric(value):

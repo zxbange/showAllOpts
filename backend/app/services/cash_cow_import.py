@@ -1,4 +1,5 @@
-"""Read the small JoinQuant result from the existing immutable local cache."""
+"""Validate, persist and restore the authoritative external cash-cow snapshot."""
+from datetime import date, datetime, timezone
 import math
 
 from sqlalchemy import select
@@ -7,14 +8,18 @@ from app.models.cash_cow import CashCowSnapshot
 from app.services.cash_cow_rules import PERIODS, evaluate_year, finish_stock
 
 RULE_VERSION = 'cash_cow_static_display_v2'
+PUBLIC_SOURCE = '东方财富公开数据接口'
 
 
 def validate_snapshot(connection):
     rows = connection.execute(select(CashCowSnapshot.__table__)).mappings().all()
+    if len(rows) != 1 or rows[0]['id'] != 1:
+        raise SnapshotDataError('奶牛股缺少完整结果，请在页面重新采集。')
+    validate_payload(rows[0])
+
+
+def validate_payload(row):
     try:
-        if len(rows) != 1 or rows[0]['id'] != 1:
-            raise ValueError('Expected one complete snapshot')
-        row = rows[0]
         payload = row['payload']
         if set(payload) != {str(p) for p in PERIODS}:
             raise ValueError('Missing screening window')
@@ -24,7 +29,7 @@ def validate_snapshot(connection):
             meta, items = result['snapshot'], result['items']
             run_ids.add(meta['run_id'])
             if (meta['years'] != period or meta['as_of'] != row['as_of_date'].isoformat()
-                    or meta['rule_version'] != RULE_VERSION or meta['source'] != '聚宽'
+                    or meta['rule_version'] != RULE_VERSION or meta['source'] != PUBLIC_SOURCE
                     or meta['end_year'] != row['as_of_date'].year - 1
                     or meta['start_year'] != meta['end_year'] - period + 1):
                 raise ValueError('Mismatched provenance')
@@ -52,7 +57,7 @@ def validate_snapshot(connection):
         if len(run_ids) != 1 or not next(iter(run_ids)):
             raise ValueError('Mixed publications')
     except (KeyError, TypeError, ValueError, AttributeError, OverflowError) as exc:
-        raise SnapshotDataError('奶牛股结果不完整或口径不一致，请重新运行聚宽采集脚本。') from exc
+        raise SnapshotDataError('奶牛股结果不完整或口径不一致，请在页面重新采集外部数据。') from exc
 
 
 def latest_cached(cache, years):
@@ -60,6 +65,28 @@ def latest_cached(cache, years):
     try:
         with cache.session('cash-cow') as session:
             row = session.get(CashCowSnapshot, 1)
-            return row.payload[str(years)] if row else None
+            result = row.payload.get(str(years)) if row else None
+            return result if result and result.get('snapshot', {}).get('source') == PUBLIC_SOURCE else None
     except CacheUnavailable:
         return None
+
+
+def write_public(engine, payload, check):
+    meta = payload['3']['snapshot']
+    stamp = datetime.fromisoformat(meta['updated_at']).astimezone(timezone.utc).replace(tzinfo=None)
+    record = dict(id=1, as_of_date=date.fromisoformat(meta['as_of']), updated_at=stamp, payload=payload)
+    validate_payload(record)
+    table = CashCowSnapshot.__table__
+    with engine.begin() as conn:
+        table.create(conn, checkfirst=True)
+        old = conn.execute(select(table).where(table.c.id == 1).with_for_update()).mappings().first()
+        if old:
+            old_meta = old['payload'].get('3', {}).get('snapshot', {})
+            if old_meta.get('source') == PUBLIC_SOURCE and (old['as_of_date'], old['updated_at']) > (record['as_of_date'], stamp):
+                validate_payload(old)
+                return old['payload']
+            conn.execute(table.update().where(table.c.id == 1).values(**record))
+        else:
+            conn.execute(table.insert().values(**record))
+        check()
+    return payload

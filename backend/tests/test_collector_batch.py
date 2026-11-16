@@ -128,7 +128,7 @@ def test_batch_configuration_and_local_entrypoints_have_one_definition():
                            for target in node.targets)]
     assert len(definitions) == 1
     config = ast.literal_eval(definitions[0].value)
-    assert len(config) == 11
+    assert len(config) == 9
     for scope in [tree] + [node for node in ast.walk(tree) if isinstance(node, (ast.FunctionDef, ast.ClassDef))]:
         names = [node.name for node in scope.body if isinstance(node, (ast.FunctionDef, ast.ClassDef))]
         assert len(names) == len(set(names)), names
@@ -150,15 +150,15 @@ def test_pasted_notebook_with_shared_connector_and_no_other_strategy_files(batch
         namespace.update({name: object() for name in
                           ('datetime', 'bool', 'int', 'float', 'str', 'type', 'isinstance', 'any', 'min')})
     exec(compile(source, '<ipython-input-test>', 'exec'), namespace)
-    assert len(namespace['STRATEGIES']) == 11
-    assert {'估值标尺', '创红比'} <= namespace['STRATEGIES'].keys()
+    assert len(namespace['STRATEGIES']) == 9
+    assert {'估值标尺'} <= namespace['STRATEGIES'].keys()
     # Construct every real strategy without accessing any project files.
     for name in namespace['STRATEGY_ORDER']:
         assert callable(namespace['_load_strategy'](name, CONFIG, {}))
     events = []
     def factory(name):
         def run(skip_existing=False):
-            assert skip_existing is (name not in ('高股息选股', '奶牛股'))
+            assert skip_existing is (name not in ('高股息选股',))
             events.append(name)
             return []
         return lambda apis, config: SimpleNamespace(run=run)
@@ -695,24 +695,24 @@ def test_partial_archive_error_names_strategy_and_gap_count(batch, monkeypatch, 
         report.update(gaps=[], unresolved_gaps=3)
     monkeypatch.setattr(batch, '_load_strategy', lambda *args: lambda **kwargs: report)
     with pytest.raises(batch.BatchRunError) as caught:
-        batch.run_all(['创红比'], db_config=CONFIG)
+        batch.run_all(['估值标尺'], db_config=CONFIG)
     gap_count = 3 if saved_gaps else 1
-    assert '创红比（缺口 {} 指数日）'.format(gap_count) in str(caught.value)
+    assert '估值标尺（缺口 {} 指数日）'.format(gap_count) in str(caught.value)
     assert caught.value.summary[0]['status'] == 'PARTIAL'
     assert caught.value.summary[0]['rows'] == 2
 
 
 def test_mixed_batch_error_lists_failures_and_gaps_after_later_tasks_finish(batch, monkeypatch):
     called = []
-    names = ['行业动量', '创红比', '估值标尺', '抱团拥挤度']
+    names = ['行业动量', '估值标尺', '微盘新高新低', '抱团拥挤度']
     def loader(name, *_):
         def run(**kwargs):
             called.append(name)
             if name == '行业动量':
                 raise RuntimeError('synthetic failure')
-            if name == '创红比':
-                return dict(added=1, skipped=0, remaining=0, gaps=[{}], unit='指数日')
             if name == '估值标尺':
+                return dict(added=1, skipped=0, remaining=0, gaps=[{}], unit='指数日')
+            if name == '微盘新高新低':
                 return dict(added=0, skipped=0, remaining=2, gaps=[])
             return []
         return run
@@ -721,4 +721,4 @@ def test_mixed_batch_error_lists_failures_and_gaps_after_later_tasks_finish(batc
         batch.run_all(names, db_config=CONFIG)
     assert called == names
     assert [row['status'] for row in caught.value.summary] == ['FAILED', 'PARTIAL', 'PENDING', 'SUCCESS']
-    assert str(caught.value) == '采集未全部完成：行业动量（执行失败）、创红比（缺口 1 指数日）；请查看控制台结果。'
+    assert str(caught.value) == '采集未全部完成：行业动量（执行失败）、估值标尺（缺口 1 指数日）；请查看控制台结果。'

@@ -396,19 +396,19 @@ export function GrowthDividendPage() {
         </div>
         {status?.sync_summary && (
           <p role="status">
-            聚宽同步：新增 {status.sync_summary.inserted} 条， 已存在 {status.sync_summary.existing}{' '}
-            条，冲突保留原值 {status.sync_summary.conflicts} 条。
+            数据库同步：新增 {status.sync_summary.inserted} 条， 已存在 {status.sync_summary.existing}{' '}
+            条。
             {status.sync_summary.coverage}
           </p>
         )}
         {!!status?.comparison_conflicts && (
           <details>
-            <summary>公开源对照有 {status.comparison_conflicts} 条差异，已保留原值</summary>
+            <summary>外部行情修正记录：{status.comparison_conflicts} 条</summary>
             <ul>
               {status.recent_conflicts?.map((item) => (
                 <li key={`${item.code}-${item.trade_date}-${item.candidate_close}`}>
                   {item.trade_date} · {item.code}：已保存 {item.published_close}，公开源候选{' '}
-                  {item.candidate_close}（未覆盖）
+                  {item.candidate_close}（采集值）
                 </li>
               ))}
             </ul>

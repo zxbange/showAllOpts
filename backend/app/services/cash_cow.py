@@ -1,4 +1,4 @@
-"""Shared 3/5/10-year screen; retain public collection alongside synced results.
+"""Shared external 3/5/10-year screen, published to MySQL and local SQLite.
 
 Only complete, validated observations can qualify. Interrupted refreshes never
 replace a published snapshot. All currency amounts are CNY; rates use percent.
@@ -6,7 +6,8 @@ replace a published snapshot. All currency amounts are CNY; rates use percent.
 from app.services.system_runtime import source_client
 from app.services.collection_notifications import notify_collection
 from app.services.cash_cow_rules import PERIODS, evaluate_year, finish_stock, screen_cash_cows
-from app.services.cash_cow_import import latest_cached
+from app.services.cash_cow_import import latest_cached, write_public, PUBLIC_SOURCE
+from app.services.public_publication import PublicPublication
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 import json
@@ -147,6 +148,8 @@ class CashCowScreen:
     def _read_result(self, db):
         row = db.execute('SELECT payload FROM snapshots WHERE years=?', (self.years,)).fetchone()
         result = json.loads(row[0]) if row else dict(snapshot=None, items=[])
+        if result.get('snapshot') and result['snapshot'].get('source') != PUBLIC_SOURCE:
+            result = dict(snapshot=None, items=[])
         if self.cache is not None:
             imported = latest_cached(self.cache, self.years)
             def freshness(value):
@@ -227,6 +230,7 @@ class CashCowScreen:
         from app.services.cash_cow_source import EastmoneyCashCowSource, CashCowSourceError
         marker = self.cancel_path(state)
         published = False
+        publication = None
         started = monotonic()
         run_outcome = 'failed'
         LOG.info('Cash cow collection started source=eastmoney periods=3,5,10')
@@ -245,7 +249,37 @@ class CashCowScreen:
                 state['total'] = total
             self.write_state(state)
 
+        def prepare(payloads):
+            result = {}
+            for period in PERIODS:
+                check_cancel()
+                result[str(period)] = json.dumps(payloads[str(period)], ensure_ascii=False, allow_nan=False)
+            return result
+
+        def apply(payloads, db):
+            meta = json.loads(payloads['3'])['snapshot']
+            for period in PERIODS:
+                db.execute('INSERT OR REPLACE INTO snapshots VALUES(?,?)',
+                    (period, payloads[str(period)]))
+            state.update(active=False, last_success_at=meta['updated_at'],
+                previous_success_at=meta.get('previous_updated_at'),
+                previous_previous_success_at=meta.get('previous_previous_updated_at'),
+                processed=meta['universe_count'], total=meta['universe_count'],
+                stage='3/5/10年筛选完成', error=None)
+            if state.get('current_scheduled_slot') and meta['as_of'] >= state['current_scheduled_slot']:
+                state['scheduled_success_slot'] = state['current_scheduled_slot']
+            db.execute('UPDATE state SET payload=? WHERE id=1', (json.dumps(state, ensure_ascii=False),))
+
         try:
+            publication = PublicPublication(self)
+            if publication.resume(write_public, apply, check_cancel, prepare):
+                with self.db() as db:
+                    restored = json.loads(db.execute('SELECT payload FROM snapshots WHERE years=3').fetchone()[0])
+                if restored['snapshot']['as_of'] >= moment.astimezone(CHINA).date().isoformat():
+                    published, run_outcome = True, 'success'
+                    return
+                state.update(active=True, processed=0, total=None, stage='读取本期公开数据')
+                self.write_state(state)
             end_year = moment.astimezone(CHINA).year - 1
             with self.client_factory() as client:
                 source = (self.source_factory or EastmoneyCashCowSource)(client, check_cancel=check_cancel,
@@ -275,26 +309,14 @@ class CashCowScreen:
                         years=period, start_year=end_year - period + 1, end_year=end_year,
                         universe_count=len(stocks), evaluated_count=excluded + len(items[period]),
                         excluded_count=excluded, insufficient_count=insufficient, matched_count=len(items[period]),
-                        source='东方财富公开数据接口', rule_version=RULE_VERSION)
-                    payloads[period] = json.dumps(dict(snapshot=snapshot, items=items[period]),
-                                                 ensure_ascii=False, allow_nan=False)
-                with self.publication_lock():
-                    check_cancel()
-                    success_state = dict(state, active=False, last_success_at=updated_at,
-                        previous_success_at=state.get('last_success_at'),
-                        previous_previous_success_at=state.get('previous_success_at'),
-                        processed=len(stocks), total=len(stocks), stage='3/5/10年筛选完成')
-                    if state.get('current_scheduled_slot'):
-                        success_state['scheduled_success_slot'] = state['current_scheduled_slot']
-                    with self.db() as db:
-                        for period, payload in payloads.items():
-                            db.execute('INSERT OR REPLACE INTO snapshots VALUES(?,?)', (period, payload))
-                        db.execute('UPDATE state SET payload=? WHERE id=1',
-                                   (json.dumps(success_state, ensure_ascii=False),))
-                    state.clear()
-                    state.update(success_state)
-                    published = True
-                    run_outcome = 'success'
+                        source=PUBLIC_SOURCE, rule_version=RULE_VERSION)
+                    payloads[str(period)] = dict(snapshot=snapshot, items=items[period])
+                state['stage'] = '写入数据库并发布本地结果'
+                self.write_state(state)
+                publication.stage(payloads)
+                # Remote I/O does not hold the UI/cancel publication lock.
+                publication.resume(write_public, apply, check_cancel, prepare)
+                published, run_outcome = True, 'success'
                 for period in PERIODS:
                     LOG.info('Cash cow period complete years=%s matched=%s excluded=%s insufficient=%s',
                              period, len(items[period]),
@@ -311,6 +333,8 @@ class CashCowScreen:
         finally:
             state['active'] = False
             try:
+                if publication is not None:
+                    publication.close()
                 if not published:
                     with self.publication_lock():
                         self.write_state(state)

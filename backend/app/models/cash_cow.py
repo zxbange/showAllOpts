@@ -1,4 +1,4 @@
-"""Latest complete JoinQuant cash-cow result; three windows publish together."""
+"""Latest complete External cash-cow result; three windows publish together."""
 from sqlalchemy import Column, Date, DateTime, Integer, JSON
 from app.models.base import Base
 

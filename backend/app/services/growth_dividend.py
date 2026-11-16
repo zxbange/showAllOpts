@@ -3,6 +3,8 @@ from app.core.history_sync import mark_sync_owner, clear_sync_owner, database_sy
 from app.services.system_runtime import source_client
 from app.services.system_configuration import task_config
 from app.services.collection_notifications import notify_collection
+from app.services.public_publication import PublicPublication
+from app.services.growth_dividend_import import SOURCES, apply_points, write_public
 from contextlib import contextmanager
 from datetime import date, datetime, time, timedelta, timezone
 import json
@@ -158,8 +160,8 @@ class GrowthDividend:
             'SELECT i.code,c.trade_date FROM calendar c CROSS JOIN instruments i '
             'LEFT JOIN points p ON p.code=i.code AND p.trade_date=c.trade_date '
             'WHERE c.trade_date>=? AND c.trade_date>=i.first_date AND c.trade_date<=? '
-            'AND p.trade_date IS NULL ORDER BY c.trade_date DESC,i.code',
-            (str(START), str(cutoff))).fetchall()
+            'AND (p.trade_date IS NULL OR p.source NOT IN (?,?)) ORDER BY c.trade_date DESC,i.code',
+            (str(START), str(cutoff), *SOURCES)).fetchall()
 
     def status(self, moment=None):
         moment = moment or now()
@@ -216,7 +218,7 @@ class GrowthDividend:
         code_keys = {index.code: index.key for index in INDEXES}
         updated = None
         for row in rows:
-            if row['code'] not in code_keys or (row['code'] == '000688' and row['trade_date'] < '2020-01-02'):
+            if row['source'] not in SOURCES or row['code'] not in code_keys or (row['code'] == '000688' and row['trade_date'] < '2020-01-02'):
                 continue
             by_date.setdefault(row['trade_date'], {})[code_keys[row['code']]] = row['close']
             provenance.setdefault(row['trade_date'], {})[code_keys[row['code']]] = row['source']
@@ -240,7 +242,7 @@ class GrowthDividend:
                     updated_at=updated, status=self.status(moment),
                     indices=[dict(key=index.key, code=index.code, name=index.name,
                                   first_date=str(index.first_date)) for index in INDEXES],
-                    sources=['腾讯财经', '东方财富（备用）', '聚宽（仅已同步记录）'], calendar_source=CALENDAR_URL,
+                    sources=['腾讯财经', '东方财富（备用）'], calendar_source=CALENDAR_URL,
                     star50_base_date='2019-12-31', history_start=str(START))
 
     def refresh(self, background=True, *, moment=None, slot=None, trigger='manual'):
@@ -288,13 +290,37 @@ class GrowthDividend:
         started = monotonic()
         outcome = 'failed'
         failed_windows = 0
+        publication = None
         LOG.info('Growth/dividend collection started source=public_index trigger=%s cutoff=%s', state.get('trigger', '-'), cutoff)
 
         def check_cancel():
             if self.stop_event.is_set() or marker.exists():
                 raise CollectionCancelled()
 
+        def apply(payload, db):
+            apply_points(db, payload['points'], check_cancel)
+            state['processed'] += len(payload['points'])
+            state['percent'] = round(100 * state['processed'] / state['total'], 1) if state['total'] else None
+            self.write_state(state, db)
+
         try:
+            publication = PublicPublication(self)
+            publication.resume(write_public, apply, check_cancel)
+            # Mirror pre-upgrade public history once for each configured target.
+            # Legacy JoinQuant rows are retained but scheduled for public re-fetch.
+            if state.get('public_database_target') != publication.target:
+                with self.db() as db:
+                    saved = [tuple(row) for row in db.execute(
+                        'SELECT code,trade_date,close,source,source_url,updated_at FROM points '
+                        'WHERE source IN (?,?) ORDER BY trade_date,code', tuple(SOURCES))]
+                state['stage'] = '保存已有公开行情到数据库'
+                self.write_state(state)
+                for offset in range(0, len(saved), 500):
+                    check_cancel()
+                    publication.stage(dict(points=saved[offset:offset + 500]))
+                    publication.resume(write_public, apply, check_cancel)
+                state['public_database_target'] = publication.target
+                self.write_state(state)
             with self.client_factory() as client:
                 check_cancel()
                 calendar_ok = False
@@ -348,7 +374,7 @@ class GrowthDividend:
                             needed[index.code].add(local.date())
                 work = [(index, group) for index in INDEXES for group in windows(needed[index.code])]
                 work.sort(key=lambda item: (item[1][-1], item[0].code), reverse=True)
-                state.update(total=sum(len(group) for _, group in work), percent=0 if work else 100,
+                state.update(processed=0, total=sum(len(group) for _, group in work), percent=0 if work else 100,
                              stage='补齐指数历史数据')
                 self.write_state(state)
                 LOG.info('Growth/dividend plan ready calendar_ok=%s windows=%s points=%s',
@@ -370,22 +396,9 @@ class GrowthDividend:
                                 raise IndexSourceError('指数收盘点位无效。')
                             accepted.append((index.code, str(day), quote.close, quote.source,
                                              quote.source_url, moment.isoformat()))
-                        with self.db() as db:
-                            db.execute('BEGIN IMMEDIATE')
-                            for row in accepted:
-                                old = db.execute('SELECT close FROM points WHERE code=? AND trade_date=?',
-                                                 row[:2]).fetchone()
-                                if old is None:
-                                    db.execute('INSERT INTO points VALUES (?,?,?,?,?,?)', row)
-                                elif old['close'] != row[2]:
-                                    # Today's recheck must not overwrite a confirmed public or JQ row.
-                                    # Persist only validated market values, never upstream responses/errors.
-                                    db.execute('INSERT OR IGNORE INTO comparisons VALUES (?,?,?,?,?)',
-                                               (*row[:2], old['close'], row[2], moment.isoformat()))
-                                    state['conflict_points'] += 1
-                            state['processed'] += len(accepted)
-                            state['percent'] = round(100 * state['processed'] / state['total'], 1) if state['total'] else 100
-                            self.write_state(state, db)
+                        if accepted:
+                            publication.stage(dict(points=accepted))
+                            publication.resume(write_public, apply, check_cancel)
                         absent = set(target_days) - set(quotes)
                         if absent:
                             raise IndexSourceError(f'{index.name}仍有 {len(absent)} 个交易日未返回收盘数据。')
@@ -404,16 +417,14 @@ class GrowthDividend:
                             break
                 with self.db() as db:
                     pending = self.pending(db, cutoff)
-                if pending or not calendar_ok or not expected_days or state['recent_failures'] or state['conflict_points']:
+                if pending or not calendar_ok or not expected_days or state['recent_failures']:
                     outcome = 'partial'
                     count = len({row['trade_date'] for row in pending})
                     state['error'] = '；'.join(part for part in [state.get('calendar_error'),
                         f'{count} 个交易日、{len(pending)} 条指数数据待补齐。' if pending else None,
                         '部分行情请求未成功，已保存数据保留，稍后会重试。' if state['recent_failures'] and not pending else None,
-                        f"{state['conflict_points']} 条公开行情与已保存记录不同；已保留原值，未覆盖。" if state['conflict_points'] else None,
                         '尚未取得有效交易日历。' if not expected_days else None] if part)
-                    state['stage'] = ('本次更新结束，来源差异已记录，原值未覆盖' if state['conflict_points']
-                                      else '本次更新结束，未完成数据将继续补齐')
+                    state['stage'] = '本次更新结束，未完成数据将继续补齐'
                 else:
                     outcome = 'success'
                     state.update(stage='已更新至 ' + str(expected_days[-1]), error=None,
@@ -429,6 +440,8 @@ class GrowthDividend:
         finally:
             state['active'] = False
             try:
+                if publication is not None:
+                    publication.close()
                 self.write_state(state)
                 marker.unlink(missing_ok=True)
             except BaseException as exc:

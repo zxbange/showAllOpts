@@ -8,13 +8,10 @@ collectors/
 ├── mysql_connector.py      全部采集脚本共用的 MySQL 配置
 ├── *.py                    采集、补采和研究入口
 ├── rules/                  公共代码维护源，不在聚宽运行时导入
-│   ├── cash_cow.py
-│   ├── cash_cow_strategy.py
 │   ├── momentum_threshold.py
 │   ├── result_journal.py
 │   └── selection_archive.py
 └── tools/                  仅在本地使用的代码同步工具
-    ├── sync_cash_cow.py
     ├── sync_momentum_threshold.py
     ├── sync_result_journal.py
     └── sync_history_strategies.py
@@ -28,14 +25,12 @@ collectors/
 
 - [市场情绪历史补采](市场情绪历史补采_聚宽研究版.py)：市场热度、拥挤度独立补洞，原成功数据保留。
 - [估值标尺历史补采](估值标尺历史补采_聚宽研究版.py)：沪深300、上证50、中证1000的静态整体PE与静态/滚动等权及中位数PE；v2专用表，按指数续采。
-- [创红比历史补采](创红比历史补采_聚宽研究版.py)：默认补2018起三指数可见历史，页面专门同步。
 
 ## 日常入口
 
 | 用途 | 脚本 | 运行环境 |
 | --- | --- | --- |
-| 13 个策略批量采集、计算并写入数据库 | [策略批量采集_数据库版.py](策略批量采集_数据库版.py) | 聚宽研究环境 |
-| 奶牛股 3／5／10 年筛选并入库 | [奶牛股选股_数据库版.py](奶牛股选股_数据库版.py) | 聚宽研究环境；[运行与口径](../docs/data/cash-cow.md#聚宽采集与数据库同步) |
+| 9 个策略批量采集、计算并写入数据库 | [策略批量采集_数据库版.py](策略批量采集_数据库版.py) | 聚宽研究环境 |
 | ETF 份额与价格日常采集 | [etf_exchange_collector.py](etf_exchange_collector.py) | 项目 Python 环境；[运行说明](../docs/data/etf-exchange-collector.md) |
 | ETF 历史缺口补采 | [ETF历史补采_聚宽研究版.py](ETF历史补采_聚宽研究版.py) | 聚宽研究环境；填写配置后整段运行即入库，缺表自动创建 |
 | ETF 分类、规模筛选及跟踪标的去重研究 | [ETF分类去重_研究版.py](ETF分类去重_研究版.py) | 聚宽研究环境 |
@@ -57,7 +52,6 @@ collectors/
 | ETF/LOF 动量热度 | [ETF动量热度_数据库版.py](ETF动量热度_数据库版.py) |
 | 个股机构持仓 | [个股机构持仓_数据库版.py](个股机构持仓_数据库版.py) |
 | 估值标尺 | [估值标尺历史补采_聚宽研究版.py](估值标尺历史补采_聚宽研究版.py) |
-| 创红比（含科创红利比） | [创红比历史补采_聚宽研究版.py](创红比历史补采_聚宽研究版.py) |
 
 聚宽脚本各自包含完整策略，但统一导入 `mysql_connector.py` 获取数据库配置。先将配置文件上传到研究目录，再运行所需策略。采集、计算后的结果写入数据库，网页再同步本地缓存。批量参数见[批量采集说明](../docs/data/collector-batch.md)。
 
@@ -65,7 +59,7 @@ collectors/
 
 ## 独立策略与公共代码维护
 
-聚宽入口之间不互相调用。批量版内置十三个策略，独立版各自包含策略及辅助函数；运行时统一依赖同目录中的 `mysql_connector.py`，无需上传 `rules/`、`tools/` 或其他策略文件。
+聚宽入口之间不互相调用。批量版内置九个策略，独立版各自包含策略及辅助函数；运行时统一依赖同目录中的 `mysql_connector.py`，无需上传 `rules/`、`tools/` 或其他策略文件。
 
 `etf_exchange_collector.py` 是项目环境中的交易所采集入口，调用后端服务，不属于聚宽脚本；该命令行入口也使用 `mysql_connector.py` 的连接配置。网页自动采集仍使用网页已保存的目标配置，不受本次脚本配置迁移影响。
 
@@ -90,7 +84,7 @@ python collectors/tools/sync_momentum_threshold.py --check
 python collectors/tools/sync_history_strategies.py --check
 ```
 
-`sync_history_strategies.py` 同步估值标尺、创红比实现及高股息选股共用的归档函数，并适配批量版的连接、配置和进度。公共规则标记内只放实现，依赖在各入口顶部集中声明；修改依赖时同步维护入口文件头。其余工具只同步标记的公共代码块，其他策略修改仍须检查两个入口。工具仅供本地维护，聚宽无需上传。
+`sync_history_strategies.py` 同步估值标尺实现及高股息选股共用的归档函数，并适配批量版的连接、配置和进度。公共规则标记内只放实现，依赖在各入口顶部集中声明；修改依赖时同步维护入口文件头。其余工具只同步标记的公共代码块，其他策略修改仍须检查两个入口。工具仅供本地维护，聚宽无需上传。
 
 ## 行业动量20%边界
 
@@ -114,3 +108,5 @@ python collectors/tools/sync_history_strategies.py --check
 4. 配置文件修改并重新上传后，重启 Notebook 内核，再重新运行策略，以免 Python 模块缓存继续使用旧连接。
 
 各入口取得配置副本，不互相修改配置；策略的时间范围、筛选参数和是否写库仍在各自脚本中设置。`ETF分类去重_研究版.py` 不写数据库，因此无需导入连接配置。
+
+创红比（含科创红利比）和奶牛股由后端外部接口统一采集并写入 MySQL 与本地缓存，不属于聚宽入口。

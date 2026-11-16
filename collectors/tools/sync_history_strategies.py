@@ -38,45 +38,26 @@ def factory(filename, name, label):
         block = '\n'.join(lines[node.lineno-1:node.end_lineno])
         if isinstance(node, ast.FunctionDef) and node.name == 'run':
             block = block.replace('def run(', 'def collect(', 1)
-        if label == '估值标尺':
-            block = block.replace('_builtins', 'builtins')
-            if isinstance(node, ast.FunctionDef) and node.name == 'api':
-                block = block.replace('globals().get(name)', '_apis.get(name)')
-            if isinstance(node, ast.FunctionDef) and node.name == 'database':
-                block = block.replace('    from mysql_connector import create_mysql_engine\n', '')
-                block = block.replace('engine = create_mysql_engine()', 'engine = connect_database(_config)')
-            if isinstance(node, ast.ClassDef) and node.name == 'Progress':
-                block = '''class Progress:
+        block = block.replace('_builtins', 'builtins')
+        if isinstance(node, ast.FunctionDef) and node.name == 'api':
+            block = block.replace('globals().get(name)', '_apis.get(name)')
+        if isinstance(node, ast.FunctionDef) and node.name == 'database':
+            block = block.replace('    from mysql_connector import create_mysql_engine\n', '')
+            block = block.replace('engine = create_mysql_engine()', 'engine = connect_database(_config)')
+        if isinstance(node, ast.ClassDef) and node.name == 'Progress':
+            block = '''class Progress:
     def update(self, stage, done=0, total=None, day=None, force=False):
         suffix = ' {}/{} 日'.format(done, total) if total is not None else ''
         _progress_note('{}{} {}'.format(stage, suffix, day or ''))
     def finish(self, status):
         _progress_note(status)'''
-        else:
-            # Keep the datetime class distinct from the batch datetime module.
-            block = block.replace('datetime.', '_growth_datetime.').replace('value, datetime)', 'value, _growth_datetime)')
-            if isinstance(node, ast.FunctionDef) and node.name == 'api':
-                block = block.replace('    import jqdata\n', '').replace('getattr(jqdata,', 'getattr(jq,')
-            if isinstance(node, ast.FunctionDef) and node.name == 'database':
-                block = 'def database():\n    return connect_database(_config)'
         blocks.append(block)
     blocks += ["settings = strategy_settings('{}')".format(label)]
-    if label == '估值标尺':
-        blocks.append('''def run(start_date=settings['start_date'], end_date=settings['end_date'],
+    blocks.append('''def run(start_date=settings['start_date'], end_date=settings['end_date'],
         max_days=settings['max_days'], indices=settings['indices'], skip_existing=True):
     _require_append(skip_existing)
     return collect(start_date=start_date, end_date=end_date, write_database=True,
                    max_days=max_days, indices=indices, return_report=True)''')
-    else:
-        blocks += ['Base = SimpleNamespace(metadata=metadata)', '''def run(start_date=settings['start_date'], end_date=settings['end_date'],
-        window_days=settings['window_days'], max_days=settings['max_days'],
-        max_windows=settings['max_windows'], retry_earlier_missing=settings['retry_earlier_missing'],
-        skip_existing=True):
-    _require_append(skip_existing)
-    return collect(start_date=start_date, end_date=end_date, preview=False,
-                   window_days=window_days, max_days=max_days, max_windows=max_windows,
-                   api_namespace=_apis, engine_factory=lambda: connect_database(_config),
-                   progress=_progress_note, retry_earlier_missing=retry_earlier_missing)''']
     blocks.append('return SimpleNamespace(**locals())')
     return 'def {}(_apis, _config):\n'.format(name) + textwrap.indent(join_blocks(blocks), '    ')
 
@@ -122,8 +103,7 @@ def sync_valuation_rules(check=False):
 def sync(check=False):
     sync_valuation_rules(check)
     sync_selection_archive(check)
-    factories = [factory('估值标尺历史补采_聚宽研究版.py', '_valuation_ruler_strategy', '估值标尺'),
-                 factory('创红比历史补采_聚宽研究版.py', '_growth_dividend_strategy', '创红比')]
+    factories = [factory('估值标尺历史补采_聚宽研究版.py', '_valuation_ruler_strategy', '估值标尺')]
     block = START + '\n' + '\n\n\n'.join(factories) + '\n' + END
     source = TARGET.read_text(encoding='utf-8')
     if START in source:
