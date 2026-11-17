@@ -62,6 +62,8 @@ def test_real_git_research_diff_then_mixed_diff(tmp_path):
 def test_workflow_keeps_ci_and_manual_deploy():
     workflow=(ROOT/'.github/workflows/deploy.yml').read_text()
     assert 'paths-ignore' not in workflow and 'needs: [backend, frontend]' in workflow
-    assert "needs.backend.outputs.deploy_required == 'true'" in workflow
+    assert "needs.backend.outputs.deploy_required" not in workflow
+    assert "BEFORE_SHA" not in workflow
+    assert "scripts/deployment_impact.py" not in workflow
     assert "github.event_name == 'workflow_dispatch' && inputs.operation == 'deploy' && vars.DEPLOY_ENABLED == 'true'" in workflow
     assert 'fetch-depth: 0' in workflow

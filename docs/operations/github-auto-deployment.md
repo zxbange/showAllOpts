@@ -65,8 +65,14 @@
 
 ## 脚本目录变更不自动部署
 
-所有main推送仍跑完整CI。`scripts/deployment_impact.py` 比较推送前后完整差异：仅 `scripts/`、`collectors/`、`docs/`、`backend/tests/`、`frontend/tests/` 内文件（含子目录）变化时，跳过deploy。因此聚宽采集脚本及其测试、文档一起修改也不会发布网站。`scripts-other/`、`collectors-other/`、`backend/tests-other/` 等相似前缀不包含在内。
+所有 main 推送仍跑完整 CI，五个分片全部成功且 `DEPLOY_ENABLED=true` 后调用受限服务器入口。是否实际发布，由服务器在部署锁内比较当前健康发布版本与本次已测试 SHA 的累计差异，不再比较单次推送的 before/head。
 
-目录外应用、共享运行时代码、工作流、依赖或混合变更仍部署。目录内的 `scripts/deploy.py`、同步工具、分类程序等也按用户要求跳过自动部署；这些工具更新若需立即激活，须在CI通过后手动运行 `operation=deploy`，否则会随以后一次正常部署一起进入服务器。删除必需脚本可能使CI失败，此规则不绕过测试。
+基线来自 `backend/.venv` 实际指向的 `.runtime/releases/<release>/status.json`：必须为 `complete`，目标 SHA 与干净生产 checkout 一致，服务、分支及祖先关系均须匹配，并通过现有进程身份和健康检查。仅 CI 成功、check 成功或上一轮跳过发布都不会前移基线。
 
-比较失败、SHA缺失/非祖先或空差异时阻止自动发布；手动deploy/check不执行推送分类，原有安全验证、权限、凭据及部署开关均不变。
+累计差异仅涉及 `scripts/`、`collectors/`、`docs/`、`backend/tests/`、`frontend/tests/` 时，不创建 release、不构建、不重启、不移动源码或基线。`scripts/deploy.py` 是部署运行器，保持原有运行时代码例外；应用、依赖、工作流及其他目录的变更仍实际发布。相似前缀（如 `scripts-other/`）不在排除范围。空差异同样为 no-op。
+
+例如功能提交 A 的 CI 失败，随后只改测试的 B 通过，服务器会从仍在运行的旧版比较到 B，发现 A 的未发布功能，正常部署 B。若线上已包含全部功能而只修改采集脚本，则只检查而不发布网站。
+
+缺失、损坏、非祖先或不健康基线保守拒绝，不猜测已部署版本。已有失败恢复流程不变，只有完成激活和健康检查后才写 `complete`；回滚保留原基线。首次安装或故障恢复仍使用人工部署流程，确认环境后再恢复自动化。
+
+原已安装的受限 SSH 入口会读取本次已测试 SHA 的独立 `scripts/deploy.py`，并传入 `--non-interactive --commit`，因此此次修复不需要更换 root 所有入口、不增权限或凭据。手动 `operation=deploy` 也执行累计检查；`operation=check` 仍只做认证、预检和健康检查。

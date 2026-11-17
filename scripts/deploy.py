@@ -701,6 +701,59 @@ def safe_cleanup_releases():
         LOG.warning('Release cleanup failed; live deployment unchanged', exc_info=True)
 
 
+# Keep this standalone: the restricted SSH entry loads only this tested file.
+# Compare the live healthy release, never the previous push or latest CI run.
+NO_DEPLOY_PREFIXES = ('scripts/', 'collectors/', 'docs/', 'backend/tests/', 'frontend/tests/')
+
+
+def cumulative_deployment_required(previous, target, was_active, options):
+    if not was_active:
+        raise DeployError('Deployment baseline unavailable: service is not healthy/active.')
+    runtime = ROOT / '.runtime/releases'
+    live = ROOT / 'backend/.venv'
+    try:
+        if not live.is_symlink() or runtime.is_symlink():
+            raise ValueError('not a managed release')
+        environment = live.resolve(strict=True)
+        relative = environment.relative_to(runtime.resolve(strict=True))
+        if len(relative.parts) != 2 or relative.parts[1] != 'venv':
+            raise ValueError('not a release environment')
+        stage = runtime / relative.parts[0]
+        record_path = stage / 'status.json'
+        if stage.is_symlink() or record_path.is_symlink():
+            raise ValueError('unexpected release link')
+        record = json.loads(record_path.read_text())
+        if not isinstance(record, dict):
+            raise ValueError('invalid release record')
+        base = record['target']
+        if (record.get('status') != 'complete' or not re.fullmatch(r'[0-9a-f]{40}', base)
+                or base != previous or record.get('service') != options.service
+                or record.get('branch') != options.branch):
+            raise ValueError('release metadata does not match active checkout')
+        if options.web_url:
+            # The current release retains its build artifacts; never infer a
+            # healthy frontend from API health or an unrelated HTTP 200 alone.
+            expected = stage / 'source/frontend/dist/index.html'
+            if not expected.is_file():
+                raise ValueError('live frontend build evidence is missing')
+            frontend_check(options.web_url, expected)
+        if run(['git', 'rev-parse', base+'^{commit}'], capture=True) != base:
+            raise ValueError('unresolved baseline')
+        run(['git', 'merge-base', '--is-ancestor', base, target], capture=True)
+        changed = run(['git', 'diff', '--no-renames', '--name-status', '-z', base, target, '--'],
+                      capture=True).rstrip('\0')
+        entries = changed.split('\0') if changed else []
+        if len(entries) % 2 or any(status not in ('A', 'D', 'M', 'T') for status in entries[::2]):
+            raise ValueError('unrecognized diff')
+        paths = entries[1::2]
+    except (OSError, ValueError, KeyError, TypeError, DeployError) as exc:
+        raise DeployError('Deployment baseline cannot be verified; no release attempted.') from exc
+    required = any(path and (path == 'scripts/deploy.py' or not path.startswith(NO_DEPLOY_PREFIXES))
+                   for path in paths)
+    LOG.info('Deployment cumulative impact baseline=%s target=%s required=%s', base, target, required)
+    return required
+
+
 def deploy(options):
     web_root, check_env = preflight(options)
     previous = clean_head(branch=options.branch)
@@ -716,6 +769,15 @@ def deploy(options):
         if json.loads(record.read_text()).get('status') in ('activating', 'recovery-failed'):
             raise DeployError('Unfinished deployment: inspect {} before another release.'.format(record))
     target = target_commit(options, previous)
+    # Existing installed SSH entry already supplies these flags. No privileged
+    # entry replacement or new secret is required to adopt cumulative gating.
+    if options.non_interactive and options.commit:
+        if not cumulative_deployment_required(previous, target, was_active, options):
+            if options.web_url:
+                health_check(options.web_url)
+            ready(options.service, options.api_url)
+            LOG.info('Deployment not required: no cumulative runtime changes; live release unchanged.')
+            return
     safe_cleanup_releases()
     stage = Path(tempfile.mkdtemp(prefix=target[:12]+'-', dir=runtime))
     os.chmod(stage, 0o700)

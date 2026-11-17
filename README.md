@@ -81,7 +81,7 @@ npm run test:e2e
 
 修改聚宽公共规则后，在项目根目录执行对应 `collectors/tools/sync_*.py --check`；修改前端后验证桌面和移动端。开发约定见[工程规范](docs/development/engineering.md)。
 
-推送 main 会运行 GitHub Actions。只有应用、依赖或部署配置发生变化才执行服务器部署；仅修改采集脚本、测试、文档会跳过部署。检查失败不发布，发布失败走恢复流程，见[自动部署](docs/operations/github-auto-deployment.md)。
+推送 main 会运行 GitHub Actions。服务器以当前健康发布版本为基准比较累计差异；存在未发布的应用、依赖或部署配置变更才实际部署，仅采集脚本、测试、文档变更不新建版本、不重启。检查失败不发布，发布失败走恢复流程，见[自动部署](docs/operations/github-auto-deployment.md)。
 
 ## 文档
 
