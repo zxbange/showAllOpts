@@ -17,7 +17,7 @@ DB_CONFIG = {
 DB_OPTIONS = {
     'driver': 'auto',  # auto 优先 MySQLdb，其次 PyMySQL；也可填写 mysqldb 或 pymysql。
     'charset': 'utf8mb4',
-    'connect_timeout': 10,
+    'connect_timeout': 60,
     'retry_count': 5,
     'retry_interval': 10,
     'pool_recycle': 3600,
@@ -58,9 +58,19 @@ def engine_options(options=None):
             raise ValueError('MySQL 连接次数、超时及连接池大小须为正整数。')
     if opts['retry_interval'] < 0 or opts['max_overflow'] < 0:
         raise ValueError('MySQL 重试间隔及额外连接数不可为负。')
+    connect_args = {'connect_timeout': builtins.max(60, opts['connect_timeout'])}
+    # Omitted/None/zero read-write timeouts retain the driver's unbounded wait.
+    # Explicit finite budgets are raised to 60 seconds, never reduced.
+    for name in ('read_timeout', 'write_timeout'):
+        value = opts.get(name)
+        if value is None or type(value) is builtins.int and value == 0:
+            continue
+        if isinstance(value, builtins.bool) or not isinstance(value, builtins.int) or value < 0:
+            raise ValueError('MySQL 读写超时须为非负整数或 None。')
+        connect_args[name] = builtins.max(60, value)
     return dict(echo=opts['echo'], pool_size=opts['pool_size'], max_overflow=opts['max_overflow'],
                 pool_pre_ping=opts['pool_pre_ping'], pool_recycle=opts['pool_recycle'],
-                connect_args={'connect_timeout': opts['connect_timeout']})
+                connect_args=connect_args)
 
 
 def create_mysql_engine():

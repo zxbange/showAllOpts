@@ -37,7 +37,7 @@ def test_engine_uses_central_credentials_options_and_special_password(monkeypatc
     assert url.host == CONFIG['host'] and url.port == CONFIG['port']
     assert url.database == CONFIG['dbname'] and url.password == CONFIG['dbpassword']
     assert url.drivername == 'mysql+pymysql'
-    assert opts['connect_args']['connect_timeout'] == 17 and opts['pool_recycle'] == 7200
+    assert opts['connect_args']['connect_timeout'] == 60 and opts['pool_recycle'] == 7200
     assert engine.hide_parameters is True
 
 
@@ -88,3 +88,14 @@ def test_exchange_shared_engine_is_only_opened_for_writes_and_always_disposed(mo
     monkeypatch.setattr(service, 'write_records', save)
     assert service.main(['--write'] if write else [], engine_factory=factory) == (1 if fail else 0)
     assert events == (['opened', 'written', 'disposed'] if write else [])
+
+
+@pytest.mark.parametrize('values,expected', [
+    ({'connect_timeout': 8, 'read_timeout': 20, 'write_timeout': 15},
+     {'connect_timeout': 60, 'read_timeout': 60, 'write_timeout': 60}),
+    ({'connect_timeout': 120, 'read_timeout': 600, 'write_timeout': 180},
+     {'connect_timeout': 120, 'read_timeout': 600, 'write_timeout': 180}),
+    ({'read_timeout': None, 'write_timeout': 0}, {'connect_timeout': 60}),
+])
+def test_collector_timeouts_have_floor_without_shortening_larger_or_unbounded(values, expected):
+    assert connector.engine_options(dict(connector.DB_OPTIONS, **values))['connect_args'] == expected

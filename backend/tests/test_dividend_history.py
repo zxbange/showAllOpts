@@ -62,3 +62,14 @@ def test_cancellation_is_not_swallowed():
     def cancel(): raise RuntimeError('cancelled')
     with pytest.raises(RuntimeError, match='cancelled'):
         run(rows(), check=cancel)
+
+@pytest.mark.parametrize('unavailable', [False, True])
+def test_progress_counts_processed_records_including_unavailable_history(unavailable):
+    class ProgressSource(Source):
+        def per_share_dividends(self, *args):
+            return {} if unavailable else super().per_share_dividends(*args)
+    events = []
+    enrich_history(rows() * 2, client=None, settings=None, as_of='2026-11-17', cache_dir=None,
+                   listed_dates={}, check_cancel=lambda: None, source_factory=ProgressSource,
+                   progress=lambda completed, total: events.append((completed, total)))
+    assert events == [(1, 2), (2, 2)]

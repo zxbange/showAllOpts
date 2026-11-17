@@ -487,7 +487,8 @@ def main(argv=None, engine_factory=None):
             if engine_factory is None:
                 from sqlalchemy import create_engine
                 from app.core.config import Settings
-                engine = create_engine(Settings().database_url, echo=False, pool_pre_ping=True)
+                engine = create_engine(Settings().database_url, echo=False, pool_pre_ping=True,
+                                       connect_args={'connect_timeout': 60})
             else:
                 engine = engine_factory()
             try:

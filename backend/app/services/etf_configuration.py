@@ -104,7 +104,7 @@ class ETFConfiguration:
             self.validate_target(self.url(config))
         # ETF database transport is intentionally non-TLS, including legacy records
         # and environment URLs. This does not change browser HTTPS or other modules.
-        options = dict(connect_timeout=10, read_timeout=60, write_timeout=60, ssl_disabled=True)
+        options = dict(connect_timeout=60, read_timeout=60, write_timeout=60, ssl_disabled=True)
         extra = {}
         if config.get('target_mode') == 'custom':
             # Resolve and pin one permitted socket before transmitting credentials.
@@ -130,7 +130,7 @@ class ETFConfiguration:
                         user=config['username'], password=config['password'], database=config['database'],
                         charset='utf8mb4', defer_connect=True, **options)
                     stage = 'socket_connect'
-                    sock = socket.create_connection((addresses[0], config['port']), timeout=10)
+                    sock = socket.create_connection((addresses[0], config['port']), timeout=60)
                     stage = 'mysql_connect'
                     connection.connect(sock=sock)
                     return connection

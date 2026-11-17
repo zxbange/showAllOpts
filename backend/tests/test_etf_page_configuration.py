@@ -552,6 +552,8 @@ def test_custom_engine_pins_dns_and_disables_tls(tmp_path, monkeypatch):
     monkeypatch.setattr(socket, 'create_connection', lambda *a, **kw: sockets.append((a, kw)) or sock)
     assert captured[0][1]['creator']() is connection
     assert sockets[0][0] == (('10.1.2.3', 3307),)
+    assert sockets[0][1]['timeout'] == 60
+    assert [connections[0][key] for key in ('connect_timeout', 'read_timeout', 'write_timeout')] == [60, 60, 60]
     assert connections[0]['host'] == 'new.example' and connections[0]['ssl_disabled'] is True
     assert 'ssl' not in connections[0]
     assert connection.socket is sock

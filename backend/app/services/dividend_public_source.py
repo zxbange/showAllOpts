@@ -334,10 +334,14 @@ class DividendPublicSource(EastmoneyCashCowSource):
         except ProposalError as exc:
             raise DividendSourceError(str(exc)) from None
 
+    def on_progress(self, stage, processed=None, total=None):
+        pass
+
     def collect(self):
         moment = datetime.now(CHINA)
         if self.day != moment.date() or moment.time() < daytime(16):
             raise DividendSourceError('公开筛选仅支持当日收盘后；历史请使用聚宽恢复。')
+        self.on_progress('universe')
         all_rows = self.mapped(self.ash('reference/stocks', {'list_status': 'L'}))
         if not all_rows or any(row.get('list_status') != 'L' for row in all_rows.values()):
             raise DividendSourceError('当前上市股票池未完整核验。')
@@ -364,6 +368,7 @@ class DividendPublicSource(EastmoneyCashCowSource):
             if any(tag in row['name'] for tag in ('ST', '*', '退')):
                 continue
             eligible.append(row)
+        self.on_progress('quotes')
         quotes = self.mapped(self.ash('market/realtime', {}))
         events = self.suspension_events()
         active = []
@@ -377,6 +382,7 @@ class DividendPublicSource(EastmoneyCashCowSource):
                 if any(tag in quote_name for tag in ('ST', '*', '退')):
                     raise DividendSourceError('当前ST/退市标识跨接口不一致：' + row['symbol'])
                 active.append(row)
+        self.on_progress('valuations')
         valuations = self.mapped(self.ash('market/fundamentals', {'trade_date': self.day.strftime('%Y%m%d')}))
         for row in active:
             val = valuations.get(row['symbol'])
@@ -389,17 +395,21 @@ class DividendPublicSource(EastmoneyCashCowSource):
             raise DividendSourceError('PE 字段缺失。')
         candidates = [r for r in active if valuations[r['symbol']]['pe_ttm'] is not None
                       and 0 < decimal(valuations[r['symbol']]['pe_ttm']) < 12]
+        self.on_progress('dividends')
         cash = self.fiscal_cash([r['symbol'] for r in candidates])
+        self.on_progress('ranking')
         industry_rows = self.ash('reference/industries', {})
         # The full industry feed also contains legacy/non-equity identifiers
         # (live sample T00018.SH). Only join to the independently verified pool;
         # duplicates and missing classification for qualifying stocks still fail.
         industries = self.mapped([row for row in industry_rows if row.get('symbol') in all_rows])
         meta, records = rank_records(active, valuations, cash, industries, self.day, universe_count)
+        self.on_progress('history', 0, len(records))
         self.enrich_history(records)
         return meta, records
 
     def enrich_history(self, records):
         from app.services.dividend_history import enrich_history
         enrich_history(records, client=self.client, settings=self.settings, as_of=self.day.isoformat(),
-                       cache_dir=self.cache_dir, listed_dates=self.listed_dates, check_cancel=self.check_cancel)
+                       cache_dir=self.cache_dir, listed_dates=self.listed_dates, check_cancel=self.check_cancel,
+                       progress=lambda processed, total: self.on_progress('history', processed, total))

@@ -476,7 +476,7 @@ def test_writer_connection_has_bounded_timeouts(tmp_path):
         return SimpleNamespace(dispose=lambda: None)
     w.engine_factory = factory
     assert w.tick(EVENING)
-    assert received[0]['connect_args']=={'connect_timeout':10,'read_timeout':60,'write_timeout':60,'ssl_disabled':True}
+    assert received[0]['connect_args']=={'connect_timeout':60,'read_timeout':60,'write_timeout':60,'ssl_disabled':True}
     assert received[0]['hide_parameters'] and callable(received[0]['creator'])
 
 

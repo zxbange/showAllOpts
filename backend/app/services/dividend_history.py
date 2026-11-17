@@ -8,7 +8,7 @@ LOG = logging.getLogger(__name__)
 
 
 def enrich_history(records, *, client, settings, as_of, cache_dir, listed_dates, check_cancel,
-                   source_factory=CombinedCashCowSource):
+                   source_factory=CombinedCashCowSource, progress=lambda processed, total: None):
     # No historical value may retain the old current-price denominator.
     for record in records:
         for point in record['dividend_yield_history'][1:]:
@@ -22,7 +22,7 @@ def enrich_history(records, *, client, settings, as_of, cache_dir, listed_dates,
         check_cancel()
         LOG.warning('Dividend annual history unavailable stage=configuration error_type=%s', type(exc).__name__)
         return
-    for record in records:
+    for index, record in enumerate(records):
         check_cancel()
         code, exchange = record['code'].split('.')
         symbol = code + { 'XSHG': '.SH', 'XSHE': '.SZ', 'XBSE': '.BJ' }[exchange]
@@ -54,6 +54,8 @@ def enrich_history(records, *, client, settings, as_of, cache_dir, listed_dates,
             check_cancel()
             LOG.warning('Dividend annual history unavailable symbol=%s years=%s,%s stage=%s error_type=%s', symbol, year - 1, year - 2, stage, type(exc).__name__)
 
+        finally:
+            progress(index + 1, len(records))
 
 def _positive(value):
     return isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value) and value > 0

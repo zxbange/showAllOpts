@@ -344,7 +344,7 @@ def test_shared_connection_retry_and_failure_cleanup(batch, monkeypatch, failure
     engine = Engine()
     def create(url, **kwargs):
         assert url.password == CONFIG['dbpassword']
-        assert kwargs['connect_args']['connect_timeout'] == 10
+        assert kwargs['connect_args']['connect_timeout'] == 60
         seen.append(kwargs)
         return engine
     monkeypatch.setattr(batch, 'create_engine', create)

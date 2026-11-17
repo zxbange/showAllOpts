@@ -217,7 +217,7 @@ def test_connection_uses_batch_compatible_engine_options(backfill, monkeypatch, 
         assert url.drivername == 'mysql+pymysql' and url.port == 3306
         assert echo is False and pool_size == 1 and max_overflow == 0
         assert pool_recycle == 3600 and pool_pre_ping is True
-        assert connect_args == {'connect_timeout': 10}
+        assert connect_args == {'connect_timeout': 60}
         return engine
     namespace['create_engine'] = factory
     if legacy:

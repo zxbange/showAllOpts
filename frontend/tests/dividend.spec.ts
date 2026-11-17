@@ -281,3 +281,29 @@ test('collection action stays outside scrolling tabs on narrow screens and clear
     await expect(page.locator('.page-header-actions').getByRole('button')).toHaveCount(0)
   }
 })
+
+test('collection displays real stage and counts without invented overall percentage', async ({
+  page,
+}) => {
+  await page.route('**/api/v1/dividend-selection/latest', (route) =>
+    route.fulfill({ json: fixture }),
+  )
+  await page.route('**/api/v1/dividend-selection/status', (route) =>
+    route.fulfill({
+      json: {
+        running: true,
+        available: true,
+        stage: 'history',
+        processed: 12,
+        total: 70,
+      },
+    }),
+  )
+  await page.goto('/dividend-selection')
+  await expect(page.getByText('核验历史股息率', { exact: true })).toBeVisible()
+  await expect(page.getByText('已处理 12 / 70 只（含历史数据不可用）')).toBeVisible()
+  await expect(page.getByRole('progressbar', { name: '高股息采集更新进度' })).not.toHaveAttribute(
+    'value',
+  )
+  await expect(page.getByRole('button', { name: '取消采集' })).toBeVisible()
+})

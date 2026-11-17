@@ -18,13 +18,21 @@ def database_identity(config):
     return hashlib.sha256(json.dumps([config['host'].lower().rstrip('.'), int(config['port']), config['database']]).encode()).hexdigest()
 
 
-def build_engine(settings: Settings, *, for_cache: bool = False, configuration=None) -> Engine:
+def build_engine(settings: Settings, *, for_cache: bool = False, configuration=None,
+                 read_timeout_seconds=None, write_timeout_seconds=None, connect_timeout_seconds=None) -> Engine:
     from app.services.system_configuration import database_config, SystemConfiguration
     from app.services.database_sources import DatabaseSources, SourceError
     from app.core.diagnostics import diagnostic_details
     config = dict(configuration or database_config(settings))
     from app.services.system_runtime import runtime_config
     sync_options = runtime_config(settings)['database_sync']
+    for value in (read_timeout_seconds, write_timeout_seconds, connect_timeout_seconds):
+        if value is not None and (type(value) is not int or not 1 <= value <= 3600):
+            raise ValueError('Invalid database socket timeout')
+    connect_seconds = max(60, connect_timeout_seconds if connect_timeout_seconds is not None else 8)
+    read_seconds = max(60, read_timeout_seconds if read_timeout_seconds is not None else
+                       (sync_options['read_timeout_seconds'] if for_cache else 20))
+    write_seconds = max(60, write_timeout_seconds if write_timeout_seconds is not None else 20)
     validator = object.__new__(DatabaseSources)
     validator.settings = settings
     def connect():
@@ -34,10 +42,10 @@ def build_engine(settings: Settings, *, for_cache: bool = False, configuration=N
             address = validator.allowed(config)
             connection = pymysql.connect(host=config['host'], port=config['port'], user=config['username'],
                 password=config['password'], database=config['database'], charset='utf8mb4',
-                connect_timeout=8, read_timeout=sync_options['read_timeout_seconds'] if for_cache else 20,
-                write_timeout=20, ssl_disabled=True, defer_connect=True, autocommit=False)
+                connect_timeout=connect_seconds, read_timeout=read_seconds,
+                write_timeout=write_seconds, ssl_disabled=True, defer_connect=True, autocommit=False)
             stage = 'connect_socket'
-            sock = socket.create_connection((address, config['port']), timeout=8)
+            sock = socket.create_connection((address, config['port']), timeout=connect_seconds)
             stage = 'authenticate'
             connection.connect(sock=sock)
             return connection

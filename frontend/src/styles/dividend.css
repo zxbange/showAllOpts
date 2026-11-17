@@ -170,4 +170,18 @@
   color: var(--muted);
   font-size: 13px;
 }
-.dividend-collection > [role='alert'] { color: var(--danger, #dc4545); }
+.dividend-collection > [role='alert'] {
+  color: var(--danger, #dc4545);
+}
+.dividend-collection progress {
+  width: 100%;
+  height: 8px;
+  accent-color: var(--accent);
+}
+.dividend-collection .growth-dividend-progress-label {
+  display: flex;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 8px;
+}

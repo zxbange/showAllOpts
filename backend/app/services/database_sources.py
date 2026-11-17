@@ -243,10 +243,10 @@ class DatabaseSources:
                 stage = 'create_driver'
                 connection = pymysql.connect(host=config['host'], port=config['port'],
                     user=config['username'], password=config['password'], database=config['database'],
-                    charset='utf8mb4', connect_timeout=8, read_timeout=20, write_timeout=20,
+                    charset='utf8mb4', connect_timeout=60, read_timeout=60, write_timeout=60,
                     ssl_disabled=True, defer_connect=True, autocommit=False)
                 stage = 'connect_socket'
-                sock = socket.create_connection((address, config['port']), timeout=8)
+                sock = socket.create_connection((address, config['port']), timeout=60)
                 stage = 'authenticate'
                 connection.connect(sock=sock)
                 return connection

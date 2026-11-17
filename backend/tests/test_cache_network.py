@@ -176,8 +176,8 @@ def test_background_source_timeout_is_separate_from_direct_page_queries(monkeypa
     settings=Settings(_env_file=None,cache_db_read_timeout=150)
     database.build_engine(settings)
     database.build_engine(settings,for_cache=True)
-    assert [o['read_timeout'] for o in options]==[20,150]
-    assert all(o['connect_timeout']==8 and o['ssl_disabled'] and o['defer_connect'] for o in options)
+    assert [o['read_timeout'] for o in options]==[60,150]
+    assert all(o['connect_timeout']==60 and o['ssl_disabled'] and o['defer_connect'] for o in options)
 
 
 def test_app_and_cli_select_the_background_timeout(cached, engine, monkeypatch, capsys):

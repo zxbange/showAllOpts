@@ -111,7 +111,7 @@ def test_injected_source_shares_one_collection_and_preserves_failure(tmp_path, m
             return result()
     service = DividendCollection(settings, source_factory=Source,
         engine_factory=lambda *a, **k: engine, client_factory=lambda: nullcontext(None))
-    monkeypatch.setattr(service, 'sync_local', lambda meta, rows: None)
+    monkeypatch.setattr(service, 'sync_local', lambda meta, rows, **kwargs: None)
     moment = datetime(2026, 11, 16, 21, tzinfo=CHINA)
     assert service.refresh(background=False, moment=moment)
     assert service.status()['stage'] == 'complete'
@@ -308,7 +308,7 @@ def test_manual_dividend_notifies_only_changed_publication(tmp_path, monkeypatch
         def collect(self): return result()
     service = DividendCollection(SimpleNamespace(log_path=tmp_path), source_factory=Source,
         engine_factory=lambda *a, **k: engine, client_factory=lambda: nullcontext(None))
-    monkeypatch.setattr(service, 'sync_local', lambda *args: None)
+    monkeypatch.setattr(service, 'sync_local', lambda *args, **kwargs: None)
     moment = datetime(2026, 11, 16, 21, tzinfo=CHINA)
     for _ in range(2):
         assert service.refresh(background=False, moment=moment)
@@ -485,3 +485,22 @@ def test_closed_day_migration_failure_is_retained_but_not_automatically_replayed
     assert service.read_state()['stage'] == 'complete'
     with service.db() as db:
         assert db.execute('SELECT count(*) FROM manual_publication_failures').fetchone()[0] == remaining
+
+
+def test_progress_persists_real_stages_and_failure_location(tmp_path, monkeypatch):
+    service, remote, local, cache, calls = publication_service(tmp_path, monkeypatch)
+    events = []
+    save = service.save_state
+    def capture(state):
+        events.append(dict(state))
+        save(state)
+    monkeypatch.setattr(service, 'save_state', capture)
+    service.refresh(background=False, moment=datetime(2026, 11, 16, 21, tzinfo=CHINA))
+    stages = [state['stage'] for state in events]
+    assert stages.index('validating') < stages.index('publishing') < stages.index('syncing_local')
+    assert service.status()['failed_stage'] == '刷新本地高股息缓存'
+    assert service.status()['total'] is None
+    cache.fail = False
+    service.refresh(background=False, moment=datetime(2026, 11, 16, 21, tzinfo=CHINA))
+    assert service.status()['stage'] == 'complete'
+    assert service.status()['failed_stage'] is None

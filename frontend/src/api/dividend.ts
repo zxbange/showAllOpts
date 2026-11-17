@@ -1,6 +1,12 @@
 import { apiFetch } from './http'
 
 export interface DividendCollectionStatus {
+  stage?: string
+  failed_stage?: string | null
+  processed?: number | null
+  total?: number | null
+  stage_started_at?: string
+  last_attempt_at?: string
   running: boolean
   available: boolean
   unavailable_reason?: string | null
@@ -14,7 +20,9 @@ async function request<T>(path: string, signal?: AbortSignal, method = 'GET'): P
   const response = await apiFetch('/api/v1/dividend-selection/' + path, { method, signal })
   if (!response.ok) {
     const body = await response.json().catch(() => null)
-    throw new Error(typeof body?.detail === 'string' ? body.detail : `请求失败（${response.status}）`)
+    throw new Error(
+      typeof body?.detail === 'string' ? body.detail : `请求失败（${response.status}）`,
+    )
   }
   return response.json() as Promise<T>
 }
