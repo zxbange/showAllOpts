@@ -179,7 +179,8 @@ test('legacy successful results remain visible with an old-rule warning', async 
     }),
   )
   await page.goto('/dividend-selection')
-  await expect(page.getByRole('status')).toContainText('保留上次成功结果，采用旧版选股口径')
+  await expect(page.getByRole('status')).toContainText('保留上次成功结果，采用旧版股息率口径')
+  await expect(page.getByRole('status')).toContainText('历史两年尚未切换为年度均价')
   await expect(page.locator('tbody tr')).toHaveCount(25)
   await expect(page.getByText('最高股息率（旧口径）')).toBeVisible()
   await page.getByRole('link', { name: /高股息低估值（银行业）/ }).click()
