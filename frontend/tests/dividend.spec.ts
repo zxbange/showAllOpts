@@ -1,5 +1,13 @@
 import { expect, test } from './fixtures'
 
+// Every page now polls collection status independently of the saved result.
+// Per-test routes registered later override this default when testing mutations.
+test.beforeEach(async ({ page }) => {
+  await page.route('**/api/v1/dividend-selection/status', route =>
+    route.fulfill({ json: { running: false, available: true } }),
+  )
+})
+
 function stock(method: string, i: number) {
   return {
     method,
@@ -153,7 +161,7 @@ test('dividend uncollected, legitimate zero results and retry states', async ({ 
   await expect(page.getByRole('heading', { name: '本组暂无符合条件的股票' })).toBeVisible()
   mode = 'fail'
   await page.getByRole('button', { name: '刷新高股息选股' }).click()
-  await expect(page.getByRole('alert')).toContainText('数据库暂不可用')
+  await expect(page.getByRole('alert').filter({ hasText: '数据库暂不可用' })).toBeVisible()
   mode = 'data'
   await page.getByRole('button', { name: '重新加载' }).click()
   await expect(page.locator('tbody tr')).toHaveCount(25)

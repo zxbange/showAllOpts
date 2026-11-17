@@ -326,9 +326,10 @@ class Commodities:
                         for day in historical:
                             db.execute('INSERT INTO recovery_attempts VALUES(?,?,?) ON CONFLICT(day) DO UPDATE SET attempted_at=excluded.attempted_at,result=excluded.result',
                                        (day, now().isoformat(), 'deferred' if limited else 'no_verified_public_quote'))
-                    LOG.info('Commodity recovery range=%s..%s checked=%s recovered=%s pending=%s limited=%s',
+                    LOG.info('Commodity recovery range=%s..%s checked=%s recovered=%s pending=%s limited=%s pending_dates=%s',
                              recovery['dateFrom'], recovery['dateTo'], recovery['articlesChecked'],
-                             recovery['recoveredCount'], len(missing), limited)
+                             recovery['recoveredCount'], len(missing), limited,
+                             ','.join(sorted(missing)[:31]) or '-')
             finished = True
         except Exception as exc:
             failures += 1

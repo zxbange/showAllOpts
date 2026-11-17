@@ -200,3 +200,12 @@ def test_current_quote_is_logged_and_saved_before_recovery(setup, monkeypatch, c
 def test_unrelated_article_has_specific_diagnostic():
     from app.services.commodity_source import ArticleNotApplicable, diagnostic_reason
     assert diagnostic_reason(ArticleNotApplicable('unrelated')) == 'article_not_applicable'
+
+
+def test_recovery_log_identifies_unverified_dates(setup, monkeypatch, caplog):
+    _, _, job = setup
+    install(monkeypatch, ['2026-11-05', '2026-11-06', '2026-11-09'])
+    with caplog.at_level('INFO'):
+        job.collect(job.lock())
+    assert 'pending=2 limited=False pending_dates=2026-11-07,2026-11-08' in caplog.text
+    assert not {'2026-11-07', '2026-11-08'} & days(job)
