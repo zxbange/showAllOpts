@@ -32,7 +32,8 @@ def setup(engine, tmp_path, monkeypatch):
 
 
 def entry(cache, module):
-    return next(item for item in cache.status()['modules'] if item['id'] == module)
+    state = cache.read_state()['modules'].get(module, {})
+    return dict(state, ready=cache.snapshot_path(module, state) is not None)
 
 
 def test_valuation_missing_pe_survives_unified_sync(setup):
@@ -83,7 +84,7 @@ def test_empty_growth_prices_explain_missing_collection_and_keep_cached_page(set
 
 
 @pytest.mark.parametrize('full', [False, True])
-def test_global_api_sync_publishes_to_both_page_apis(setup, engine, full):
+def test_global_sync_excludes_history_but_internal_publication_serves_page_apis(setup, engine, full):
     settings, _ = setup
     with TestClient(create_app(settings, engine)) as client:
         cache = client.app.state.cache
@@ -91,6 +92,9 @@ def test_global_api_sync_publishes_to_both_page_apis(setup, engine, full):
         cache.worker.join(timeout=10)
         assert not cache.worker.is_alive()
         for module in HISTORY_MODULES:
+            assert not entry(cache,module)['ready']
+            assert module not in {item['id'] for item in cache.status()['modules']}
+            cache.refresh(module, background=False)
             assert entry(cache,module)['ready'] and entry(cache,module)['progress']['status'] == 'complete'
             assert client.post('/api/v1/'+module+'/sync-joinquant').status_code == 404
         # Disconnect the source. The existing actual API/service must still serve
@@ -109,16 +113,15 @@ def test_global_api_sync_publishes_to_both_page_apis(setup, engine, full):
             event.remove(engine, 'before_cursor_execute', disconnected)
 
 
-def test_daily_schedule_includes_actual_history_imports(setup):
+def test_daily_schedule_does_not_import_collector_owned_history(setup):
     _, cache = setup
-    # Existing daily schedule semantics: no catch-up on startup, next due slot
-    # imports both service modules without a second scheduler or separate action.
+    # History collectors own their publication, not the database sync schedule.
     cache.tick(MOMENT)
     assert all(not entry(cache,module)['ready'] for module in HISTORY_MODULES)
     cache.tick(MOMENT + timedelta(days=1))
     for module in HISTORY_MODULES:
-        assert entry(cache,module)['ready']
-        assert count(history_sync.service_for(cache,module)) > 0
+        assert not entry(cache,module)['ready']
+        assert count(history_sync.service_for(cache,module)) == 0
 
 
 @pytest.mark.parametrize('module', list(HISTORY_MODULES))

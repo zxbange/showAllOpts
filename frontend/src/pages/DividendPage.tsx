@@ -7,12 +7,15 @@ import { useResource } from '../hooks/useResource'
 import { EmptyState, ErrorState, LoadingState } from '../components/States'
 import { StatCard } from '../components/StatCard'
 import { DividendYieldHistory } from '../components/DividendYieldHistory'
+import { useAuth } from '../components/AccountAccess'
+import { DividendCollectionControls } from '../components/DividendCollectionControls'
 import '../styles/dividend.css'
 
 const number = (v: number | null | undefined, suffix = '') =>
   v == null ? '—' : v.toFixed(2) + suffix
 
 export function DividendPage() {
+  const admin = useAuth().session?.user?.role === 'admin'
   const [params] = useSearchParams()
   const method = params.get('method') === 'bank' ? 'bank' : 'value'
   const [search, setSearch] = useState('')
@@ -54,7 +57,7 @@ export function DividendPage() {
       ) : error ? (
         <ErrorState message={error} retry={reload} />
       ) : !data?.snapshot ? (
-        <EmptyState title="暂无高股息选股结果" description="请运行采集脚本，再同步本模块。" />
+        <EmptyState title="暂无高股息选股结果" description="请由管理员点击更新数据，采集选股结果。" />
       ) : (
         <>
           {data.requires_refresh && (
@@ -179,6 +182,7 @@ export function DividendPage() {
           </section>
         </>
       )}
+      {admin && <DividendCollectionControls onComplete={reload} />}
     </div>
   )
 }

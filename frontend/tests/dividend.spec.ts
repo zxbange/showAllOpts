@@ -193,3 +193,58 @@ test('retired method URL defaults to nonbank and has no obsolete controls', asyn
   await expect(page.locator('thead')).not.toContainText('PEG')
   await expect(page.locator('thead')).not.toContainText('累计分红')
 })
+
+test('administrator can collect both groups and cancel the shared task', async ({ page }) => {
+  let running = false
+  let refreshes = 0
+  let cancellations = 0
+  await page.route('**/api/v1/dividend-selection/latest', route => route.fulfill({ json: fixture }))
+  await page.route('**/api/v1/dividend-selection/status', route => route.fulfill({ json: { running, available: true } }))
+  await page.route('**/api/v1/dividend-selection/refresh', route => {
+    refreshes++; running = true
+    return route.fulfill({ status: 202, json: { started: true } })
+  })
+  await page.route('**/api/v1/dividend-selection/cancel', route => {
+    cancellations++; running = false
+    return route.fulfill({ status: 202, json: { cancelled: true } })
+  })
+  await page.goto('/dividend-selection')
+  await page.getByRole('button', { name: '更新数据', exact: true }).click()
+  await expect(page.getByRole('button', { name: '采集中', exact: true })).toBeDisabled()
+  await page.getByRole('link', { name: '高股息低估值（银行业）', exact: true }).click()
+  await expect(page.getByRole('button', { name: '采集中', exact: true })).toBeDisabled()
+  await page.getByRole('button', { name: '取消采集', exact: true }).click()
+  await expect(page.getByRole('button', { name: '更新数据', exact: true })).toBeEnabled()
+  expect(refreshes).toBe(1)
+  expect(cancellations).toBe(1)
+})
+
+test('shared earnings task busy is not presented as a successful collection', async ({ page }) => {
+  await page.route('**/api/v1/dividend-selection/latest', route => route.fulfill({ json: fixture }))
+  await page.route('**/api/v1/dividend-selection/status', route => route.fulfill({ json: { running: false, available: true } }))
+  await page.route('**/api/v1/dividend-selection/refresh', route => route.fulfill({ status: 202, json: { started: false } }))
+  await page.goto('/dividend-selection')
+  await page.getByRole('button', { name: '更新数据', exact: true }).click()
+  await expect(page.getByRole('status').filter({ hasText: '其他业绩选股任务正在运行' })).toBeVisible()
+})
+
+test('collection rejection is visible and does not hide previous results', async ({ page }) => {
+  await page.route('**/api/v1/dividend-selection/latest', route => route.fulfill({ json: fixture }))
+  await page.route('**/api/v1/dividend-selection/status', route => route.fulfill({ json: { running: false, available: true } }))
+  await page.route('**/api/v1/dividend-selection/refresh', route => route.fulfill({ status: 409, json: { detail: '当日数据须在16:00后采集' } }))
+  await page.goto('/dividend-selection')
+  await page.getByRole('button', { name: '更新数据', exact: true }).click()
+  await expect(page.getByRole('alert')).toContainText('当日数据须在16:00后采集')
+  await expect(page.locator('tbody tr').first()).toContainText('000010.XSHE')
+})
+
+test('read-only users do not receive collection controls', async ({ page }) => {
+  await page.route('**/api/auth/**', route => route.fulfill({ json: {
+    user: { id: 'viewer', username: 'viewer', role: 'viewer', enabled: true, created_at: 0 },
+    csrf_token: 'test-csrf', configured: true, https_required: false,
+  } }))
+  await page.route('**/api/v1/dividend-selection/latest', route => route.fulfill({ json: fixture }))
+  await page.goto('/dividend-selection')
+  await expect(page.locator('tbody tr').first()).toBeVisible()
+  await expect(page.getByRole('button', { name: '更新数据', exact: true })).toHaveCount(0)
+})

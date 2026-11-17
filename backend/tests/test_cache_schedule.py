@@ -7,7 +7,7 @@ import os
 from fastapi.testclient import TestClient
 import pytest
 
-from app.core.cache import CHINA, MODULES, SnapshotCache
+from app.core.cache import CHINA, DATABASE_SYNC_MODULES, SnapshotCache
 from app.core.cache_schedule import CacheScheduleError
 from app.core.config import Settings
 from app.main import create_app
@@ -108,7 +108,7 @@ def test_change_before_due_shared_workers_and_once_per_day(scheduled, engine):
     assert calls == []
     clock[0] = clock[0].replace(hour=8, minute=0)
     cache.tick(); other.tick()
-    assert len(calls) == 1 and calls[0][0] == list(MODULES)
+    assert len(calls) == 1 and calls[0][0] == list(DATABASE_SYNC_MODULES)
     cache.save_schedule('09:00')
     clock[0] = clock[0].replace(hour=9)
     cache.tick(); other.tick()
@@ -217,12 +217,12 @@ def test_manual_all_cannot_erase_today_claim_and_active_sync_keeps_saved_plan(tm
         return module + '-test.sqlite', 0
     monkeypatch.setattr(cache, 'copy_module', copy)
     cache.refresh(background=False)
-    assert calls == list(MODULES)
+    assert calls == list(DATABASE_SYNC_MODULES)
     assert cache.schedule.read()['daily_time'] == '08:00'
     assert cache.read_state()['scheduled_slot'] == '2026-10-29T00:00:00+08:00'
     clock[0] = clock[0].replace(hour=8)
     cache.tick()
-    assert calls == list(MODULES)
+    assert calls == list(DATABASE_SYNC_MODULES)
 
 
 def test_disabled_cache_rejects_schedule_write(scheduled, engine):

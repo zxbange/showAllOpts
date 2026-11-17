@@ -28,8 +28,8 @@ def synced(collector, tmp_path, monkeypatch):
 
 def test_summary_only_sync_and_static_ttm_are_separate(synced, monkeypatch):
     c, cache, service, sql = synced
-    entry = next(r for r in cache.status()['modules'] if r['id'] == 'valuation-ruler')
-    assert entry['ready'] and entry['progress']['status'] == 'complete'
+    entry = cache.read_state()['modules']['valuation-ruler']
+    assert cache.snapshot_path('valuation-ruler', entry) is not None and entry['progress']['status'] == 'complete'
     assert not any('valuation_ruler_member' in statement for statement in sql)
     for code, (_, count, _) in index_valuation.INDICES.items():
         ttm = service.history(index_code=code, basis='ttm')
@@ -60,7 +60,7 @@ def test_failed_summary_does_not_replace_published_cache(synced):
         db.execute(text('UPDATE valuation_ruler_daily_v2 SET mean_pe_ttm=301'))
     cache.refresh('valuation-ruler', background=False)
     assert service.history() == before
-    entry = next(r for r in cache.status()['modules'] if r['id'] == 'valuation-ruler')
+    entry = cache.read_state()['modules']['valuation-ruler']
     assert entry['progress']['status'] == 'failed'
 
 
@@ -101,8 +101,8 @@ def test_latest_daily_point_does_not_hide_earlier_source_history(synced, has_bas
     cache.refresh('valuation-ruler', background=False)
     for code in index_valuation.INDICES:
         assert len(service.history(index_code=code)['points']) == 3
-    entry = next(r for r in cache.status()['modules'] if r['id'] == 'valuation-ruler')
-    assert entry['ready'] and not entry['error']
+    entry = cache.read_state()['modules']['valuation-ruler']
+    assert cache.snapshot_path('valuation-ruler', entry) is not None and not entry['error']
     assert '新增 6 个指数日' in entry['sync_note']
     with service.db() as db:
         assert db.execute('SELECT COUNT(*) FROM index_sync_baseline_v2').fetchone()[0] == 3

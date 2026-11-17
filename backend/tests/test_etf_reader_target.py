@@ -75,7 +75,7 @@ def test_switch_rejects_snapshot_and_rebuilds_only_etf(targets):
     config.choose('b', revision=2)
     with pytest.raises(CacheUnavailable):
         shares(cache)
-    assert next(item for item in cache.status()['modules'] if item['id'] == 'etf-shares')['ready'] is False
+    assert cache.snapshot_path('etf-shares', cache.read_state()['modules'].get('etf-shares', {})) is None
     cache.refresh('etf-shares', background=False)
     assert shares(cache) == [202]
     assert cache.root == root

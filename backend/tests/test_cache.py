@@ -8,7 +8,7 @@ import pytest
 from sqlalchemy import event, select, text
 from sqlalchemy.exc import OperationalError
 
-from app.core.cache import CHINA, MODULES, SnapshotCache, latest_slot
+from app.core.cache import CHINA, MODULES, DATABASE_SYNC_MODULES, COLLECTOR_OWNED_MODULES, SnapshotCache, latest_slot
 from app.core.config import Settings
 from app.main import create_app
 from app.models.momentum import IndustryMomentum
@@ -51,7 +51,8 @@ def test_all_modules_and_detail_read_locally_with_source_disconnected(cached, en
     settings, cache = cached
     with TestClient(create_app(settings.model_copy(update={'cache_enabled':False}), engine)) as direct:
         expected = {path: direct.get('/api/v1'+path).json() for path in PATHS}
-        cache.refresh(background=False)
+        for module in MODULES:
+            cache.refresh(module, background=False)
     assert all(m['ready'] and not m['error'] for m in cache.status()['modules'])
     def no_network(*args):
         raise AssertionError('Page query reached the source database')
@@ -107,7 +108,7 @@ def test_module_failure_retains_old_snapshot_other_modules_still_refresh(cached,
     current = cache.read_state()['modules']['industry-momentum']
     assert current['file'] == previous['file'] and current['updated_at'] == previous['updated_at']
     assert current['error'] and 'password' not in json.dumps(cache.status())
-    assert calls == list(MODULES)
+    assert calls == list(DATABASE_SYNC_MODULES)
     with cache.session('industry-momentum') as local:
         assert local.scalar(select(IndustryMomentum.momentum).order_by(IndustryMomentum.trade_date.desc())) == 5
 
@@ -120,11 +121,10 @@ def test_refresh_selects_only_source_columns_and_does_not_write_source(cached, e
     try: cache.refresh(background=False)
     finally: event.remove(engine,'before_cursor_execute',record)
     selects = [s for s in statements if s.lstrip().startswith('SELECT')]
-    # Only crowding uses append bounds. Momentum/breadth without journals use
-    # complete manifests so newly restored dates cannot hide within old bounds.
-    assert sum('GROUP BY' in sql for sql in selects) == 1  # Microcap completeness counts.
-    assert any('FROM etf_price_daily' in sql for sql in selects)
-    for _, models in MODULES.values():
+    # Collector-owned tables are not imported by the database sync center.
+    assert sum('GROUP BY' in sql for sql in selects) == 0
+    assert not any('FROM etf_price_daily' in sql for sql in selects)
+    for _, models in DATABASE_SYNC_MODULES.values():
         for model in models:
             queried = any(model.__tablename__ in sql for sql in selects)
             assert queried, model.__tablename__
@@ -183,9 +183,12 @@ def test_api_missing_cache_never_falls_back_and_sync_needs_no_secret(cached, eng
         monkeypatch.setattr(app.state.cache,'refresh', lambda module: calls.append(module) or True)
         assert client.post('/api/v1/cache/refresh',json={}).status_code == 202
         assert client.post('/api/v1/cache/refresh',json={'module':None}).status_code == 202
-        for module in MODULES:
+        for module in DATABASE_SYNC_MODULES:
             assert client.post('/api/v1/cache/refresh',json={'module':module}).status_code == 202
-        assert calls == [None, None, *MODULES]
+        assert calls == [None, None, *DATABASE_SYNC_MODULES]
+        for module in COLLECTOR_OWNED_MODULES:
+            for full in (False, True):
+                assert client.post('/api/v1/cache/refresh', json={'module': module, 'full': full}).status_code == 422
         assert client.post('/api/v1/cache/refresh',json={'module':'unknown'}).status_code == 422
         monkeypatch.setattr(app.state.cache,'refresh',lambda module: False)
         assert client.post('/api/v1/cache/refresh',json={}).status_code == 409
@@ -256,7 +259,7 @@ def test_real_background_refresh_and_lifespan_shutdown(cached, engine):
         assert not app.state.cache.worker.is_alive()
         status=client.get('/api/v1/cache/status').json()
         assert not status['refreshing'] and all(m['ready'] for m in status['modules'])
-        assert client.get('/api/v1/dividend-selection/latest').status_code == 200
+        assert client.get('/api/v1/industry-momentum/latest').status_code == 200
     assert app.state.cache.stop_event.is_set()
 
 
@@ -267,18 +270,18 @@ def test_interrupted_schedule_resumes_pending_modules(cached, monkeypatch):
     cache.refresh(background=False)
     state=cache.read_state()
     previous=state['modules']['industry-momentum']['file']
-    state['pending']=['dividend-selection']
-    dividend_before=state['modules']['dividend-selection']['file']
+    state['pending']=['microcap-temperature']
+    dividend_before=state['modules']['microcap-temperature']['file']
     cache.write_state(state)
     cache.tick(clock)
     state=cache.read_state()
-    assert state['pending'] == ['dividend-selection']
-    assert state['modules']['dividend-selection']['file'] == dividend_before
-    cache.refresh('dividend-selection', background=False)
+    assert state['pending'] == ['microcap-temperature']
+    assert state['modules']['microcap-temperature']['file'] == dividend_before
+    cache.refresh('microcap-temperature', background=False)
     state = cache.read_state()
     assert state['pending'] == []
     assert state['modules']['industry-momentum']['file'] == previous
-    assert state['modules']['dividend-selection']['file'] != dividend_before
+    assert state['modules']['microcap-temperature']['file'] != dividend_before
 
 
 def test_missing_module_waits_for_manual_or_next_schedule(cached, monkeypatch):
@@ -298,9 +301,9 @@ def test_missing_module_waits_for_manual_or_next_schedule(cached, monkeypatch):
     cache.tick(clock+timedelta(minutes=5))
     assert calls == []
     cache.tick(clock.replace(hour=7))
-    assert len(calls) == len(MODULES)
+    assert len(calls) == len(DATABASE_SYNC_MODULES)
     cache.tick(clock.replace(hour=7, minute=5))
-    assert len(calls) == len(MODULES)
+    assert len(calls) == len(DATABASE_SYNC_MODULES)
 
 
 def test_progress_shared_between_workers_and_interruption(cached, engine, monkeypatch):
@@ -416,7 +419,7 @@ def test_cancel_one_running_and_one_queued_module_continues_others(cached, engin
     from app.core.sync_progress import report
     settings, cache = cached
     other = SnapshotCache(settings, engine)
-    running, queued = list(MODULES)[:2]
+    running, queued = list(DATABASE_SYNC_MODULES)[:2]
     cache.refresh(running, background=False)
     previous = cache.read_state()['modules'][running]['file']
     original = cache.copy_module
@@ -438,7 +441,7 @@ def test_cancel_one_running_and_one_queued_module_continues_others(cached, engin
     cache.refresh(background=False)
     state = cache.read_state()
     assert queued not in calls
-    assert len(calls) == len(MODULES) - 1
+    assert len(calls) == len(DATABASE_SYNC_MODULES) - 1
     assert state['modules'][running]['file'] == previous
     for module, entry in state['modules'].items():
         assert entry['progress']['status'] == ('cancelled' if module in (running, queued) else 'complete')
@@ -495,3 +498,31 @@ def test_api_explicit_full_rebuild_is_forwarded(cached, engine, monkeypatch):
         assert client.post('/api/v1/cache/refresh', json={'full': True}).status_code == 202
         assert calls == [('industry-momentum', {'full': True}), (None, {'full': True})]
         assert client.post('/api/v1/cache/refresh', json={'module': 'unknown', 'full': True}).status_code == 422
+
+
+@pytest.mark.parametrize('full', [False, True])
+def test_public_sync_excludes_collector_owned_modules_and_stale_pending(cached, monkeypatch, full):
+    _, cache = cached
+    calls = []
+    original = cache.copy_module
+    monkeypatch.setattr(cache, 'copy_module', lambda module, **kwargs: calls.append(module) or original(module, **kwargs))
+    state = cache.read_state()
+    cache.root.mkdir(parents=True, exist_ok=True)
+    state['pending'] = list(COLLECTOR_OWNED_MODULES)
+    state['pending_full'] = True
+    cache.write_state(state)
+    assert cache.refresh(background=False, full=full)
+    assert calls == list(DATABASE_SYNC_MODULES)
+    assert {item['id'] for item in cache.status()['modules']} == set(DATABASE_SYNC_MODULES)
+    assert not cache.read_state().get('pending')
+
+
+def test_internal_collection_can_publish_hidden_modules(cached, monkeypatch):
+    _, cache = cached
+    calls = []
+    original = cache.copy_module
+    monkeypatch.setattr(cache, 'copy_module', lambda module, **kwargs: calls.append(module) or original(module, **kwargs))
+    assert cache.refresh_market_collection()
+    assert cache.refresh_etf_collection()
+    assert cache.refresh('dividend-selection', background=False, reason='dividend-collection')
+    assert calls == ['market-sentiment', 'market-crowding', 'etf-shares', 'dividend-selection']

@@ -155,3 +155,19 @@
     grid-template-columns: 1fr;
   }
 }
+
+.dividend-collection {
+  margin-top: 24px;
+  padding: 22px 26px;
+}
+.dividend-collection .panel-heading {
+  padding: 0;
+  flex-wrap: wrap;
+  gap: 16px;
+}
+.dividend-collection > p {
+  margin: 12px 0 0;
+  color: var(--muted);
+  font-size: 13px;
+}
+.dividend-collection > [role='alert'] { color: var(--danger, #dc4545); }

@@ -61,4 +61,4 @@ def test_incremental_cache_download_and_delete_and_stable_namespace(engine,sessi
     assert cache.refresh('market-sentiment',background=False)
     with cache.session('market-sentiment') as local:
         assert list(local.scalars(select(MarketSentiment.trade_date).order_by(MarketSentiment.trade_date)))==[date(2026,10,23),date(2026,10,24)]
-    assert cache.status()['modules'][list(MODULES).index('market-sentiment')]['ready']
+    assert cache.snapshot_path('market-sentiment', cache.read_state()['modules'].get('market-sentiment', {})) is not None

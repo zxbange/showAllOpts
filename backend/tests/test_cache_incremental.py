@@ -45,7 +45,7 @@ def test_dividend_legacy_schema_and_new_history_refresh(cached, session, engine)
 
 
 def assert_matches(cache, session, module):
-    assert not next(m for m in cache.status()['modules'] if m['id'] == module)['error']
+    assert not cache.read_state()['modules'][module]['error']
     count = 0
     with cache.session(module) as local:
         for model in MODULES[module][1]:

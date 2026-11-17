@@ -57,6 +57,17 @@ MODULES = {
 }
 
 
+# These modules publish their local results as part of external collection.
+# Keep MODULES stable for cache identities and internal publication, but do not
+# offer a second database-import workflow in the synchronization center.
+COLLECTOR_OWNED_MODULES = frozenset({
+    'market-crowding', 'market-sentiment', 'growth-dividend',
+    'valuation-ruler', 'dividend-selection', 'cash-cow', 'etf-shares',
+})
+DATABASE_SYNC_MODULES = {key: value for key, value in MODULES.items()
+                         if key not in COLLECTOR_OWNED_MODULES}
+
+
 def now():
     return datetime.now(CHINA)
 
@@ -294,7 +305,7 @@ class SnapshotCache:
         state = self.read_state()
         running = self.refreshing()
         items = []
-        for module, (name, _) in MODULES.items():
+        for module, (name, _) in DATABASE_SYNC_MODULES.items():
             entry = state['modules'].get(module, {})
             items.append({'id': module, 'name': name, 'ready': self.snapshot_path(module, entry) is not None,
                           'updated_at': entry.get('updated_at'), 'last_attempt_at': entry.get('last_attempt_at'),
@@ -319,6 +330,8 @@ class SnapshotCache:
         entry = self.read_state()['modules'].get(module, {})
         path = self.snapshot_path(module, entry)
         if path is None:
+            if module in COLLECTOR_OWNED_MODULES:
+                raise CacheUnavailable('本地数据尚未准备好，请在对应功能页面采集数据，或等待自动采集完成。')
             raise CacheUnavailable('本地数据尚未准备好，请查看数据同步状态，等待首次同步或手动同步。')
         engine = create_engine('sqlite:///file:' + path.as_posix() + '?mode=ro&uri=true', poolclass=NullPool)
         try:
@@ -565,10 +578,10 @@ class SnapshotCache:
         lock = self.acquire()
         if lock is None:
             return False
-        selected = [module] if module else list(MODULES)
+        selected = [module] if module else list(DATABASE_SYNC_MODULES)
         # Preserve unfinished work left by an interrupted process.
         state = self.read_state()
-        pending = [m for m in state.get('pending', []) if m in MODULES]
+        pending = [m for m in state.get('pending', []) if m in DATABASE_SYNC_MODULES]
         selected += [m for m in pending if m not in selected]
         full = full or bool(pending and state.get('pending_full'))
         slot = latest_slot(now(), daily_time).isoformat() if module is None else None
@@ -659,8 +672,8 @@ class SnapshotCache:
                 if slot <= self.schedule_floor or state.get('scheduled_slot', '')[:10] >= slot[:10]:
                     lock.release()
                     return
-                selected, reason = list(MODULES), 'scheduled'
-                full = bool(state.get('pending') and state.get('pending_full'))
+                selected, reason = list(DATABASE_SYNC_MODULES), 'scheduled'
+                full = bool(any(m in DATABASE_SYNC_MODULES for m in state.get('pending', [])) and state.get('pending_full'))
                 state['scheduled_slot'] = slot
                 self.write_state(state)
         except BaseException:

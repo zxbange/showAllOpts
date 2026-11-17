@@ -1,7 +1,7 @@
 """Manual module synchronization; concurrent refresh jobs share a single lock."""
 from fastapi import APIRouter, HTTPException, Request, Response
 from pydantic import BaseModel, Field
-from app.core.cache import MODULES
+from app.core.cache import DATABASE_SYNC_MODULES
 from app.core.cache_schedule import TIME_PATTERN
 
 router = APIRouter(prefix='/cache', tags=['数据同步'])
@@ -23,7 +23,7 @@ def refresh(body: RefreshRequest, request: Request):
     cache = request.app.state.cache
     if not cache.settings.cache_enabled:
         raise HTTPException(status_code=409, detail='当前未启用本地缓存。')
-    if body.module is not None and body.module not in MODULES:
+    if body.module is not None and body.module not in DATABASE_SYNC_MODULES:
         raise HTTPException(status_code=422, detail='未知模块。')
     accepted = cache.refresh(body.module, full=True) if body.full else cache.refresh(body.module)
     if not accepted:
