@@ -1,3 +1,4 @@
+import { PageHeaderActions } from './PageHeaderActions'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Database, RefreshCw } from 'lucide-react'
 import { useAuth } from './AccountAccess'
@@ -230,24 +231,26 @@ export function MarketCollectionPanel({ onCollected }: { onCollected: () => void
           {status && !status.configured && <p>请管理员在系统配置中设置数据库。</p>}
         </div>
         {admin && (
-          <button
-            className="button"
-            disabled={!!busy || running || confirming || workerDisabled || !status?.configured}
-            onClick={() => void run()}
-          >
-            <RefreshCw size={15} className={busy === 'run' || running ? 'spin' : ''} />
-            {busy === 'run'
-              ? '提交中…'
-              : running
-                ? '采集中…'
-                : confirming
-                  ? '正在确认采集状态…'
-                  : uncertain
-                    ? '重试同一采集请求'
-                    : retry
-                      ? '重试未完成采集'
-                      : '立即采集'}
-          </button>
+          <PageHeaderActions>
+            <button
+              className="button button-primary"
+              disabled={!!busy || running || confirming || workerDisabled || !status?.configured}
+              onClick={() => void run()}
+            >
+              <RefreshCw size={15} className={busy === 'run' || running ? 'spin' : ''} />
+              {busy === 'run'
+                ? '提交中…'
+                : running
+                  ? '采集中…'
+                  : confirming
+                    ? '正在确认采集状态…'
+                    : uncertain
+                      ? '重试同一采集请求'
+                      : retry
+                        ? '重试未完成采集'
+                        : '更新数据'}
+            </button>
+          </PageHeaderActions>
         )}
       </div>
       <p className="market-collection-note">

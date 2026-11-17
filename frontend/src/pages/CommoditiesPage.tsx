@@ -1,3 +1,4 @@
+import { PageHeaderActions } from '../components/PageHeaderActions'
 import { PageHeader } from '../components/PageHeader'
 import { ModuleSwitch } from '../components/ModuleSwitch'
 import { Coins } from 'lucide-react'
@@ -233,15 +234,15 @@ function A00Page() {
         <div className="commodity-heading">
           <h2>价格走势</h2>
           {admin && (
-            <div className="commodity-actions">
+            <PageHeaderActions>
               <button
-                className="button"
+                className="button button-primary"
                 disabled={busy || data?.status.running}
                 onClick={() => void refresh()}
               >
-                {busy || data?.status.running ? '采集中…' : '更新当日报价'}
+                {busy || data?.status.running ? '采集中' : '更新数据'}
               </button>
-            </div>
+            </PageHeaderActions>
           )}
         </div>
         <p>

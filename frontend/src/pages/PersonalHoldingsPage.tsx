@@ -1,3 +1,4 @@
+import { PageHeaderActions } from '../components/PageHeaderActions'
 import { PageHeader } from '../components/PageHeader'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useAuth } from '../components/AccountAccess'
@@ -327,13 +328,15 @@ function Holdings() {
           <small>最近成功读取：{stamp(status?.observed_at ?? null)}</small>
         </div>
         <div className="holdings-actions">
-          <button
-            className="button"
-            disabled={busy || !status?.configured || status?.manual?.status === 'pending'}
-            onClick={() => void operate('sync')}
-          >
-            {status?.manual?.status === 'pending' ? '采集中…' : '立即采集'}
-          </button>
+          <PageHeaderActions>
+            <button
+              className="button button-primary"
+              disabled={busy || !status?.configured || status?.manual?.status === 'pending'}
+              onClick={() => void operate('sync')}
+            >
+              {status?.manual?.status === 'pending' ? '采集中…' : '更新数据'}
+            </button>
+          </PageHeaderActions>
           <button
             className="button button-primary"
             disabled={busy || !status?.configured}

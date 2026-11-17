@@ -1,6 +1,7 @@
 import { useLayoutEffect, useRef } from 'react'
 import { ChartNoAxesCombined, ChevronRight, House, Layers3 } from 'lucide-react'
 import { Link, NavLink, Outlet, useLocation } from 'react-router-dom'
+import { PageHeaderActionsProvider } from './PageHeaderActions'
 import { CacheControl } from './CacheControl'
 import { useAuth } from './AccountAccess'
 import { accountRequest } from '../api/http'
@@ -123,7 +124,7 @@ export function Layout() {
           </div>
         </header>
         <main id="main-content" className="main-content">
-          <Outlet />
+          <PageHeaderActionsProvider key={location.pathname}><Outlet /></PageHeaderActionsProvider>
         </main>
       </div>
     </div>

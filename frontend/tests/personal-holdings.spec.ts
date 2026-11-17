@@ -284,7 +284,7 @@ test('manual sync outside trading window keeps monitoring off and survives navig
     })
   })
   await page.goto('/personal-holdings')
-  await page.getByRole('button', { name: '立即采集', exact: true }).click()
+  await page.locator('.page-header').getByRole('button', { name: '更新数据', exact: true }).click()
   await expect(page.getByRole('button', { name: '采集中…' })).toBeDisabled()
   expect(calls).toBe(1)
   await page.reload()
@@ -298,11 +298,11 @@ test('manual sync outside trading window keeps monitoring off and survives navig
   await expect(page.getByRole('status')).toContainText('采集完成')
   expect(calls).toBe(1)
   await page.screenshot({ path: info.outputPath('manual.png'), fullPage: true })
-  await page.getByRole('button', { name: '立即采集', exact: true }).click()
+  await page.locator('.page-header').getByRole('button', { name: '更新数据', exact: true }).click()
   await expect(page.getByRole('button', { name: '采集中…' })).toBeDisabled()
   expect(calls).toBe(2)
   manual.status = 'completed'
-  await expect(page.getByRole('button', { name: '立即采集', exact: true })).toBeEnabled({
+  await expect(page.getByRole('button', { name: '更新数据', exact: true })).toBeEnabled({
     timeout: 10000,
   })
 })

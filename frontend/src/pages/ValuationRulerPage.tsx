@@ -1,3 +1,4 @@
+import { PageHeaderActions } from '../components/PageHeaderActions'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { CalendarDays, RefreshCw, Download, Square, Gauge, Layers3 } from 'lucide-react'
 import { useAuth } from '../components/AccountAccess'
@@ -342,7 +343,7 @@ export function ValuationRulerPage() {
               </p>
               <p>计算后保存至数据库与本地。历史补采使用聚宽。</p>
             </div>
-            <div className="valuation-actions">
+            <PageHeaderActions>
               <button
                 className="button button-primary"
                 disabled={disabled || running}
@@ -355,7 +356,7 @@ export function ValuationRulerPage() {
                     ? '采集中'
                     : busy
                       ? '正在提交…'
-                      : '采集并补数据'}
+                      : '更新数据'}
               </button>
               {running && (
                 <button
@@ -364,10 +365,10 @@ export function ValuationRulerPage() {
                   onClick={() => void act('cancel')}
                 >
                   <Square size={14} />
-                  停止采集
+                  取消采集
                 </button>
               )}
-            </div>
+            </PageHeaderActions>
           </div>
           {!admin && <p>仅管理员可采集与停止任务。</p>}
           <div aria-live="polite">

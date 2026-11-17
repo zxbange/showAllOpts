@@ -1,3 +1,4 @@
+import { PageHeaderActions } from '../components/PageHeaderActions'
 import { useEffect, useRef, useState } from 'react'
 import { init, use } from 'echarts/core'
 import { LineChart } from 'echarts/charts'
@@ -203,13 +204,15 @@ export function CCICoalPage() {
         <div className="commodity-heading">
           <h2>价格走势</h2>
           {admin && (
-            <button
-              className="button"
-              disabled={busy || data?.status.running}
-              onClick={() => void refresh()}
-            >
-              {busy || data?.status.running ? '更新中…' : '更新数据'}
-            </button>
+            <PageHeaderActions>
+              <button
+                className="button button-primary"
+                disabled={busy || data?.status.running}
+                onClick={() => void refresh()}
+              >
+                {busy || data?.status.running ? '采集中' : '更新数据'}
+              </button>
+            </PageHeaderActions>
           )}
         </div>
         <p>点击图例选择档位；仅显示来源实际报价日期，缺口不代表价格不变。</p>

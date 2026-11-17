@@ -419,6 +419,7 @@ test('initial backfill, update progress and failed gaps retain existing curves',
     '待补 3 个交易日 · 4 条指数数据',
   )
   await expect(page.getByRole('alert')).toContainText('已保留现有数据')
+  await expect(page.locator('.page-header').getByRole('button', { name: '更新数据', exact: true })).toBeVisible()
   await page.getByRole('button', { name: '更新数据', exact: true }).click()
   await expect(page.getByRole('progressbar', { name: '创红比更新进度' })).toHaveAttribute(
     'value',
@@ -552,7 +553,7 @@ test('database sync uses the global cancellation entry, not public collection', 
   })
   await page.goto('/growth-dividend')
   await expect(page.getByRole('button', { name: '数据库同步中', exact: true })).toBeDisabled()
-  await expect(page.getByRole('button', { name: '停止更新', exact: true })).toHaveCount(0)
+  await expect(page.getByRole('button', { name: '取消采集', exact: true })).toHaveCount(0)
   await expect(page.getByText('数据库同步中，请到顶部“数据同步”查看或取消。')).toBeVisible()
   expect(mutations).toBe(0)
 })

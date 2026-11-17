@@ -8,6 +8,7 @@ import {
 } from '../lib/cashCow'
 import { RefreshCw, Square } from 'lucide-react'
 import { useAuth } from '../components/AccountAccess'
+import { PageHeaderActions } from '../components/PageHeaderActions'
 import { PageHeader } from '../components/PageHeader'
 import { getCashCowLatest, getCashCowStatus, updateCashCow } from '../api/cashCow'
 import type { CashCowOverview, CashCowStatus } from '../types/cashCow'
@@ -164,6 +165,7 @@ function CashCowPeriodPage({
             </select>
           </label>
           <span className="date-badge">数据截至 {snapshot?.as_of ?? '—'}</span>
+          <PageHeaderActions>
           <button
             className="button button-primary"
             disabled={busy || loading || !status || !admin || status.cancelling}
@@ -175,9 +177,10 @@ function CashCowPeriodPage({
               : status?.cancelling
                 ? '正在停止…'
                 : running
-                  ? '停止采集'
-                  : '更新全部周期'}
+                  ? '取消采集'
+                  : '更新数据'}
           </button>
+          </PageHeaderActions>
         </div>
       </PageHeader>
       <section className="panel cash-cow-summary" aria-label="筛选概况">
@@ -283,7 +286,7 @@ function CashCowPeriodPage({
         {!snapshot ? (
           <div className="state-panel">
             <h3>{loading ? '正在加载' : '暂无筛选快照'}</h3>
-            <p>点击“更新全部周期”从公开接口采集并筛选，首次运行可能需要较长时间。</p>
+            <p>点击“更新数据”从公开接口采集并筛选，首次运行可能需要较长时间。</p>
           </div>
         ) : !data?.items.length ? (
           <div className="state-panel">

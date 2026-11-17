@@ -48,6 +48,42 @@ def mature(listed, day):
         raise DividendSourceError('上市日期无法核验，保留原结果。') from None
 
 
+def reconcile_universe(current, independent, day):
+    """Only independently proven under-age single-source listings may differ."""
+    verified = {f"{r['code']}.{r['exchange']}": r for r in independent}
+    if len(verified) != len(independent):
+        raise DividendSourceError('独立股票池存在重复，保留原结果。')
+    dates = {}
+    for provider, pool in [('asharehub', current), ('eastmoney_selector', verified)]:
+        for symbol, row in pool.items():
+            listed = row.get('list_date')
+            if provider == 'asharehub':
+                if not isinstance(listed, str) or not re.fullmatch(r'\d{8}', listed):
+                    raise DividendSourceError('上市日期缺失或无效，无法核验股票池。')
+                listed = f'{listed[:4]}-{listed[4:6]}-{listed[6:]}'
+            mature(listed, day)  # Validate dates (including future dates) before exclusion.
+            dates[provider, symbol] = listed
+    for symbol in sorted(current.keys() & verified.keys()):
+        if dates['asharehub', symbol] != dates['eastmoney_selector', symbol]:
+            LOG.warning('Dividend listing date mismatch symbol=%s', symbol)
+            raise DividendSourceError('上市日期跨来源不一致：' + symbol)
+    missing = []
+    for provider, pool, other in [('asharehub', current, verified), ('eastmoney_selector', verified, current)]:
+        for symbol in sorted(pool.keys() - other.keys()):
+            listed = dates[provider, symbol]
+            if mature(listed, day):
+                missing.append(symbol)
+            else:
+                LOG.info('Dividend universe excluded difference source=%s symbol=%s listed=%s as_of=%s reason=listed_under_three_years',
+                         provider, symbol, listed, day)
+    if missing:
+        LOG.warning('Dividend universe mismatch asharehub=%s selector=%s asharehub_only=%s selector_only=%s eligible_unverified=%s',
+                    len(current), len(verified), sorted(current.keys()-verified.keys())[:10],
+                    sorted(verified.keys()-current.keys())[:10], sorted(missing)[:10])
+        raise DividendSourceError('股票池跨来源覆盖不一致，保留原结果。')
+    return {symbol: row for symbol, row in current.items() if symbol in verified}
+
+
 def timestamp(value):
     try:
         result = datetime.fromisoformat(value)
@@ -306,9 +342,9 @@ class DividendPublicSource(EastmoneyCashCowSource):
         if not all_rows or any(row.get('list_status') != 'L' for row in all_rows.values()):
             raise DividendSourceError('当前上市股票池未完整核验。')
         independent = self._selector_universe()
+        universe_count = len(all_rows)
+        all_rows = reconcile_universe(all_rows, independent, self.day)
         census = {f"{r['code']}.{r['exchange']}": r for r in independent}
-        if len(census) != len(independent) or set(census) != set(all_rows):
-            raise DividendSourceError('股票池跨来源覆盖不一致。')
         eligible = []
         self.listed_dates = {}
         for symbol, row in all_rows.items():
@@ -359,7 +395,7 @@ class DividendPublicSource(EastmoneyCashCowSource):
         # (live sample T00018.SH). Only join to the independently verified pool;
         # duplicates and missing classification for qualifying stocks still fail.
         industries = self.mapped([row for row in industry_rows if row.get('symbol') in all_rows])
-        meta, records = rank_records(active, valuations, cash, industries, self.day, len(all_rows))
+        meta, records = rank_records(active, valuations, cash, industries, self.day, universe_count)
         self.enrich_history(records)
         return meta, records
 

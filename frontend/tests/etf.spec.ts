@@ -300,6 +300,6 @@ test('collection descriptions and past failure status stay hidden without blocki
   )
   await page.goto('/etf-shares')
   await expect(page.getByText(/自动采集：北京时间|手动采集：|立即采集仅更新/)).toHaveCount(0)
-  await expect(page.getByRole('button', { name: '立即采集', exact: true })).toBeEnabled()
+  await expect(page.getByRole('button', { name: '更新数据', exact: true })).toBeEnabled()
   await expect(page.getByRole('img', { name: 'ETF总份额曲线' })).toBeVisible()
 })

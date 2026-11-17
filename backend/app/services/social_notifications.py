@@ -28,6 +28,10 @@ class NotificationDeferred(Exception):
     pass
 
 
+class PhotoUploadDeferred(NotificationDeferred):
+    """Image downloaded, but upload was cancelled before network I/O."""
+
+
 class NotificationError(RuntimeError):
     def __init__(self, message, retry_after=0):
         super().__init__(message)
@@ -142,7 +146,7 @@ class NotificationMixin:
                 if channel not in enabled and delivery['status'] == 'pending':
                     delivery.update(status='skipped', last_error=None)
 
-    def send_channel(self, channel, text, require_enabled=True, guard=None):
+    def send_channel(self, channel, text, require_enabled=True, guard=None, upload_guard=None):
         """Serialize sends across workers and re-read switches just before network I/O."""
         try:
             with portalocker.Lock(str(self.root / 'notification-send.lock'), timeout=35):
@@ -169,9 +173,24 @@ class NotificationMixin:
                         self.write_config(db, current)
                 try:
                     if channel == 'telegram':
-                        self.send_part(self.decode(current['token']), self.decode(current['chat_id']), text)
+                        if isinstance(text, dict):
+                            def before_upload():
+                                with self.db() as db:
+                                    refreshed = self.config(db)
+                                    if ('telegram' not in enabled_channels(refreshed)
+                                            or refreshed.get('token') != current.get('token')
+                                            or refreshed.get('chat_id') != current.get('chat_id')
+                                            or (require_enabled and not refreshed['enabled'])
+                                            or (upload_guard and not upload_guard(db, refreshed))):
+                                        raise PhotoUploadDeferred()
+                            self.send_photo(self.decode(current['token']), self.decode(current['chat_id']),
+                                            text, before_upload=before_upload)
+                        else:
+                            self.send_part(self.decode(current['token']), self.decode(current['chat_id']), text)
                     else:
                         send_feishu(self.decode(current['feishu_webhook']), self.decode(current['feishu_secret']), text)
+                except (NotificationSkipped, NotificationDeferred):
+                    raise
                 except NotificationError as error:
                     if error.retry_after:
                         with self.db() as db:
@@ -229,7 +248,22 @@ class NotificationMixin:
         for channel, state in routes.items():
             if state['status'] != 'pending' or channel in blocked:
                 continue
-            selected_parts = parts if channel == 'telegram' else feishu_parts(parts)
+            selected_parts = list(parts) if channel == 'telegram' else feishu_parts(parts)
+            if channel == 'telegram' and table == 'posts':
+                from app.services.social_images import image_url, MAX_IMAGES
+                payload = json.loads(row['payload'])
+                urls = payload.get('images', [])
+                urls = urls if isinstance(urls, list) else []
+                safe_urls = list(dict.fromkeys(url for raw in urls[:MAX_IMAGES]
+                                              if (url := image_url(raw, row['platform']))))
+                selected_parts.extend({'url': url, 'platform': row['platform'],
+                                       'caption': f"配图 {index + 1}/{len(safe_urls)}"}
+                                      for index, url in enumerate(safe_urls))
+            if state.get('image_in_flight') is not None:
+                self._save_delivery(table, status_column, row['id'], channel, image_in_flight=None,
+                                    image_warning='部分配图发送中断、状态不明，请查看原文。')
+            if state['next_part'] >= len(selected_parts):
+                self._save_delivery(table, status_column, row['id'], channel, status='sent')
             for index in range(state['next_part'], len(selected_parts)):
                 if self.stop_event.is_set():
                     return errors
@@ -241,13 +275,55 @@ class NotificationMixin:
                     if current is None or json.loads(current['delivery'] or '{}').get(channel, {}).get('status') != 'pending':
                         break
                 try:
-                    self.send_channel(channel, selected_parts[index], guard=active_check)
+                    part = selected_parts[index]
+                    def guarded_send(db, current):
+                        if not active_check(db, current):
+                            return False
+                        if isinstance(part, dict):
+                            # Telegram has no idempotency key: durably consume each image attempt
+                            # before I/O. A crash/timeout may omit an image, never blindly replay it.
+                            saved = db.execute(f'SELECT delivery FROM {table} WHERE id=?', (row['id'],)).fetchone()
+                            delivery = json.loads(saved['delivery'] or '{}') if saved else {}
+                            target = delivery.get(channel, {})
+                            if target.get('status') != 'pending' or target.get('next_part', 0) > index:
+                                return False
+                            target['next_part'] = index + 1
+                            target['image_in_flight'] = index
+                            db.execute(f'UPDATE {table} SET delivery=?,next_part=? WHERE id=?',
+                                       (json.dumps(delivery), index + 1, row['id']))
+                        return True
+                    if isinstance(part, dict):
+                        self.send_channel(channel, part, guard=guarded_send, upload_guard=active_check)
+                    else:
+                        self.send_channel(channel, part, guard=guarded_send)
                 except NotificationSkipped:
                     self._save_delivery(table, status_column, row['id'], channel, status='skipped', last_error=None)
                     break
+                except PhotoUploadDeferred:
+                    self._save_delivery(table, status_column, row['id'], channel,
+                                        next_part=index, image_in_flight=None)
+                    return errors
                 except NotificationDeferred:
                     return errors
-                except RuntimeError as error:
+                except (RuntimeError, ValueError, OSError) as error:
+                    if isinstance(selected_parts[index], dict):
+                        with self.db() as db:
+                            checkpoint = db.execute(f'SELECT delivery FROM {table} WHERE id=?', (row['id'],)).fetchone()
+                            saved_state = json.loads(checkpoint['delivery'] or '{}').get(channel, {}) if checkpoint else {}
+                        if saved_state.get('next_part', 0) <= index:
+                            # Lock contention/rate-limit wait happened before the durable attempt.
+                            # Keep the image pending rather than silently consuming it.
+                            self._save_delivery(table, status_column, row['id'], channel,
+                                                last_error='配图发送暂缓，稍后重试。')
+                            blocked.add(channel)
+                            errors.append(error)
+                            break
+                        LOG.warning('Social image omitted post=%s image_part=%s error_type=%s; text preserved',
+                                    row['id'], index + 1, type(error).__name__)
+                        self._save_delivery(table, status_column, row['id'], channel, next_part=index+1,
+                                            status='sent' if index == len(selected_parts)-1 else 'pending',
+                                            image_warning='部分配图未送达或状态不明，请查看原文。', image_in_flight=None)
+                        continue
                     LOG.warning('Notification delivery deferred channel=%s part=%s total=%s %s',
                                 channel, index + 1, len(selected_parts), diagnostic_details(error))
                     self._save_delivery(table, status_column, row['id'], channel, last_error=str(error))
@@ -255,6 +331,7 @@ class NotificationMixin:
                     errors.append(error)
                     break
                 self._save_delivery(table, status_column, row['id'], channel, next_part=index+1,
-                                    status='sent' if index == len(selected_parts)-1 else 'pending', last_error=None)
+                                    status='sent' if index == len(selected_parts)-1 else 'pending', last_error=None,
+                                    **({'image_in_flight': None} if isinstance(part, dict) else {}))
                 self.stop_event.wait(1.1)
         return errors

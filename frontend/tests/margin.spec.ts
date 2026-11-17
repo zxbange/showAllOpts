@@ -235,17 +235,18 @@ test('empty history starts explicitly and shows progress with stop only while ru
   })
   await page.goto('/margin-guarantee')
   await expect(page.getByRole('heading', { name: '暂无两融担保比例数据' })).toBeVisible()
-  await expect(page.getByRole('button', { name: '停止采集' })).toHaveCount(0)
+  await expect(page.getByRole('button', { name: '取消采集' })).toHaveCount(0)
   expect(starts).toBe(0)
-  await page.getByRole('button', { name: '采集历史数据' }).click()
+  await expect(page.getByRole('region', { name: '两融数据更新' }).getByRole('button', { name: '更新数据', exact: true })).toHaveCount(0)
+  await page.locator('.page-header').getByRole('button', { name: '更新数据' }).click()
   await expect(page.getByRole('progressbar', { name: '两融采集进度' })).toHaveAttribute(
     'value',
     '35',
   )
   await expect(page.locator('.margin-progress-label')).toContainText('42 / 120')
-  await page.getByRole('button', { name: '停止采集' }).click()
-  await expect(page.getByRole('button', { name: '停止采集' })).toHaveCount(0)
-  await expect(page.getByRole('button', { name: '采集历史数据' })).toBeVisible()
+  await page.locator('.page-header').getByRole('button', { name: '取消采集' }).click()
+  await expect(page.getByRole('button', { name: '取消采集' })).toHaveCount(0)
+  await expect(page.getByRole('button', { name: '更新数据' })).toBeVisible()
   expect(starts).toBe(1)
   expect(stops).toBe(1)
 })
@@ -318,7 +319,7 @@ test('first saved record appears during backfill and later history reads are thr
   peakConcurrent = concurrentHistory
   processed = 1
   await expect(page.locator('.margin-chart canvas')).toBeVisible({ timeout: 10000 })
-  await expect(page.getByRole('button', { name: '停止采集' })).toBeVisible()
+  await expect(page.getByRole('button', { name: '取消采集' })).toBeVisible()
   const reads = historyReads
   processed = 2
   await expect(page.locator('.margin-progress-label')).toContainText('2 / 120', { timeout: 10000 })

@@ -257,3 +257,27 @@ test('read-only users do not receive collection controls', async ({ page }) => {
   await expect(page.locator('tbody tr').first()).toBeVisible()
   await expect(page.getByRole('button', { name: '更新数据', exact: true })).toHaveCount(0)
 })
+
+test('collection action stays outside scrolling tabs on narrow screens and clears on navigation', async ({ page }) => {
+  await page.route('**/api/v1/dividend-selection/latest', route => route.fulfill({ json: fixture }))
+  for (const width of [320, 375]) {
+    await page.setViewportSize({ width, height: 812 })
+    await page.goto('/dividend-selection')
+    const actions = page.locator('.page-header-actions')
+    const update = actions.getByRole('button', { name: '更新数据', exact: true })
+    await expect(update).toBeEnabled()
+    await expect(page.getByRole('button', { name: '更新数据', exact: true })).toHaveCount(1)
+    await expect(page.locator('.module-card-switch').getByRole('button', { name: '更新数据' })).toHaveCount(0)
+    const tabs = page.locator('.page-header .module-card-switch')
+    const tabBox = await tabs.boundingBox()
+    const actionBox = await actions.boundingBox()
+    expect(actionBox!.x).toBeGreaterThanOrEqual(tabBox!.x + tabBox!.width)
+    expect(Math.abs((actionBox!.y + actionBox!.height / 2) - (tabBox!.y + tabBox!.height / 2))).toBeLessThan(2)
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true)
+    await tabs.getByRole('link', { name: '高股息低估值（银行业）', exact: true }).click()
+    await expect(update).toBeEnabled()
+    await expect(page.getByRole('button', { name: '更新数据', exact: true })).toHaveCount(1)
+    await page.getByRole('link', { name: '总览', exact: true }).click()
+    await expect(page.locator('.page-header-actions').getByRole('button')).toHaveCount(0)
+  }
+})

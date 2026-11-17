@@ -9,6 +9,7 @@ from datetime import datetime, timezone, timedelta
 from contextlib import closing
 from email.utils import parsedate_to_datetime
 import httpx
+from app.services.social_images import extract_images
 
 XUEQIU_TIMELINE_URL = 'https://www.xueqiu.com/statuses/original/timeline.json'
 XUEQIU_PAGE_SIZE = 10
@@ -241,6 +242,7 @@ def normalize_post(platform, uid, item, fallback_name):
         "name": user.get("screen_name") or fallback_name or uid,
         "time": published,
         "text": body or "[图片或视频帖子，请查看原文]",
+        "images": extract_images(platform, item),
         "url": (f"https://m.weibo.cn/detail/{post_id}" if platform == "weibo"
                 else f"https://xueqiu.com/{uid}/{post_id}"),
     }

@@ -1,3 +1,4 @@
+import { PageHeaderActions } from '../components/PageHeaderActions'
 import { useAuth } from '../components/AccountAccess'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import {
@@ -269,7 +270,7 @@ export function MarginPage() {
           <div className="margin-chart-placeholder">
             <EmptyState
               title="暂无两融担保比例数据"
-              description="点击“采集历史数据”获取近六年记录；已保存的数据可继续补采。"
+              description="点击“更新数据”获取近六年记录；已保存的数据可继续补采。"
             />
           </div>
         )}
@@ -289,27 +290,29 @@ export function MarginPage() {
                 : '首次采集补齐近六年历史，后续按日期增量更新。'}
             </p>
           </div>
-          <div className="margin-update-actions">
-            {running ? (
-              <button
-                className="button button-quiet"
-                onClick={() => void act('cancel')}
-                disabled={busy || cancelling || !admin}
-              >
-                <Square size={15} />
-                {cancelling ? '正在停止…' : '停止采集'}
-              </button>
-            ) : (
-              <button
-                className="button button-primary"
-                onClick={() => void act('refresh')}
-                disabled={busy || loading || !admin}
-              >
-                <Download size={16} />
-                {busy ? '正在启动…' : latest ? '更新数据' : '采集历史数据'}
-              </button>
-            )}
-          </div>
+          <PageHeaderActions>
+            <div className="margin-update-actions">
+              {running ? (
+                <button
+                  className="button button-quiet"
+                  onClick={() => void act('cancel')}
+                  disabled={busy || cancelling || !admin}
+                >
+                  <Square size={15} />
+                  {cancelling ? '正在停止…' : '取消采集'}
+                </button>
+              ) : (
+                <button
+                  className="button button-primary"
+                  onClick={() => void act('refresh')}
+                  disabled={busy || loading || !admin}
+                >
+                  <Download size={16} />
+                  {busy ? '正在启动…' : '更新数据'}
+                </button>
+              )}
+            </div>
+          </PageHeaderActions>
         </div>
         <div className="margin-progress-area" aria-live="polite">
           {running ? (

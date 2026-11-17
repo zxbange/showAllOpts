@@ -1,3 +1,4 @@
+import { PageHeaderActions } from './PageHeaderActions'
 import { useEffect, useRef, useState } from 'react'
 import { useAuth } from './AccountAccess'
 import { getETFCollectionStatus } from '../api/client'
@@ -186,21 +187,23 @@ export function ETFCollectionPanel({ onCollected }: { onCollected: () => void })
             )}
             {uncertain && <p>重试会沿用上次请求的日常采集选项，不新增历史补采。</p>}
             {cancelling && <p>正在等待当前采集步骤结束，取消后可重新开始。</p>}
-            <button
-              className="button"
-              disabled={!!busy || (!manualActive && (running || !status?.configured))}
-              onClick={() => void (manualActive ? cancel() : run())}
-            >
-              {manualActive
-                ? '取消采集'
-                : busy === 'run'
-                  ? '提交中…'
-                  : running
-                    ? '自动采集中…'
-                    : uncertain
-                      ? '重试同一采集请求'
-                      : '立即采集'}
-            </button>
+            <PageHeaderActions>
+              <button
+                className="button button-primary"
+                disabled={!!busy || (!manualActive && (running || !status?.configured))}
+                onClick={() => void (manualActive ? cancel() : run())}
+              >
+                {manualActive
+                  ? '取消采集'
+                  : busy === 'run'
+                    ? '提交中…'
+                    : running
+                      ? '自动采集中…'
+                      : uncertain
+                        ? '重试同一采集请求'
+                        : '更新数据'}
+              </button>
+            </PageHeaderActions>
           </div>
         )}
       </div>

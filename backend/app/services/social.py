@@ -630,6 +630,22 @@ class SocialMonitor(NotificationMixin, CubeMonitorMixin):
             LOG.warning('Notification transport failed channel=telegram %s', diagnostic_details(error))
             raise RuntimeError('Telegram 网络或响应异常，下轮自动重试') from None
 
+    def send_photo(self, token, chat_id, part, before_upload=None):
+        from app.services.social_images import download_image
+        data, mime = download_image(part['url'], part['platform'])
+        if before_upload is not None:
+            before_upload()
+        try:
+            with httpx.Client(timeout=30, follow_redirects=False, trust_env=False) as client:
+                response = client.post(f'https://api.telegram.org/bot{token}/sendPhoto',
+                                       data={'chat_id': chat_id, 'caption': part['caption']},
+                                       files={'photo': ('image.' + mime.split('/')[1], data, mime)})
+                result = response.json()
+                if not response.is_success or not isinstance(result, dict) or result.get('ok') is not True:
+                    raise RuntimeError('Telegram image rejected')
+        except (httpx.HTTPError, ValueError):
+            raise RuntimeError('Telegram image delivery uncertain') from None
+
     def test_telegram(self):
         with self.db() as db:
             config = self.config(db)

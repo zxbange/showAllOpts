@@ -42,6 +42,7 @@ test('CCI peer module, gaps, grade selection, schedule, responsive navigation', 
   await expect(page.getByRole('cell', { name: '2026-01-21', exact: true })).toHaveCount(0)
   await expect(page.getByRole('cell', { name: '—', exact: true }).first()).toBeVisible()
   await page.getByLabel('CCI报价档位').selectOption('all')
+  await expect(page.locator('.page-header').getByRole('button', { name: '更新数据', exact: true })).toBeVisible()
   await page.getByRole('button', { name: '更新数据' }).click()
   expect(calls).toBe(1)
   await expect(page.getByRole('button', { name: '更新数据' })).toBeEnabled()
@@ -78,7 +79,7 @@ test('CCI failed refresh retains displayed history and prevents repeated start',
   })
   await page.goto('/commodities?instrument=cci')
   await page.getByRole('button', { name: '更新数据' }).click()
-  await expect(page.getByRole('button', { name: '更新中…' })).toBeDisabled()
+  await expect(page.getByRole('button', { name: '采集中' })).toBeDisabled()
   expect(posts).toBe(1)
   release()
   await expect(page.getByRole('alert')).toContainText('CCI更新未启动')
@@ -241,7 +242,7 @@ test('CCI manual recovery polls until finished and preserves history', async ({ 
   })
   await page.goto('/commodities?instrument=cci')
   await page.getByRole('button', { name: '更新数据' }).click()
-  await expect(page.getByRole('button', { name: '更新中…' })).toBeDisabled()
+  await expect(page.getByRole('button', { name: '采集中' })).toBeDisabled()
   await expect(page.getByRole('row')).toHaveCount(587)
   await expect(page.getByRole('button', { name: '更新数据' })).toBeEnabled()
   expect(posts).toBe(1)
@@ -288,4 +289,35 @@ test('CCI explains initial recovery floor when no quote has succeeded', async ({
   await expect(page.getByRole('status', { name: 'CCI数据更新状态' })).toContainText(
     '暂无历史报价的档位从首次采集记录日期开始：CCI5000 2026-11-04。',
   )
+})
+
+test('commodity toolbar switches its command with the active tab without stale buttons', async ({ page }) => {
+  const commands: string[] = []
+  await page.route('**/api/v1/commodities/**', route => {
+    if (route.request().method() === 'POST') {
+      commands.push(new URL(route.request().url()).pathname)
+      return route.fulfill({ json: { started: true } })
+    }
+    return route.fulfill({ json: { rows: [], status: { running: false, automatic: true } } })
+  })
+  await page.setViewportSize({ width: 375, height: 812 })
+  await page.goto('/commodities')
+  const update = page.locator('.page-header-actions').getByRole('button', { name: '更新数据', exact: true })
+  await expect(update).toBeEnabled()
+  await update.click()
+  await expect(update).toBeEnabled()
+  await page.getByRole('link', { name: 'CCI动力煤', exact: true }).click()
+  await expect(update).toHaveCount(1)
+  await expect(update).toBeEnabled()
+  await update.click()
+  await expect(update).toBeEnabled()
+  await page.goBack()
+  await expect(update).toHaveCount(1)
+  await expect(update).toBeEnabled()
+  await update.click()
+  await expect.poll(() => commands.length).toBe(3)
+  expect(commands[0]).toContain('/a00/')
+  expect(commands[1]).toContain('/cci/')
+  expect(commands[2]).toContain('/a00/')
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
 })

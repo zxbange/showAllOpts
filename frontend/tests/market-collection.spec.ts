@@ -376,7 +376,7 @@ test('a disabled server worker cannot queue collection even with a configured ac
   const panel = page.getByRole('region', { name: '市场日采集' })
   await expect(panel).toContainText('服务端采集任务未启用')
   await expect(panel).toContainText('自动计划待服务启用')
-  const start = page.getByRole('button', { name: '立即采集', exact: true })
+  const start = page.getByRole('button', { name: '更新数据', exact: true })
   await expect(start).toBeDisabled()
   await start.evaluate((element: HTMLButtonElement) => element.click())
   expect(runs).toBe(0)
@@ -519,7 +519,7 @@ test('locks repeated starts, keeps action failures across polling and retries th
     await route.fulfill({ status: 202, json: { id: ids[0], status: 'queued' } })
   })
   await page.goto('/market-sentiment')
-  const start = page.getByRole('button', { name: '立即采集', exact: true })
+  const start = page.getByRole('button', { name: '更新数据', exact: true })
   await expect(start).toBeEnabled()
   await start.evaluate((element: HTMLButtonElement) => {
     element.click()
@@ -678,22 +678,22 @@ for (const legacy of [false, true]) {
     })
     await page.goto('/market-sentiment')
     const panel = page.getByRole('region', { name: '市场日采集' })
-    await panel.getByRole('button', { name: '立即采集', exact: true }).click()
-    await expect(panel.getByRole('button', { name: '采集中…', exact: true })).toBeDisabled()
+    await page.locator('.page-header').getByRole('button', { name: '更新数据', exact: true }).click()
+    await expect(page.locator('.page-header').getByRole('button', { name: '采集中…', exact: true })).toBeDisabled()
     await expect(panel.getByRole('alert')).toHaveCount(0)
     await expect(panel).not.toContainText('重试将沿用同一请求')
-    await expect(panel.getByRole('button', { name: '重试同一采集请求', exact: true })).toHaveCount(
+    await expect(page.locator('.page-header').getByRole('button', { name: '重试同一采集请求', exact: true })).toHaveCount(
       0,
     )
     state = { ...state, running: false, status: 'complete' }
     await page.clock.fastForward(1600)
-    const start = panel.getByRole('button', { name: '立即采集', exact: true })
+    const start = page.locator('.page-header').getByRole('button', { name: '更新数据', exact: true })
     await expect(start).toBeEnabled()
     await expect(panel).not.toContainText('已有采集正在运行')
     await start.click()
     await expect.poll(() => ids.length).toBe(2)
     expect(ids[1]).not.toBe(ids[0])
-    await expect(panel.getByRole('button', { name: '采集中…', exact: true })).toBeDisabled()
+    await expect(page.locator('.page-header').getByRole('button', { name: '采集中…', exact: true })).toBeDisabled()
   })
 }
 
@@ -711,7 +711,7 @@ for (const dayStatus of ['partial', 'blocked']) {
     })
     await page.goto('/market-sentiment')
     const panel = page.getByRole('region', { name: '市场日采集' })
-    const start = panel.getByRole('button', { name: '采集中…', exact: true })
+    const start = page.locator('.page-header').getByRole('button', { name: '采集中…', exact: true })
     await expect(start).toBeDisabled()
     await start.evaluate((button: HTMLButtonElement) => {
       button.click()
@@ -719,7 +719,7 @@ for (const dayStatus of ['partial', 'blocked']) {
     })
     expect(starts).toBe(0)
     await expect(panel).toContainText('首轮失败项先跳过，完整采集一遍后仅重试失败项（最多3轮）')
-    await expect(panel.getByRole('button', { name: '重试未完成采集', exact: true })).toHaveCount(0)
+    await expect(page.locator('.page-header').getByRole('button', { name: '重试未完成采集', exact: true })).toHaveCount(0)
   })
 }
 
@@ -739,8 +739,8 @@ test('an acknowledged run remains locked across stale or failed status reads', a
   })
   await page.goto('/market-sentiment')
   const panel = page.getByRole('region', { name: '市场日采集' })
-  await panel.getByRole('button', { name: '立即采集', exact: true }).click()
-  const confirming = panel.getByRole('button', { name: '采集中…', exact: true })
+  await page.locator('.page-header').getByRole('button', { name: '更新数据', exact: true }).click()
+  const confirming = page.locator('.page-header').getByRole('button', { name: '采集中…', exact: true })
   await expect(confirming).toBeDisabled()
   await expect.poll(() => statusReads).toBeGreaterThanOrEqual(2)
   await confirming.evaluate((button: HTMLButtonElement) => {
@@ -755,7 +755,7 @@ test('an acknowledged run remains locked across stale or failed status reads', a
   failStatus = false
   state = { ...idle, status: 'running', run_id: ids[0] }
   await panel.getByRole('button', { name: '重新读取状态', exact: true }).click()
-  await expect(panel.getByRole('button', { name: '采集中…', exact: true })).toBeDisabled()
+  await expect(page.locator('.page-header').getByRole('button', { name: '采集中…', exact: true })).toBeDisabled()
   expect(ids).toHaveLength(1)
 })
 
@@ -787,11 +787,11 @@ test('a busy retry cannot discard an earlier uncertain id even after another job
   })
   await page.goto('/market-sentiment')
   const panel = page.getByRole('region', { name: '市场日采集' })
-  await panel.getByRole('button', { name: '立即采集', exact: true }).click()
-  const retry = panel.getByRole('button', { name: '重试同一采集请求', exact: true })
+  await page.locator('.page-header').getByRole('button', { name: '更新数据', exact: true }).click()
+  const retry = page.locator('.page-header').getByRole('button', { name: '重试同一采集请求', exact: true })
   await expect(retry).toBeEnabled()
   await retry.click()
-  await expect(panel.getByRole('button', { name: '采集中…', exact: true })).toBeDisabled()
+  await expect(page.locator('.page-header').getByRole('button', { name: '采集中…', exact: true })).toBeDisabled()
   await expect(panel.getByRole('alert')).toHaveCount(0)
   await expect(panel).not.toContainText('重试将沿用同一请求')
   state = { ...state, status: 'complete' }
@@ -801,7 +801,7 @@ test('a busy retry cannot discard an earlier uncertain id even after another job
   await retry.click()
   await expect.poll(() => ids.length).toBe(3)
   expect(new Set(ids).size).toBe(1)
-  await expect(panel.getByRole('button', { name: '采集中…', exact: true })).toBeDisabled()
+  await expect(page.locator('.page-header').getByRole('button', { name: '采集中…', exact: true })).toBeDisabled()
 })
 
 for (const firstResult of ['lost', 'malformed']) {
@@ -822,12 +822,12 @@ for (const firstResult of ['lost', 'malformed']) {
     })
     await page.goto('/market-sentiment')
     const panel = page.getByRole('region', { name: '市场日采集' })
-    await panel.getByRole('button', { name: '立即采集', exact: true }).click()
-    await panel.getByRole('button', { name: '重试同一采集请求', exact: true }).click()
+    await page.locator('.page-header').getByRole('button', { name: '更新数据', exact: true }).click()
+    await page.locator('.page-header').getByRole('button', { name: '重试同一采集请求', exact: true }).click()
     await expect(panel).toContainText('该采集请求已完成，未重复启动任务。')
     await expect(panel).not.toContainText('采集请求已提交')
     await expect(panel.getByRole('alert')).toHaveCount(0)
-    await expect(panel.getByRole('button', { name: '立即采集', exact: true })).toBeEnabled()
+    await expect(page.locator('.page-header').getByRole('button', { name: '更新数据', exact: true })).toBeEnabled()
     expect(ids).toHaveLength(2)
     expect(ids[1]).toBe(ids[0])
   })
@@ -861,11 +861,11 @@ test('polling finds a completed uncertain request in history even after a newer 
   })
   await page.goto('/market-sentiment')
   const panel = page.getByRole('region', { name: '市场日采集' })
-  await panel.getByRole('button', { name: '立即采集', exact: true }).click()
-  await expect(panel.getByRole('button', { name: '重试同一采集请求', exact: true })).toBeEnabled()
+  await page.locator('.page-header').getByRole('button', { name: '更新数据', exact: true }).click()
+  await expect(page.locator('.page-header').getByRole('button', { name: '重试同一采集请求', exact: true })).toBeEnabled()
   resolved = true
   await page.clock.fastForward(1600)
-  await expect(panel.getByRole('button', { name: '立即采集', exact: true })).toBeEnabled()
+  await expect(page.locator('.page-header').getByRole('button', { name: '更新数据', exact: true })).toBeEnabled()
   await expect(panel).toContainText('该采集请求已完成，未重复启动任务。')
   await expect(panel.getByRole('alert')).toHaveCount(0)
 })
@@ -881,11 +881,11 @@ for (const status of [409, 422]) {
     })
     await page.goto('/market-sentiment')
     const panel = page.getByRole('region', { name: '市场日采集' })
-    const start = panel.getByRole('button', { name: '立即采集', exact: true })
+    const start = page.locator('.page-header').getByRole('button', { name: '更新数据', exact: true })
     await start.click()
     await expect(panel.getByRole('alert')).toContainText('采集配置尚未就绪')
     await expect(panel).not.toContainText('重试将沿用同一请求')
-    await expect(panel.getByRole('button', { name: '重试同一采集请求', exact: true })).toHaveCount(
+    await expect(page.locator('.page-header').getByRole('button', { name: '重试同一采集请求', exact: true })).toHaveCount(
       0,
     )
     await expect(start).toBeEnabled()
@@ -918,12 +918,12 @@ for (const result of ['complete', 'partial', 'paused']) {
     })
     await page.goto('/market-sentiment')
     const panel = page.getByRole('region', { name: '市场日采集' })
-    const start = panel.getByRole('button', { name: '立即采集', exact: true })
+    const start = page.locator('.page-header').getByRole('button', { name: '更新数据', exact: true })
     await start.click()
-    await panel.getByRole('button', { name: '重试同一采集请求', exact: true }).click()
+    await page.locator('.page-header').getByRole('button', { name: '重试同一采集请求', exact: true }).click()
     await expect(start).toBeEnabled()
     await expect(panel).toContainText('未重复启动任务')
-    await expect(panel.getByRole('button', { name: '正在确认采集状态…', exact: true })).toHaveCount(
+    await expect(page.locator('.page-header').getByRole('button', { name: '正在确认采集状态…', exact: true })).toHaveCount(
       0,
     )
     await page.clock.fastForward(60000)

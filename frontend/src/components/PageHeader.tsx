@@ -1,6 +1,7 @@
 import type { ReactNode } from 'react'
 import { useLocation } from 'react-router-dom'
 import { groupForPath, individualModules } from '../lib/modules'
+import { PageHeaderActionSlot } from './PageHeaderActions'
 import { ModuleSwitch } from './ModuleSwitch'
 import '../styles/page-header.css'
 
@@ -37,18 +38,21 @@ export function PageHeader({ children, switcher }: { children: ReactNode; switch
   return (
     <header className="page-header">
       <div className="page-heading">{children}</div>
-      {switcher ??
-        (group && groupItems && (
-          <ModuleSwitch
-            label={group.name + '模块切换'}
-            items={groupItems}
-            value={
-              pathname === '/dividend-selection'
-                ? `dividend-${new URLSearchParams(search).get('method') === 'bank' ? 'bank' : 'value'}`
-                : pathname.split('/')[1]
-            }
-          />
-        ))}
+      <div className="page-header-toolbar">
+        {switcher ??
+          (group && groupItems && (
+            <ModuleSwitch
+              label={group.name + '模块切换'}
+              items={groupItems}
+              value={
+                pathname === '/dividend-selection'
+                  ? `dividend-${new URLSearchParams(search).get('method') === 'bank' ? 'bank' : 'value'}`
+                  : pathname.split('/')[1]
+              }
+            />
+          ))}
+        <PageHeaderActionSlot />
+      </div>
     </header>
   )
 }

@@ -79,7 +79,8 @@ test('empty page is read only until requested and has three navigation modules',
   await expect(page.getByRole('heading', { name: '暂无筛选快照' })).toBeVisible()
   await expect(page.getByLabel('成功更新时间')).toContainText('最近成功更新 —')
   await expect(page.getByLabel('成功更新时间')).toContainText('上上一次 —')
-  await expect(page.getByRole('button', { name: '更新全部周期' })).toBeEnabled()
+  await expect(page.getByRole('button', { name: '更新数据' })).toBeEnabled()
+  await expect(page.locator('.page-header-actions').getByRole('button', { name: '更新数据' })).toBeVisible()
   await expect(
     page.getByRole('navigation', { name: '业绩选股模块切换' }).getByRole('link'),
   ).toHaveCount(3)
@@ -152,21 +153,21 @@ test('refresh and cancel are single-flight and preserve published results', asyn
     await route.fulfill({ json: { cancelled: true } })
   })
   await page.goto('/cash-cow')
-  await expect(page.getByRole('button', { name: '更新全部周期' })).toBeEnabled()
-  await page.getByRole('button', { name: '更新全部周期' }).evaluate((el: HTMLButtonElement) => {
+  await expect(page.getByRole('button', { name: '更新数据' })).toBeEnabled()
+  await page.getByRole('button', { name: '更新数据' }).evaluate((el: HTMLButtonElement) => {
     el.click()
     el.click()
   })
-  await expect(page.getByRole('button', { name: '停止采集' })).toBeEnabled()
+  await expect(page.getByRole('button', { name: '取消采集' })).toBeEnabled()
   expect(starts).toBe(1)
-  await page.getByRole('button', { name: '停止采集' }).evaluate((el: HTMLButtonElement) => {
+  await page.getByRole('button', { name: '取消采集' }).evaluate((el: HTMLButtonElement) => {
     el.click()
     el.click()
   })
   await expect(page.getByRole('button', { name: '正在停止…' })).toBeDisabled()
   expect(cancels).toBe(1)
   status = { ...idle, stage: '已停止' }
-  await expect(page.getByRole('button', { name: '更新全部周期' })).toBeEnabled({ timeout: 7000 })
+  await expect(page.getByRole('button', { name: '更新数据' })).toBeEnabled({ timeout: 7000 })
   await expect(page.getByText('测试股份', { exact: true })).toBeVisible()
   await expect(
     page.getByText('当前仍展示上次成功快照；失败或停止不会覆盖已保存结果。'),
@@ -181,7 +182,7 @@ test('failed collection retains prior snapshot and read failure is retryable', a
   await page.route('**/api/v1/cash-cow/refresh', (route) =>
     route.fulfill({ status: 503, json: { detail: '启动失败' } }),
   )
-  await page.getByRole('button', { name: '更新全部周期' }).click()
+  await page.getByRole('button', { name: '更新数据' }).click()
   await expect(page.getByRole('alert')).toContainText('启动失败')
   await expect(page.getByText('测试股份', { exact: true })).toBeVisible()
   await page.getByRole('button', { name: '重新读取' }).click()
@@ -300,7 +301,7 @@ test('switching periods aborts old polling and ignores delayed snapshots without
     if (request.method() === 'POST') writes.push(request.url())
   })
   await page.goto('/cash-cow')
-  await expect(page.getByRole('button', { name: '停止采集' })).toBeEnabled()
+  await expect(page.getByRole('button', { name: '取消采集' })).toBeEnabled()
   await expect.poll(() => polls).toBeGreaterThan(0)
   await page.getByLabel('筛选年限').selectOption('3')
   await page.getByLabel('筛选年限').selectOption('5')
@@ -308,7 +309,7 @@ test('switching periods aborts old polling and ignores delayed snapshots without
   await page.waitForTimeout(2600)
   await expect(page.getByText('5年股份', { exact: true })).toBeVisible()
   await expect(page.getByText('旧状态不应显示', { exact: true })).toHaveCount(0)
-  await expect(page.getByRole('button', { name: '停止采集' })).toBeEnabled()
+  await expect(page.getByRole('button', { name: '取消采集' })).toBeEnabled()
   expect(polls).toBe(1)
   expect(writes).toEqual([])
 })
@@ -414,7 +415,7 @@ test('switching views during a pending refresh keeps one command and shares canc
     return route.fulfill({ json: { cancelled: true } })
   })
   await page.goto('/cash-cow?years=3')
-  await page.getByRole('button', { name: '更新全部周期' }).click()
+  await page.getByRole('button', { name: '更新数据' }).click()
   await expect.poll(() => starts).toBe(1)
   await page.getByLabel('筛选年限').selectOption('5')
   await expect(page.getByText('5年股份', { exact: true })).toBeVisible()
@@ -426,10 +427,10 @@ test('switching views during a pending refresh keeps one command and shares canc
   await page.getByLabel('筛选年限').selectOption('10')
   await expect(page.getByRole('button', { name: '正在提交…' })).toBeDisabled()
   finishStart()
-  await expect(page.getByRole('button', { name: '停止采集' })).toBeEnabled()
+  await expect(page.getByRole('button', { name: '取消采集' })).toBeEnabled()
   expect(starts).toBe(1)
   await page.getByLabel('筛选年限').selectOption('3')
-  await page.getByRole('button', { name: '停止采集' }).click()
+  await page.getByRole('button', { name: '取消采集' }).click()
   await expect(page.getByRole('button', { name: '正在停止…' })).toBeDisabled()
   await page.getByLabel('筛选年限').selectOption('5')
   await expect(page.getByRole('button', { name: '正在停止…' })).toBeDisabled()
@@ -450,7 +451,7 @@ for (const hasSnapshot of [false, true])
       return route.fulfill({ status: 503, json: { detail: '布局测试启动失败' } })
     })
     await page.goto('/cash-cow')
-    const update = page.getByRole('button', { name: '更新全部周期' })
+    const update = page.getByRole('button', { name: '更新数据' })
     await expect(update).toBeEnabled()
     const viewportWidth = page.viewportSize()!.width
     expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(

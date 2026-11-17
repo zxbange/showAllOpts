@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import { PageHeaderActions } from './PageHeaderActions'
 import { RefreshCw } from 'lucide-react'
 import { getDividendStatus, updateDividend, type DividendCollectionStatus } from '../api/dividend'
 
@@ -63,13 +64,13 @@ export function DividendCollectionControls({ onComplete }: { onComplete: () => v
   return <section className="panel dividend-collection" aria-label="高股息数据采集">
     <div className="panel-heading">
       <div><h2>数据采集</h2><p>一次更新银行与非银行选股结果</p></div>
-      <div className="heading-actions">
+      <PageHeaderActions>
         <button className="button button-primary" disabled={busy || !status || status.running || !status.available} onClick={() => void act('refresh')}>
           <RefreshCw size={16} className={status?.running ? 'spin' : ''} />
           {status?.running ? '采集中' : status?.publication_pending ? '恢复同步' : '更新数据'}
         </button>
         {status?.running && <button className="button button-quiet" disabled={busy} onClick={() => void act('cancel')}>取消采集</button>}
-      </div>
+      </PageHeaderActions>
     </div>
     {(error || pollError || status?.error) && <p role="alert">{error || pollError || status?.error}</p>}
     {notice && <p role="status">{notice}</p>}

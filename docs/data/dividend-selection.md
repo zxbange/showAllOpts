@@ -79,3 +79,7 @@ eligibility. Its 2025 ordinary-holder annual DPS is 0.7721, including the interi
 0.28. An unrecognised company, changed publication, changed amount, or changed
 ex-date remains pending verification; this bounded registry is not a universal
 solution and a future differential plan can block automatic publication.
+
+## 股票池跨来源覆盖校验
+
+公开源完整分页后核对 AShareHub 与东方财富股票池。共同证券的上市日期必须一致；单边证券仅在上市日期有效、不晚于采集日且明确未满三周年时排除，不读取其行情和财报。满三周年的单边证券、重复代码、日期缺失/无效/冲突仍停止采集并保留上次成功结果。日志输出来源数量和最多十个差异证券代码，便于排查数据源更新不同步，不记录凭据或完整响应。

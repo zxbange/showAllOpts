@@ -88,7 +88,8 @@ def test_missing_proposal_source_cannot_publish():
         source.fiscal_cash(['600036.SH'])
 
 
-def test_collect_complete_current_day_and_missing_nonpaused_valuation(monkeypatch):
+@pytest.mark.parametrize('young_side', [None, 'asharehub', 'eastmoney_selector'])
+def test_collect_complete_current_day_and_missing_nonpaused_valuation(monkeypatch, young_side):
     from datetime import datetime
     import app.services.dividend_public_source as module
     class Clock(datetime):
@@ -108,7 +109,12 @@ def test_collect_complete_current_day_and_missing_nonpaused_valuation(monkeypatc
                'reference/industries':[dict(symbol='600036.SH',l1_code='801780.SI',l1_name='Bank'),
                                        dict(symbol='T00018.SH',l1_code='801780.SI',l1_name='Legacy')]}
     source.ash=lambda endpoint,params:responses[endpoint]
-    source._selector_universe=lambda:[dict(code=r['symbol'][:6],exchange='SH',name=r['name'],list_date='2000-01-01') for r in stocks]
+    independent=[dict(code=r['symbol'][:6],exchange='SH',name=r['name'],list_date='2000-01-01') for r in stocks]
+    source._selector_universe=lambda:independent
+    if young_side == 'asharehub':
+        stocks.append(dict(symbol='920309.BJ', name='Young', list_date='20261116', list_status='L'))
+    elif young_side == 'eastmoney_selector':
+        independent.append(dict(code='920309', exchange='BJ', name='Young', list_date='2026-11-16'))
     source.suspension_events=lambda:[event()]
     def dividends(symbols):
         assert symbols==['600036.SH']

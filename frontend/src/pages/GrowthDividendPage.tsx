@@ -1,3 +1,4 @@
+import { PageHeaderActions } from '../components/PageHeaderActions'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { CalendarDays, Clock3, Download, RefreshCw, Square, TrendingUp } from 'lucide-react'
 import {
@@ -348,25 +349,27 @@ export function GrowthDividendPage() {
             </strong>
             <p>补齐当天与此前未成功更新的数据，历史记录从2018年起保留。</p>
           </div>
-          {running ? (
-            <button
-              className="button button-quiet"
-              onClick={() => void act('cancel')}
-              disabled={busy || stopping || status?.cancelling || !admin || uncertain}
-            >
-              <Square size={15} />
-              {stopping || status?.cancelling ? '正在停止…' : '停止更新'}
-            </button>
-          ) : (
-            <button
-              className="button button-primary"
-              onClick={() => void act('refresh')}
-              disabled={databaseSyncing || busy || loading || !admin || uncertain}
-            >
-              <Download size={16} />
-              {databaseSyncing ? '数据库同步中' : busy ? '正在启动…' : '更新数据'}
-            </button>
-          )}
+          <PageHeaderActions>
+            {running ? (
+              <button
+                className="button button-quiet"
+                onClick={() => void act('cancel')}
+                disabled={busy || stopping || status?.cancelling || !admin || uncertain}
+              >
+                <Square size={15} />
+                {stopping || status?.cancelling ? '正在停止…' : '取消采集'}
+              </button>
+            ) : (
+              <button
+                className="button button-primary"
+                onClick={() => void act('refresh')}
+                disabled={databaseSyncing || busy || loading || !admin || uncertain}
+              >
+                <Download size={16} />
+                {databaseSyncing ? '数据库同步中' : busy ? '正在启动…' : '更新数据'}
+              </button>
+            )}
+          </PageHeaderActions>
         </div>
         <div className="growth-dividend-progress" aria-live="polite">
           {running ? (
