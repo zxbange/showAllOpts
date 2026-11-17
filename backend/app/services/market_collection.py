@@ -1021,10 +1021,10 @@ class MarketCollection:
             return False
         finally:
             try:
-                if run_id and not manual and self._notification_changes:
+                if run_id and self._notification_changes:
                     with self.connect() as db:
                         terminal = db.execute('SELECT status FROM manual_runs WHERE id=?', (run_id,)).fetchone()
-                    emit_collection_result(self.settings, 'market', scheduled=True, run_key=run_id,
+                    emit_collection_result(self.settings, 'market', scheduled=not manual, run_key=run_id,
                         outcome=terminal[0] if terminal else 'failed', changed_count=self._notification_changes,
                         summary=self._notification_summary[-10:])
             except Exception as exc:

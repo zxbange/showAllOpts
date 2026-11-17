@@ -365,7 +365,7 @@ def test_automatic_startup_notifies_once_across_workers_and_later_daily_slot(mon
     try:
         replacement.tick(MOMENT)
         monitor.tick(MOMENT.replace(hour=19))
-        # A later explicit refresh is still manual, and never sends.
+        # A later manual refresh with unchanged business values does not send.
         monitor.refresh(background=False, moment=MOMENT)
         with notifications._database(monitor.settings) as db:
             assert db.execute('SELECT count(*) FROM outbox').fetchone()[0] == 1
@@ -381,7 +381,9 @@ def test_startup_no_notification_when_disabled_or_no_business_changes(monitor, m
     monitor.settings.growth_dividend_worker_enabled = True
     provider(monkeypatch)
     if preload:
+        monkeypatch.setattr(notifications, 'enabled', lambda *_: False)
         monitor.refresh(background=False, moment=MOMENT)
+        monkeypatch.setattr(notifications, 'enabled', lambda *_: notify_enabled)
         state = monitor.read_state()
         state['initialized'] = False
         monitor.write_state(state)

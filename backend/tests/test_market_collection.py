@@ -1546,3 +1546,23 @@ def test_heat_progress_logs_count_and_elapsed_without_stock_payload(tmp_path, ca
     assert any('processed=100 elapsed_seconds=' in text for text in progress)
     assert any('processed=120 elapsed_seconds=' in text for text in progress)
     assert not any('fake-password' in text or 'quote_json' in text for text in progress)
+
+
+@pytest.mark.parametrize('notify_enabled', [True, False])
+def test_manual_collection_notifications_obey_switch_and_no_change(tmp_path, monkeypatch, notify_enabled):
+    from app.services import collection_notifications as notifications
+    monkeypatch.setattr(notifications, 'enabled', lambda *_: notify_enabled)
+    monkeypatch.setattr(notifications, 'start_notifications', lambda *_: None)
+    collection, provider, writer, clock = worker(tmp_path)
+    original_writer = collection.writer
+    def counting_writer(*args):
+        return original_writer(*args) | {'changed_count': 2, 'changed_metrics': ['heat', 'crowding']}
+    collection.writer = counting_writer
+    collection.request_run('manual-notify')
+    assert collection.tick()
+    with notifications._database(collection.settings) as db:
+        assert db.execute('SELECT count(*) FROM outbox').fetchone()[0] == int(notify_enabled)
+    collection.request_run('manual-notify')
+    collection.tick(clock.advance(minutes=1))
+    with notifications._database(collection.settings) as db:
+        assert db.execute('SELECT count(*) FROM outbox').fetchone()[0] == int(notify_enabled)

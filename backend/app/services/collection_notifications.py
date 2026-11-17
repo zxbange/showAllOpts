@@ -1,5 +1,6 @@
-"""Opt-in scheduled-result Telegram outbox; never a dependency of collection success."""
+"""Opt-in collection-result Telegram outbox; never a dependency of collection success."""
 from datetime import datetime
+from decimal import Decimal, InvalidOperation
 from functools import wraps
 import inspect
 import json
@@ -48,7 +49,7 @@ def emit_collection_result(settings, task_id, *, scheduled, run_key, outcome,
                            changed_count, summary, collected_at=None):
     """Persist a deduplicated event describing committed business changes."""
     try:
-        reason = ('not_scheduled' if not scheduled else 'no_business_change' if changed_count <= 0
+        reason = ('no_business_change' if changed_count <= 0
                   else 'disabled' if not enabled(settings, task_id) else None)
         if reason:
             LOG.info('Collection notification skipped task=%s reason=%s', task_id, reason)
@@ -61,8 +62,9 @@ def emit_collection_result(settings, task_id, *, scheduled, run_key, outcome,
                                       (task_id, str(run_key), message, 'pending')).rowcount
         finally:
             db.close()
-        LOG.info('Collection notification %s task=%s changed_count=%s',
-                 'enqueued' if inserted else 'duplicate', task_id, changed_count)
+        LOG.info('Collection notification %s task=%s changed_count=%s trigger=%s',
+                 'enqueued' if inserted else 'duplicate', task_id, changed_count,
+                 'automatic' if scheduled else 'manual')
         start_notifications(settings)
         return bool(inserted)
     except Exception as exc:
@@ -175,6 +177,37 @@ def published_values(monitor, task):
     raise ValueError('unsupported task')
 
 
+def _quote_number(value):
+    if value is None or isinstance(value, bool):
+        return None
+    try:
+        number = Decimal(str(value))
+        return number if number.is_finite() else None
+    except (InvalidOperation, ValueError):
+        return None
+
+
+def _quote_with_change(after, day, field, grade=None):
+    """Compare with the latest earlier valid same-field quote, never same-day/future."""
+    key = (day, grade) if grade is not None else day
+    current = _quote_number(after.get(key, {}).get(field))
+    if current is None:
+        return '—'
+    if grade is not None:
+        earlier = sorted((key for key in after if isinstance(key, tuple)
+                          and key[1] == grade and key[0] < day), reverse=True)
+    else:
+        earlier = sorted((key for key in after if isinstance(key, str) and key < day), reverse=True)
+    previous = next((value for key in earlier
+                     if (value := _quote_number(after[key].get(field))) is not None), None)
+    def display(value):
+        text = format(value, 'f')
+        return text.rstrip('0').rstrip('.') if '.' in text else text
+    delta = current - previous if previous is not None else None
+    change = '—' if delta is None else ('+' if delta > 0 else '') + display(delta if delta else Decimal(0))
+    return f'{display(current)}({change})'
+
+
 def summarize_changes(task, changes, after):
     if task == 'cash_cow':
         lines = []
@@ -190,10 +223,17 @@ def summarize_changes(task, changes, after):
     if task == 'margin':
         lines.append(f'最新担保比例：{after[day]}%')
     elif task == 'commodities':
-        q = after[day]
-        lines.append(f"最新报价：最低 {q['low'] if q['low'] is not None else '—'} / 最高 {q['high'] if q['high'] is not None else '—'} / 均价 {q['mean'] if q['mean'] is not None else '—'} 元/吨")
+        lines.append(f"报价日期：{day}")
+        values = [_quote_with_change(after, day, field) for field in ('low', 'high', 'mean')]
+        lines.append(f"最低 {values[0]} / 最高 {values[1]} / 均价 {values[2]} 元/吨")
     elif task == 'cci':
-        lines.extend(f'{grade}：{after[(day,grade)]["price"]} 元/吨' for grade in ('CCI5500','CCI5000','CCI4500') if (day,grade) in after)
+        # Each grade can have a different newest changed date during partial backfill.
+        for grade in ('CCI5500', 'CCI5000', 'CCI4500'):
+            grade_days = [key[0] for key in changes if isinstance(key, tuple) and key[1] == grade]
+            if grade_days:
+                quote_day = max(grade_days)
+                value = _quote_with_change(after, quote_day, 'price', grade)
+                lines.append(f'{grade}：{value} 元/吨（{quote_day}）')
     elif task == 'valuation_ruler':
         if any(isinstance(key, tuple) for key in after):
             from app.services.index_valuation import INDICES
@@ -224,12 +264,11 @@ def notify_collection(task):
             bound = call.arguments
             state = bound.get('state') or {}
             slot = bound.get('slot') or state.get('current_scheduled_slot')
-            # Startup gap recovery is automatic and may consume today's schedule
-            # in GrowthDividend.collect. It must not silently swallow its result.
+            # Preserve trigger classification for logs; both triggers notify on changes.
             scheduled = slot is not None or (task == 'growth_dividend' and state.get('trigger') == 'startup')
             before = None
             try:
-                reason = 'not_scheduled' if not scheduled else 'disabled' if not enabled(self.settings, task) else None
+                reason = 'disabled' if not enabled(self.settings, task) else None
                 if reason:
                     LOG.info('Collection notification skipped task=%s reason=%s', task, reason)
                 else:
@@ -270,7 +309,7 @@ def notify_collection(task):
                         failed = failed or any(word in latest.get('stage', '') for word in ('已停止','采集中断'))
                         outcome = latest.get('outcome') or ('failed' if failed else 'completed')
                         if changes:
-                            emit_collection_result(self.settings,task,scheduled=True,run_key=run,outcome=outcome,
+                            emit_collection_result(self.settings,task,scheduled=scheduled,run_key=run,outcome=outcome,
                                                    changed_count=len(changes),summary=summarize_changes(task,changes,after))
                         else:
                             LOG.info('Collection notification skipped task=%s reason=no_business_change', task)

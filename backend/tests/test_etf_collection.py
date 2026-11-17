@@ -511,3 +511,25 @@ def test_collection_logs_unexpected_calendar_failure(tmp_path, caplog):
     assert 'ETF collection failed' in caplog.text and 'phase=calendar' in caplog.text
     assert 'reason=http_timeout' in caplog.text and 'outcome=failed' in caplog.text
     assert 'private-url-and-token' not in caplog.text
+
+
+def test_manual_etf_notification_uses_shared_change_gate(tmp_path, monkeypatch):
+    from app.services import collection_notifications as notifications
+    monkeypatch.setattr(notifications, 'enabled', lambda *_: True)
+    monkeypatch.setattr(notifications, 'start_notifications', lambda *_: None)
+    w, collector, _ = worker(tmp_path)
+    from test_etf_page_configuration import save
+    save(w, {'enabled': False})
+    original_write = collector.write_records
+    def counting_write(*args, **kwargs):
+        original_write(*args, **kwargs)
+        return 4
+    collector.write_records = counting_write
+    w.request_run('manual-etf-notify')
+    assert w.tick(EVENING)
+    with notifications._database(w.settings) as db:
+        assert db.execute('SELECT count(*) FROM outbox').fetchone()[0] == 1
+    w.request_run('manual-etf-notify')
+    w.tick(EVENING)
+    with notifications._database(w.settings) as db:
+        assert db.execute('SELECT count(*) FROM outbox').fetchone()[0] == 1

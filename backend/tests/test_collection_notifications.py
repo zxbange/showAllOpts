@@ -1,4 +1,4 @@
-"""Scheduled notifications follow committed business changes only."""
+"""Collection notifications follow committed business changes only."""
 from contextlib import contextmanager
 import json
 import sqlite3
@@ -22,8 +22,7 @@ def emit(settings,**overrides):
     arguments.update(overrides)
     return n.emit_collection_result(settings,'cci',**arguments)
 
-def test_manual_no_change_and_disabled_are_silent(settings,monkeypatch):
-    assert not emit(settings,scheduled=False)
+def test_no_change_and_disabled_are_silent(settings,monkeypatch):
     assert not emit(settings,changed_count=0,outcome='failed')
     monkeypatch.setattr(n,'enabled',lambda *_:False)
     assert not emit(settings)
@@ -102,12 +101,12 @@ def test_hooks_snapshot_before_release_and_ignore_timestamp_only(settings):
     m.collect(Lock(),{'run_id':'2','current_scheduled_slot':'2026-11-12'})
     assert len(rows(settings))==1
     m.collect(Lock(),{'run_id':'3','current_scheduled_slot':None},value=130)
-    assert len(rows(settings))==1
+    assert len(rows(settings))==2
     m.collect(Lock(),{'run_id':'4','current_scheduled_slot':'2026-11-12'},value=140,fail=True)
-    assert '失败' in rows(settings)[1]['message']
+    assert '失败' in rows(settings)[2]['message']
 
 def test_all_templates(settings):
-    assert '—' in n.summarize_changes('commodities',{'2026-11-11':1},{'2026-11-11':dict(low=None,high=None,mean=21000)})[1]
+    assert '—' in n.summarize_changes('commodities',{'2026-11-11':1},{'2026-11-11':dict(low=None,high=None,mean=21000)})[2]
     assert '近3年' in n.summarize_changes('cash_cow',{3:[]},{3:[]})[0]
     assert '创红比：0.500000' in n.summarize_changes('growth_dividend',{('2026-11-11','399006'):2500},{('2026-11-11','399006'):2500,('2026-11-11','000922'):5000})
 
@@ -164,7 +163,7 @@ def test_skip_and_queue_reasons_are_observable_without_payload(settings, monkeyp
     monkeypatch.setattr(n, 'enabled', lambda *_: True)
     emit(settings, summary=['DO_NOT_LOG_PAYLOAD'])
     emit(settings)
-    for reason in ('not_scheduled', 'no_business_change', 'disabled'):
+    for reason in ('no_business_change', 'disabled'):
         assert 'reason='+reason in caplog.text
     assert 'notification enqueued task=cci changed_count=1' in caplog.text
     assert 'notification duplicate task=cci' in caplog.text
@@ -207,3 +206,75 @@ def test_valuation_current_hook_emits_after_current_store_publish(settings):
     collect(monitor, Lock(), {'run_id': 'v2'}, 'scheduled-slot')
     row, = rows(settings)
     assert '上证50：3000；等权平均 PE(TTM)：15' in row['message']
+
+@pytest.mark.parametrize('task', list(n.LABELS))
+@pytest.mark.parametrize('scheduled', [True, False])
+def test_every_collection_trigger_obeys_switch_change_and_dedup(settings, monkeypatch, task, scheduled):
+    args = dict(scheduled=scheduled, run_key='one-run', outcome='completed', changed_count=1, summary=['changed'])
+    monkeypatch.setattr(n, 'enabled', lambda *_: False)
+    assert not n.emit_collection_result(settings, task, **args)
+    monkeypatch.setattr(n, 'enabled', lambda *_: True)
+    assert not n.emit_collection_result(settings, task, **dict(args, changed_count=0, outcome='failed'))
+    assert n.emit_collection_result(settings, task, **args)
+    assert not n.emit_collection_result(settings, task, **args)
+    assert len(rows(settings)) == 1
+
+
+def test_a00_quote_delta_uses_each_previous_valid_field_not_source_change():
+    after = {
+        '2026-11-10': dict(low='23000.1', high=23040, mean=23020),
+        '2026-11-11': dict(low=None, high=23050, mean=float('nan')),
+        '2026-11-12': dict(low='23000.2', high=23045, mean=23020, change=999),
+        '2026-11-13': dict(low=99999, high=99999, mean=99999),
+    }
+    lines = n.summarize_changes('commodities', {'2026-11-12': after['2026-11-12']}, after)
+    assert '报价日期：2026-11-12' in lines
+    assert '最低 23000.2(+0.1) / 最高 23045(-5) / 均价 23020(0) 元/吨' in lines
+
+
+def test_cci_quote_delta_aligns_grade_and_changed_date_with_partial_backfill():
+    after = {
+        ('2026-11-09', 'CCI5500'): dict(price=802),
+        ('2026-11-10', 'CCI5500'): dict(price=797, change=999),
+        ('2026-11-11', 'CCI5500'): dict(price=1000),
+        ('2026-11-08', 'CCI5000'): dict(price=700),
+        ('2026-11-09', 'CCI5000'): dict(price=None),
+        ('2026-11-11', 'CCI5000'): dict(price=702),
+        ('2026-11-10', 'CCI4500'): dict(price=600),
+    }
+    changes = {key: after[key] for key in [('2026-11-10', 'CCI5500'), ('2026-11-11', 'CCI5000'), ('2026-11-10', 'CCI4500')]}
+    lines = n.summarize_changes('cci', changes, after)
+    assert 'CCI5500：797(-5) 元/吨（2026-11-10）' in lines
+    assert 'CCI5000：702(+2) 元/吨（2026-11-11）' in lines
+    assert 'CCI4500：600(—) 元/吨（2026-11-10）' in lines
+
+
+def test_first_missing_and_invalid_quotes_never_invent_delta():
+    after = {'2026-11-11': dict(low=None, high='Infinity', mean='21000.00')}
+    lines = n.summarize_changes('commodities', after, after)
+    assert '最低 — / 最高 — / 均价 21000(—) 元/吨' in lines
+
+
+def test_same_batch_previous_quote_used_for_latest_change():
+    after = {('2026-11-09', 'CCI5500'): dict(price=800), ('2026-11-10', 'CCI5500'): dict(price=795)}
+    assert 'CCI5500：795(-5) 元/吨（2026-11-10）' in n.summarize_changes('cci', after, after)
+
+
+def test_manual_same_day_new_values_notify_but_repeated_values_do_not(settings):
+    monitor = Monitor(settings)
+    for run, value in [('manual-1', 120), ('manual-2', 120), ('manual-3', 130)]:
+        monitor.collect(Lock(), {'run_id': run}, value=value)
+    messages = rows(settings)
+    assert len(messages) == 2
+    assert [row['run'] for row in messages] == ['manual-1', 'manual-3']
+    assert '120.0%' in messages[0]['message']
+    assert '130.0%' in messages[1]['message']
+
+
+def test_competing_workers_enqueue_same_manual_run_once(settings):
+    from concurrent.futures import ThreadPoolExecutor
+    # Separate SQLite connections model separate API workers sharing the outbox.
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        results = list(pool.map(lambda _: emit(settings, scheduled=False), range(4)))
+    assert sum(results) == 1
+    assert len(rows(settings)) == 1

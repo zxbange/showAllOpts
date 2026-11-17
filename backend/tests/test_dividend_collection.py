@@ -294,3 +294,24 @@ def test_verified_source_enabled_by_default_without_starting_network(tmp_path):
     assert service.status()['available'] is True
     assert service.status()['unavailable_reason'] is None
     assert service.read_state() == {}
+
+
+def test_manual_dividend_notifies_only_changed_publication(tmp_path, monkeypatch):
+    from app.services import collection_notifications as notifications
+    import app.services.dividend_collection as module
+    monkeypatch.setattr(notifications, 'enabled', lambda *_: True)
+    monkeypatch.setattr(notifications, 'start_notifications', lambda *_: None)
+    monkeypatch.setattr(module, 'database_config', lambda _: {'revision': 1, 'host': 'localhost', 'port': 3306, 'database': 'test'})
+    engine = create_engine('sqlite:///' + str(tmp_path / 'results.sqlite'))
+    class Source:
+        def __init__(self, *args, **kwargs): pass
+        def collect(self): return result()
+    service = DividendCollection(SimpleNamespace(log_path=tmp_path), source_factory=Source,
+        engine_factory=lambda *a, **k: engine, client_factory=lambda: nullcontext(None))
+    monkeypatch.setattr(service, 'sync_local', lambda *args: None)
+    moment = datetime(2026, 11, 16, 21, tzinfo=CHINA)
+    for _ in range(2):
+        assert service.refresh(background=False, moment=moment)
+        assert service.status()['stage'] == 'complete'
+    with notifications._database(service.settings) as db:
+        assert db.execute('SELECT count(*) FROM outbox').fetchone()[0] == 1
