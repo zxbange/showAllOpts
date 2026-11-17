@@ -17,6 +17,7 @@ import portalocker
 from sqlalchemy import delete, select, inspect, text
 from app.core.database import build_engine, database_identity
 from app.core.diagnostics import diagnostic_details
+from app.services.dividend_limits import DIVIDEND_GROUP_LIMITS
 from app.models.dividend import DividendSnapshot, DividendStock
 from app.services.system_configuration import database_config
 from app.services.system_runtime import source_client
@@ -74,7 +75,7 @@ def validate_result(meta, records):
             if not Decimal(str(point['yield_pct'])).is_finite() or Decimal(str(point['yield_pct'])) < 0:
                 raise DividendCollectionError('Invalid annual dividend history')
         groups[record['method']].append(record)
-    for method, limit in (('value', 25), ('bank', 10)):
+    for method, limit in DIVIDEND_GROUP_LIMITS.items():
         ranks = sorted(row['rank'] for row in groups[method])
         if len(ranks) > limit or ranks != list(range(1, len(ranks) + 1)):
             raise DividendCollectionError('Invalid dividend ranks')

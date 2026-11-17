@@ -28,7 +28,7 @@ export function DividendPage() {
   const items = (group?.items ?? []).filter((s) =>
     [s.code, s.name, s.industry_name ?? ''].some((v) => v.toLowerCase().includes(term)),
   )
-  const limit = method === 'bank' ? 10 : 25
+  const limit = method === 'bank' ? 20 : 50
   const maxYield = Math.max(1, ...(group?.items ?? []).map((s) => s.dividend_yield_static))
   return (
     <div className="page-enter dividend-page">
@@ -37,7 +37,7 @@ export function DividendPage() {
           <h1>
             高股息低估值 <span className="heading-tag">银行与非银行</span>
           </h1>
-          <p>静态股息率 &gt; 3% · 0 &lt; PE &lt; 12 · 非银行前 25 只，银行前 10 只</p>
+          <p>静态股息率 &gt; 3% · 0 &lt; PE &lt; 12 · 非银行前 50 只，银行前 20 只</p>
         </div>
         <div className="heading-actions">
           <span className="date-badge">

@@ -88,7 +88,7 @@ def modules():
         'path': '/microcap-breadth', 'status': 'available',
     }, {
         'id': 'dividend-selection', 'name': '高股息选股',
-        'description': '静态股息率大于3%、PE小于12；非银行前25只、银行前10只。',
+        'description': '静态股息率大于3%、PE小于12；非银行前50只、银行前20只。',
         'path': '/dividend-selection', 'status': 'available',
     }, {
         'id': 'cash-cow', 'name': '奶牛股',

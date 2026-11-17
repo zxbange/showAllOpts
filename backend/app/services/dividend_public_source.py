@@ -9,6 +9,7 @@ import logging
 import re
 import time
 
+from app.services.dividend_limits import DIVIDEND_GROUP_LIMITS
 from app.services.cash_cow_source import EastmoneyCashCowSource, CashCowSourceError, DATACENTER
 from app.services.system_integrations import integrations_config
 
@@ -145,7 +146,7 @@ def rank_records(stocks, valuations, proposals, industries, day, universe_count)
             market_cap=cap / 100000000, close=decimal(valuation['close'], positive=True)))
     candidates.sort(key=lambda row: (-row['dividend_yield_1y'], row['code']))
     records = []
-    for method, count in [('value', 25), ('bank', 10)]:
+    for method, count in DIVIDEND_GROUP_LIMITS.items():
         selected = [row for row in candidates if row['method'] == method][:count]
         records.extend(dict(row, rank=i + 1) for i, row in enumerate(selected))
     return dict(trade_date=day, rule_version=RULE_VERSION, universe_count=universe_count,

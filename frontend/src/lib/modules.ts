@@ -89,7 +89,7 @@ export const individualModules: ResearchModule[] = [
     name: '高股息选股',
     path: '/dividend-selection',
     category: '价值观察',
-    description: '静态股息率大于3%、PE小于12；非银行前25只、银行前10只。',
+    description: '静态股息率大于3%、PE小于12；非银行前50只、银行前20只。',
     tags: ['银行与非银行', '股息率', 'PE估值'],
     icon: Coins,
     tone: 'gold',

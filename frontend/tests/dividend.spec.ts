@@ -37,17 +37,17 @@ const groups = ['value', 'bank'].map((id) => ({
   name: id === 'bank' ? '高股息低估值（银行业）' : '高股息低估值（非银行业）',
   ranking_field: 'dividend_yield_static',
   candidates: null,
-  items: Array.from({ length: id === 'bank' ? 10 : 25 }, (_, i) => stock(id, i)),
+  items: Array.from({ length: id === 'bank' ? 20 : 50 }, (_, i) => stock(id, i)),
 }))
 const fixture = {
   snapshot: {
     trade_date: '2026-10-16',
     updated_at: '2026-10-16T17:30:00',
-    rule_version: 'dividend_dps_proposal_age3_v9',
+    rule_version: 'dividend_dps_proposal_age3_annual_history_v10',
     universe_count: 5000,
     eligible_count: 4000,
-    value_candidates: 60,
-    value_count: 35,
+    value_candidates: 80,
+    value_count: 70,
   },
   groups,
 }
@@ -99,17 +99,17 @@ test('dividend module switches two groups, preserves search and omits retired fi
   await page.getByRole('link', { name: '进入业绩选股', exact: true }).click()
   await page.getByRole('link', { name: '高股息低估值（非银行业）', exact: true }).click()
   await expect(page.getByRole('heading', { level: 1 })).toContainText('高股息低估值')
-  await expect(page.locator('tbody tr')).toHaveCount(25)
+  await expect(page.locator('tbody tr')).toHaveCount(50)
   await expect(page.locator('tbody tr').first()).toContainText('8.00%')
   await expect(page.locator('.page-header .module-card')).toHaveCount(3)
   await page.getByRole('link', { name: /高股息低估值（银行业）/ }).click()
-  await expect(page.locator('tbody tr')).toHaveCount(10)
+  await expect(page.locator('tbody tr')).toHaveCount(20)
   await expect(
-    page.getByRole('heading', { name: '高股息低估值（银行业） · 前 10 名' }),
+    page.getByRole('heading', { name: '高股息低估值（银行业） · 前 20 名' }),
   ).toBeVisible()
   await expect(page.locator('tbody tr').first()).toContainText('000100.XSHE')
   await page.getByRole('link', { name: /高股息低估值（非银行业）/ }).click()
-  await expect(page.locator('tbody tr')).toHaveCount(25)
+  await expect(page.locator('tbody tr')).toHaveCount(50)
   await expect(page.locator('thead th').nth(2)).toHaveText('静态股息率')
   await expect(page.locator('tbody tr').first()).toContainText('000010.XSHE')
   const search = page.getByRole('textbox', { name: '搜索高股息股票' })
@@ -164,7 +164,7 @@ test('dividend uncollected, legitimate zero results and retry states', async ({ 
   await expect(page.getByRole('alert').filter({ hasText: '数据库暂不可用' })).toBeVisible()
   mode = 'data'
   await page.getByRole('button', { name: '重新加载' }).click()
-  await expect(page.locator('tbody tr')).toHaveCount(25)
+  await expect(page.locator('tbody tr')).toHaveCount(50)
 })
 
 test('legacy successful results remain visible with an old-rule warning', async ({ page }) => {
@@ -174,7 +174,7 @@ test('legacy successful results remain visible with an old-rule warning', async 
         ...fixture,
         requires_refresh: true,
         snapshot: { ...fixture.snapshot, rule_version: 'dividend_value_pe12_age3_v7' },
-        groups,
+        groups: groups.map(g => ({ ...g, items: g.items.slice(0, g.id === 'bank' ? 10 : 25) })),
       },
     }),
   )
@@ -196,7 +196,7 @@ test('retired method URL defaults to nonbank and has no obsolete controls', asyn
   await expect(
     page.getByRole('link', { name: '高股息低估值（非银行业）', exact: true }),
   ).toHaveAttribute('aria-current', 'page')
-  await expect(page.locator('tbody tr')).toHaveCount(25)
+  await expect(page.locator('tbody tr')).toHaveCount(50)
   await expect(page.getByRole('link', { name: '纯高股息', exact: true })).toHaveCount(0)
   await expect(page.getByRole('checkbox')).toHaveCount(0)
   await expect(page.locator('thead')).not.toContainText('PEG')
