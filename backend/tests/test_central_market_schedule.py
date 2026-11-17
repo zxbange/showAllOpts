@@ -61,12 +61,27 @@ def test_dynamic_schedule_changes_scope_and_next_run(tmp_path, monkeypatch):
     assert owner.status()['next_run_at'] == '2026-11-11T01:30:00+08:00'
 
 
-def test_manual_changed_run_does_not_notify(tmp_path, monkeypatch):
+@pytest.mark.parametrize('notify_enabled,changed_count', [(True, 1), (False, 1), (True, 0)])
+def test_manual_run_notifies_only_when_enabled_and_business_changed(tmp_path, monkeypatch, notify_enabled, changed_count):
+    from app.services import collection_notifications as notifications
+    monkeypatch.setattr(notifications, 'enabled', lambda settings, task: task == 'market' and notify_enabled)
+    monkeypatch.setattr(notifications, 'start_notifications', lambda *_: None)
     owner, _, _, _ = worker(tmp_path)
     original = owner.writer
-    owner.writer = lambda *args: original(*args) | {'changed_count': 1, 'changed_metrics': ['heat']}
-    emitted = []
-    monkeypatch.setattr('app.services.market_collection.emit_collection_result', lambda *a, **kw: emitted.append(kw))
+    owner.writer = lambda *args: original(*args) | {'changed_count': changed_count, 'changed_metrics': ['heat']}
     owner.request_run('manual-notify-test')
     assert owner.tick(), str(owner.status())
-    assert not emitted
+    with notifications._database(owner.settings) as db:
+        events = db.execute('SELECT task,run,message FROM outbox').fetchall()
+    if notify_enabled and changed_count:
+        assert len(events) == 1
+        assert events[0]['task'] == 'market'
+        assert events[0]['run'] == 'manual-notify-test'
+        assert '更新记录：1' in events[0]['message']
+    else:
+        assert not events
+    # Replaying the same manual request must never enqueue another notification.
+    owner.request_run('manual-notify-test')
+    owner.tick()
+    with notifications._database(owner.settings) as db:
+        assert db.execute('SELECT count(*) FROM outbox').fetchone()[0] == len(events)
