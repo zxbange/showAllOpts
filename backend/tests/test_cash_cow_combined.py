@@ -436,3 +436,31 @@ def test_retry_checks_cancellation_before_next_request(monkeypatch):
     obj.check_cancel=cancel
     with pytest.raises(InterruptedError):obj._request('tushare','daily',{})
     assert len(calls)==1
+
+
+@pytest.mark.parametrize('latest',[12.5,None])
+def test_static_history_older_years_match_annual_details_exactly(latest):
+    from app.services.cash_cow_rules import screen_cash_cows
+    class Fake:
+        calls=0
+        def universe(self):return [dict(code='600900',name='Test',exchange='SH')]
+        def dividends(self,y,codes=None):return {'600900':{'cash_dividend':100}}
+        def financials(self,y,codes=None):return {'600900':dict(adjusted_profit=120,net_profit=100,operating_cashflow=100)}
+        def per_share_dividends_by_period(self,c,y,periods):return {p:{year:5 for year in range(y-p+1,y+1)}for p in periods}
+        def prices(self,c,start,end):
+            self.calls+=1
+            return {y:dict(year_average_close=47+(y%3),price_date=f'{y}-12-31')for y in range(start,end+1)}
+        def current_dividend_yield(self,c):
+            return dict(current_yield=latest,latest_price=40,latest_price_date='2026-11-16',
+                        dividend_yield_history=[dict(fiscal_year=y,yield_pct=99)for y in (2025,2024,2023)])
+    obj=Fake();items,_,_=screen_cash_cows(obj,2025,lambda *a:None)
+    for period in (3,5,10):
+        item=items[period][0]
+        annual={r['year']:r['dividend_yield']for r in item['years']}
+        assert item['current_yield']==latest
+        assert item['dividend_yield_history']==[
+            dict(fiscal_year=2025,yield_pct=latest),
+            dict(fiscal_year=2024,yield_pct=annual[2024]),
+            dict(fiscal_year=2023,yield_pct=annual[2023])]
+        assert item['average_yield']==sum(annual.values())/period
+    assert obj.calls==1

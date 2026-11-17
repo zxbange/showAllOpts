@@ -235,9 +235,9 @@ def _replace_latest_snapshot(Session, Snapshot, Stock, meta, records,
         head = session.query(Snapshot).filter_by(id=1).with_for_update().first()
         # Keep legacy JQ archives, but never downgrade a published DPS proposal snapshot.
         if (Snapshot.__tablename__ == 'dividend_selection_snapshot' and head is not None
-                and head.rule_version == 'dividend_dps_proposal_age3_v9'
+                and head.rule_version in ('dividend_dps_proposal_age3_v9', 'dividend_dps_proposal_age3_annual_history_v10')
                 and meta.get('rule_version') != head.rule_version):
-            raise ValueError('Legacy JQ dividend rules cannot overwrite the v9 proposal snapshot; use history mode.')
+            raise ValueError('Legacy JQ dividend rules cannot overwrite the public proposal snapshot; use history mode.')
         if head is not None and getattr(head, date_field) > meta[date_field]:
             raise ValueError('数据库已有更新日期，拒绝旧日期覆盖。')
         existing = session.query(Stock).all()

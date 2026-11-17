@@ -5,7 +5,13 @@ import '../styles/dividend-yield-history.css'
 
 import type { AnnualYield } from '../types/dividend'
 
-export function DividendYieldHistory({ history }: { history?: AnnualYield[] | null }) {
+export function DividendYieldHistory({
+  history,
+  note = '各财年已实施分红 ÷ 当前价格或市值',
+}: {
+  history?: AnnualYield[] | null
+  note?: string
+}) {
   const id = useId()
   const anchor = useRef<HTMLButtonElement>(null)
   const popup = useRef<HTMLDivElement>(null)
@@ -106,7 +112,7 @@ export function DividendYieldHistory({ history }: { history?: AnnualYield[] | nu
             ) : (
               <p>待新版采集更新</p>
             )}
-            <small>各财年已实施分红 ÷ 当前价格或市值</small>
+            <small>{note}</small>
           </div>,
           document.body,
         )}

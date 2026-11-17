@@ -1,6 +1,11 @@
 import { useEffect, useRef, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
-import { cashCowPeriod, cashCowUpdateTime, type CashCowPeriod } from '../lib/cashCow'
+import {
+  cashCowPeriod,
+  cashCowStaticHistory,
+  cashCowUpdateTime,
+  type CashCowPeriod,
+} from '../lib/cashCow'
 import { RefreshCw, Square } from 'lucide-react'
 import { useAuth } from '../components/AccountAccess'
 import { PageHeader } from '../components/PageHeader'
@@ -212,7 +217,9 @@ function CashCowPeriodPage({
               <p>当前仍展示上次成功快照；失败或停止不会覆盖已保存结果。</p>
             )}
         </div>
-        {data?.rule_outdated && <p role="status">当前为旧规则结果，请更新数据以应用 30%–100% 派息率规则。</p>}
+        {data?.rule_outdated && (
+          <p role="status">当前为旧规则结果，请更新数据以应用 30%–100% 派息率规则。</p>
+        )}
         {snapshot && (
           <div className="cash-cow-counts">
             <strong>入选 {snapshot.matched_count} 只</strong>
@@ -312,7 +319,10 @@ function CashCowPeriodPage({
                 >
                   <small>静态股息率</small>
                   {item.current_yield == null ? '—' : percent(item.current_yield)}
-                  <DividendYieldHistory history={item.dividend_yield_history} />
+                  <DividendYieldHistory
+                    history={cashCowStaticHistory(item)}
+                    note="最近财年按最新收盘价计算；此前两年与年度明细股息率一致（按当年平均收盘价）"
+                  />
                 </span>
                 <span>
                   <small>股利支付率区间</small>

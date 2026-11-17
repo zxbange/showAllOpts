@@ -9,7 +9,7 @@ from test_dividend_collector import row, meta
 
 
 def seed(session,empty=False):
-    data=meta(rule_version='dividend_dps_proposal_age3_v9')
+    data=meta(rule_version='dividend_dps_proposal_age3_annual_history_v10')
     if empty:data.update(value_count=0,value_candidates=0)
     session.add(DividendSnapshot(id=1,updated_at=datetime(2026,10,16,17),**data))
     if not empty:session.add_all([DividendStock(**row()),DividendStock(**row('bank', code='600000.XSHG'))])
@@ -75,3 +75,25 @@ def test_legacy_yields_are_not_mislabeled_as_static(client,session,version):
     assert data['groups'][0]['items']
     assert data['groups'][1]['items']
     assert 'overlap_codes' not in data
+
+
+def test_previous_current_price_history_is_marked_legacy(client, session):
+    seed(session)
+    session.query(DividendSnapshot).update({'rule_version': 'dividend_dps_proposal_age3_v9'})
+    session.commit()
+    data = client.get('/api/v1/dividend-selection/latest').json()
+    assert data['requires_refresh'] is True
+    assert data['snapshot']['rule_version'] == 'dividend_dps_proposal_age3_v9'
+
+
+def test_missing_older_history_is_serialized_as_null(client, session):
+    seed(session)
+    item = session.query(DividendStock).first()
+    item.dividend_yield_history = [dict(fiscal_year=2025, yield_pct=5),
+                                   dict(fiscal_year=2024, yield_pct=None),
+                                   dict(fiscal_year=2023, yield_pct=None)]
+    session.commit()
+    response = client.get('/api/v1/dividend-selection/latest')
+    assert response.status_code == 200
+    points = [r for g in response.json()['groups'] for r in g['items'] if r['code'] == item.code][0]['dividend_yield_history']
+    assert points[1]['yield_pct'] is None

@@ -13,7 +13,7 @@ from app.services.cash_cow_source import EastmoneyCashCowSource, CashCowSourceEr
 from app.services.system_integrations import integrations_config
 
 LOG = logging.getLogger(__name__)
-RULE_VERSION = 'dividend_dps_proposal_age3_v9'
+RULE_VERSION = 'dividend_dps_proposal_age3_annual_history_v10'
 CHINA = timezone(timedelta(hours=8))
 
 
@@ -129,11 +129,6 @@ def rank_records(stocks, valuations, proposals, industries, day, universe_count)
         rate = current_dps / close * 100
         if rate <= 3:
             continue
-        if not set(years) <= set(cash):
-            raise DividendSourceError('入选股票历年每股派息覆盖未核验，保留原结果。')
-        cash = {year: decimal(cash[year]) for year in years}
-        if any(value < 0 for value in cash.values()):
-            raise DividendSourceError('派现金额无效。')
         industry = industries.get(symbol)
         if not industry or not re.fullmatch(r'801[0-9]{3}(?:\.SI)?', str(industry.get('l1_code', ''))):
             raise DividendSourceError('申万行业缺失，保留原结果。')
@@ -145,7 +140,7 @@ def rank_records(stocks, valuations, proposals, industries, day, universe_count)
             industry_code=industry[f'l{level}_code'], industry_name=industry.get(f'l{level}_name'),
             industry_level=f'sw_l{level}', dividend_yield_1y=rate,
             dividend_cash_1y=None, dividend_per_share=cash[years[0]], dividend_fiscal_year=fiscal,
-            dividend_yield_history=[dict(fiscal_year=y, yield_pct=float(cash[y] / close * 100)) for y in years],
+            dividend_yield_history=[dict(fiscal_year=y, yield_pct=float(rate) if y == fiscal else None) for y in years],
             pe_ttm=pe, pb=None if valuation.get('pb') is None else decimal(valuation['pb']),
             market_cap=cap / 100000000, close=decimal(valuation['close'], positive=True)))
     candidates.sort(key=lambda row: (-row['dividend_yield_1y'], row['code']))
@@ -162,6 +157,7 @@ class DividendPublicSource(EastmoneyCashCowSource):
     def __init__(self, client, *, settings, as_of, cache_dir=None, check_cancel=lambda: None):
         super().__init__(client, as_of=as_of, cache_dir=cache_dir, check_cancel=check_cancel)
         self.day = date.fromisoformat(str(as_of)[:10])
+        self.settings = settings
         self.token = integrations_config(settings)['asharehub']['token']
         if not self.token:
             raise DividendSourceError('请在系统配置中填写 AShareHub 凭据。')
@@ -362,4 +358,11 @@ class DividendPublicSource(EastmoneyCashCowSource):
         # (live sample T00018.SH). Only join to the independently verified pool;
         # duplicates and missing classification for qualifying stocks still fail.
         industries = self.mapped([row for row in industry_rows if row.get('symbol') in all_rows])
-        return rank_records(active, valuations, cash, industries, self.day, len(all_rows))
+        meta, records = rank_records(active, valuations, cash, industries, self.day, len(all_rows))
+        self.enrich_history(records)
+        return meta, records
+
+    def enrich_history(self, records):
+        from app.services.dividend_history import enrich_history
+        enrich_history(records, client=self.client, settings=self.settings, as_of=self.day.isoformat(),
+                       cache_dir=self.cache_dir, listed_dates=self.listed_dates, check_cancel=self.check_cancel)

@@ -174,4 +174,13 @@ def screen_cash_cows(source, end_year, progress, check_cancel=lambda: None):
             current = source.current_dividend_yield(code)
             for item in matched:
                 item.update(current)
+                # The latest fiscal year remains the current static yield.
+                # Older entries reuse the exact annual-detail result, not a
+                # fresh DPS/current-price calculation or rounded UI values.
+                annual_yields = {row['year']: row['dividend_yield'] for row in item['years']}
+                item['dividend_yield_history'] = [
+                    dict(fiscal_year=year, yield_pct=(current.get('current_yield')
+                         if year == end_year else annual_yields.get(year)))
+                    for year in range(end_year, end_year - 3, -1)
+                ]
     return items, outcomes, stocks

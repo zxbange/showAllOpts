@@ -370,11 +370,12 @@ def test_invalid_listing_date_never_silently_qualifies(ns, listed):
         ns.listed_three_years(listed, DAY)
 
 
-def test_legacy_jq_cannot_downgrade_proposal_snapshot(ns):
+@pytest.mark.parametrize('version', ['dividend_dps_proposal_age3_v9', 'dividend_dps_proposal_age3_annual_history_v10'])
+def test_legacy_jq_cannot_downgrade_proposal_snapshot(ns, version):
     engine = create_engine('sqlite://')
     ns.Base.metadata.create_all(engine)
     Session = sessionmaker(bind=engine)
-    proposal = meta(rule_version='dividend_dps_proposal_age3_v9')
+    proposal = meta(rule_version=version)
     records = [row(dividend_cash_1y=None, dividend_per_share=Decimal('0.5'), dividend_fiscal_year=2025),
                row('bank', dividend_cash_1y=None, dividend_per_share=Decimal('0.5'), dividend_fiscal_year=2025)]
     ns.save_latest(Session, proposal, records)

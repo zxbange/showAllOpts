@@ -23,7 +23,7 @@ from app.services.system_runtime import source_client
 
 LOG = logging.getLogger(__name__)
 CHINA = timezone(timedelta(hours=8))
-RULE_VERSION = 'dividend_dps_proposal_age3_v9'
+RULE_VERSION = 'dividend_dps_proposal_age3_annual_history_v10'
 PUBLIC_SOURCE_READY = True
 NOT_READY = '当前候选池与同日估值覆盖尚未完成验证，保留原结果。'
 
@@ -35,7 +35,7 @@ class DividendCollectionError(ValueError):
 def validate_result(meta, records):
     """Validate both groups before opening a write transaction, including empty results."""
     expected = {'trade_date', 'rule_version', 'universe_count', 'eligible_count', 'value_candidates', 'value_count'}
-    if set(meta) != expected or meta['rule_version'] != RULE_VERSION or type(meta['trade_date']) is not date:
+    if set(meta) != expected or meta['rule_version'] not in (RULE_VERSION, 'dividend_dps_proposal_age3_v9') or type(meta['trade_date']) is not date:
         raise DividendCollectionError('Invalid dividend snapshot metadata')
     counts = [meta[key] for key in ('universe_count', 'eligible_count', 'value_candidates', 'value_count')]
     if any(type(value) is not int or value < 0 for value in counts) or not counts[0] or not counts[0] >= counts[1] >= counts[2] >= counts[3]:
@@ -67,7 +67,11 @@ def validate_result(meta, records):
         if not isinstance(history, list) or len(history) != 3:
             raise DividendCollectionError('Incomplete annual dividend history')
         for offset, point in enumerate(history):
-            if point['fiscal_year'] != fiscal_year - offset or not Decimal(str(point['yield_pct'])).is_finite() or Decimal(str(point['yield_pct'])) < 0:
+            if point['fiscal_year'] != fiscal_year - offset:
+                raise DividendCollectionError('Invalid annual dividend year')
+            if offset > 0 and point['yield_pct'] is None:
+                continue
+            if not Decimal(str(point['yield_pct'])).is_finite() or Decimal(str(point['yield_pct'])) < 0:
                 raise DividendCollectionError('Invalid annual dividend history')
         groups[record['method']].append(record)
     for method, limit in (('value', 25), ('bank', 10)):

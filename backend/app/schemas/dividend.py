@@ -15,7 +15,7 @@ class DividendRun(BaseModel):
 
 class DividendAnnualYield(BaseModel):
     fiscal_year: int
-    yield_pct: float
+    yield_pct: float | None
 
 
 class DividendItem(BaseModel):

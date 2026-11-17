@@ -7,6 +7,7 @@ import { useResource } from '../hooks/useResource'
 import { EmptyState, ErrorState, LoadingState } from '../components/States'
 import { StatCard } from '../components/StatCard'
 import { DividendYieldHistory } from '../components/DividendYieldHistory'
+import { dividendHistoryIsLegacy, dividendHistoryNote } from '../lib/dividendHistory'
 import { useAuth } from '../components/AccountAccess'
 import { DividendCollectionControls } from '../components/DividendCollectionControls'
 import '../styles/dividend.css'
@@ -21,6 +22,7 @@ export function DividendPage() {
   const [search, setSearch] = useState('')
   const loader = useCallback((signal: AbortSignal) => getDividendOverview(signal), [])
   const { data, error, loading, reload } = useResource(loader)
+  const legacy = dividendHistoryIsLegacy(data)
   const group = data?.groups.find((g) => g.id === method)
   const term = search.trim().toLowerCase()
   const items = (group?.items ?? []).filter((s) =>
@@ -57,11 +59,16 @@ export function DividendPage() {
       ) : error ? (
         <ErrorState message={error} retry={reload} />
       ) : !data?.snapshot ? (
-        <EmptyState title="暂无高股息选股结果" description="请由管理员点击更新数据，采集选股结果。" />
+        <EmptyState
+          title="暂无高股息选股结果"
+          description="请由管理员点击更新数据，采集选股结果。"
+        />
       ) : (
         <>
-          {data.requires_refresh && (
-            <div className="panel" role="status">保留上次成功结果，采用旧版选股口径；新版采集成功后更新。</div>
+          {legacy && (
+            <div className="panel" role="status">
+              保留上次成功结果，采用旧版股息率口径，历史两年尚未切换为年度均价；新版采集成功后更新。
+            </div>
           )}
           <div className="stats-grid dividend-stats">
             <StatCard
@@ -73,10 +80,10 @@ export function DividendPage() {
               accent
             />
             <StatCard
-              label={data.requires_refresh ? "最高股息率（旧口径）" : "最高方案股息率"}
+              label={legacy ? '最高股息率（旧口径）' : '最高方案股息率'}
               value={number(group?.items[0]?.dividend_yield_static)}
               suffix="%"
-              note={data.requires_refresh ? "旧版规则，详见数据日期" : "已公开税前每股分红 / 当日股价"}
+              note={legacy ? '旧版规则，详见数据日期' : '已公开税前每股分红 / 当日股价'}
               icon={<Coins size={18} />}
             />
             <StatCard
@@ -93,7 +100,7 @@ export function DividendPage() {
                 <h2>
                   {group?.name} · 前 {limit} 名
                 </h2>
-                <p>{data.requires_refresh ? "旧版股息率从高到低排序" : "方案股息率从高到低排序"}</p>
+                <p>{legacy ? '旧版股息率从高到低排序' : '方案股息率从高到低排序'}</p>
               </div>
               <span className="heading-tag">最新结果</span>
             </div>
@@ -152,7 +159,10 @@ export function DividendPage() {
                           <div className="dividend-yield">
                             <strong>
                               {number(s.dividend_yield_static, '%')}
-                              <DividendYieldHistory history={s.dividend_yield_history} />
+                              <DividendYieldHistory
+                                history={s.dividend_yield_history}
+                                note={dividendHistoryNote(legacy)}
+                              />
                             </strong>
                             <span>
                               <i

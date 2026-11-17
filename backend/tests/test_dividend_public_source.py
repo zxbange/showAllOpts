@@ -60,7 +60,7 @@ def test_rank_cash_and_cap_units_and_independent_groups():
     assert all(r['rank'] == 1 for r in rows)
     assert all(r['dividend_yield_1y'] == Decimal('5') for r in rows)
     assert all(r['dividend_cash_1y'] is None and r['dividend_per_share'] == Decimal('.5') and r['market_cap'] == 100 for r in rows)
-    assert all([p['yield_pct'] for p in r['dividend_yield_history']] == [5, 4, 3] for r in rows)
+    assert all([p['yield_pct'] for p in r['dividend_yield_history']] == [5, None, None] for r in rows)
     assert meta['value_count'] == meta['value_candidates'] == 2
 
 
@@ -75,8 +75,8 @@ def test_strict_original_thresholds(pe, rate):
 def test_missing_annual_cash_not_zero():
     stocks, vals, cash, industries = fixtures()
     del cash['600036.SH']['annual_dps'][2024]
-    with pytest.raises(DividendSourceError):
-        rank_records(stocks, vals, cash, industries, DAY, 5500)
+    _, rows = rank_records(stocks, vals, cash, industries, DAY, 5500)
+    assert rows[0]['dividend_yield_history'][1]['yield_pct'] is None
 
 
 def test_missing_proposal_source_cannot_publish():
@@ -96,6 +96,7 @@ def test_collect_complete_current_day_and_missing_nonpaused_valuation(monkeypatc
         def now(cls, tz=None):return cls(2026,11,16,23,0,tzinfo=tz)
     monkeypatch.setattr(module,'datetime',Clock)
     source=object.__new__(DividendPublicSource)
+    source.enrich_history=lambda records: None
     source.day=DAY
     source.check_cancel=lambda:None
     stocks=[dict(symbol='600036.SH',name='Bank',list_date='20000101',list_status='L'),
@@ -142,6 +143,7 @@ def test_public_source_refuses_historical_current_snapshot_replay(monkeypatch):
         def now(cls,tz=None):return cls(2026,11,16,23,tzinfo=tz)
     monkeypatch.setattr(module,'datetime',Clock)
     source=object.__new__(DividendPublicSource)
+    source.enrich_history=lambda records: None
     source.day=date(2026,11,13)
     source.ash=lambda *args:pytest.fail('Historical requests must stop before network')
     with pytest.raises(DividendSourceError,match='历史'):
