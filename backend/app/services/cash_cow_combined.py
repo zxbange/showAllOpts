@@ -3,6 +3,7 @@ from datetime import date, timedelta
 import time
 import re
 import logging
+import httpx
 
 LOG = logging.getLogger(__name__)
 
@@ -24,33 +25,72 @@ class CombinedCashCowSource(EastmoneyCashCowSource):
         self.unavailable_calendars = set()
 
     def _request(self, provider, endpoint, params):
-        self.check_cancel()
-        time.sleep(max(0, 2 - (time.monotonic() - self.last_request)))
-        LOG.info('Cash cow request provider=%s endpoint=%s symbol=%s period=%s', provider, endpoint, params.get('symbol') or params.get('ts_code') or '-', params.get('period') or '-')
-        try:
-            if provider == 'asharehub':
-                response = self.client.get('https://asharehub.com/v2/' + endpoint,
-                    params=params, headers={'X-API-Key': self.ash_key}, follow_redirects=False)
-            else:
-                response = self.client.post('https://api.tushare.pro', json={
-                    'api_name': endpoint, 'token': self.ts_token, 'params': params,
-                    'fields': ('cal_date,is_open' if endpoint == 'trade_cal' else 'ts_code,trade_date,close')}, follow_redirects=False)
-            if response.status_code == 429:
-                raise CashCowSourceError(f'{provider} 请求受限，请等待配额恢复后重试。')
-            if response.status_code in (401, 403):
-                raise CashCowSourceError(f'{provider} 凭据无效或接口无权限，请检查系统配置。')
-            response.raise_for_status()
-            if len(response.content) > 24 * 1024 * 1024:
-                raise ValueError('response_too_large')
-            return response.json()
-        except CashCowSourceError:
-            raise
-        except Exception as exc:
-            LOG.warning('Cash cow source failure provider=%s endpoint=%s type=%s', provider, endpoint, type(exc).__name__)
-            # Never attach HTTP exception/request objects containing credentials.
-            raise CashCowSourceError(f'{provider} {endpoint} 数据读取失败，未发布本次结果。') from None
-        finally:
-            self.last_request = time.monotonic()
+        attempts = 3 if provider == 'tushare' else 1
+        for attempt in range(1, attempts + 1):
+            self.check_cancel()
+            # Include a quiet interval after failed attempts, not just successes.
+            delay = max(2, 2 ** (attempt - 1))
+            time.sleep(max(0, delay - (time.monotonic() - self.last_request)))
+            self.check_cancel()
+            started, response, stage = time.monotonic(), None, 'request'
+            symbol = params.get('symbol') or params.get('ts_code') or '-'
+            LOG.info('Cash cow request provider=%s endpoint=%s symbol=%s period=%s start=%s end=%s attempt=%s/%s',
+                     provider, endpoint, symbol, params.get('period') or '-',
+                     params.get('start_date') or '-', params.get('end_date') or '-', attempt, attempts)
+            try:
+                if provider == 'asharehub':
+                    response = self.client.get('https://asharehub.com/v2/' + endpoint,
+                        params=params, headers={'X-API-Key': self.ash_key}, follow_redirects=False)
+                else:
+                    response = self.client.post('https://api.tushare.pro', json={
+                        'api_name': endpoint, 'token': self.ts_token, 'params': params,
+                        'fields': ('cal_date,is_open' if endpoint == 'trade_cal' else 'ts_code,trade_date,close')},
+                        timeout=httpx.Timeout(60, connect=10), follow_redirects=False)
+                stage = 'http_status'
+                response.raise_for_status()
+                stage = 'decode'
+                if len(response.content) > 24 * 1024 * 1024:
+                    raise ValueError('response_too_large')
+                result = response.json()
+                if provider == 'tushare' and isinstance(result, dict) and result.get('code') != 0:
+                    api_code = result.get('code')
+                    LOG.warning('Cash cow API rejection provider=%s endpoint=%s symbol=%s api_code=%s',
+                                provider, endpoint, symbol, api_code if type(api_code) is int else '-')
+                LOG.info('Cash cow response provider=%s endpoint=%s symbol=%s attempt=%s http_status=%s '
+                         'received_bytes=%s elapsed_seconds=%.3f', provider, endpoint, symbol, attempt,
+                         response.status_code, len(response.content), time.monotonic() - started)
+                return result
+            except Exception as exc:
+                status = response.status_code if response is not None else None
+                transient = (isinstance(exc, (httpx.TimeoutException, httpx.NetworkError, httpx.RemoteProtocolError))
+                             or isinstance(exc, httpx.HTTPStatusError) and status is not None and 500 <= status <= 599)
+                retry = transient and attempt < attempts
+                # No exception strings, URLs, request objects or provider bodies:
+                # they can contain the configured credential or echo it back.
+                LOG.warning('Cash cow source failure provider=%s endpoint=%s symbol=%s start=%s end=%s '
+                            'attempt=%s/%s stage=%s type=%s http_status=%s elapsed_seconds=%.3f retry=%s',
+                            provider, endpoint, symbol, params.get('start_date') or '-', params.get('end_date') or '-',
+                            attempt, attempts, stage, type(exc).__name__, status if status is not None else '-',
+                            time.monotonic() - started, retry)
+                if retry:
+                    continue
+                if status == 429:
+                    message = f'{provider} 请求受限，请等待配额恢复后重试。'
+                elif status in (401, 403):
+                    message = f'{provider} 凭据无效或接口无权限，请检查系统配置。'
+                elif isinstance(exc, httpx.TimeoutException):
+                    message = f'{provider} {endpoint} 请求超时，未发布本次结果。'
+                elif isinstance(exc, (httpx.NetworkError, httpx.RemoteProtocolError)):
+                    message = f'{provider} {endpoint} 连接中断，未发布本次结果。'
+                elif stage == 'decode':
+                    message = f'{provider} {endpoint} 返回格式异常，未发布本次结果。'
+                elif status is not None:
+                    message = f'{provider} {endpoint} HTTP {status}，未发布本次结果。'
+                else:
+                    message = f'{provider} {endpoint} 数据读取失败，未发布本次结果。'
+                raise CashCowSourceError(message) from None
+            finally:
+                self.last_request = time.monotonic()
 
     def _ash(self, endpoint, params):
         # Do not reuse pre-validation list caches. An earlier truncated payload

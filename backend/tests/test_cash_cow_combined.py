@@ -374,3 +374,65 @@ def test_shared_young_listing_date_conflict_not_hidden_by_age_filter():
     rows.append(dict(symbol='920309.BJ',name='Test',list_date='20200101',list_status='L'))
     obj._ash=lambda *a:rows
     with pytest.raises(CashCowSourceError,match='上市日期跨来源不一致'):obj.universe()
+
+
+def test_tushare_transient_retries_and_longer_read_timeout(monkeypatch,caplog):
+    sleeps=[];calls=[]
+    monkeypatch.setattr('app.services.cash_cow_combined.time.sleep',sleeps.append)
+    def handler(req):
+        calls.append(req)
+        assert req.extensions['timeout']['read']==60
+        assert req.extensions['timeout']['connect']==10
+        if len(calls)<3:
+            raise httpx.ReadTimeout('private-ts',request=req)
+        return httpx.Response(200,json=payload([['600900.SH','20241231',20]]))
+    obj=source(handler)
+    result=obj._request('tushare','daily',{'ts_code':'600900.SH','start_date':'20240101','end_date':'20241231'})
+    assert result['code']==0 and len(calls)==3
+    assert len(sleeps)==3 and sleeps[1]>1.9 and sleeps[2]>3.9
+    assert 'private-ts' not in caplog.text
+    assert 'symbol=600900.SH' in caplog.text and 'type=ReadTimeout' in caplog.text
+    assert 'retry=True' in caplog.text
+
+
+@pytest.mark.parametrize('status,attempts',[(401,1),(403,1),(429,1),(400,1),(302,1),(503,3)])
+def test_tushare_only_transient_http_status_retried(monkeypatch,status,attempts,caplog):
+    monkeypatch.setattr('app.services.cash_cow_combined.time.sleep',lambda _:None)
+    calls=[]
+    obj=source(lambda req:(calls.append(req) or httpx.Response(status,json={'detail':'private-ts'})))
+    with pytest.raises(CashCowSourceError) as exc:
+        obj._request('tushare','daily',{'ts_code':'600900.SH'})
+    assert len(calls)==attempts
+    assert 'private-ts' not in str(exc.value)+caplog.text
+    assert exc.value.__cause__ is None
+    assert f'http_status={status}' in caplog.text
+
+
+def test_tushare_quota_business_response_not_retried(monkeypatch):
+    monkeypatch.setattr('app.services.cash_cow_combined.time.sleep',lambda _:None)
+    calls=[]
+    obj=source(lambda req:(calls.append(req)or httpx.Response(200,json={'code':40203,'msg':'频率限制'})))
+    with pytest.raises(CashCowSourceError,match='频率受限'):obj.prices('600900',2024,2024)
+    assert len(calls)==1
+
+
+def test_tushare_malformed_json_no_retry(monkeypatch,caplog):
+    monkeypatch.setattr('app.services.cash_cow_combined.time.sleep',lambda _:None)
+    calls=[]
+    obj=source(lambda req:(calls.append(req)or httpx.Response(200,text='private-ts-not-json')))
+    with pytest.raises(CashCowSourceError,match='格式异常'):obj._request('tushare','daily',{})
+    assert len(calls)==1 and 'private-ts' not in caplog.text
+
+
+def test_retry_checks_cancellation_before_next_request(monkeypatch):
+    monkeypatch.setattr('app.services.cash_cow_combined.time.sleep',lambda _:None)
+    calls=[]
+    def handler(req):
+        calls.append(req)
+        raise httpx.RemoteProtocolError('private-ts')
+    obj=source(handler)
+    def cancel():
+        if calls:raise InterruptedError('cancelled')
+    obj.check_cancel=cancel
+    with pytest.raises(InterruptedError):obj._request('tushare','daily',{})
+    assert len(calls)==1
