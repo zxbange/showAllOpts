@@ -29,7 +29,7 @@ def save(owner,**changes):
 def test_global_account_is_authoritative_and_encrypted_configuration(tmp_path):
     owner=Owner(tmp_path);assert owner.configuration.load()['username']==owner.settings.db_user
     store=save(owner);public=owner.configuration.public()
-    assert public['source']=='system' and public['schedule']==['00:01'] and 'password' not in public
+    assert public['source']=='system' and public['schedule']==['23:58'] and 'password' not in public
     assert b'test-secret-never-public' not in store.path.read_bytes()
     assert Owner(tmp_path).configuration.public()==public and owner.configuration.issue() is None
 def test_stale_revision_and_new_account_require_new_password(tmp_path):

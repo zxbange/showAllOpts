@@ -77,7 +77,8 @@ def test_manual_and_scheduled_recover_whole_incremental_interval(setup, monkeypa
     assert state['currentVerified'] and state['inserted'] == 4 and state['changed'] == 0
     assert state['recovery']['dateFrom'] == '2026-11-04'
     assert state['recovery']['recoveredCount'] == 3
-    assert state['recovery']['pendingCount'] == 2  # Weekends stay unknown, never fabricated.
+    assert state['recovery']['pendingCount'] == 0  # Weekends are not quote targets.
+    assert state['outcome'] == 'completed'
     assert state['recovery']['sourceLimited'] is True
     assert state['trigger'] == ('scheduled' if scheduled else 'manual')
     assert calls[0:2] == [HOME, CATALOG]
@@ -175,11 +176,11 @@ def test_parsed_articles_cool_down_but_requests_and_new_links_retry(setup, monke
     assert {'2026-11-05', '2026-11-06', '2026-11-09'} <= days(restarted)
     calls.clear()
     restarted.collect(restarted.lock())
-    assert calls == [HOME, CATALOG]
+    assert calls == [HOME]
     clock[0] += timedelta(days=1)
     calls.clear()
     restarted.collect(restarted.lock())
-    assert article_url(1) in calls
+    assert article_url(1) not in calls  # No historical gap remains.
 
 
 def test_current_quote_is_logged_and_saved_before_recovery(setup, monkeypatch, caplog):
@@ -207,5 +208,104 @@ def test_recovery_log_identifies_unverified_dates(setup, monkeypatch, caplog):
     install(monkeypatch, ['2026-11-05', '2026-11-06', '2026-11-09'])
     with caplog.at_level('INFO'):
         job.collect(job.lock())
-    assert 'pending=2 limited=False pending_dates=2026-11-07,2026-11-08' in caplog.text
+    assert 'pending=0 limited=False pending_dates=-' in caplog.text
     assert not {'2026-11-07', '2026-11-08'} & days(job)
+
+@pytest.mark.parametrize('instant', [
+    datetime(2026,11,7,3,tzinfo=timezone.utc),
+    datetime(2026,11,8,3,tzinfo=timezone.utc),
+    datetime(2026,10,1,3,tzinfo=timezone.utc),
+    datetime(2027,1,4,3,tzinfo=timezone.utc)])
+def test_closed_automatic_skips_but_manual_failure_is_isolated(setup, monkeypatch, instant):
+    clock, _, job = setup
+    clock[0] = instant
+    calls = []
+    def fail(*args, **kwargs):
+        calls.append(args)
+        raise TimeoutError('unavailable')
+    monkeypatch.setattr(commodities, 'fetch', fail)
+    before = job.history()['rows']
+    slot = commodities.latest_slot(clock[0])
+    assert not job.refresh(slot=slot)
+    assert not calls
+    job.collect(job.lock(), slot)
+    assert not calls
+    assert job.refresh()
+    job.thread.join(5)
+    assert calls
+    assert job.history()['rows'] == before
+    with job.db() as db:
+        for table in ('failed_targets','recovery_attempts','a00_source_checks','a00_recovery'):
+            assert db.execute(f'SELECT count(*) FROM {table}').fetchone()[0] == 0
+
+def test_restart_retires_weekend_targets_not_quotes(setup):
+    _, settings, job = setup
+    with job.db() as db:
+        for day in ('2026-11-07','2026-11-08','2026-11-09'):
+            db.execute('INSERT INTO failed_targets VALUES(?,?,?)', (day,'failed','old'))
+            db.execute('INSERT INTO recovery_attempts VALUES(?,?,?)', (day,'old','failed'))
+        db.execute('INSERT INTO quotes VALUES(?,?)', ('2026-11-07', json.dumps({'quoteDate':'2026-11-07','mean':123})))
+    before = job.history()['rows']
+    restarted = commodities.Commodities(settings)
+    assert restarted.history()['rows'] == before
+    with restarted.db() as db:
+        for table in ('failed_targets','recovery_attempts'):
+            assert [r[0] for r in db.execute(f'SELECT day FROM {table}')] == ['2026-11-09']
+
+def test_manual_closed_failure_does_not_stop_next_normal_schedule(setup, monkeypatch):
+    clock, _, job = setup
+    clock[0] = datetime(2026,11,7,3,tzinfo=timezone.utc)
+    monkeypatch.setattr(commodities, 'fetch', lambda *a, **k: (_ for _ in ()).throw(TimeoutError()))
+    job.collect(job.lock())
+    clock[0] = datetime(2026,11,10,10,tzinfo=timezone.utc)
+    install(monkeypatch, ['2026-11-05','2026-11-06','2026-11-09'])
+    assert job.refresh(slot=commodities.latest_slot(clock[0]))
+    job.thread.join(5)
+    assert job.status()['outcome'] == 'completed'
+    assert not {'2026-11-07','2026-11-08'} & days(job)
+
+def test_automatic_collection_stops_before_second_request_after_china_midnight(setup, monkeypatch):
+    clock, _, job = setup
+    clock[0] = datetime(2026,11,6,15,59,tzinfo=timezone.utc)
+    calls = []
+    from pathlib import Path
+    home = (Path(__file__).parent / 'fixtures/commodities/home-visible.html').read_text()
+    def fetch(client, url, catalog=False):
+        calls.append(url)
+        clock[0] = datetime(2026,11,6,16,0,tzinfo=timezone.utc)
+        return home
+    monkeypatch.setattr(commodities, 'fetch', fetch)
+    job.collect(job.lock(), commodities.latest_slot(clock[0]))
+    assert calls == [HOME]
+    assert job.status()['outcome'] == 'interrupted'
+    assert not job.status()['currentVerified']
+    lock = job.lock()
+    assert lock is not None
+    lock.release()
+
+def test_known_holiday_targets_retired_but_unknown_calendar_preserved(setup):
+    _, settings, job = setup
+    with job.db() as db:
+        for day in ('2026-10-01', '2027-01-04'):
+            db.execute('INSERT INTO failed_targets VALUES(?,?,?)', (day,'failed','old'))
+    restarted = commodities.Commodities(settings)
+    assert [x['day'] for x in restarted.status()['pendingTargets']] == ['2027-01-04']
+
+
+def test_manual_failure_crossing_into_weekend_keeps_prior_queue(setup, monkeypatch):
+    clock, _, job = setup
+    clock[0] = datetime(2026,11,6,15,59,tzinfo=timezone.utc)
+    with job.db() as db:
+        db.execute('INSERT INTO failed_targets VALUES(?,?,?)', ('2026-11-05','old_failure','old'))
+        db.execute('INSERT INTO a00_source_checks VALUES(?,?,?)', (article_url(1),'old','pending'))
+        before = {table: db.execute(f'SELECT * FROM {table}').fetchall()
+                  for table in ('failed_targets','recovery_attempts','a00_source_checks')}
+    def fail(*args, **kwargs):
+        clock[0] = datetime(2026,11,6,16,0,tzinfo=timezone.utc)
+        raise TimeoutError('unavailable')
+    monkeypatch.setattr(commodities, 'fetch', fail)
+    job.collect(job.lock())
+    with job.db() as db:
+        for table, rows in before.items():
+            assert db.execute(f'SELECT * FROM {table}').fetchall() == rows
+    assert job.status()['outcome'] == 'failed'

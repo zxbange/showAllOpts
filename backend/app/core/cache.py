@@ -1,3 +1,4 @@
+from app.services.collection_calendar import automatic_collection_allowed, manual_failure_isolated
 from app.core.database import VersionedDatabase, database_identity
 """Shared persistent SQLite snapshots. Only refresh jobs read the source database."""
 from contextlib import closing, contextmanager
@@ -289,8 +290,19 @@ class SnapshotCache:
         attempted = self.read_state().get('scheduled_slot', '')
         while slot.date().isoformat() <= attempted[:10]:
             slot += timedelta(days=1)
+        from app.services.holdings_calendar import trading_day
+        for _ in range(370):
+            day_state = trading_day(slot.date())
+            if day_state is None:
+                slot = None
+                break
+            if day_state:
+                break
+            slot += timedelta(days=1)
+        else:
+            slot = None
         return {'daily_time': plan['daily_time'], 'timezone': 'Asia/Shanghai',
-                'next_refresh_at': slot.isoformat() if self.settings.cache_enabled and plan.get('enabled', self.settings.cache_auto_refresh) else None}
+                'next_refresh_at': slot.isoformat() if slot is not None and self.settings.cache_enabled and plan.get('enabled', self.settings.cache_auto_refresh) else None}
 
     def save_schedule(self, daily_time):
         self.schedule.save(daily_time, now)
@@ -431,10 +443,12 @@ class SnapshotCache:
         finally:
             destination.dispose()
 
-    def copy_with_retry(self, module, full=False):
+    def copy_with_retry(self, module, full=False, *, check_cancel=None, retry=True, retry_allowed=None):
         from app.services.system_runtime import runtime_config
-        attempts = runtime_config(self.settings)['database_sync']['attempts']
+        attempts = runtime_config(self.settings)['database_sync']['attempts'] if retry else 1
         for attempt in range(1, attempts + 1):
+            if check_cancel is not None:
+                check_cancel()
             if self.stop_event.is_set():
                 return None
             try:
@@ -442,7 +456,8 @@ class SnapshotCache:
             except Exception as exc:
                 if self.stop_event.is_set():
                     return None
-                if not retryable_source_error(exc) or attempt == attempts:
+                if (not retryable_source_error(exc) or attempt == attempts
+                        or (retry_allowed is not None and not retry_allowed())):
                     raise
                 report('网络重试 {}/{}'.format(attempt + 1, attempts))
                 delay = min(2 ** attempt, 16)
@@ -457,7 +472,10 @@ class SnapshotCache:
         run_id = uuid.uuid4().hex
         marker = self.root / ('cancel-' + run_id)
         deferred, deferred_full = [], False
+        isolated_manual = reason == 'manual' and manual_failure_isolated(now())
         def check_cancel():
+            if reason == 'scheduled' and not automatic_collection_allowed(now()):
+                raise SyncCancelled()
             if marker.exists() or module_marker.exists():
                 raise SyncCancelled()
         try:
@@ -470,6 +488,7 @@ class SnapshotCache:
             # Keep deferred work durable throughout ETF-only refresh, including process death.
             state['pending'] = list(modules) + deferred
             state['pending_full'] = full or deferred_full
+            state['pending_manual_isolated'] = isolated_manual or bool(deferred and state.get('pending_manual_isolated'))
             for module in modules:
                 state['modules'].setdefault(module, {})['error'] = None
                 state['modules'][module]['progress'] = {'status': 'waiting', 'stage': '等待同步', 'processed': 0, 'percent': 0}
@@ -477,7 +496,7 @@ class SnapshotCache:
                 state['scheduled_slot'] = max(state.get('scheduled_slot', ''), slot)
             self.write_state(state)
             for module in modules:
-                if self.stop_event.is_set() or marker.exists():
+                if self.stop_event.is_set() or marker.exists() or (reason == 'scheduled' and not automatic_collection_allowed(now())):
                     break
                 module_marker = self.root / ('cancel-' + run_id + '-' + module)
                 entry = state['modules'].setdefault(module, {})
@@ -513,7 +532,9 @@ class SnapshotCache:
                 try:
                     check_cancel()
                     source_identity = self.target_identity()
-                    result = self.copy_with_retry(module, full)
+                    result = self.copy_with_retry(module, full, check_cancel=check_cancel,
+                                                  retry=not isolated_manual,
+                                                  retry_allowed=lambda: not (reason == 'manual' and manual_failure_isolated(now())))
                     if result is None:
                         break  # Leave this module pending so a restart can resume it.
                     if module not in HISTORY_MODULES:
@@ -534,6 +555,8 @@ class SnapshotCache:
                     entry['error'] = None
                     entry['progress'].update(status='cancelled', stage='已停止，可手动重新同步')
                 except Exception as exc:
+                    if reason == 'manual' and manual_failure_isolated(now()):
+                        state['pending_manual_isolated'] = True
                     if marker.exists():
                         break
                     if not module_marker.exists():
@@ -570,6 +593,8 @@ class SnapshotCache:
                 lock.release()
 
     def refresh(self, module=None, background=True, reason='manual', full=False):
+        if reason == 'scheduled' and not automatic_collection_allowed(now()):
+            return False
         if not self.settings.cache_enabled:
             raise CacheUnavailable('本地缓存未启用。')
         if module is not None and module not in MODULES:
@@ -581,7 +606,8 @@ class SnapshotCache:
         selected = [module] if module else list(DATABASE_SYNC_MODULES)
         # Preserve unfinished work left by an interrupted process.
         state = self.read_state()
-        pending = [m for m in state.get('pending', []) if m in DATABASE_SYNC_MODULES]
+        pending = ([] if reason == 'scheduled' and state.get('pending_manual_isolated') else
+                   [m for m in state.get('pending', []) if m in DATABASE_SYNC_MODULES])
         selected += [m for m in pending if m not in selected]
         full = full or bool(pending and state.get('pending_full'))
         slot = latest_slot(now(), daily_time).isoformat() if module is None else None
@@ -645,6 +671,8 @@ class SnapshotCache:
 
     def tick(self, moment=None):
         moment = moment or now()
+        if not automatic_collection_allowed(moment):
+            return
         if self.schedule.read().get('enabled') is False:
             return
         # Observe startup even while a manual/module sync holds refresh.lock. A
@@ -665,6 +693,9 @@ class SnapshotCache:
             with self.schedule.locked():
                 plan = self.schedule.read()
                 slot = latest_slot(moment, plan['daily_time']).isoformat()
+                if not automatic_collection_allowed(datetime.fromisoformat(slot)):
+                    lock.release()
+                    return
                 self.schedule_floor = self.schedule_floor_for(plan, moment)
                 self.schedule_revision = plan['revision']
                 state = self.read_state()
@@ -673,7 +704,7 @@ class SnapshotCache:
                     lock.release()
                     return
                 selected, reason = list(DATABASE_SYNC_MODULES), 'scheduled'
-                full = bool(any(m in DATABASE_SYNC_MODULES for m in state.get('pending', [])) and state.get('pending_full'))
+                full = bool(not state.get('pending_manual_isolated') and any(m in DATABASE_SYNC_MODULES for m in state.get('pending', [])) and state.get('pending_full'))
                 state['scheduled_slot'] = slot
                 self.write_state(state)
         except BaseException:

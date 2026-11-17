@@ -109,14 +109,15 @@ def test_shared_execution_lease_blocks_other_modules(tmp_path):
 
 
 @pytest.mark.parametrize('stamp,expected', [
-    ('2024-02-28T23:00:00+08:00', '2024-02-29T23:00:00+08:00'),
-    ('2025-02-28T23:00:00+08:00', '2025-03-01T23:00:00+08:00'),
-    ('2026-12-31T23:00:00+08:00', '2027-01-01T23:00:00+08:00'),
+    ('2024-02-28T23:00:00+08:00', None),
+    ('2025-02-28T23:00:00+08:00', None),
+    ('2026-12-31T23:00:00+08:00', None),
     ('2026-11-16T14:59:00+00:00', '2026-11-16T23:00:00+08:00'),
     ('2026-11-16T15:00:00+00:00', '2026-11-17T23:00:00+08:00'),
 ])
 def test_daily_calendar_boundary(stamp, expected):
-    assert daily_next_run(datetime.fromisoformat(stamp)).isoformat() == expected
+    result = daily_next_run(datetime.fromisoformat(stamp))
+    assert (result.isoformat() if result else None) == expected
 
 
 def test_enabled_schedule_time_change_and_disabled(queue, monkeypatch):
@@ -126,3 +127,24 @@ def test_enabled_schedule_time_change_and_disabled(queue, monkeypatch):
     assert q.jobs() == []
     monkeypatch.setattr('app.services.earnings_schedule.task_config', lambda *a: {'enabled': True, 'times': ['22:00']})
     assert q.tick(at(hour=22)) == 'dividend_selection'
+
+
+@pytest.mark.parametrize('moment', [at(day=14), datetime(2026, 10, 1, 23, tzinfo=CHINA), datetime(2027, 1, 4, 23, tzinfo=CHINA)])
+def test_closed_or_unknown_dates_do_not_launch_queue(queue, moment):
+    q, a, b = queue
+    assert q.tick(moment) is None
+    assert not a.calls and not b.calls and not q.jobs()
+
+
+def test_legacy_weekend_queue_is_retired_without_launch(queue):
+    q, a, b = queue
+    with q.db() as db:
+        db.execute('INSERT INTO jobs VALUES(?,?,?,?,?,?)', ('2026-11-14', 'dividend_selection', 0, 'pending', None, None))
+    assert q.tick(at()) == 'dividend_selection'
+    assert a.calls[0]['slot'] == '2026-11-16'
+    assert q.jobs()[0]['status'] == 'skipped'
+
+
+def test_next_run_skips_weekend_and_holiday():
+    assert daily_next_run(at(day=13)).isoformat() == '2026-11-16T23:00:00+08:00'
+    assert daily_next_run(datetime(2026, 9, 30, 23, tzinfo=CHINA)).isoformat() == '2026-10-08T23:00:00+08:00'

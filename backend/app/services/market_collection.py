@@ -4,6 +4,7 @@ One process owns collection.lock for a run. SQLite commits the universe before
 the first per-stock request, and each observation before the next request. A
 restart therefore resumes pending stocks without rebuilding a historical pool.
 """
+from app.services.collection_calendar import automatic_collection_allowed, manual_failure_isolated, next_automatic_collection
 from app.services.system_runtime import source_client
 from app.services.system_configuration import task_config, pin_configuration, SystemConfiguration
 from app.services.collection_notifications import emit_collection_result
@@ -39,12 +40,12 @@ from app.services.market_writer import read_market_dates, write_market_results
 
 LOG = logging.getLogger(__name__)
 CHINA = ZoneInfo('Asia/Shanghai')
-SCHEDULE = ['00:01']
+SCHEDULE = ['23:58']
 DATED_PRICE_METHOD = 'sina_dated_raw_snapshot_v1'
 RESOLVED = ('current', 'insufficient_history', 'paused')
 PUBLISHED = ('written', 'existing_preserved')
 METRIC_DONE = (*PUBLISHED, 'outside_window')
-# A scheduled batch is the latest Shanghai 18:30 slot. Polling/restarts keep
+# A scheduled batch is the latest configured Shanghai slot. Polling/restarts keep
 # its durable budget; only a new slot or explicit manual request starts over.
 MAX_PASSES_PER_RUN = 4
 RETRY_DELAYS = (timedelta(minutes=5), timedelta(minutes=30), timedelta(hours=6))
@@ -451,7 +452,8 @@ class MarketCollection:
         slot = datetime.combine(now.date(), self._auto_time(), CHINA)
         if slot <= now:
             slot += timedelta(days=1)
-        state['next_run_at'] = slot.isoformat() if config['enabled'] else None
+        slot = next_automatic_collection(slot)
+        state['next_run_at'] = slot.isoformat() if config['enabled'] and slot is not None else None
         if not (self.root / 'state.sqlite').exists():
             # The first owner can take the lock before creating its state DB.
             if (self.root / 'collection.lock').exists():
@@ -503,7 +505,8 @@ class MarketCollection:
             slot = datetime.combine(now.date(), self._auto_time(), CHINA)
             if slot <= now:
                 slot += timedelta(days=1)
-            state['next_run_at'] = slot.isoformat() if config['enabled'] else None
+            slot = next_automatic_collection(slot)
+            state['next_run_at'] = slot.isoformat() if config['enabled'] and slot is not None else None
         lock = self._acquire()
         state['running'] = lock is None
         try:
@@ -643,9 +646,11 @@ class MarketCollection:
             raise CollectionInterrupted()
         if run_id:
             with self.connect() as db:
-                row = db.execute('SELECT cancel_requested FROM manual_runs WHERE id=?', (run_id,)).fetchone()
+                row = db.execute('SELECT cancel_requested,trigger FROM manual_runs WHERE id=?', (run_id,)).fetchone()
             if row and row[0]:
                 raise CollectionCancelled()
+            if row and row[1] == 'scheduled' and not automatic_collection_allowed(self.clock()):
+                raise CollectionInterrupted()
 
     def _phase(self, run_id, phase, day=None):
         self._check(run_id)
@@ -667,7 +672,7 @@ class MarketCollection:
         if manual:
             return moment.date() if moment.time() >= time(18, 30) else moment.date() - timedelta(days=1)
         slot = moment.date() if moment.time() >= self._auto_time() else moment.date() - timedelta(days=1)
-        return slot - timedelta(days=1)
+        return slot if self._auto_time() >= time(18, 30) else slot - timedelta(days=1)
 
     def start(self):
         with self.thread_lock:
@@ -725,6 +730,8 @@ class MarketCollection:
         existing = {kind: {str(day) for day in source[kind]} for kind in ('heat', 'crowding')}
         stamp = _stamp(moment)
         with self.connect() as db:
+            manual_only = {row[0].removeprefix('manual-only:') for row in db.execute(
+                "SELECT key FROM metadata WHERE key LIKE 'manual-only:%'")}
             calendar = [row[0] for row in db.execute('SELECT day FROM calendar WHERE day<=? ORDER BY day', (str(cutoff),))]
             latest = {kind: max(values, default=None) for kind, values in existing.items()}
             target = calendar[-1] if calendar else None
@@ -732,12 +739,19 @@ class MarketCollection:
                       else ({target} if target else set()) for kind in existing}
             for kind in needed:
                 needed[kind].update(row[0].removeprefix('gap:' + kind + ':') for row in db.execute(
-                    "SELECT key FROM metadata WHERE key LIKE ?", ('gap:' + kind + ':%',)))
+                    "SELECT key FROM metadata WHERE key LIKE ?", ('gap:' + kind + ':%',))
+                    if manual or row[0].removeprefix('gap:' + kind + ':') not in manual_only)
             if calendar and any(value and value < calendar[0] for value in latest.values()):
                 raise SourceFailure('calendar_incomplete')
             planned = {day for day in set().union(*needed.values()) if day <= str(cutoff)}
             planned |= {value for value in latest.values() if value and value <= str(cutoff)}
             tracked = {row[0] for row in db.execute('SELECT trade_date FROM days WHERE trade_date<=?', (str(cutoff),))}
+            original_tracked = tracked.copy()
+            if not manual:
+                tracked -= manual_only
+                # Only the ordinary source-date plan can reactivate these dates.
+                for day in planned:
+                    db.execute('DELETE FROM metadata WHERE key=?', ('manual-only:' + day,))
             LOG.info('Market gap plan target=%s heat_after=%s crowding_after=%s sessions=%d heat_existing=%d crowding_existing=%d heat_missing=%d crowding_missing=%d',
                      target or '-', latest['heat'] or '-', latest['crowding'] or '-', len(planned),
                      len(existing['heat']), len(existing['crowding']), len(needed['heat']), len(needed['crowding']))
@@ -745,6 +759,8 @@ class MarketCollection:
                 db.execute('INSERT OR REPLACE INTO metadata VALUES (?,?)',
                            ('source_latest_' + kind, latest[kind] or ''))
             for day in sorted(planned | tracked):
+                if manual and day not in original_tracked:
+                    db.execute('INSERT OR IGNORE INTO metadata VALUES (?,?)', ('manual-only:' + day, stamp))
                 db.execute("""INSERT OR IGNORE INTO days
                            (trade_date,status,created_at,updated_at) VALUES (?,'pending',?,?)""", (day, stamp, stamp))
                 row = dict(db.execute('SELECT * FROM days WHERE trade_date=?', (day,)).fetchone())
@@ -805,7 +821,9 @@ class MarketCollection:
         return True
 
     def _record_dependency_failure(self, scope, moment):
-        scopes = {scope, self._scheduled_scope(moment)}
+        scopes = {scope}
+        if not (scope.startswith('manual:') and manual_failure_isolated(moment)):
+            scopes.add(self._scheduled_scope(moment))
         with self.connect() as db:
             for budget_scope in scopes:
                 key = 'dependency-budget:' + budget_scope
@@ -835,6 +853,8 @@ class MarketCollection:
             if manual:
                 targets.append(row['trade_date'])
                 continue
+            if self._meta('manual-only:' + row['trade_date']):
+                continue
             if self._pass_count(self._scheduled_scope(moment), row['trade_date']) >= MAX_PASSES_PER_RUN:
                 continue
             if (self._pass_count(self._scheduled_scope(moment), row['trade_date'])
@@ -863,6 +883,7 @@ class MarketCollection:
             return False
         run_id, active_day, manual = None, None, False
         scope = self._scheduled_scope(moment)
+        manual_snapshot = None
         self._blocked_writers = {}
         self._notification_changes = 0
         self._notification_summary = []
@@ -872,14 +893,22 @@ class MarketCollection:
                     ('days', 'observations', 'metadata', 'hq_checkpoints'), self.clock().isoformat())
             self._migrate_heat_methodology()
             self._recover()
-            self._refresh_pending()
             config = self.configuration.load()
             with self.connect() as db:
                 queued = db.execute("SELECT * FROM manual_runs WHERE status='queued' ORDER BY rowid LIMIT 1").fetchone()
                 manual = queued is not None
-                pending_exists = db.execute("SELECT 1 FROM days WHERE status NOT IN ('complete','blocked','superseded') LIMIT 1").fetchone()
-            if not manual and not config['enabled']:
+                pending_exists = db.execute("""SELECT 1 FROM days WHERE status NOT IN ('complete','blocked','superseded')
+                    AND NOT EXISTS (SELECT 1 FROM metadata WHERE key='manual-only:' || trade_date) LIMIT 1""").fetchone()
+            if not manual and (not config['enabled'] or not automatic_collection_allowed(moment)):
                 return False
+            self._refresh_pending()
+            isolated = manual and manual_failure_isolated(moment)
+            if manual:
+                with self.connect() as db:
+                    manual_snapshot = (
+                        dict(db.execute("SELECT key,value FROM metadata WHERE key LIKE 'pass-budget:scheduled:%' OR key LIKE 'dependency-budget:scheduled:%' OR key IN ('scheduler_next_attempt_at','planned_scope','session_checked_day')")),
+                        {row['trade_date']: dict(row) for row in db.execute('SELECT * FROM days')},
+                    )
             # Retain the activation audit marker; source-table boundaries, not
             # this legacy marker, determine the current backfill window.
             with self.connect() as db:
@@ -915,6 +944,7 @@ class MarketCollection:
                     db.execute('INSERT INTO manual_runs(id,status,trigger,phase,requested_at,updated_at) VALUES(?,?,?,?,?,?)',
                                (run_id, 'running', 'scheduled', 'calendar', stamp, stamp))
             check = lambda: self._check(run_id)
+            check()
             completed = False
             with self.client_factory() as client:
                 paced = PacedHTTPClient(client, self, check)
@@ -932,8 +962,8 @@ class MarketCollection:
                     self._record_dependency_failure(scope, moment)
                 self._ensure_days(moment, manual=manual)
                 self._put_meta(last_error=calendar_error or '',
-                               scheduler_next_attempt_at=_stamp(moment + timedelta(minutes=30)) if calendar_error else '')
-                if not calendar_error:
+                               scheduler_next_attempt_at=_stamp(moment + timedelta(minutes=30)) if calendar_error and not isolated else '')
+                if not calendar_error and not isolated:
                     self._put_meta(planned_scope=self._scheduled_scope(moment))
                     if moment.time() >= time(18, 30):
                         self._put_meta(session_checked_day=str(moment.date()))
@@ -948,7 +978,7 @@ class MarketCollection:
                             if all(current[kind + '_status'] in METRIC_DONE for kind in ('heat', 'crowding')):
                                 continue
                             self._check(run_id)
-                            if not self._claim_pass(scope, active_day, scheduled_scope=self._scheduled_scope(moment)):
+                            if not self._claim_pass(scope, active_day, scheduled_scope=None if isolated else self._scheduled_scope(moment)):
                                 continue
                             LOG.info('Market collection pass=%d/%d date=%s run=%s',
                                      pass_number + 1, MAX_PASSES_PER_RUN, active_day, hashlib.sha256(run_id.encode()).hexdigest()[:12])
@@ -986,7 +1016,8 @@ class MarketCollection:
                     self._finish_run(run_id, 'blocked', 'before_collection_time')
                 else:
                     self._finish_run(run_id, 'partial' if unfinished else 'complete')
-            self._refresh_pending()
+            if manual or automatic_collection_allowed(self.clock()):
+                self._refresh_pending()
             return completed
         except SinaRateLimitError as error:
             code = 'source_forbidden' if getattr(error, 'status_code', None) == 403 else 'source_rate_limited'
@@ -1011,7 +1042,7 @@ class MarketCollection:
             if not isinstance(code, str) or code not in SAFE_ERRORS:
                 code = 'source_unavailable'
             self._record_dependency_failure(scope, moment)
-            self._put_meta(last_error=code, scheduler_next_attempt_at=_stamp(moment + timedelta(minutes=30)))
+            self._put_meta(last_error=code, scheduler_next_attempt_at='' if manual and manual_failure_isolated(moment) else _stamp(moment + timedelta(minutes=30)))
             if active_day:
                 self._defer_day(active_day, code, moment)
             if run_id:
@@ -1021,6 +1052,20 @@ class MarketCollection:
             return False
         finally:
             try:
+                if manual_snapshot is not None:
+                    before_meta, before_days = manual_snapshot
+                    closed = manual_failure_isolated(moment) or manual_failure_isolated(self.clock())
+                    with self.connect() as db:
+                        if closed:
+                            db.execute("DELETE FROM metadata WHERE key LIKE 'pass-budget:scheduled:%' OR key LIKE 'dependency-budget:scheduled:%' OR key IN ('scheduler_next_attempt_at','planned_scope','session_checked_day')")
+                            db.executemany('INSERT OR REPLACE INTO metadata VALUES (?,?)', before_meta.items())
+                            for day, old in before_days.items():
+                                db.execute("UPDATE days SET attempts_today=?,attempt_date=?,next_attempt_at=?,updated_at=? WHERE trade_date=? AND status NOT IN ('complete','superseded')",
+                                           (old['attempts_today'], old['attempt_date'], old['next_attempt_at'], old['updated_at'], day))
+                        else:
+                            for row in db.execute('SELECT trade_date FROM days').fetchall():
+                                if row[0] not in before_days:
+                                    db.execute('DELETE FROM metadata WHERE key=?', ('manual-only:' + row[0],))
                 if run_id and self._notification_changes:
                     with self.connect() as db:
                         terminal = db.execute('SELECT status FROM manual_runs WHERE id=?', (run_id,)).fetchone()

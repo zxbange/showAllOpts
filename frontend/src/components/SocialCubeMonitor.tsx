@@ -197,7 +197,7 @@ export function SocialCubeMonitor({
       <div className="social-cube-window">
         <Clock3 size={16} />
         <div>
-          <strong>北京时间 周一至周五 09:00～15:00</strong>
+          <strong>北京时间 · 交易日按系统配置时段监控</strong>
           <span>
             {monitoringActive
               ? '当前处于监控时段'

@@ -9,6 +9,8 @@
 
 ## 运行与维护
 
+- [自动采集运行日历与手动失败隔离](operations/collection-calendar.md)
+
 - [缓存同步策略与历史修复](operations/cache-sync-strategies.md)
 - [CCI 采集核验（2026-11-09）](operations/cci-collection-investigation.md)
 - [CCI 数据更新与断档恢复](operations/cci-recovery.md)

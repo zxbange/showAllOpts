@@ -2,6 +2,7 @@
 
 ETF collection and display reads can share a page-configured database account.
 """
+from app.services.collection_calendar import automatic_collection_allowed, manual_failure_isolated
 from app.services.system_runtime import source_client
 from app.services.system_configuration import pin_configuration
 from app.services.collection_notifications import emit_collection_result
@@ -243,7 +244,7 @@ class ETFCollection:
                         if row['id'] == request_id:
                             return dict(row)
                         raise ConfigurationFailure('已有采集任务排队，请勿重复触发')
-                    if retry_exhausted:
+                    if retry_exhausted and not manual_failure_isolated(self.clock()):
                         db.execute("UPDATE observations SET status='pending',attempts=0 WHERE status='retry_exhausted' AND day=(SELECT value FROM metadata WHERE key='coverage_end')")
                     db.execute('INSERT INTO manual_runs(id,status,requested_at,phase) VALUES (?,?,?,?)',
                                (request_id, 'queued', self.clock().isoformat(), 'queued'))
@@ -341,7 +342,6 @@ class ETFCollection:
                     config = reconcile_system_ledger(self.configuration, db,
                         ('observations', 'slots', 'metadata'), moment.isoformat())
                     db.commit()
-                    self._refresh(db)
                     self._recover_manual_runs(db)
                     db.execute("DELETE FROM metadata WHERE key='progress'")
                     manual = db.execute("SELECT * FROM manual_runs WHERE status='queued' ORDER BY rowid LIMIT 1").fetchone()
@@ -351,8 +351,9 @@ class ETFCollection:
                         if not claimed:
                             return False  # Cancellation won the queue-claim race.
                         return self._run(db, moment.astimezone(CHINA), config, manual_id=manual['id'])
-                    if not config['enabled']:
+                    if not config['enabled'] or not automatic_collection_allowed(moment):
                         return False
+                    self._refresh(db)
                     today = moment.astimezone(CHINA).date().isoformat()
                     db.execute("UPDATE slots SET status='abandoned' WHERE substr(slot,1,10)<? AND status IN ('running','failed','partial')", (today,))
                     db.commit()
@@ -398,7 +399,7 @@ class ETFCollection:
                 row = db.execute('SELECT status FROM manual_runs WHERE id=?', (manual_id,)).fetchone()
                 if row and row['status'] in ('cancelling', 'cancelled'):
                     raise CollectionCancelled()
-            if self.stop_event.is_set():
+            if self.stop_event.is_set() or (not manual_id and not automatic_collection_allowed(self.clock())):
                 raise CollectionInterrupted()
 
         def progress(next_phase, completed=0, total=0):
@@ -425,7 +426,7 @@ class ETFCollection:
             state, error, complete = 'cancelled', None, False
         except Exception as exc:
             state, error = 'failed', exc.code if isinstance(exc, WriterFailure) else 'source_unavailable'
-            if self.stop_event.is_set():
+            if isinstance(exc, CollectionInterrupted):
                 state, error = 'interrupted', 'service_interrupted'
             if isinstance(exc, WriterFailure):
                 db.execute("INSERT OR REPLACE INTO metadata VALUES ('writer_error',?)", (exc.code,))
@@ -450,7 +451,8 @@ class ETFCollection:
         db.commit()
         LOG.info('ETF collection finish run=%s outcome=%s completed=%s total=%s seconds=%.3f',
                  run, state, last_completed, last_total, time.monotonic() - started)
-        self._refresh(db)
+        if manual_id or automatic_collection_allowed(self.clock()):
+            self._refresh(db)
         emit_collection_result(self.settings, 'etf', scheduled=manual_id is None, run_key=run,
             outcome=state, changed_count=self._notification_changes, summary=self._notification_summary)
         return complete
@@ -477,6 +479,7 @@ class ETFCollection:
         progress = progress or (lambda *args: None)
         check_cancelled = check_cancelled or (lambda: None)
         check_cancelled()
+        isolated = manual and manual_failure_isolated(slot)
         c = self.collector or collector_module()
         funds = c.catalog()
         with self.client_factory() as http:
@@ -518,7 +521,7 @@ class ETFCollection:
             for code in funds:
                 for kind in ('shares', 'prices'):
                     db.execute('INSERT OR IGNORE INTO observations(kind,code,day,status) VALUES (?,?,?,?)',
-                               (kind, code, end.isoformat(), 'pending'))
+                               (kind, code, end.isoformat(), 'manual_only' if manual else 'pending'))
             db.execute("INSERT OR REPLACE INTO metadata VALUES ('coverage_start',?)", (end.isoformat(),))
             db.execute("INSERT OR REPLACE INTO metadata VALUES ('coverage_end',?)", (end.isoformat(),))
             db.execute("INSERT OR REPLACE INTO metadata VALUES ('coverage_target_sessions','1')")
@@ -579,15 +582,18 @@ class ETFCollection:
             db.execute("INSERT OR REPLACE INTO metadata VALUES ('writer_error','')")
             # Charge only committed attempts. Preserve old values on an incomplete
             # source response, but do not mistake them for fresh verification.
-            for kind, code, day in attempted:
-                db.execute('UPDATE observations SET attempts=attempts+1 WHERE kind=? AND code=? AND day=?',
-                           (kind, code, day))
+            isolated = isolated or (manual and manual_failure_isolated(self.clock()))
+            if not isolated:
+                for kind, code, day in attempted:
+                    db.execute('UPDATE observations SET attempts=attempts+1 WHERE kind=? AND code=? AND day=?',
+                               (kind, code, day))
             for kind, records in (('shares', shares), ('prices', prices)):
                 for record in records:
                     db.execute("UPDATE observations SET status='complete' WHERE kind=? AND code=? AND day=?",
                                (kind, record['fund_code'], record['trade_date'].isoformat()))
-            db.execute("UPDATE observations SET status='pending' WHERE day=? AND status='blocked_unverified_history'",
-                       (end.isoformat(),))
+            if not isolated:
+                db.execute("UPDATE observations SET status='pending' WHERE day=? AND status IN ('blocked_unverified_history','manual_only')",
+                           (end.isoformat(),))
             db.execute("UPDATE observations SET status='retry_exhausted' WHERE day=? AND status='pending' AND attempts>=6",
                        (end.isoformat(),))
             db.execute("INSERT OR REPLACE INTO metadata VALUES ('cache_pending','1')")

@@ -272,7 +272,7 @@ test('schedule columns, explicit switches and 24-hour fields remain independent'
   await page.getByRole('button', { name: '重新读取配置' }).click()
   await expect(time).toHaveValue('23:59')
   const earnings = page.getByRole('row', { name: '业绩选股（高股息 / 奶牛股）', exact: true })
-  await expect(earnings).toContainText('每天')
+  await expect(earnings).toContainText('交易日')
   await expect(earnings.getByLabel('每日时间')).toHaveValue('23:00')
   await expect(page.getByText('每月最后一天', { exact: true })).toHaveCount(0)
   await expect(page.locator('form form')).toHaveCount(0)

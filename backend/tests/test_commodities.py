@@ -79,7 +79,7 @@ def test_schedule_shanghai_including_weekend(instant,expected):
 
 def scheduled_service(tmp_path,monkeypatch):
  from app.services import commodities
- monkeypatch.setattr(commodities,'now',lambda:datetime(2026,11,7,2,tzinfo=timezone.utc))
+ monkeypatch.setattr(commodities,'now',lambda:datetime(2026,11,6,2,tzinfo=timezone.utc))
  return Commodities(Settings(_env_file=None,log_dir=tmp_path))
 
 def test_slots_persist_after_failure_and_restart(tmp_path,monkeypatch):
@@ -88,7 +88,7 @@ def test_slots_persist_after_failure_and_restart(tmp_path,monkeypatch):
  def fail(*a,**k):raise TimeoutError('private')
  monkeypatch.setattr(commodities,'fetch',fail)
  monkeypatch.setattr(service.stopping,'wait',lambda *_:False)
- slot=latest_slot(datetime(2026,11,7,3,tzinfo=timezone.utc))
+ slot=latest_slot(datetime(2026,11,6,3,tzinfo=timezone.utc))
  assert service.refresh(slot=slot)
  service.thread.join(5)
  assert not service.thread.is_alive()
@@ -105,7 +105,7 @@ def test_slots_persist_after_failure_and_restart(tmp_path,monkeypatch):
 
 def test_restart_marks_interrupted(tmp_path,monkeypatch):
  service=scheduled_service(tmp_path,monkeypatch)
- slot=latest_slot(datetime(2026,11,7,3,tzinfo=timezone.utc))
+ slot=latest_slot(datetime(2026,11,6,3,tzinfo=timezone.utc))
  with service.db() as db:db.execute('INSERT INTO schedule_runs(slot,status) VALUES(?,?)',(slot.isoformat(),'running'))
  restored=Commodities(Settings(_env_file=None,log_dir=tmp_path))
  assert not restored.refresh(slot=slot)
@@ -120,7 +120,7 @@ def test_manual_and_two_schedulers_share_lock(tmp_path,monkeypatch):
   try:gate.wait(5)
   finally:lock.release()
  monkeypatch.setattr(service,'collect',hold)
- slot=latest_slot(datetime(2026,11,7,3,tzinfo=timezone.utc))
+ slot=latest_slot(datetime(2026,11,6,3,tzinfo=timezone.utc))
  assert service.refresh()
  try:
   assert not second.refresh(slot=slot)
@@ -133,7 +133,7 @@ def test_manual_and_two_schedulers_share_lock(tmp_path,monkeypatch):
 
 def test_initialization_does_not_backfill_previous_slots(tmp_path,monkeypatch):
  service=scheduled_service(tmp_path,monkeypatch)
- assert not service.refresh(slot=latest_slot(datetime(2026,11,7,2,tzinfo=timezone.utc)))
+ assert not service.refresh(slot=latest_slot(datetime(2026,11,6,2,tzinfo=timezone.utc)))
 
 def test_no_new_quote_is_idempotent_across_runs(tmp_path,monkeypatch):
  from app.services import commodities
@@ -151,10 +151,12 @@ def test_cross_process_claim_and_lock(tmp_path,monkeypatch):
 import sys
 from datetime import datetime,timezone
 from app.services.commodities import Commodities,latest_slot
+from app.services import commodities
+commodities.now=lambda:datetime(2026,11,6,3,tzinfo=timezone.utc)
 from app.core.config import Settings
 service=Commodities(Settings(_env_file=None,log_dir=sys.argv[1]))
 service.collect=lambda lock,slot=None:lock.release()
-print(service.refresh(slot=latest_slot(datetime(2026,11,7,3,tzinfo=timezone.utc))))
+print(service.refresh(slot=latest_slot(datetime(2026,11,6,3,tzinfo=timezone.utc))))
 if service.thread:service.thread.join(5)
 '''
  def run():

@@ -182,6 +182,9 @@ def worker(tmp_path, *, moment=EVENING, edge_cases=False, refresh=None):
                                   client_factory=lambda: nullcontext(object()),
                                   calendar_loader=lambda client: list(CALENDAR),
                                   source_dates_loader=lambda owner: writer.dates)
+    # Source/retry fixtures intentionally retain an explicit midnight schedule.
+    from datetime import time
+    collection._auto_time = lambda: time(0, 1)
     collection.start = lambda: None
     return collection, provider, writer, clock
 
@@ -402,6 +405,9 @@ def test_empty_database_failed_bootstrap_remains_a_tracked_gap(tmp_path):
 def test_weekend_calendar_check_is_cached_and_not_a_synthetic_trading_day(tmp_path):
     saturday = datetime(2026, 11, 14, 0, 1, tzinfo=CHINA)
     collection, provider, writer, clock = worker(tmp_path, moment=saturday)
+    assert not collection.tick()
+    assert not provider.universe_calls
+    collection.request_run('weekend-manual')
     assert collection.tick()
     assert not collection.tick(clock.advance(minutes=1))
     assert provider.universe_calls==[date(2026,11,13)] and writer.calls
@@ -412,9 +418,13 @@ def test_weekend_calendar_check_is_cached_and_not_a_synthetic_trading_day(tmp_pa
 def test_new_year_calendar_not_treated_as_known_holiday(tmp_path):
     collection, provider, writer, clock = worker(tmp_path, moment=datetime(2027, 1, 5, 0, 1, tzinfo=CHINA))
     assert not collection.tick()
+    assert collection.status()['error'] is None
+    collection.request_run('unknown-calendar-manual')
+    assert not collection.tick()
     assert collection.status()['error'] == 'calendar_incomplete'
     assert not provider.universe_calls
     collection.calendar_loader = lambda client: CALENDAR + [date(2027, 1, 4), date(2027, 12, 31)]
+    collection.request_run('unknown-calendar-manual-retry')
     assert collection.tick(clock.advance(minutes=30))
     assert provider.universe_calls == [date(2027, 1, 4)]
 
@@ -1125,7 +1135,7 @@ def test_exact_1830_boundary_and_shanghai_timezone(tmp_path):
     assert not provider.universe_calls
     clock.advance(minutes=1)
     assert collection.tick(clock().astimezone(timezone.utc))
-    assert collection.status()['schedule'] == ['00:01']
+    assert collection.status()['schedule'] == ['23:58']
     assert collection.status()['next_run_at'].endswith('00:01:00+08:00')
 
 
@@ -1351,7 +1361,7 @@ def test_diagnostic_logs_include_stage_counts_and_safe_errors_without_credential
 
 
 def test_monday_source_friday_target_collects_tuesday_through_friday(tmp_path):
-    collection, provider, writer, clock = worker(tmp_path, moment=EVENING.replace(day=14))
+    collection, provider, writer, clock = worker(tmp_path, moment=EVENING.replace(day=16))
     historical_provider(provider)
     writer.dates = {'heat': {'2026-11-09'}, 'crowding': {'2026-11-09'}}
     assert collection.tick()
@@ -1364,7 +1374,7 @@ def test_monday_source_friday_target_collects_tuesday_through_friday(tmp_path):
 
 
 def test_each_metric_boundary_excludes_earlier_holes_and_heat_requests(tmp_path):
-    collection, provider, writer, clock = worker(tmp_path, moment=EVENING.replace(day=14))
+    collection, provider, writer, clock = worker(tmp_path, moment=EVENING.replace(day=16))
     historical_provider(provider)
     writer.dates = {'heat': {'2026-11-11'}, 'crowding': {'2026-11-09'}}
     assert collection.tick()
@@ -1378,7 +1388,7 @@ def test_each_metric_boundary_excludes_earlier_holes_and_heat_requests(tmp_path)
 
 @pytest.mark.parametrize('stale_status', ['pending', 'partial', 'blocked', 'paused'])
 def test_older_tracked_failures_do_not_expand_source_boundaries(tmp_path, stale_status):
-    collection, provider, writer, clock = worker(tmp_path, moment=EVENING.replace(day=14))
+    collection, provider, writer, clock = worker(tmp_path, moment=EVENING.replace(day=16))
     historical_provider(provider)
     collection._migrate_heat_methodology()
     with collection.connect() as db:
@@ -1395,7 +1405,7 @@ def test_older_tracked_failures_do_not_expand_source_boundaries(tmp_path, stale_
 
 @pytest.mark.parametrize(('moment', 'expected_days'), [
     (EVENING.replace(day=13, minute=29), (10, 11, 12)),
-    (EVENING.replace(day=14), (10, 11, 12, 13)),
+    (EVENING.replace(day=16), (10, 11, 12, 13)),
     (EVENING.replace(day=15, hour=10), (10, 11, 12, 13)),
 ])
 def test_manual_closed_session_boundary_with_weekends(tmp_path, moment, expected_days):
@@ -1408,7 +1418,7 @@ def test_manual_closed_session_boundary_with_weekends(tmp_path, moment, expected
 
 
 def test_one_empty_metric_only_bootstraps_target_while_other_backfills(tmp_path):
-    collection, provider, writer, clock = worker(tmp_path, moment=EVENING.replace(day=14))
+    collection, provider, writer, clock = worker(tmp_path, moment=EVENING.replace(day=16))
     historical_provider(provider)
     writer.dates = {'heat': set(), 'crowding': {'2026-11-09'}}
     assert collection.tick()
@@ -1418,7 +1428,7 @@ def test_one_empty_metric_only_bootstraps_target_while_other_backfills(tmp_path)
 
 
 def test_failed_earlier_heat_gap_survives_later_successes(tmp_path):
-    collection, provider, writer, clock = worker(tmp_path, moment=EVENING.replace(day=14))
+    collection, provider, writer, clock = worker(tmp_path, moment=EVENING.replace(day=16))
     historical_provider(provider)
     writer.dates = {'heat': {'2026-11-09'}, 'crowding': {'2026-11-09'}}
     original = provider.fetch_quote
@@ -1477,7 +1487,7 @@ def test_automatic_upgrade_replaces_blocked_legacy_snapshot_with_current_method_
     old_crowding_hash = collection._day(DAY)['crowding_hash']
     writer.dates['crowding'].add('2026-11-13')
     writer.calls.clear()
-    clock.value = EVENING.replace(day=14)
+    clock.value = EVENING.replace(day=16)
     provider = Provider(clock)
     provider.source_id = 'public_market'
     historical_provider(provider)
@@ -1515,7 +1525,7 @@ def test_blocked_automatic_retries_obey_backoff_and_daily_budget(tmp_path):
 
 
 def test_crowding_table_failure_does_not_block_heat_frontier_or_repeat_same_day_write(tmp_path):
-    collection, provider, writer, clock = worker(tmp_path, moment=EVENING.replace(day=14))
+    collection, provider, writer, clock = worker(tmp_path, moment=EVENING.replace(day=16))
     historical_provider(provider)
     writer.dates = {'heat': {'2026-11-09'}, 'crowding': {'2026-11-09'}}
     attempts = []

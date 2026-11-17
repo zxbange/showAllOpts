@@ -150,7 +150,7 @@ def test_cross_instance_lock_rejects_duplicate_jobs(cached, engine):
 
 def test_daily_schedule_and_restart_do_not_duplicate_completed_slot(cached, engine, monkeypatch):
     settings, cache = cached
-    morning = datetime(2026,10,18,6,tzinfo=CHINA)
+    morning = datetime(2026,10,19,6,tzinfo=CHINA)
     monkeypatch.setattr('app.core.cache.now', lambda: morning)
     cache.tick(morning)
     assert cache.read_state()['modules'] == {}
@@ -170,7 +170,7 @@ def test_daily_schedule_and_restart_do_not_duplicate_completed_slot(cached, engi
     assert cache.read_state()['scheduled_slot'] == latest_slot(evening, '07:00').isoformat()
     cache.tick(evening+timedelta(seconds=30))
     assert cache.read_state()['modules']['industry-momentum']['file'] == second
-    assert latest_slot(morning,'07:00').isoformat() == '2026-10-17T07:00:00+08:00'
+    assert latest_slot(morning,'07:00').isoformat() == '2026-10-18T07:00:00+08:00'
 
 
 def test_api_missing_cache_never_falls_back_and_sync_needs_no_secret(cached, engine, monkeypatch):
@@ -265,7 +265,7 @@ def test_real_background_refresh_and_lifespan_shutdown(cached, engine):
 
 def test_interrupted_schedule_resumes_pending_modules(cached, monkeypatch):
     _, cache = cached
-    clock=datetime(2026,10,18,6,tzinfo=CHINA)
+    clock=datetime(2026,10,19,6,tzinfo=CHINA)
     monkeypatch.setattr('app.core.cache.now',lambda:clock)
     cache.refresh(background=False)
     state=cache.read_state()
@@ -286,7 +286,7 @@ def test_interrupted_schedule_resumes_pending_modules(cached, monkeypatch):
 
 def test_missing_module_waits_for_manual_or_next_schedule(cached, monkeypatch):
     _, cache = cached
-    clock=datetime(2026,10,18,6,tzinfo=CHINA)
+    clock=datetime(2026,10,19,6,tzinfo=CHINA)
     monkeypatch.setattr('app.core.cache.now',lambda:clock)
     original=cache.copy_module
     calls=[]
@@ -337,7 +337,7 @@ def test_evening_restart_does_not_catch_up(cached, monkeypatch):
     _, cache = cached
     calls = []
     monkeypatch.setattr(cache, '_refresh_locked', lambda *args: calls.append(args))
-    clock = datetime(2026,10,18,22,tzinfo=CHINA)
+    clock = datetime(2026,10,19,22,tzinfo=CHINA)
     cache.tick(clock)
     cache.tick(clock + timedelta(minutes=5))
     assert calls == []
@@ -526,3 +526,34 @@ def test_internal_collection_can_publish_hidden_modules(cached, monkeypatch):
     assert cache.refresh_etf_collection()
     assert cache.refresh('dividend-selection', background=False, reason='dividend-collection')
     assert calls == ['market-sentiment', 'market-crowding', 'etf-shares', 'dividend-selection']
+
+
+@pytest.mark.parametrize('stamp', ['2026-11-07T10:00:00+08:00', '2026-10-01T10:00:00+08:00'])
+def test_closed_day_manual_failure_is_not_retried(cached, monkeypatch, stamp):
+    _, cache = cached
+    monkeypatch.setattr('app.core.cache.now', lambda: datetime.fromisoformat(stamp))
+    calls = []
+    def fail(module):
+        calls.append(module)
+        raise OperationalError('read', {}, Exception(2003, 'test'))
+    monkeypatch.setattr(cache, 'copy_module', fail)
+    assert cache.refresh('industry-momentum', background=False)
+    assert calls == ['industry-momentum']
+    state = cache.read_state()
+    assert not state['pending']
+    assert state['pending_manual_isolated']
+    assert state['modules']['industry-momentum']['progress']['status'] == 'failed'
+
+
+def test_scheduled_sync_stops_before_next_module_on_closed_day(cached, monkeypatch):
+    _, cache = cached
+    moment = [datetime.fromisoformat('2026-11-06T23:59:59+08:00')]
+    monkeypatch.setattr('app.core.cache.now', lambda: moment[0])
+    calls = []
+    def copy(module):
+        calls.append(module)
+        moment[0] = datetime.fromisoformat('2026-11-07T00:00:01+08:00')
+        raise OperationalError('read', {}, Exception(2003, 'test'))
+    monkeypatch.setattr(cache, 'copy_module', copy)
+    assert cache.refresh(background=False, reason='scheduled')
+    assert len(calls) == 1

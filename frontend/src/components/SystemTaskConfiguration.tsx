@@ -93,7 +93,8 @@ export function SystemTaskConfiguration({
         <span className="system-timezone">北京时间 · 24h</span>
       </div>
       <p className="system-settings-muted system-task-help">
-        自动运行控制定时执行，通知开关只控制推送；修改后保存生效。
+        自动运行控制定时执行，通知开关只控制推送；修改后保存生效。除微博 /
+        雪球动态外，自动任务在周末和节假日暂停；未核验年份也暂停自动运行，手动仍可运行。
       </p>
       <div className="system-task-table" role="table" aria-label="自动任务配置">
         <div className="system-task-columns" role="row">
@@ -129,11 +130,11 @@ export function SystemTaskConfiguration({
               <span className="system-frequency-badge">
                 {t.frequency === 'month_end'
                   ? '每月最后一天'
-                  : key === 'social_cubes'
-                    ? '周一至周五'
-                    : t.interval_seconds !== undefined || t.min_interval_minutes !== undefined
-                      ? '每天轮询'
-                      : '每天'}
+                  : key === 'social'
+                    ? '每天轮询'
+                    : t.interval_seconds !== undefined || key === 'social_cubes'
+                      ? '交易日轮询'
+                      : '交易日'}
               </span>
               {t.interval_seconds !== undefined && (
                 <label className="system-frequency-input">

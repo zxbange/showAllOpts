@@ -586,7 +586,7 @@ def _dividend_strategy(_apis, _config):
         id = Column(Integer, primary_key=True)
         trade_date = Column(Date, nullable=False)
         updated_at = Column(DateTime, nullable=False)
-        rule_version = Column(String(32), nullable=False)
+        rule_version = Column(String(64), nullable=False)
         universe_count = Column(Integer, nullable=False)
         eligible_count = Column(Integer, nullable=False)
         value_candidates = Column(Integer, nullable=False)
@@ -821,6 +821,12 @@ def _dividend_strategy(_apis, _config):
         with session_scope(Session) as session:
             engine = session.get_bind()
         with engine.begin() as connection:
+            if engine.dialect.name == 'mysql':
+                version = next(c for c in inspect(connection).get_columns(DividendSnapshot.__tablename__)
+                               if c['name'] == 'rule_version')
+                length = getattr(version['type'], 'length', None)
+                if length is not None and length < 64:
+                    connection.execute(sql_text('ALTER TABLE dividend_selection_snapshot MODIFY COLUMN rule_version VARCHAR(64) NOT NULL'))
             columns = {c['name'] for c in inspect(connection).get_columns(DividendStock.__tablename__)}
             if 'dividend_yield_history' not in columns:
                 connection.execute(sql_text('ALTER TABLE dividend_selection_stock ADD COLUMN dividend_yield_history JSON NULL'))

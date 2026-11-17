@@ -23,7 +23,7 @@ def test_default_is_global_database_and_daily_schedules(tmp_path):
     config = service(tmp_path)
     value = config.public()
     assert value['database']['password_set'] and 'password' not in value['database']
-    assert value['schedules']['market']['times'] == ['00:01']
+    assert value['schedules']['market']['times'] == ['23:58']
     assert value['schedules']['valuation_ruler']['times'] == ['18:30']
     assert value['schedules']['holdings']['start'] == '09:25'
     assert value['schedules']['holdings']['interval_seconds'] == 15
@@ -212,7 +212,7 @@ def test_initial_market_disabled_preference_survives_migration(tmp_path):
         db.execute('CREATE TABLE configuration(id INTEGER,revision INTEGER,ciphertext BLOB)')
         db.execute('INSERT INTO configuration VALUES(1,4,?)', (raw,))
     migrated = task_config(config.settings, 'market')
-    assert not migrated['enabled'] and migrated['times'] == ['00:01']
+    assert not migrated['enabled'] and migrated['times'] == ['23:58']
 
 def test_configured_times_and_windows(tmp_path):
     from datetime import datetime
@@ -281,3 +281,19 @@ def test_earnings_share_daily_schedule_and_migrate_month_end(tmp_path):
     config.save(body)
     assert task_config(config.settings, 'cash_cow')['times'] == ['22:30']
     assert task_config(config.settings, 'dividend_selection')['times'] == ['22:30']
+
+
+def test_market_time_migration_persists_once_and_respects_later_edits(tmp_path):
+    config = service(tmp_path)
+    old = config.default()
+    old.pop('market_schedule_v2')
+    old['schedules']['market']['times'] = ['00:01']
+    config._persist(old, config.cipher())
+    value = config.load()
+    assert value['schedules']['market']['times'] == ['23:58']
+    assert value['revision'] == 1
+    assert config.load()['revision'] == 1
+    body = form(config)
+    body['schedules']['market']['times'] = ['22:15']
+    config.save(body)
+    assert service(tmp_path).load()['schedules']['market']['times'] == ['22:15']

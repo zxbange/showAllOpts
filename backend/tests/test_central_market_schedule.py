@@ -26,7 +26,9 @@ def test_midnight_batch_keeps_previous_day_even_if_recovered_evening(tmp_path):
 
 def test_status_has_daily_next_slot_without_calendar(tmp_path):
     owner, _, _, _ = worker(tmp_path)
-    assert owner.status()['next_run_at'] == '2026-11-12T00:01:00+08:00'
+    del owner._auto_time
+    assert owner.status()['schedule'] == ['23:58']
+    assert owner.status()['next_run_at'] == '2026-11-11T23:58:00+08:00'
 
 
 def test_notification_only_automatic_real_changes(tmp_path, monkeypatch):
@@ -54,6 +56,7 @@ def test_no_change_does_not_notify(tmp_path, monkeypatch):
 
 def test_dynamic_schedule_changes_scope_and_next_run(tmp_path, monkeypatch):
     owner, _, _, _ = worker(tmp_path)
+    del owner._auto_time
     monkeypatch.setattr('app.services.market_collection.task_config', lambda settings, key: {'times': ['01:30'], 'enabled': True})
     now = datetime(2026, 11, 11, 1, 29, tzinfo=CHINA)
     assert owner._scheduled_scope(now) == 'scheduled:2026-11-10'
@@ -85,3 +88,19 @@ def test_manual_run_notifies_only_when_enabled_and_business_changed(tmp_path, mo
     owner.tick()
     with notifications._database(owner.settings) as db:
         assert db.execute('SELECT count(*) FROM outbox').fetchone()[0] == len(events)
+
+
+@pytest.mark.parametrize('moment, expected', [
+    ('2026-11-13T23:59:00+08:00', '2026-11-16T23:58:00+08:00'),
+    ('2026-09-30T23:59:00+08:00', '2026-10-08T23:58:00+08:00'),
+    ('2026-12-31T23:59:00+08:00', None),
+])
+@pytest.mark.parametrize('existing_ledger', [False, True])
+def test_next_run_skips_closed_dates_and_stops_at_unknown_calendar(tmp_path, moment, expected, existing_ledger):
+    owner, _, _, clock = worker(tmp_path)
+    del owner._auto_time
+    clock.value = datetime.fromisoformat(moment)
+    if existing_ledger:
+        with owner.connect():
+            pass
+    assert owner.status()['next_run_at'] == expected

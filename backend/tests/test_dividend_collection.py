@@ -315,3 +315,173 @@ def test_manual_dividend_notifies_only_changed_publication(tmp_path, monkeypatch
         assert service.status()['stage'] == 'complete'
     with notifications._database(service.settings) as db:
         assert db.execute('SELECT count(*) FROM outbox').fetchone()[0] == 1
+
+
+def test_rule_version_fits_declared_snapshot_column():
+    from app.services.dividend_collection import RULE_VERSION
+    assert len(RULE_VERSION) <= DividendSnapshot.rule_version.type.length
+
+
+@pytest.mark.parametrize('width,altered', [(32, True), (64, False), (128, False)])
+def test_mysql_legacy_rule_version_widens_without_shrinking(monkeypatch, width, altered):
+    from sqlalchemy import String
+    import app.services.dividend_collection as module
+    executed = []
+    conn = SimpleNamespace(execute=lambda sql: executed.append(str(sql)))
+    fake = SimpleNamespace(dialect=SimpleNamespace(name='mysql'), begin=lambda: nullcontext(conn))
+    monkeypatch.setattr(module, 'inspect', lambda engine: SimpleNamespace(
+        get_columns=lambda table: [dict(name='rule_version', type=String(width))]))
+    module.ensure_rule_version_capacity(fake)
+    assert executed == (['ALTER TABLE dividend_selection_snapshot MODIFY COLUMN rule_version VARCHAR(64) NOT NULL'] if altered else [])
+
+
+def test_local_verification_reports_truncated_version_without_accepting_it(tmp_path, caplog):
+    from sqlalchemy.orm import Session
+    engine = create_engine('sqlite://')
+    meta, rows = result()
+    write_result(engine, meta, rows)
+    with engine.begin() as conn:
+        conn.execute(DividendSnapshot.__table__.update().values(rule_version=meta['rule_version'][:32]))
+    cache = SimpleNamespace(refresh=lambda *a, **k: True, session=lambda *a: Session(engine))
+    service = DividendCollection(SimpleNamespace(log_path=tmp_path), cache=cache)
+    with pytest.raises(DividendCollectionError, match='complete dividend snapshot'):
+        service.sync_local(meta, rows)
+    assert 'metadata_fields=rule_version records_match=True expected_stock_rows=2 actual_stock_rows=2' in caplog.text
+    engine.dispose()
+
+
+def test_schema_permission_failure_retains_old_results_and_pending_for_retry(tmp_path, monkeypatch):
+    import app.services.dividend_collection as module
+    from sqlalchemy.exc import OperationalError
+    service, remote, local, cache, calls = publication_service(tmp_path, monkeypatch)
+    old_meta, old_rows = result(date(2026, 11, 13))
+    write_result(remote, old_meta, old_rows)
+    write_result(local, old_meta, old_rows)
+    before_remote, before_local = read(remote), read(local)
+    original = module.ensure_rule_version_capacity
+    def denied(engine):
+        raise OperationalError('ALTER TABLE synthetic', {}, Exception(1142, 'ALTER denied'))
+    monkeypatch.setattr(module, 'ensure_rule_version_capacity', denied)
+    moment = datetime(2026, 11, 16, 21, tzinfo=CHINA)
+    assert service.refresh(background=False, moment=moment)
+    assert service.pending() is not None
+    assert service.status()['stage'] == 'publication_pending'
+    assert read(remote) == before_remote
+    assert read(local) == before_local
+    assert calls == [1]
+    monkeypatch.setattr(module, 'ensure_rule_version_capacity', original)
+    cache.fail = False
+    assert service.refresh(background=False, moment=moment)
+    assert service.pending() is None
+    assert service.status()['stage'] == 'complete'
+    assert calls == [1]  # Retry the durable snapshot, not a new collection.
+
+
+def test_post_migration_write_failure_still_rolls_back_snapshot(engine, monkeypatch):
+    import app.services.dividend_collection as module
+    from sqlalchemy import event
+    meta, rows = result()
+    write_result(engine, meta, rows)
+    old = read(engine)
+    seen = []
+    monkeypatch.setattr(module, 'ensure_rule_version_capacity', lambda engine: seen.append('schema-ready'))
+    def fail_insert(conn, cursor, statement, *args):
+        if statement.startswith('INSERT INTO dividend_selection_stock'):
+            raise RuntimeError('synthetic stock insert failure')
+    event.listen(engine, 'before_cursor_execute', fail_insert)
+    changed = deepcopy(rows)
+    changed[0]['name'] = 'new-name'
+    try:
+        with pytest.raises(RuntimeError, match='synthetic stock'):
+            write_result(engine, meta, changed)
+    finally:
+        event.remove(engine, 'before_cursor_execute', fail_insert)
+    assert seen == ['schema-ready']
+    assert read(engine) == old
+
+
+def test_closed_manual_failure_is_quarantined_and_next_schedule_collects_fresh(tmp_path, monkeypatch):
+    service, remote, local, cache, calls = publication_service(tmp_path, monkeypatch)
+    class DatedSource:
+        def __init__(self, *args, **kwargs): self.day = kwargs['as_of']
+        def collect(self):
+            calls.append(1)
+            return result(self.day)
+    service.source_factory = DatedSource
+    weekend = datetime(2026, 11, 14, 21, tzinfo=CHINA)
+    assert not service.refresh(background=False, moment=weekend, slot='2026-11-14')
+    assert not calls
+    assert service.refresh(background=False, moment=weekend)
+    assert len(calls) == 1 and service.pending() is None
+    assert service.read_state()['manual_failure_isolated']
+    with service.db() as db:
+        assert db.execute('SELECT count(*) FROM manual_publication_failures').fetchone()[0] == 1
+    cache.fail = False
+    assert service.refresh(background=False, moment=datetime(2026, 11, 16, 23, tzinfo=CHINA), slot='2026-11-16')
+    assert len(calls) == 2  # Fresh normal run, not a replay of the manual payload.
+    assert service.read_state()['stage'] == 'complete'
+    with service.db() as db:
+        assert db.execute('SELECT count(*) FROM manual_publication_failures').fetchone()[0] == 1
+
+
+def test_manual_crossing_into_weekend_failure_is_isolated(tmp_path, monkeypatch):
+    import app.services.dividend_collection as module
+    service, remote, local, cache, calls = publication_service(tmp_path, monkeypatch)
+    class DatedSource:
+        def __init__(self, *args, **kwargs): self.day = kwargs['as_of']
+        def collect(self):
+            calls.append(1)
+            return result(self.day)
+    service.source_factory = DatedSource
+    ticks = iter([0, 120])
+    monkeypatch.setattr(module, 'monotonic', lambda: next(ticks, 120))
+    assert service.refresh(background=False, moment=datetime(2026, 11, 13, 23, 59, tzinfo=CHINA))
+    assert service.pending() is None
+    assert service.read_state()['run_isolated']
+    assert service.read_state()['manual_failure_isolated']
+    with service.db() as db:
+        assert db.execute('SELECT count(*) FROM manual_publication_failures').fetchone()[0] == 1
+
+
+@pytest.mark.parametrize('retry_kind', ['manual', 'automatic'])
+def test_closed_day_migration_failure_is_retained_but_not_automatically_replayed(
+        tmp_path, monkeypatch, retry_kind):
+    import app.services.dividend_collection as module
+    from sqlalchemy.exc import OperationalError
+    service, remote, local, cache, calls = publication_service(tmp_path, monkeypatch)
+    class DatedSource:
+        def __init__(self, *args, **kwargs): self.day = kwargs['as_of']
+        def collect(self):
+            calls.append(self.day)
+            return result(self.day)
+    service.source_factory = DatedSource
+    old_meta, old_rows = result(date(2026, 11, 13))
+    write_result(remote, old_meta, old_rows)
+    write_result(local, old_meta, old_rows)
+    before = read(remote), read(local)
+    original = module.ensure_rule_version_capacity
+    def denied(engine):
+        raise OperationalError('ALTER TABLE synthetic', {}, Exception(1142, 'ALTER denied'))
+    monkeypatch.setattr(module, 'ensure_rule_version_capacity', denied)
+    weekend = datetime(2026, 11, 14, 21, tzinfo=CHINA)
+    assert service.refresh(background=False, moment=weekend)
+    assert service.pending() is None
+    assert service.read_state()['manual_failure_isolated']
+    assert (read(remote), read(local)) == before
+    with service.db() as db:
+        assert db.execute('SELECT count(*) FROM manual_publication_failures').fetchone()[0] == 1
+    monkeypatch.setattr(module, 'ensure_rule_version_capacity', original)
+    cache.fail = False
+    if retry_kind == 'manual':
+        assert service.refresh(background=False, moment=weekend.replace(day=15))
+        assert calls == [weekend.date()]
+        assert service.read_state()['result_date'] == '2026-11-14'
+        remaining = 0
+    else:
+        assert service.refresh(background=False, moment=weekend.replace(day=16), slot='2026-11-16')
+        assert calls == [weekend.date(), date(2026, 11, 16)]
+        assert service.read_state()['result_date'] == '2026-11-16'
+        remaining = 1
+    assert service.read_state()['stage'] == 'complete'
+    with service.db() as db:
+        assert db.execute('SELECT count(*) FROM manual_publication_failures').fetchone()[0] == remaining

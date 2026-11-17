@@ -275,3 +275,39 @@ def test_edit_during_first_busy_tick_uses_saved_plan_boundary(scheduled):
     clock[0] += timedelta(days=1)
     cache.tick()
     assert len(calls) == 1
+
+@pytest.mark.parametrize('stamp', ['2026-11-07T12:00:00+08:00', '2026-10-01T12:00:00+08:00', '2027-01-04T12:00:00+08:00'])
+def test_closed_or_unknown_day_blocks_automatic_not_manual(scheduled, stamp):
+    _, cache, clock, calls = scheduled
+    clock[0] = datetime.fromisoformat(stamp)
+    cache.tick(clock[0])
+    assert calls == []
+    assert cache.refresh(background=False)
+    assert calls[-1][1] == 'manual'
+
+
+def test_normal_schedule_does_not_replay_isolated_manual_full_restore(scheduled):
+    _, cache, clock, calls = scheduled
+    cache.save_schedule('07:00')
+    state = cache.read_state()
+    cache.root.mkdir(parents=True, exist_ok=True)
+    state.update(pending=[next(iter(DATABASE_SYNC_MODULES))], pending_full=True, pending_manual_isolated=True)
+    cache.write_state(state)
+    clock[0] = datetime(2026, 11, 9, 6, tzinfo=CHINA)
+    cache.tick(clock[0])
+    clock[0] = clock[0].replace(hour=7)
+    cache.tick(clock[0])
+    assert calls[-1][1] == 'scheduled'
+    assert calls[-1][3] is False
+
+
+@pytest.mark.parametrize('stamp,expected', [
+    ('2026-11-07T10:00:00+08:00', '2026-11-09T07:00:00+08:00'),
+    ('2026-10-01T10:00:00+08:00', '2026-10-08T07:00:00+08:00'),
+    ('2027-01-04T10:00:00+08:00', None),
+])
+def test_next_refresh_skips_closed_and_unknown_days(scheduled, stamp, expected):
+    _, cache, clock, _ = scheduled
+    cache.settings.cache_auto_refresh = True
+    clock[0] = datetime.fromisoformat(stamp)
+    assert cache.schedule_status()['next_refresh_at'] == expected

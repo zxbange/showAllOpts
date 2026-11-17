@@ -132,7 +132,7 @@ def test_cancelled_backfill_resumes_old_pending_dates_in_one_batch(tmp_path, mon
         return httpx.Response(200, json=payload([row(), row(old, 250)]))
     service = MarginGuarantee(Settings(_env_file=None, log_dir=tmp_path, margin_worker_enabled=False),
         client_factory=lambda: httpx.Client(transport=httpx.MockTransport(respond)))
-    moment = datetime(2026, 11, 8, 8, tzinfo=CHINA)
+    moment = datetime(2026, 11, 9, 8, tzinfo=CHINA)
     write = service.write_state
     def cancel_after_one(state, db=None):
         write(state, db)

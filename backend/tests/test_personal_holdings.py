@@ -164,9 +164,9 @@ def test_window_closes_releases_and_next_day_compares(monitor):
     now[0]+=timedelta(seconds=1);assert job.poll()
     assert job.history('2026-11-03')['events'][0]['kind']=='clear'
     assert not job.history('2026-11-02')['events']
-    now[0]=datetime(2027,1,4,2,tzinfo=timezone.utc);assert job.poll()
+    now[0]=datetime(2027,1,4,2,tzinfo=timezone.utc);assert not job.poll()
     assert job.status()['calendar_error'] is None
-    now[0]=datetime(2027,1,9,2,tzinfo=timezone.utc);assert job.poll()
+    now[0]=datetime(2027,1,9,2,tzinfo=timezone.utc);assert not job.poll()
     assert in_window(datetime(2026,11,2,4,tzinfo=timezone.utc))  # lunch included
 
 
@@ -589,3 +589,25 @@ def test_broken_legacy_configuration_preserves_pointer_and_snapshot(tmp_path):
     assert job.state()['source']==ref and job.state()['rows'] and job.state()['baseline']
     assert not job.state()['enabled']
     job.stop()
+
+@pytest.mark.parametrize('stamp', ['2026-11-07T02:00:00+00:00', '2026-10-01T02:00:00+00:00', '2027-01-04T02:00:00+00:00'])
+def test_closed_day_manual_failure_is_terminal_and_next_workday_is_normal(monitor, monkeypatch, stamp):
+    job, source, now, *_ = monitor
+    job.set_enabled(True)
+    now[0] = datetime.fromisoformat(stamp)
+    replace(source, [row()])
+    assert not job.poll()
+    original = job.read
+    attempts = []
+    def failed(*args):
+        attempts.append(1)
+        raise RuntimeError('failed')
+    monkeypatch.setattr(job, 'read', failed)
+    job.request_sync('d' * 32)
+    assert not job.poll()
+    assert job.status()['manual']['status'] == 'failed'
+    assert not job.poll()
+    assert len(attempts) == 1
+    monkeypatch.setattr(job, 'read', original)
+    now[0] = datetime(2026, 11, 9, 2, tzinfo=timezone.utc)
+    assert job.poll()

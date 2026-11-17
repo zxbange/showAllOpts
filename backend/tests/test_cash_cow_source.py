@@ -384,3 +384,19 @@ def test_selector_prelisting_still_validated_but_not_in_current_pool(monkeypatch
     rows[-1]['MAX_TRADE_DATE']='2026-11-16'
     obj.as_of='2026-11-17'
     assert len(obj._selector_universe())==4
+
+
+def test_unverified_capital_logs_safe_specific_reason_without_relaxing_gate(caplog):
+    s = source({})
+    s.capital['600900'] = [dict(END_DATE='2000-01-01', TOTAL_SHARES=100),
+                           dict(END_DATE='2024-06-01', TOTAL_SHARES=120,
+                                CHANGE_REASON='untrusted provider text should not be logged')]
+    assert not s._capital_stable('600900', '2023-01-01')
+    assert 'reason=unrecognized_capital_change' in caplog.text
+    assert 'untrusted provider' not in caplog.text
+
+
+def test_absent_implemented_dividends_have_distinct_diagnostic(caplog):
+    s = source({})
+    assert s._annual_dividends('600900', 2023, 2024, []) == {}
+    assert 'reason=no_implemented_payout' in caplog.text

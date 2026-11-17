@@ -1,3 +1,4 @@
+from app.services.collection_calendar import automatic_collection_allowed
 from app.services.system_configuration import SystemConfiguration, task_config, window_open, next_window_time
 """Persistent social monitoring, independent of the market snapshot database."""
 from contextlib import contextmanager
@@ -75,10 +76,23 @@ class SocialMonitor(NotificationMixin, CubeMonitorMixin):
         return next_window_time(self.settings, 'social', moment, delay)
 
     def cube_monitoring_time(self, moment):
-        return window_open(self.settings, 'social_cubes', moment, weekdays=True)
+        return automatic_collection_allowed(moment) and window_open(self.settings, 'social_cubes', moment, weekdays=True)
 
     def next_cube_check_time(self, moment, delay=0):
-        return next_window_time(self.settings, 'social_cubes', moment, delay, weekdays=True)
+        from app.services.holdings_calendar import trading_day
+        candidate = datetime.fromtimestamp(next_window_time(
+            self.settings, 'social_cubes', moment, delay, weekdays=True), CHINA)
+        for _ in range(370):
+            day_state = trading_day(candidate.date())
+            if day_state is None:
+                return None
+            if day_state:
+                return candidate.timestamp()
+            candidate = datetime.fromtimestamp(next_window_time(
+                self.settings, 'social_cubes',
+                (candidate + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0),
+                weekdays=True), CHINA)
+        return None
 
     @staticmethod
     def current_moment():
@@ -533,12 +547,14 @@ class SocialMonitor(NotificationMixin, CubeMonitorMixin):
                                              (platform,)).fetchone())
                 if platform == 'xueqiu' and has_cubes and not has_authors:
                     due = self.next_cube_check_time(datetime.fromtimestamp(due, CHINA))
+                    if due is None:
+                        continue
                 if getattr(self, 'browser_login', None) and self.browser_login.active(platform):
                     due = max(due, moment.timestamp() + 5)
                 due_times.append(self.next_check_time(datetime.fromtimestamp(due, CHINA)))
                 if platform == 'xueqiu' and has_cubes:
                     opens = self.next_cube_check_time(moment)
-                    if opens > moment.timestamp():
+                    if opens is not None and opens > moment.timestamp():
                         due_times.append(max(opens, state.get('retry_at', 0)))
             config['next_check'] = min(due_times) if due_times and config['enabled'] else None
             if checked:

@@ -1,3 +1,4 @@
+from app.services.collection_calendar import automatic_collection_allowed, manual_failure_isolated
 from app.services.system_configuration import task_config
 """CCI has its own model, history and daily 21:00 scheduling ledger."""
 from app.services.system_runtime import source_client
@@ -66,7 +67,7 @@ class CCICoal(Commodities):
     def refresh(self, *, slot=None):
         if slot is None:
             return super().refresh()
-        if self.stopping.is_set():
+        if self.stopping.is_set() or not automatic_collection_allowed(now()) or not automatic_collection_allowed(slot):
             return False
         lock = self.lock()
         if not lock:
@@ -141,7 +142,7 @@ class CCICoal(Commodities):
             if not launched:
                 lock.release()
 
-    def recovery_plan(self, day):
+    def recovery_plan(self, day, *, persist=True):
         """Freeze the first recovery floor; newer rows must not hide older gaps."""
         with self.db() as db:
             installation = datetime.fromisoformat(db.execute(
@@ -152,9 +153,14 @@ class CCICoal(Commodities):
                     'SELECT min(day),max(day) FROM cci_quotes WHERE grade=? AND day<=?', (grade, day)).fetchone()
                 bounds[grade] = (earliest, latest)
                 floor = max(START, min(latest or installation, day))
-                db.execute('INSERT OR IGNORE INTO cci_recovery VALUES(?,?,?)',
-                           (grade, floor, 'latest_quote' if latest else 'installation_date'))
+                if persist:
+                    db.execute('INSERT OR IGNORE INTO cci_recovery VALUES(?,?,?)',
+                               (grade, floor, 'latest_quote' if latest else 'installation_date'))
             floors = db.execute('SELECT grade,start_day,origin FROM cci_recovery ORDER BY grade').fetchall()
+            saved_grades = {row[0] for row in floors}
+            floors += [(grade, max(START, min(bounds[grade][1] or installation, day)),
+                        'latest_quote' if bounds[grade][1] else 'installation_date')
+                       for grade in GRADES if grade not in saved_grades]
             existing = set(db.execute('SELECT day,grade FROM cci_quotes WHERE day<=?', (day,)))
             checks = {(d, g): (stamp, result) for d, g, stamp, result in db.execute(
                 'SELECT day,grade,checked_at,result FROM cci_gap_checks')}
@@ -212,12 +218,15 @@ class CCICoal(Commodities):
         count = inserted = changed = target_hits = 0
         outcome = 'failed'
         trigger = 'scheduled' if slot else 'manual'
+        isolated = slot is None and manual_failure_isolated(now())
+        manual_snapshot = None
         context = dict(targetDate=day, trigger=trigger, slot=slot.isoformat() if slot else None)
         recovery = None
         missing = checked = unavailable = set()
 
         def should_stop():
-            return self.stopping.is_set() or monotonic() - began >= self.max_collection_seconds
+            return (self.stopping.is_set() or (slot is not None and not automatic_collection_allowed(now()))
+                    or monotonic() - began >= self.max_collection_seconds)
 
         def summarize():
             if recovery is not None:
@@ -267,7 +276,7 @@ class CCICoal(Commodities):
                 window_unavailable = set()
                 for key in attempted_keys:
                     result = 'failed' if key[1] in errors else 'unavailable'
-                    if key not in returned:
+                    if key not in returned and not (isolated or (slot is None and manual_failure_isolated(now()))):
                         db.execute('INSERT INTO cci_gap_checks VALUES(?,?,?,?) '
                                    'ON CONFLICT(day,grade) DO UPDATE SET checked_at=excluded.checked_at,result=excluded.result',
                                    (*key, now().isoformat(), result))
@@ -288,6 +297,15 @@ class CCICoal(Commodities):
                        inserted=inserted, changed=changed, grades=details)
 
         try:
+            if slot is None:
+                with self.db() as db:
+                    manual_snapshot = (db.execute('SELECT * FROM cci_gap_checks').fetchall(),
+                                       db.execute('SELECT * FROM cci_recovery').fetchall())
+            if slot is not None and (not automatic_collection_allowed(now()) or not automatic_collection_allowed(slot)):
+                outcome = 'skipped'
+                self.state(stage='休市日暂停自动采集', outcome=outcome, **context, error=None,
+                           observed=0, inserted=0, changed=0)
+                return
             # Do not replay yesterday's schedule before today's 21:00 or label
             # today's data as yesterday. The next real update recovers that gap.
             if slot is not None and target < today:
@@ -297,7 +315,7 @@ class CCICoal(Commodities):
                            observed=0, inserted=0, changed=0, grades=[],
                            elapsedMs=round((monotonic()-began)*1000))
                 return
-            windows, missing, recovery = self.recovery_plan(day)
+            windows, missing, recovery = self.recovery_plan(day, persist=not isolated)
             checked, unavailable = set(), set()
             self.state(stage='正在更新数据并补齐缺失报价', **context, outcome='running', error=None,
                        recovery=recovery)
@@ -310,7 +328,7 @@ class CCICoal(Commodities):
                     if should_stop() or recovery['requestCount'] >= self.max_requests:
                         break
                     read_window(client, start, end, (grade,), keys)
-            if self.stopping.is_set():
+            if self.stopping.is_set() or (slot is not None and not automatic_collection_allowed(now())):
                 outcome = 'interrupted'
                 return
             summarize()
@@ -339,6 +357,14 @@ class CCICoal(Commodities):
                        checkedAt=now().isoformat())
         finally:
             try:
+                if manual_snapshot is not None and (isolated or manual_failure_isolated(now())):
+                    with self.db() as db:
+                        # Retain successful quotes, restore only the retry bookkeeping.
+                        db.execute('DELETE FROM cci_gap_checks')
+                        db.executemany('INSERT INTO cci_gap_checks VALUES(?,?,?,?)', manual_snapshot[0])
+                        db.execute('DELETE FROM cci_gap_checks WHERE EXISTS (SELECT 1 FROM cci_quotes q WHERE q.day=cci_gap_checks.day AND q.grade=cci_gap_checks.grade)')
+                        db.execute('DELETE FROM cci_recovery')
+                        db.executemany('INSERT INTO cci_recovery VALUES(?,?,?)', manual_snapshot[1])
                 if outcome == 'interrupted':
                     summarize()
                     self.state(stage='采集已停止', outcome=outcome, **context, error='已保存数据保留，未完成缺口下次继续',

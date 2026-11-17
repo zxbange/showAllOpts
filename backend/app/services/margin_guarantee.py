@@ -1,3 +1,4 @@
+from app.services.collection_calendar import next_automatic_collection, automatic_collection_allowed, manual_failure_isolated
 from app.services.system_configuration import task_config, latest_task_slot
 """两融担保比例：东方财富接口、独立本地存储、北京时间08点调度。"""
 from app.services.system_runtime import source_client
@@ -142,7 +143,7 @@ class MarginGuarantee:
         stage = state.get('stage', '尚未采集')
         if not running and state.get('active'):
             stage = '上次采集中断，再次更新将继续补采'
-        next_run = latest_task_slot(self.settings, 'margin', moment) + timedelta(days=1)
+        next_run = next_automatic_collection(latest_task_slot(self.settings, 'margin', moment) + timedelta(days=1))
         with self.db() as db:
             pending = db.execute('SELECT count(*) FROM reports r LEFT JOIN points p '
                                  'ON p.trade_date=r.trade_date WHERE p.trade_date IS NULL '
@@ -161,7 +162,7 @@ class MarginGuarantee:
                     source_corrections=corrections,
                     recent_failures=state.get('recent_failures', []), last_failure=state.get('last_failure'),
                     daily_time=task_config(self.settings, 'margin')['times'][0], timezone='Asia/Shanghai',
-                    next_run_at=next_run.isoformat() if task_config(self.settings, 'margin')['enabled'] else None)
+                    next_run_at=next_run.isoformat() if next_run and task_config(self.settings, 'margin')['enabled'] else None)
 
     @staticmethod
     def unresolved_sql():
@@ -196,6 +197,8 @@ class MarginGuarantee:
 
     def refresh(self, background=True, *, moment=None, slot=None):
         moment = moment or now()
+        if slot is not None and not automatic_collection_allowed(moment):
+            return False
         if self.stop_event.is_set():
             return False
         lock = self.acquire()
@@ -237,15 +240,19 @@ class MarginGuarantee:
         outcome = 'failed'
         marker = self.root / ('cancel-' + state['run_id'])
         def check_cancel():
-            if self.stop_event.is_set() or marker.exists():
+            if (state.get('current_scheduled_slot') is not None and not automatic_collection_allowed(moment + timedelta(seconds=monotonic()-started))) or self.stop_event.is_set() or marker.exists():
                 raise CollectionCancelled()
         today = moment.astimezone(CHINA).date()
         cutoff = six_years_ago(today)
         failures = consecutive_failures = 0
+        isolate = state.get('current_scheduled_slot') is None and manual_failure_isolated(moment)
+        existing_reports = None
         scope = 'catalog'
         stopped_after_failures = False
         LOG.info('Margin guarantee collection started date=%s', today)
         try:
+            with self.db() as db:
+                existing_reports = {row[0] for row in db.execute('SELECT trade_date FROM reports')}
             with self.db() as db:
                 latest_report = db.execute('SELECT max(trade_date) FROM reports').fetchone()[0]
                 pending_api = db.execute(
@@ -371,8 +378,15 @@ class MarginGuarantee:
             LOG.error('Margin guarantee collection failed scope=%s stopped_after_failures=%s reason=%s details=%s',
                       scope, stopped_after_failures, safe_error_details(exc), diagnostic_details(exc))
         finally:
+            isolate = isolate or (state.get('current_scheduled_slot') is None and manual_failure_isolated(moment + timedelta(seconds=monotonic()-started)))
             state['active'] = False
             try:
+                if isolate and existing_reports is not None:
+                    with self.db() as db:
+                        pending_reports = [row[0] for row in db.execute('SELECT r.trade_date FROM reports r LEFT JOIN points p ON p.trade_date=r.trade_date WHERE p.trade_date IS NULL')]
+                        for day in set(pending_reports) - existing_reports:
+                            db.execute('DELETE FROM reports WHERE trade_date=?', (day,))
+                    state['manual_failure_isolated'] = outcome != 'success'
                 self.write_state(state)
                 marker.unlink(missing_ok=True)
             except BaseException as exc:
@@ -392,9 +406,12 @@ class MarginGuarantee:
 
     def tick(self, moment=None):
         moment = moment or now()
-        if not task_config(self.settings, 'margin')['enabled']:
+        if not automatic_collection_allowed(moment) or not task_config(self.settings, 'margin')['enabled']:
             return
-        slot = latest_task_slot(self.settings, 'margin', moment).isoformat()
+        planned = latest_task_slot(self.settings, 'margin', moment)
+        if not automatic_collection_allowed(planned):
+            return
+        slot = planned.isoformat()
         if self.schedule_floor is None:
             self.schedule_floor = slot
         if slot > self.schedule_floor:

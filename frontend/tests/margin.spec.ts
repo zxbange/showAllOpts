@@ -157,7 +157,7 @@ test('market mood third tab renders official percentage units and keeps chart du
   await expect(page.locator('.margin-stats')).toContainText('-1.97 个百分点')
   await expect(page.locator('.margin-stats')).toContainText('25.0%')
   await expect(page.locator('.date-badge')).toContainText('2026-10-26')
-  await expect(page.getByText('东方财富 · 每天北京时间 08:00 检查更新')).toBeVisible()
+  await expect(page.getByText('东方财富 · 交易日北京时间 08:00 检查更新')).toBeVisible()
   await expect(page.locator('.margin-chart canvas')).toBeVisible()
   expect(
     await page.locator('.margin-update').evaluate((element) => {

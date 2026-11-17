@@ -1,3 +1,5 @@
+from app.services.collection_calendar import automatic_collection_allowed, manual_failure_isolated
+from app.services.holdings_calendar import trading_day
 from app.services.system_configuration import task_config, latest_task_slot, pin_configuration
 from contextvars import copy_context
 """Independent persisted quotes. Daily Shanghai scheduling and manual collection share a cross-process lock."""
@@ -40,7 +42,7 @@ class Commodities:
     tracks_failed_targets = True
     max_requests = 24
     max_collection_seconds = 120
-    schedule_label = '每天 11:00、18:00 · 北京时间'
+    schedule_label = '交易日 11:00、18:00 · 北京时间'
     slot_for = staticmethod(latest_slot)
 
     def __init__(self,settings):
@@ -60,10 +62,23 @@ class Commodities:
             db.execute('CREATE TABLE IF NOT EXISTS schedule_runs(slot TEXT PRIMARY KEY, status TEXT NOT NULL, finished_at TEXT)')
             db.execute('CREATE TABLE IF NOT EXISTS a00_recovery(id INTEGER PRIMARY KEY, start_day TEXT NOT NULL, origin TEXT NOT NULL)')
             db.execute('CREATE TABLE IF NOT EXISTS a00_source_checks(url TEXT PRIMARY KEY, checked_at TEXT NOT NULL, result TEXT NOT NULL)')
+            self.clear_closed_targets(db)
             for row in json.loads(SEED.read_text())['rows']:
                 # Keep research evidence but do not expose unverified range values.
                 if row['rangeEvidence']!='page':row=dict(row,low=None,high=None)
                 db.execute('INSERT OR IGNORE INTO quotes VALUES(?,?)',(row['quoteDate'],json.dumps(row,ensure_ascii=False)))
+    def clear_closed_targets(self, db):
+        # Retire obsolete observation targets only; never delete saved quotes.
+        for table in ('failed_targets', 'recovery_attempts'):
+            db.execute(f"DELETE FROM {table} WHERE strftime('%w',day) IN ('0','6')")
+            for (day,) in db.execute(f"SELECT day FROM {table}").fetchall():
+                if trading_day(date.fromisoformat(day)) is False:
+                    db.execute(f"DELETE FROM {table} WHERE day=?", (day,))
+
+    def automatic_closed(self, slot):
+        return slot is not None and (not automatic_collection_allowed(now())
+                                     or not automatic_collection_allowed(slot))
+
     @contextmanager
     def db(self):
         c=sqlite3.connect(self.root/'history.sqlite3',timeout=10)
@@ -109,6 +124,9 @@ class Commodities:
         lock=self.lock()
         if not lock:return False
         try:
+            if self.task_key == 'commodities' and self.automatic_closed(slot):
+                lock.release()
+                return False
             if slot is not None:
                 # Claim only after acquiring the same lock used by manual collection.
                 # An interrupted claimed slot is not silently replayed after restart.
@@ -136,14 +154,30 @@ class Commodities:
             self.thread.start()
         except BaseException:lock.release();raise
         return True
-    def recovery_plan(self, today):
+    def recovery_plan(self, today, *, persist=True):
         """Persist the initial floor before saving a new quote, so gaps cannot hide.
 
         Existing failed observation dates remain in scope. Otherwise begin at the
         latest stored quote, or the persisted installation date for an empty DB.
         """
         end = today.isoformat()
+        if not persist:
+            with self.db() as db:
+                latest = db.execute('SELECT max(day) FROM quotes WHERE day<=?', (end,)).fetchone()[0]
+                stored = db.execute('SELECT start_day FROM a00_recovery WHERE id=1').fetchone()
+                floor = stored[0] if stored else latest or end
+                existing = {r[0] for r in db.execute('SELECT day FROM quotes')}
+            cursor = date.fromisoformat(floor)
+            missing = set()
+            while cursor <= today:
+                if automatic_collection_allowed(cursor) and cursor.isoformat() not in existing:
+                    missing.add(cursor.isoformat())
+                cursor += timedelta(days=1)
+            return missing, dict(dateFrom=floor, dateTo=end, origin='manual_isolated',
+                                 pendingCount=len(missing), recoveredCount=0, articlesChecked=0,
+                                 requestCount=0, deferredArticles=0, sourceLimited=True)
         with self.db() as db:
+            self.clear_closed_targets(db)
             latest = db.execute('SELECT max(day) FROM quotes WHERE day<=?', (end,)).fetchone()[0]
             installed = datetime.fromisoformat(db.execute(
                 'SELECT initialized_at FROM schedule_meta WHERE id=1').fetchone()[0]).astimezone(CHINA).date().isoformat()
@@ -158,7 +192,7 @@ class Commodities:
             cursor = date.fromisoformat(floor)
             while cursor <= today:
                 day = cursor.isoformat()
-                if day not in existing:
+                if automatic_collection_allowed(cursor) and day not in existing:
                     db.execute('INSERT OR IGNORE INTO failed_targets VALUES(?,?,?)',
                                (day, 'not_yet_observed', now().isoformat()))
                 cursor += timedelta(days=1)
@@ -170,6 +204,15 @@ class Commodities:
 
     @notify_collection('commodities')
     def collect(self,lock,slot=None):
+        # Also guard direct calls, not only the scheduler/manual entry point.
+        try:
+            skipped = self.automatic_closed(slot)
+        except BaseException:
+            lock.release()
+            raise
+        if skipped:
+            lock.release()
+            return
         failures = fetched = parsed = inserted = changed = requests = 0
         began = monotonic()
         missing = set()
@@ -179,13 +222,15 @@ class Commodities:
         home_quote = None
         recovery = None
         finished = False
+        failure_snapshot = None
         started = now().isoformat()
         today = now().astimezone(CHINA).date()
+        isolated = slot is None and manual_failure_isolated(today)
         target_day = slot.astimezone(CHINA).date() if slot else today
         target_mode = 'complete_spot' if slot is not None and slot.astimezone(CHINA).strftime('%H:%M') == task_config(self.settings, 'commodities')['times'][-1] else 'current_spot'
 
         def should_stop():
-            return self.stopping.is_set() or requests >= self.max_requests or monotonic() - began >= self.max_collection_seconds
+            return self.stopping.is_set() or self.automatic_closed(slot) or requests >= self.max_requests or monotonic() - began >= self.max_collection_seconds
 
         def status(stage, error=None, outcome='running'):
             with self.db() as db:
@@ -237,9 +282,14 @@ class Commodities:
             return True
 
         try:
-            missing, recovery = self.recovery_plan(today)
+            if slot is None and not isolated:
+                with self.db() as db:
+                    failure_snapshot = {table: db.execute(f'SELECT * FROM {table}').fetchall()
+                                        for table in ('failed_targets', 'recovery_attempts', 'a00_source_checks')}
+            missing, recovery = self.recovery_plan(today, persist=not isolated)
             with self.db() as db:
-                db.execute('INSERT INTO failed_targets VALUES(?,?,?) ON CONFLICT(day) DO UPDATE SET reason=excluded.reason, attempted_at=excluded.attempted_at',
+                if not isolated:
+                    db.execute('INSERT INTO failed_targets VALUES(?,?,?) ON CONFLICT(day) DO UPDATE SET reason=excluded.reason, attempted_at=excluded.attempted_at',
                            (target_day.isoformat(), 'interrupted_or_pending', started))
             with source_client(self.settings, factory=httpx.Client, timeout=httpx.Timeout(15,connect=8),trust_env=False,follow_redirects=False) as client:
                 status('读取最新现货报价')
@@ -265,8 +315,8 @@ class Commodities:
                                      'unverified' if isinstance(exc, (QuoteError, ValueError)) else 'sourceReadFailed')
                     failures += 1
                     LOG.warning('Commodity current quote failed %s', diagnostic_details(exc))
-                # Query only when a real interval gap remains. Calendar dates
-                # are candidates, not assertions of trading days or publication.
+                # Only eligible missing dates enter recovery. The run calendar
+                # does not assert that this source published a quote that day.
                 historical = {day for day in missing if day < today.isoformat()}
                 if historical and not should_stop():
                     candidates = recovery_links(home or '', start=recovery['dateFrom'],
@@ -278,7 +328,7 @@ class Commodities:
                         failures += 1
                         LOG.warning('Commodity recovery catalog failed %s', diagnostic_details(exc))
                     with self.db() as db:
-                        for url in dict.fromkeys(candidates):
+                        for url in (() if isolated else dict.fromkeys(candidates)):
                             db.execute("INSERT OR IGNORE INTO a00_source_checks VALUES(?,'','pending')", (url,))
                         # Retain discovered links across catalog rotation/restarts;
                         # never let one unavailable article starve all later ones.
@@ -286,10 +336,11 @@ class Commodities:
                         # them daily (not never), while transport failures stay eligible.
                         # This also bounds repeated scans caused by unpublished days.
                         retry_before = (now() - timedelta(days=1)).isoformat()
-                        candidates = [r[0] for r in db.execute(
+                        queued = [r[0] for r in db.execute(
                             "SELECT url FROM a00_source_checks WHERE checked_at<=? "
                             "OR result IN ('pending','source_request_or_processing_failed') "
                             'ORDER BY checked_at,url', (retry_before,))]
+                        candidates = list(dict.fromkeys(candidates + queued)) if isolated else queued
                     attempted = 0
                     for url in candidates:
                         if not historical or should_stop():
@@ -318,12 +369,13 @@ class Commodities:
                         attempted += 1
                         recovery['articlesChecked'] += 1
                         with self.db() as db:
-                            db.execute('UPDATE a00_source_checks SET checked_at=?,result=? WHERE url=?',
+                            if not isolated:
+                                db.execute('UPDATE a00_source_checks SET checked_at=?,result=? WHERE url=?',
                                        (now().isoformat(), result, url))
                     recovery['deferredArticles'] = len(candidates) - attempted if historical else 0
                     recovery['limited'] = limited
                     with self.db() as db:
-                        for day in historical:
+                        for day in (() if isolated else historical):
                             db.execute('INSERT INTO recovery_attempts VALUES(?,?,?) ON CONFLICT(day) DO UPDATE SET attempted_at=excluded.attempted_at,result=excluded.result',
                                        (day, now().isoformat(), 'deferred' if limited else 'no_verified_public_quote'))
                     LOG.info('Commodity recovery range=%s..%s checked=%s recovered=%s pending=%s limited=%s pending_dates=%s',
@@ -336,7 +388,7 @@ class Commodities:
             LOG.error('Commodity collection failed %s', diagnostic_details(exc))
         finally:
             try:
-                if self.stopping.is_set():
+                if self.stopping.is_set() or self.automatic_closed(slot):
                     target_result = 'interrupted'
                     outcome, stage, error = 'interrupted', '采集中断', '历史保留，尚未完成采集'
                 elif not finished or not parsed:
@@ -354,9 +406,18 @@ class Commodities:
                 if not self.stopping.is_set() and not current_verified and target_result in ('sourceReadFailed', 'partial', 'unverified'):
                     stage = {'sourceReadFailed':'目标日报价读取失败', 'partial':'目标日报价字段不完整', 'unverified':'目标日报价无法核验'}[target_result]
                 with self.db() as db:
+                    if failure_snapshot is not None and manual_failure_isolated(now()):
+                        # A manual run may cross into a closed day. Restore its
+                        # prior retry bookkeeping, retaining all verified quotes.
+                        for table, rows in failure_snapshot.items():
+                            db.execute(f'DELETE FROM {table}')
+                            db.executemany(f'INSERT INTO {table} VALUES(?,?,?)', rows)
+                        for table in ('failed_targets', 'recovery_attempts'):
+                            db.execute(f'DELETE FROM {table} WHERE day IN (SELECT day FROM quotes)')
+                        isolated = True
                     if current_verified:
                         db.execute('DELETE FROM failed_targets WHERE day=?', (target_day.isoformat(),))
-                    else:
+                    elif not isolated:
                         # This is a failed observation target, not proof that the
                         # source published a quote (nor proof of a holiday).
                         db.execute('UPDATE failed_targets SET reason=? WHERE day=?',

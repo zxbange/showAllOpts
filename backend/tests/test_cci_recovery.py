@@ -280,10 +280,10 @@ def test_network_failure_preserves_other_windows_and_retry_finishes(setup, monke
 
 def test_request_budget_continues_without_starving_later_windows(setup, monkeypatch):
     module, clock, settings, store = setup
-    seed(store, *[('2026-11-02', g) for g in GRADES])
-    available = {('2027-02-01', g) for g in GRADES}
+    seed(store, *[('2026-09-29', g) for g in GRADES])
+    available = {('2026-12-29', g) for g in GRADES}
     calls = install_source(monkeypatch, module, available)
-    clock[0] = datetime(2027, 2, 2, 13, tzinfo=timezone.utc)
+    clock[0] = datetime(2026, 12, 30, 13, tzinfo=timezone.utc)
     monkeypatch.setattr(CCICoal, 'max_requests', 4)  # Three today + one historical window.
     store.collect(store.lock())
     assert len(calls) == 4
@@ -349,3 +349,50 @@ def test_deadline_between_today_grades_commits_verified_rows_and_defers_unsent(s
     assert not state['running']
     with store.db() as db:
         assert db.execute('SELECT count(*) FROM cci_gap_checks').fetchone()[0] == 0
+
+
+def test_closed_manual_failure_keeps_quotes_without_enrolling_recovery(setup, monkeypatch):
+    module, clock, settings, store = setup
+    clock[0] = datetime(2026, 11, 7, 13, tzinfo=timezone.utc)
+    calls = install_source(monkeypatch, module, {('2026-11-06', GRADES[0])})
+    assert not store.refresh(slot=latest_slot(clock[0]))
+    store.collect(store.lock())
+    assert calls
+    with store.db() as db:
+        assert not db.execute('SELECT * FROM cci_gap_checks').fetchall()
+        assert not db.execute('SELECT * FROM cci_recovery').fetchall()
+        assert db.execute('SELECT * FROM cci_quotes').fetchall()
+
+
+def test_manual_midnight_failure_restores_retry_state(setup, monkeypatch):
+    module, clock, settings, store = setup
+    clock[0] = datetime(2026, 11, 6, 15, 59, tzinfo=timezone.utc)
+    def cross(*args, **kwargs):
+        clock[0] = datetime(2026, 11, 6, 16, 1, tzinfo=timezone.utc)
+        return []
+    monkeypatch.setattr(module, 'fetch_rows', cross)
+    store.collect(store.lock())
+    with store.db() as db:
+        assert not db.execute('SELECT * FROM cci_gap_checks').fetchall()
+        assert not db.execute('SELECT * FROM cci_recovery').fetchall()
+
+
+def test_manual_snapshot_database_failure_releases_lock(setup, monkeypatch):
+    from contextlib import contextmanager
+    import sqlite3
+    module, clock, settings, store = setup
+    original = store.db
+    calls = []
+    @contextmanager
+    def fail_snapshot_once():
+        calls.append(1)
+        if len(calls) == 1:
+            raise sqlite3.OperationalError('snapshot unavailable')
+        with original() as db:
+            yield db
+    monkeypatch.setattr(store, 'db', fail_snapshot_once)
+    store.collect(store.lock())
+    assert store.status()['outcome'] == 'failed'
+    lock = store.lock()
+    assert lock is not None
+    lock.release()

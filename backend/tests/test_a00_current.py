@@ -196,8 +196,9 @@ def test_missing_prior_date_not_filled_with_later_price(tmp_path,monkeypatch):
 def test_interval_recovery_keeps_unverified_dates_pending(tmp_path,monkeypatch,mode,expected):
     job=service(tmp_path,monkeypatch);original=commodities.fetch
     with job.db() as db:
-        for day in ('2026-10-31','2026-11-01'):
+        for day in ('2026-10-29','2026-10-30'):
             db.execute('INSERT INTO failed_targets VALUES(?,?,?)',(day,'sourceReadFailed','2026-11-01T00:00:00Z'))
+        db.execute("DELETE FROM quotes WHERE day IN ('2026-10-29','2026-10-30')")
     url='https://m.ccmn.cn/mnewsinfo/d5484f3e27d4438699d0972335e1403e.html'
     requests=[]
     def fetch(client,requested,catalog=False):
@@ -205,19 +206,19 @@ def test_interval_recovery_keeps_unverified_dates_pending(tmp_path,monkeypatch,m
         if requested==HOME:return HOME_HTML+f'<a href="{url}">现铝早评</a>'
         if requested==url:
             if mode=='network':raise TimeoutError('private')
-            day='10月30日' if mode=='wrong' else '' if mode=='relative' else '10月31日'
+            day='10月28日' if mode=='wrong' else '' if mode=='relative' else '10月29日'
             return f'<p>2026-11-02</p><h2>五、长江市场行情</h2>{day}长江现货A00铝均价23780元/吨，涨40元/吨，价格区间23760-23800元/吨<h2>六、预测</h2>明日25000'
         return original(client,requested,catalog)
     monkeypatch.setattr(commodities,'fetch',fetch)
     job.collect(job.lock())
     assert requests==[HOME,DATE_URL,CATALOG,url]
-    assert job.status()['recovery']['dateFrom']=='2026-10-31'
+    assert job.status()['recovery']['dateFrom']=='2026-10-29'
     assert job.status()['recovery']['articlesChecked']==1
     with job.db() as db:
         assert db.execute('SELECT result FROM a00_source_checks WHERE url=?',(url,)).fetchone()[0]==expected
     assert job.status()['currentVerified']
     dates={r['quoteDate'] for r in job.history()['rows']}
-    assert ('2026-10-31' in dates)==(mode=='explicit')
+    assert ('2026-10-29' in dates)==(mode=='explicit')
     assert job.status()['pendingCount']==(1 if mode=='explicit' else 2)
     # A second run retains missing dates without inserting mismatched or invented prices.
     before=job.history()['rows']

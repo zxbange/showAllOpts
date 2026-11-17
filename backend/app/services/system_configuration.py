@@ -28,7 +28,7 @@ def default_schedules(settings, *, legacy=True, warnings=None):
         'etf': daily('09:00', getattr(settings, 'etf_collection_enabled', True)),
         'commodities': {'enabled': True, 'times': ['11:00', '18:00']},
         'growth_dividend': daily('18:00', getattr(settings, 'growth_dividend_worker_enabled', True)),
-        'market': daily('00:01', getattr(settings, 'market_collection_enabled', True) and getattr(settings, 'market_collection_worker_enabled', True)),
+        'market': daily('23:58', getattr(settings, 'market_collection_enabled', True) and getattr(settings, 'market_collection_worker_enabled', True)),
         'valuation_ruler': daily('18:30', getattr(settings, 'valuation_ruler_worker_enabled', True)),
         'cci': daily('21:00'),
         'earnings_selection': daily('23:00', getattr(settings, 'cash_cow_worker_enabled', True)),
@@ -141,7 +141,7 @@ class SystemConfiguration:
         s = self.settings
         warnings = []
         schedules = default_schedules(s, warnings=warnings)
-        result = dict(revision=0, database_revision=0, timezone='Asia/Shanghai', database=dict(host=getattr(s, 'db_host', '127.0.0.1'), port=getattr(s, 'db_port', 3306), database=getattr(s, 'db_name', 'showallopts'), username=getattr(s, 'db_user', 'readonly'), password=s.db_password.get_secret_value() if hasattr(s, 'db_password') else ''), schedules=schedules, integrations=integration_defaults(s), runtime=default_runtime(s))
+        result = dict(market_schedule_v2=True, revision=0, database_revision=0, timezone='Asia/Shanghai', database=dict(host=getattr(s, 'db_host', '127.0.0.1'), port=getattr(s, 'db_port', 3306), database=getattr(s, 'db_name', 'showallopts'), username=getattr(s, 'db_user', 'readonly'), password=s.db_password.get_secret_value() if hasattr(s, 'db_password') else ''), schedules=schedules, integrations=integration_defaults(s), runtime=default_runtime(s))
         if warnings:
             result['migration_warnings'] = warnings
         return result
@@ -192,6 +192,10 @@ class SystemConfiguration:
                 if result['schedules']['valuation_ruler']['times'] == ['20:00']:
                     result['schedules']['valuation_ruler']['times'] = ['18:30']
                 result['valuation_schedule_v2'] = True
+            if not result.get('market_schedule_v2'):
+                result['schedules']['market']['times'] = ['23:58']
+                result['market_schedule_v2'] = True
+                result['_migration_pending'] = True
             return result
         except SystemConfigurationError:
             raise
@@ -237,10 +241,11 @@ class SystemConfiguration:
 
     def _reconcile(self, environment):
         current = self._local_load()
+        migration = current.pop('_migration_pending', False)
         value = self._from_environment(current, environment)
         changed = value['database'] != current['database'] or value.get('integrations') != current.get('integrations')
-        if environment.values is not None and (self.record() is None or changed):
-            if self.record() is not None and changed:
+        if migration or (environment.values is not None and (self.record() is None or changed)):
+            if self.record() is not None and (changed or migration):
                 value['revision'] += 1
                 value['database_revision'] += int(value['database'] != current['database'])
                 value['changed_at'] = datetime.now(timezone.utc).isoformat()
@@ -321,7 +326,7 @@ class SystemConfiguration:
         integrations = validate_integrations(body.get('integrations'), previous.get('integrations', {}))
         from app.services.system_runtime import validate_runtime, default_runtime
         runtime = validate_runtime(body.get('runtime'), previous.get('runtime', default_runtime(self.settings)))
-        return dict(revision=previous['revision'], database_revision=previous['database_revision'], timezone='Asia/Shanghai', database=db, schedules=schedules, integrations=integrations, runtime=runtime, valuation_schedule_v2=True)
+        return dict(revision=previous['revision'], database_revision=previous['database_revision'], timezone='Asia/Shanghai', database=db, schedules=schedules, integrations=integrations, runtime=runtime, valuation_schedule_v2=True, market_schedule_v2=True)
 
     def save(self, body):
         from app.services.system_integrations import integration_env_updates, FIELDS

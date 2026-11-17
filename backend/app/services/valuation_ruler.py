@@ -1,3 +1,4 @@
+from app.services.collection_calendar import automatic_collection_allowed, manual_failure_isolated
 from app.core.history_sync import mark_sync_owner, clear_sync_owner, database_syncing, SYNC_MESSAGE
 from app.services.system_configuration import task_config, latest_task_slot
 """Append-only valuation history, durable recovery and an independent 18:30 schedule."""
@@ -301,6 +302,7 @@ class ValuationRuler:
 
     def start_job(self,kind,runner,*,background=True,moment=None,slot=None):
         moment=moment or now()
+        if slot is not None and not automatic_collection_allowed(moment):return False
         if self.stop_event.is_set():return False
         lock=self.acquire()
         if lock is None:return False
@@ -337,10 +339,14 @@ class ValuationRuler:
     @notify_collection('valuation_ruler')
     def _execute(self,runner,lock,state,moment,slot):
         marker=self.root/('cancel-'+state['run_id']);started=monotonic()
+        isolate = slot is None and manual_failure_isolated(moment)
+        old_failures = None
         def check_cancel():
-            if self.stop_event.is_set() or marker.exists():raise CollectionCancelled()
+            if (slot is not None and not automatic_collection_allowed(moment + timedelta(seconds=monotonic()-started))) or self.stop_event.is_set() or marker.exists():raise CollectionCancelled()
             if monotonic()-started>MAX_RUN_SECONDS:raise SourceError('budget_exceeded',common=True)
         try:
+            with self.db() as db:
+                old_failures = {row[0] for row in db.execute('SELECT trade_date FROM failures')}
             check_cancel();runner(self,state,check_cancel,moment);check_cancel()
             state['phase']='failed' if state.get('error') else 'complete'
             if not state.get('error'):state['last_success_at']=now().isoformat()
@@ -352,9 +358,15 @@ class ValuationRuler:
                            state.get('phase'), '估值标尺更新失败，已保存数据保留。')
             state.update(phase='failed',error=str(exc) if isinstance(exc,ValuationError) else message)
         finally:
+            isolate = isolate or (slot is None and manual_failure_isolated(moment + timedelta(seconds=monotonic()-started)))
             try:
                 state['active']=False
-                state['retry_after']=(moment+timedelta(minutes=15, seconds=monotonic()-started)).isoformat() if state['phase']=='failed' else None
+                if isolate and old_failures is not None:
+                    with self.db() as db:
+                        for day in {row[0] for row in db.execute('SELECT trade_date FROM failures')} - old_failures:
+                            db.execute('DELETE FROM failures WHERE trade_date=?', (day,))
+                    state['manual_failure_isolated'] = state['phase'] == 'failed'
+                state['retry_after']=(moment+timedelta(minutes=15, seconds=monotonic()-started)).isoformat() if state['phase']=='failed' and not isolate else None
                 with self.db() as db:
                     self.write_state(state,db)
                     if slot:db.execute('UPDATE slots SET outcome=? WHERE slot=?',(state['phase'],slot))
@@ -421,8 +433,9 @@ class ValuationRuler:
 
     def tick(self,moment=None,*,background=True):
         moment=moment or now()
-        if not task_config(self.settings, 'valuation_ruler')['enabled']:return
+        if not automatic_collection_allowed(moment) or not task_config(self.settings, 'valuation_ruler')['enabled']:return
         slot=latest_task_slot(self.settings, 'valuation_ruler', moment)
+        if not automatic_collection_allowed(slot):return
         return self.refresh(background=background,moment=moment,slot=slot.isoformat(),cutoff=min(slot.date(),close_cutoff(moment)))
 
     def start(self):

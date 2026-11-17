@@ -114,7 +114,7 @@ def test_evening_idempotency_only_updates_latest_and_preserves_legacy_history(tm
 
 def test_morning_collects_previous_completed_day_shares_and_prices(tmp_path):
     w, c, _ = worker(tmp_path, schedule=['09:00'])
-    assert w.tick(EVENING + timedelta(days=1, hours=-9))
+    assert w.tick(EVENING + timedelta(days=3, hours=-9))
     assert all(call[0] <= DAY for call in c.calls)
     assert any(call[2] for call in c.calls) and any(call[3] for call in c.calls)
 
@@ -183,7 +183,7 @@ def test_latest_gap_exhaustion_does_not_hide_successful_daily_observations(tmp_p
         rows = [dict(fund_code=code, trade_date=start) for code in funds]
         return rows if include_shares else [], rows if include_prices else [], {}
     c.collect = partial
-    for i in range(6):
+    for i in (0, 3, 4, 5, 6, 7):
         assert not w.tick(EVENING + timedelta(days=i))
     gaps = w.status()['gaps']
     assert gaps == [dict(kind='shares', code='510300.XSHG', day=DAY.isoformat(),
@@ -210,7 +210,12 @@ def test_collection_status_endpoint(client):
 
 def test_weekend_latest_close_price_can_be_recovered(tmp_path):
     w, c, _ = worker(tmp_path)
-    assert w.tick(EVENING + timedelta(days=1))
+    weekend = EVENING + timedelta(days=1)
+    assert not w.tick(weekend)
+    w.clock = lambda: weekend
+    w.start = lambda: None
+    w.request_run('weekend-manual')
+    assert w.tick(weekend)
     assert any(day == DAY and '159919.XSHE' in funds and prices
                for day, funds, prices, shares in c.calls)
     assert all(g['day'] != DAY.isoformat() for g in w.status()['gaps'])
@@ -315,7 +320,7 @@ def test_latest_prices_require_fresh_verification_even_when_prior_values_exist(t
     def missing_price(*args, **kwargs):
         return ([], [], {}) if kwargs['include_prices'] else original(*args, **kwargs)
     collector.collect = missing_price
-    assert not w.tick(EVENING + timedelta(days=1))
+    assert not w.tick(EVENING + timedelta(days=3))
     assert w.status()['runs'][0]['status'] == 'partial'
     with w.connect() as db:
         assert db.execute("SELECT COUNT(*) FROM observations WHERE kind='prices' AND status='complete'").fetchone()[0] == 2
@@ -386,7 +391,7 @@ def test_latest_price_failure_does_not_erase_successful_shares_or_touch_history(
             raise ValueError('later price source failed')
         return real(client, start, end, **kwargs)
     c.collect = late_failure
-    for i in range(6):
+    for i in (0, 3, 4, 5, 6, 7):
         w.tick(EVENING + timedelta(days=i))
     with w.connect() as db:
         rows = db.execute("SELECT status,attempts FROM observations WHERE day=? AND kind='shares'",
@@ -401,13 +406,13 @@ def test_latest_price_failure_does_not_erase_successful_shares_or_touch_history(
 def test_six_writer_failures_do_not_consume_gap_budget(tmp_path):
     w, c, _ = worker(tmp_path)
     c.write_failure = True
-    for i in range(6):
+    for i in (0, 3, 4, 5, 6, 7):
         assert not w.tick(EVENING + timedelta(days=i))
     with w.connect() as db:
         rows = db.execute("SELECT status,attempts FROM observations WHERE kind='shares'").fetchall()
     assert rows and all(tuple(r) == ('pending', 0) for r in rows)
     c.write_failure = False
-    assert w.tick(EVENING + timedelta(days=6))
+    assert w.tick(EVENING + timedelta(days=10))
     with w.connect() as db:
         rows = db.execute("SELECT status,attempts FROM observations WHERE kind='shares'").fetchall()
     assert all(tuple(r) == ('complete', 1) for r in rows)
@@ -446,7 +451,7 @@ def test_next_morning_requires_fresh_verification_not_old_complete_state(tmp_pat
             return [], [], {}
         return real(*args, **kwargs)
     c.collect = unavailable
-    morning = EVENING + timedelta(days=1, hours=-9)
+    morning = EVENING + timedelta(days=3, hours=-9)
     assert not w.tick(morning)
     assert w.status()['runs'][0]['status'] == 'partial'
     with w.connect() as db:
@@ -483,7 +488,7 @@ def test_changing_daily_time_cannot_create_second_automatic_run(tmp_path):
     schedule[0] = '19:00'
     assert not w.tick(EVENING.replace(hour=19, minute=0))
     assert len(c.calls) == count
-    assert w.tick(EVENING.replace(hour=19, minute=0) + timedelta(days=1))
+    assert w.tick(EVENING.replace(hour=19, minute=0) + timedelta(days=3))
 
 
 def test_collection_logs_partial_summary_and_safe_failure(tmp_path, caplog):

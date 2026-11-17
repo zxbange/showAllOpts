@@ -276,11 +276,11 @@ def test_startup_backfills_once_and_scheduler_runs_daily_without_fabricated_sess
     assert len(calls) == 3 and monitor.history(MOMENT)['latest']['date'] == '2026-11-10'
     calls.clear()
     monitor.tick(MOMENT.replace(hour=19))
-    # Daily scheduling includes holidays/weekends but creates no invented prices.
+    # Closed dates do not advance the scheduled slot or collect.
     monitor.tick(MOMENT.replace(day=11, hour=18))
     monitor.tick(MOMENT.replace(day=14, hour=18))
     assert calls == []
-    assert monitor.read_state()['scheduled_slot'] == m.slot_for(MOMENT.replace(day=14).date())
+    assert monitor.read_state()['scheduled_slot'] == m.slot_for(MOMENT.replace(day=11).date())
 
 
 def test_failed_daily_slot_waits_for_next_trading_day_then_recovers(monitor, monkeypatch):
@@ -391,3 +391,51 @@ def test_startup_no_notification_when_disabled_or_no_business_changes(monitor, m
     assert monitor.read_state()['trigger'] == 'startup'
     with notifications._database(monitor.settings) as db:
         assert db.execute('SELECT count(*) FROM outbox').fetchone()[0] == 0
+
+
+@pytest.mark.parametrize('failure_type', ['connection', 'schema', 'local'])
+def test_publication_failure_stops_before_next_window_and_replays_pending(
+        monitor, monkeypatch, failure_type, caplog):
+    """SourceError is a ValueError, but must not be swallowed as a quote error."""
+    import json
+    from app.services.database_sources import SourceError
+    calls = provider(monkeypatch)
+    original_writer = m.write_public
+    original_apply = m.apply_points
+    attempts = []
+
+    def failing_writer(engine, payload, check):
+        attempts.append(payload)
+        if failure_type == 'connection':
+            raise SourceError('synthetic database authentication timeout')
+        if failure_type == 'schema':
+            raise ValueError('synthetic incompatible database schema')
+        return original_writer(engine, payload, check)
+
+    def failing_apply(*args):
+        raise TypeError('synthetic local publication failure')
+
+    monkeypatch.setattr(m, 'write_public', failing_writer)
+    if failure_type == 'local':
+        monkeypatch.setattr(m, 'apply_points', failing_apply)
+    assert monitor.refresh(background=False, moment=MOMENT)
+    assert len(calls) == len(attempts) == 1
+    assert monitor.status(MOMENT)['error']
+    assert 'window failed' not in caplog.text
+    assert 'IntegrityError' not in caplog.text
+    with monitor.db() as db:
+        pending = json.loads(db.execute('SELECT payload FROM public_publication').fetchone()[0])
+        assert pending == attempts[0]
+        assert db.execute('SELECT count(*) FROM points').fetchone()[0] == 0
+
+    replayed = []
+    def recovered_writer(engine, payload, check):
+        replayed.append(payload)
+        return original_writer(engine, payload, check)
+    monkeypatch.setattr(m, 'write_public', recovered_writer)
+    monkeypatch.setattr(m, 'apply_points', original_apply)
+    assert monitor.refresh(background=False, moment=MOMENT)
+    assert replayed[0] == pending
+    assert monitor.status(MOMENT)['error'] is None
+    with monitor.db() as db:
+        assert db.execute('SELECT count(*) FROM public_publication').fetchone()[0] == 0

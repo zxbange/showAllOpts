@@ -320,7 +320,7 @@ def test_complete_automatic_overlap_deduplicated_over_weekend_and_restart(monito
         assert calls==[friday] and replacement.status()['failed_days']==0
         with replacement.db() as db:assert db.execute('SELECT count(*) FROM comparisons').fetchone()[0]==1
         replacement.refresh(background=False,moment=MOMENT.replace(day=8,hour=20))
-        assert calls==[friday,friday]
+        assert calls[:2]==[friday,friday]
         with replacement.db() as db:assert db.execute('SELECT count(*) FROM comparisons').fetchone()[0]==2
     finally:replacement.stop()
 
@@ -332,7 +332,10 @@ def test_unavailable_overlap_retry_next_slot_no_false_gap(monitor):
     monitor.tick(MOMENT.replace(day=6,hour=20),background=False)
     assert monitor.status()['failed_days']==0 and monitor.status()['comparison_status']=='not_compared'
     failures.clear();monitor.tick(MOMENT.replace(day=7,hour=20),background=False)
-    assert calls==[friday,friday] and monitor.status()['comparison']['match']
+    assert calls == [friday]
+    monitor.tick(MOMENT.replace(day=9,hour=20),background=False)
+    assert calls == [friday, date(2026, 11, 9)]
+    assert monitor.status()['failed_days'] == 0
     assert not monitor.tick(MOMENT.replace(day=7,hour=20,minute=30),background=False)
 
 
@@ -358,3 +361,13 @@ def test_polling_status_quiet_but_errors_logged():
         ('127.0.0.1','GET','/api/v1/valuation-ruler/status','1.1',status),None)
     assert not PollingAccessFilter().filter(record(200))
     assert PollingAccessFilter().filter(record(500))
+
+
+def test_monday_before_schedule_does_not_replay_sunday_slot(monitor, monkeypatch):
+    monitor.settings.valuation_ruler_worker_enabled = True
+    calls = []
+    monkeypatch.setattr(monitor, 'refresh', lambda **kwargs: calls.append(kwargs))
+    monitor.tick(MOMENT.replace(day=9, hour=9))
+    assert not calls
+    monitor.tick(MOMENT.replace(day=9, hour=20))
+    assert len(calls) == 1

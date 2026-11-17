@@ -446,7 +446,8 @@ def test_configuration_activation_floor_is_shared_across_processes(tmp_path):
     save(first)
     assert not other.tick(EVENING + timedelta(minutes=1))
     assert not collector.calls  # A second process must not replay the newly saved past slot.
-    assert other.tick(EVENING + timedelta(days=1))
+    assert not other.tick(EVENING + timedelta(days=1))
+    assert other.tick(EVENING + timedelta(days=3))
 
 
 def test_target_change_interrupts_stale_queue_so_page_can_repair(tmp_path):

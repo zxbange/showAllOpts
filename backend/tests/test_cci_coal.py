@@ -114,7 +114,7 @@ def test_independent_locks_and_durable_slots(tmp_path,monkeypatch):
     # Freeze both clocks before constructing stores: refresh() intentionally rejects
     # slots older than their initialization, so a fixed slot with wall-clock setup
     # becomes invalid as soon as the real date passes it.
-    current = [datetime(2026,11,8,9,59,tzinfo=timezone.utc)]
+    current = [datetime(2026,11,9,9,59,tzinfo=timezone.utc)]
     monkeypatch.setattr(module, 'now', lambda: current[0])
     monkeypatch.setattr(commodities, 'now', lambda: current[0])
     store=CCICoal(Settings(_env_file=None,log_dir=tmp_path))
@@ -125,7 +125,7 @@ def test_independent_locks_and_durable_slots(tmp_path,monkeypatch):
     try:
         assert not store.refresh(slot=latest_slot(current[0]))
         assert store.thread is None
-        current[0] = datetime(2026,11,8,13,tzinfo=timezone.utc)
+        current[0] = datetime(2026,11,9,13,tzinfo=timezone.utc)
         slot=latest_slot(current[0])
         assert store.refresh(slot=slot)
         store.thread.join(5)
@@ -133,7 +133,7 @@ def test_independent_locks_and_durable_slots(tmp_path,monkeypatch):
         assert not CCICoal(Settings(_env_file=None,log_dir=tmp_path)).refresh(slot=slot)
     finally:lock.release()
     assert a00.history()['rows']==old
-    assert a00.slot_for(datetime(2026,11,8,3,tzinfo=timezone.utc)).hour==11
+    assert a00.slot_for(datetime(2026,11,9,3,tzinfo=timezone.utc)).hour==11
 
 
 def test_api_read_auth_and_admin_write(tmp_path):
@@ -240,6 +240,10 @@ def test_expired_slot_is_skipped_without_querying_today(tmp_path, monkeypatch, i
     monkeypatch.setattr(module, 'fetch_rows', fetch)
     current[0] = datetime.fromisoformat(resumed)
     slot = latest_slot(current[0])
+    if not module.automatic_collection_allowed(current[0]):
+        assert not store.refresh(slot=slot)
+        assert requests == []
+        return
     assert store.refresh(slot=slot)
     store.thread.join(5)
     assert not store.thread.is_alive()

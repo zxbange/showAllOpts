@@ -487,17 +487,21 @@ class EastmoneyCashCowSource:
             self.capital[code] = self._rows('RPT_F10_EH_EQUITY', f'(SECUCODE="{code}.{exchange}")',
                 lambda r: r.get('END_DATE'), sort='END_DATE',
                 columns='SECUCODE,SECURITY_CODE,END_DATE,TOTAL_SHARES,CHANGE_REASON')
+        def unavailable(reason):
+            LOG.warning('Cash cow share basis unavailable code=%s start=%s reason=%s',
+                        code, start_date, reason)
+            return False
         baseline = None
         for row in self.capital[code]:
             day = str(row.get('END_DATE') or '')[:10]
             shares = number(row.get('TOTAL_SHARES'))
             if not day or shares is None or shares <= 0:
-                return False
+                return unavailable('invalid_capital_row')
             if day <= start_date:
                 baseline = shares
             elif day <= self.as_of:
                 if baseline is None:
-                    return False
+                    return unavailable('missing_capital_baseline')
                 reason = str(row.get('CHANGE_REASON') or '')
                 # Verified ordinary issuance does not multiply an existing
                 # holder's units. Mixed or unfamiliar reasons remain uncertain.
@@ -506,12 +510,12 @@ class EastmoneyCashCowSource:
                     '股份回购注销', '股权激励股份回购注销',
                 }
                 if shares != baseline and not unchanged_unit:
-                    return False
+                    return unavailable('unrecognized_capital_change')
                 # Share-count neutral reorganizations can still change a holder's basis.
                 if re.search(r'拆|合股|缩股|配股|送股|转增', str(row.get('CHANGE_REASON') or '')):
-                    return False
+                    return unavailable('share_unit_action_requires_normalization')
                 baseline = shares
-        return baseline is not None
+        return True if baseline is not None else unavailable('missing_capital_baseline')
 
     def _dividend_events(self, code):
         if code not in self.events:
@@ -534,6 +538,7 @@ class EastmoneyCashCowSource:
 
     def _annual_dividends(self, code, start_year, end_year, rows):
         annual, invalid, events = {}, set(), set()
+        reasons = set()
         # Unnormalised corporate actions change the share basis across fiscal
         # and payment dates. Never compare their raw DPS with raw daily prices.
         ambiguous_action = any(corporate_action(str(r.get('IMPL_PLAN_PROFILE') or ''))
@@ -550,6 +555,7 @@ class EastmoneyCashCowSource:
             paid = str(row.get('PAY_CASH_DATE') or row.get('EX_DIVIDEND_DATE') or '')[:10]
             if not paid or paid > self.as_of:
                 invalid.add(year)
+                reasons.add('missing_or_future_payment_date')
                 continue
             text = str(row.get('IMPL_PLAN_PROFILE') or '')
             obj = row.get('ASSIGN_OBJECT')
@@ -558,16 +564,28 @@ class EastmoneyCashCowSource:
             # date are not additive. Bonus/splits need share-basis adjustment.
             if event in events or obj not in ('全体股东', '全体A股股东', 'A股股东') or corporate_action(text):
                 invalid.add(year)
+                reasons.add('duplicate_payout_or_unverified_class_or_share_action')
             events.add(event)
             rate = cash_rate(text)
             if rate is None:
                 invalid.add(year)
+                reasons.add('unrecognized_cash_plan')
                 continue
             annual[year] = annual.get(year, 0.0) + rate
         for year in invalid:
             annual[year] = None
-        if ambiguous_action or not self._capital_stable(code, f'{start_year}-01-01'):
+        if reasons:
+            LOG.warning('Cash cow annual dividends unavailable code=%s years=%s reasons=%s',
+                        code, ','.join(map(str, sorted(invalid))), ','.join(sorted(reasons)))
+        if ambiguous_action:
+            LOG.warning('Cash cow share basis unavailable code=%s start=%s reason=implemented_share_action_requires_normalization',
+                        code, f'{start_year}-01-01')
             return {year: None for year in range(start_year, end_year + 1)}
+        if not self._capital_stable(code, f'{start_year}-01-01'):
+            return {year: None for year in range(start_year, end_year + 1)}
+        if not annual:
+            LOG.warning('Cash cow annual dividends unavailable code=%s start_year=%s end_year=%s reason=no_implemented_payout',
+                        code, start_year, end_year)
         return annual
 
     def prices(self, code, start_year, end_year):

@@ -8,7 +8,7 @@ describe('system task controls', () => {
     renderToStaticMarkup(
       createElement(SystemTaskConfiguration, {
         schedules: {
-          market: { enabled: true, times: ['00:01'], telegram_notify: false },
+          market: { enabled: true, times: ['23:58'], telegram_notify: false },
           commodities: { enabled: true, times: ['11:00', '18:00'] },
           holdings: { enabled: false, start: '09:25', end: '15:10', interval_seconds: 15 },
           earnings_selection: { enabled: true, times: ['23:00'], telegram_notify: false },
@@ -34,14 +34,14 @@ describe('system task controls', () => {
     expect(html).toContain('修改后保存生效')
     expect(html).toContain('业绩选股（高股息 / 奶牛股）')
     expect(html).not.toContain('每月最后一天')
-    expect(html).toContain('周一至周五')
+    expect(html).toContain('交易日轮询')
     expect(html).toContain('每天轮询')
     expect(html).toContain('单独配置')
   })
   it('uses literal HH:mm rather than locale-dependent time inputs', () => {
     const html = render()
     expect(html).not.toContain('type="time"')
-    for (const value of ['00:01', '11:00', '18:00', '23:00', '24:00']) {
+    for (const value of ['23:58', '11:00', '18:00', '23:00', '24:00']) {
       expect(html).toContain(`value="${value}"`)
     }
     expect(html).toContain('HH:mm')

@@ -13,13 +13,14 @@ from test_market_collection import DAY, EVENING, N, historical_provider, worker
 from test_market_public import DAYS, DAY as PUBLIC_DAY, make_provider, member
 
 
-FRIDAY = EVENING.replace(day=14)
+# Monday midnight: the last completed session is Friday the 13th.
+RUN_DAY = EVENING.replace(day=16)
 DATES = [date(2026, 11, day) for day in (10, 11, 12, 13)]
 BAD = ('sh600003', DATES[0])
 
 
 def planned_worker(tmp_path, *, manual=False):
-    collection, provider, writer, clock = worker(tmp_path, moment=FRIDAY)
+    collection, provider, writer, clock = worker(tmp_path, moment=RUN_DAY)
     historical_provider(provider)
     writer.dates = {'heat': {'2026-11-09'}, 'crowding': {'2026-11-09'}}
     if manual:
@@ -97,17 +98,17 @@ def test_next_scheduled_slot_gets_new_budget_but_morning_poll_does_not(tmp_path)
         runs_before = db.execute('SELECT COUNT(*) FROM manual_runs').fetchone()[0]
     reads = []
     collection.source_dates_loader = lambda owner: reads.append(1) or writer.dates
-    clock.value = FRIDAY + timedelta(days=1, hours=-8)
+    clock.value = RUN_DAY + timedelta(days=1, hours=-8)
     assert not collection.tick()
     assert seen[BAD] == 4
     assert not collection.tick(clock.advance(seconds=30))
     assert reads == []
     with collection.connect() as db:
         assert db.execute('SELECT COUNT(*) FROM manual_runs').fetchone()[0] == runs_before
-    clock.value = FRIDAY + timedelta(days=1)
+    clock.value = RUN_DAY + timedelta(days=1)
     assert collection.tick()
     assert seen[BAD] == 5
-    assert provider.universe_calls == DATES
+    assert provider.universe_calls == DATES + [date(2026, 11, 16)]
     assert collection.status()['gaps'] == []
 
 
@@ -189,7 +190,7 @@ def test_manual_requests_cannot_clear_a_source_access_cooldown(tmp_path, status)
     assert not collection.tick(clock.advance(hours=1))
     assert (len(provider.quote_calls), len(provider.universe_calls)) == before
     assert collection.status()['runs'][0]['error'] == ('source_forbidden' if status == 403 else 'source_rate_limited')
-    clock.value = FRIDAY + timedelta(days=1)
+    clock.value = RUN_DAY + timedelta(days=1)
     collection.request_run('after-source-cooldown')
     assert collection.tick()
     assert collection.status()['runs'][0]['status'] == 'complete'

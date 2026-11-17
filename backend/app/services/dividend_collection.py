@@ -1,3 +1,6 @@
+from app.services.collection_failure_isolation import quarantine_publication, restore_manual_publication
+from time import monotonic
+from app.services.collection_calendar import automatic_collection_allowed, manual_failure_isolated
 """One public collection and atomic publication for both dividend strategies.
 
 The public source validates coverage before each publication. Existing JoinQuant
@@ -90,6 +93,18 @@ def signature(rows):
     return sorted(json.dumps({key: normalize(value, key) if key in numeric and value is not None else value
                               for key, value in dict(row).items()}, sort_keys=True, default=str) for row in rows)
 
+def ensure_rule_version_capacity(engine):
+    """Widen legacy MySQL metadata before its implicitly committing DDL can affect a write."""
+    if engine.dialect.name != 'mysql':
+        return
+    column = next(c for c in inspect(engine).get_columns(DividendSnapshot.__tablename__)
+                  if c['name'] == 'rule_version')
+    length = getattr(column['type'], 'length', None)
+    if length is not None and length < DividendSnapshot.rule_version.type.length:
+        with engine.begin() as conn:
+            conn.execute(text('ALTER TABLE dividend_selection_snapshot MODIFY COLUMN rule_version VARCHAR(64) NOT NULL'))
+
+
 def write_result(engine, meta, records, check=lambda: None):
     """Both groups replace together, or neither does. Never replace a newer date."""
     validate_result(meta, records)
@@ -97,6 +112,7 @@ def write_result(engine, meta, records, check=lambda: None):
     # Schema creation is outside publication (MySQL DDL implicitly commits).
     head.create(engine, checkfirst=True)
     stocks.create(engine, checkfirst=True)
+    ensure_rule_version_capacity(engine)
     columns = {column['name']: column for column in inspect(engine).get_columns(stocks.name)}
     if engine.dialect.name == 'mysql':
         with engine.begin() as conn:
@@ -188,7 +204,13 @@ class DividendCollection:
         with self.cache.session('dividend-selection') as session:
             head = session.execute(select(DividendSnapshot.__table__).where(DividendSnapshot.id == 1)).mappings().first()
             rows = session.execute(select(DividendStock.__table__)).mappings().all()
-            if not head or any(head[key] != value for key, value in meta.items()) or signature(rows) != signature(records):
+            meta_fields = sorted(key for key, value in meta.items() if not head or head[key] != value)
+            records_match = signature(rows) == signature(records)
+            if meta_fields or not records_match:
+                # Field names/counts only: preserve the strict full-snapshot gate.
+                LOG.error('Dividend local verification mismatch metadata_fields=%s records_match=%s '
+                          'expected_stock_rows=%s actual_stock_rows=%s',
+                          ','.join(meta_fields) or '-', records_match, len(records), len(rows))
                 raise DividendCollectionError('Local synchronization did not verify the complete dividend snapshot')
 
     def acquire(self):
@@ -224,6 +246,8 @@ class DividendCollection:
         if moment.tzinfo is None:
             raise DividendCollectionError('Timezone-aware collection time required')
         moment = moment.astimezone(CHINA)
+        if slot is not None and not automatic_collection_allowed(moment):
+            return False
         if moment.hour < 16 and self.pending() is None:
             raise DividendCollectionError('当日数据须在16:00后采集；不使用实时状态回填历史。')
         from app.services.earnings_schedule import acquire_execution
@@ -232,6 +256,11 @@ class DividendCollection:
             return False
         try:
             state = self.read_state()
+            if state.get('run_isolated'):
+                quarantine_publication(self, 'pending', state)
+            state['run_isolated'] = slot is None and manual_failure_isolated(moment)
+            if slot is None:
+                restore_manual_publication(self, 'pending', state)
             recovered_older = (state.get('stage') == 'complete' and
                                isinstance(state.get('result_date'), str) and
                                slot is not None and state['result_date'] < slot)
@@ -261,8 +290,12 @@ class DividendCollection:
     def _collect(self, lock, state, moment):
         marker = self.root / ('cancel-' + state['run_id'])
         engine = None
+        started = monotonic()
         def check():
-            if self.stopped.is_set() or marker.exists():
+            if state.get('current_slot') is None and not state.get('run_isolated') and manual_failure_isolated(moment + timedelta(seconds=monotonic()-started)):
+                state['run_isolated'] = True
+                self.save_state(state)
+            if (state.get('current_slot') is not None and not automatic_collection_allowed(moment + timedelta(seconds=monotonic()-started))) or self.stopped.is_set() or marker.exists():
                 raise DividendCollectionError('采集已取消；未提交的结果不发布。')
         try:
             config = database_config(self.settings)
@@ -324,6 +357,12 @@ class DividendCollection:
         finally:
             state['active'] = False
             try:
+                if state.get('stage') != 'complete' and state.get('current_slot') is None and (manual_failure_isolated(moment) or manual_failure_isolated(moment + timedelta(seconds=monotonic()-started))):
+                    state['run_isolated'] = True
+                    self.save_state(state)
+                    quarantine_publication(self, 'pending', state)
+                    state.update(manual_failure_isolated=True, publication_pending=False, stage='failed',
+                                 error='休市日手动采集失败，已隔离，不会自动重试；已有结果保留，可手动重试。')
                 self.save_state(state)
             finally:
                 try:

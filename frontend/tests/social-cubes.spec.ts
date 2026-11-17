@@ -164,7 +164,7 @@ test('manage cube monitoring and inspect rebalances within the configured time w
   expect(reads).toHaveLength(0)
   await page.getByRole('tab', { name: /组合调仓/ }).click()
   const panel = page.getByRole('tabpanel', { name: /组合调仓/ })
-  await expect(panel.getByText('北京时间 周一至周五 09:00～15:00', { exact: true })).toBeVisible()
+  await expect(panel.getByText('北京时间 · 交易日按系统配置时段监控', { exact: true })).toBeVisible()
   await expect(panel.getByText('当前为非监控时段，下一个监控窗口按队列补齐新调仓')).toBeVisible()
   await expect(panel.getByRole('heading', { name: '添加要关注的组合' })).toBeVisible()
   await expect(panel.getByLabel('组合链接或代码')).toHaveValue('')

@@ -106,7 +106,7 @@ test('v2 switches indices and static/rolling metrics and keeps automatic collect
   await expect(statisticValue(page, '中证1000指数')).toBeVisible()
   await expect(page.locator('.page-header').getByRole('button', { name: '更新数据', exact: true })).toBeVisible()
   await expect(page.getByRole('button', { name: '更新数据' })).toBeVisible()
-  await expect(page.getByText('东方财富 · 每天北京时间 18:30 更新')).toBeVisible()
+  await expect(page.getByText('东方财富 · 交易日北京时间 18:30 更新')).toBeVisible()
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
 })
 

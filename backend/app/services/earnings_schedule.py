@@ -1,3 +1,4 @@
+from app.services.collection_calendar import next_automatic_collection, automatic_collection_allowed
 """Durable daily earnings queue: one shared bank/non-bank run, then cash cows.
 
 Manual and scheduled collections use the same execution lease. The coordinator
@@ -26,7 +27,7 @@ def daily_next_run(moment=None, at='23:00'):
     moment = moment.astimezone(CHINA)
     hour, minute = map(int, at.split(':'))
     result = moment.replace(hour=hour, minute=minute, second=0, microsecond=0)
-    return result if result > moment else result + timedelta(days=1)
+    return next_automatic_collection(result if result > moment else result + timedelta(days=1))
 
 
 class ExecutionLease:
@@ -101,7 +102,7 @@ class EarningsScheduler:
             raise ValueError('Timezone-aware scheduler time required')
         moment = moment.astimezone(CHINA)
         config = task_config(self.settings, 'earnings_selection')
-        if not config['enabled']:
+        if not automatic_collection_allowed(moment) or not config['enabled']:
             return None
         lock = portalocker.Lock(str(self.root / 'tick.lock'), timeout=0, flags=portalocker.LOCK_EX | portalocker.LOCK_NB)
         try:
@@ -119,6 +120,9 @@ class EarningsScheduler:
             with self.db() as db:
                 jobs = [dict(row) for row in db.execute("SELECT * FROM jobs WHERE status IN ('pending','launching','running') ORDER BY slot,position")]
             for job in jobs:
+                if not automatic_collection_allowed(datetime.fromisoformat(job['slot']).date()):
+                    self.update(job, 'skipped', detail='Closed or unverified calendar date; automatic collection skipped')
+                    continue
                 service = self.services[job['task']]
                 state = service.read_state()
                 busy = service.running()

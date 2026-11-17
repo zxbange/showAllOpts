@@ -1,3 +1,4 @@
+from app.services.collection_calendar import automatic_collection_allowed
 """Private holdings monitoring: one leader, bounded reads, atomic snapshots/events."""
 from contextlib import contextmanager
 from datetime import datetime, timezone
@@ -43,7 +44,7 @@ def clock():
 def in_window(moment, settings=None):
     local = moment.astimezone(SHANGHAI)
     plan = task_config(settings, 'holdings') if settings is not None else {'start': '09:25', 'end': '15:10'}
-    return plan['start'] <= local.strftime('%H:%M') < plan['end']
+    return automatic_collection_allowed(moment) and plan['start'] <= local.strftime('%H:%M') < plan['end']
 
 
 def table_name(value):

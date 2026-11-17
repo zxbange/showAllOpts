@@ -51,7 +51,7 @@ export function CacheScheduleForm({
     >
       <strong>自动同步时间</strong>
       <p>
-        当前设置：每天 {schedule.daily_time}，北京时间（{schedule.timezone}）。
+        当前设置：交易日 {schedule.daily_time}，北京时间（{schedule.timezone}）。
       </p>
       {autoRefresh ? (
         schedule.next_refresh_at && (

@@ -8,7 +8,7 @@ from app.services.etf_configuration import ConfigurationFailure
 from app.services.source_keys import KeyStorageError, persistent_cipher
 
 
-SCHEDULE = ['00:01']
+SCHEDULE = ['23:58']
 
 
 class MarketConfiguration:

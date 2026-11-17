@@ -283,7 +283,7 @@ export function MarginPage() {
       <section className="margin-update panel" aria-label="两融数据更新">
         <div className="margin-update-row">
           <div>
-            <strong>东方财富 · 每天北京时间 08:00 检查更新</strong>
+            <strong>东方财富 · 交易日北京时间 {status?.daily_time ?? '按系统配置'} 检查更新</strong>
             <p>
               {latest
                 ? `当前展示 ${latest.date} 已公布数据；当天未公布时保留最近一期。`

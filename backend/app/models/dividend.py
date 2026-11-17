@@ -9,7 +9,7 @@ class DividendSnapshot(Base):
     id = Column(Integer, primary_key=True)
     trade_date = Column(Date, nullable=False)
     updated_at = Column(DateTime, nullable=False)
-    rule_version = Column(String(32), nullable=False)
+    rule_version = Column(String(64), nullable=False)
     universe_count = Column(Integer, nullable=False)
     eligible_count = Column(Integer, nullable=False)
     value_candidates = Column(Integer, nullable=False)

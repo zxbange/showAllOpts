@@ -1,3 +1,5 @@
+from app.services.collection_failure_isolation import quarantine_publication, restore_manual_publication
+from app.services.collection_calendar import next_automatic_collection, automatic_collection_allowed, manual_failure_isolated
 from app.core.history_sync import mark_sync_owner, clear_sync_owner, database_syncing, SYNC_MESSAGE
 """Restartable public index history, with Shanghai 18:00 trading-day updates."""
 from app.services.system_runtime import source_client
@@ -179,7 +181,8 @@ class GrowthDividend:
         next_slot = datetime.fromisoformat(slot_for(local.date(), self.settings))
         if next_slot <= local:
             next_slot += timedelta(days=1)
-        next_run = next_slot.isoformat()
+        next_slot = next_automatic_collection(next_slot)
+        next_run = next_slot.isoformat() if next_slot else None
         busy = self.running()
         syncing = database_syncing(self, busy)
         running = bool(busy and not syncing and state.get('active'))
@@ -247,6 +250,8 @@ class GrowthDividend:
 
     def refresh(self, background=True, *, moment=None, slot=None, trigger='manual'):
         moment = moment or now()
+        if (slot is not None or trigger != 'manual') and not automatic_collection_allowed(moment):
+            return False
         if self.stop_event.is_set():
             return False
         lock = self.acquire()
@@ -255,6 +260,11 @@ class GrowthDividend:
         state = None
         try:
             state = self.read_state()
+            if state.get('run_isolated'):
+                quarantine_publication(self, 'public_publication', state)
+            state['run_isolated'] = slot is None and trigger == 'manual' and manual_failure_isolated(moment)
+            if slot is None and trigger == 'manual':
+                restore_manual_publication(self, 'public_publication', state)
             if slot and state.get('scheduled_slot') == slot:
                 lock.release()
                 return False
@@ -294,7 +304,10 @@ class GrowthDividend:
         LOG.info('Growth/dividend collection started source=public_index trigger=%s cutoff=%s', state.get('trigger', '-'), cutoff)
 
         def check_cancel():
-            if self.stop_event.is_set() or marker.exists():
+            if slot is None and state.get('trigger') == 'manual' and not state.get('run_isolated') and manual_failure_isolated(moment + timedelta(seconds=monotonic()-started)):
+                state['run_isolated'] = True
+                self.write_state(state)
+            if ((slot is not None or state.get('trigger') != 'manual') and not automatic_collection_allowed(moment + timedelta(seconds=monotonic()-started))) or self.stop_event.is_set() or marker.exists():
                 raise CollectionCancelled()
 
         def apply(payload, db):
@@ -384,11 +397,12 @@ class GrowthDividend:
                     check_cancel()
                     state['stage'] = f'更新{index.name} {target_days[0]} — {target_days[-1]}'
                     self.write_state(state)
+                    source_error = None
+                    accepted = []
                     try:
                         quotes = fetch_prices(client, index, target_days[0], target_days[-1],
                                               expected_dates=set(target_days), check_cancel=check_cancel)
                         check_cancel()
-                        accepted = []
                         for day, quote in quotes.items():
                             if day not in target_days or quote.day != day or not index.first_date <= day <= cutoff:
                                 raise IndexSourceError('行情返回日期与请求交易日不一致。')
@@ -396,14 +410,22 @@ class GrowthDividend:
                                 raise IndexSourceError('指数收盘点位无效。')
                             accepted.append((index.code, str(day), quote.close, quote.source,
                                              quote.source_url, moment.isoformat()))
+                    except (httpx.HTTPError, ValueError, TypeError) as exc:
+                        source_error = exc
+                    if source_error is None:
+                        # Publication failures are not source-window failures. Keep the
+                        # durable pending payload and stop before staging another batch.
                         if accepted:
                             publication.stage(dict(points=accepted))
                             publication.resume(write_public, apply, check_cancel)
                         absent = set(target_days) - set(quotes)
                         if absent:
-                            raise IndexSourceError(f'{index.name}仍有 {len(absent)} 个交易日未返回收盘数据。')
-                        consecutive_failures = 0
-                    except (httpx.HTTPError, ValueError, TypeError) as exc:
+                            source_error = IndexSourceError(
+                                f'{index.name}仍有 {len(absent)} 个交易日未返回收盘数据。')
+                        else:
+                            consecutive_failures = 0
+                    if source_error is not None:
+                        exc = source_error
                         consecutive_failures += 1
                         failed_windows += 1
                         state['recent_failures'] = (state['recent_failures'] + [dict(
@@ -440,6 +462,13 @@ class GrowthDividend:
         finally:
             state['active'] = False
             try:
+                if outcome != 'success' and slot is None and state.get('trigger') == 'manual' and (manual_failure_isolated(moment) or manual_failure_isolated(moment + timedelta(seconds=monotonic()-started))):
+                    state['run_isolated'] = True
+                    self.write_state(state)
+                    quarantine_publication(self, 'public_publication', state)
+                    state['manual_failure_isolated'] = True
+                elif outcome == 'success':
+                    state['manual_failure_isolated'] = False
                 if publication is not None:
                     publication.close()
                 self.write_state(state)
@@ -466,11 +495,13 @@ class GrowthDividend:
             return
         moment = moment or now()
         local = moment.astimezone(CHINA)
+        if not automatic_collection_allowed(moment):
+            return
         if not self.startup_checked:
             self.startup_checked = True
             state = self.read_state()
             status = self.status(moment)
-            if (not state.get('initialized') or state.get('active') or
+            if not (state.get('manual_failure_isolated') or state.get('run_isolated')) and (not state.get('initialized') or state.get('active') or
                     status['pending_points'] or not status['calendar_ready']):
                 self.refresh(background=False, moment=moment, trigger='startup')
                 return

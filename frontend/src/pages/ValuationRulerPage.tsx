@@ -337,7 +337,7 @@ export function ValuationRulerPage() {
               <p>
                 {status
                   ? status.automatic
-                    ? `东方财富 · 每天北京时间 ${status.schedule.split(' ')[0]} 更新`
+                    ? `东方财富 · 交易日北京时间 ${status.schedule.split(' ')[0]} 更新`
                     : '自动采集当前未启用，请管理员检查系统配置。'
                   : '正在核验自动采集状态。'}
               </p>

@@ -1,3 +1,5 @@
+from app.services.collection_failure_isolation import quarantine_publication, restore_manual_publication
+from app.services.collection_calendar import automatic_collection_allowed, manual_failure_isolated
 """Shared external 3/5/10-year screen, published to MySQL and local SQLite.
 
 Only complete, validated observations can qualify. Interrupted refreshes never
@@ -130,11 +132,12 @@ class CashCowScreen:
         from app.services.system_configuration import task_config
         schedule = task_config(self.settings, 'earnings_selection')
         running = self.running()
+        next_run = daily_next_run(at=schedule['times'][0]) if schedule['enabled'] else None
         marker = self.cancel_path(state)
         snapshot = result.get('snapshot') or {}
         return dict(years=self.years, periods=list(PERIODS), collection_years=max(PERIODS),
                     run_id=state.get('run_id'),
-                    next_run_at=daily_next_run(at=schedule['times'][0]).isoformat() if schedule['enabled'] else None,
+                    next_run_at=next_run.isoformat() if next_run else None,
                     schedule_time=schedule['times'][0], running=running, cancelling=bool(running and marker and marker.exists()),
                     stage=('上次更新中断，请重新更新' if not running and state.get('active')
                            else state.get('stage', '尚未筛选')),
@@ -193,6 +196,9 @@ class CashCowScreen:
 
     def refresh(self, background=True, *, moment=None, slot=None):
         from app.services.earnings_schedule import acquire_execution
+        moment = moment or now()
+        if slot is not None and not automatic_collection_allowed(moment):
+            return False
         if self.stop_event.is_set():
             return False
         lock = acquire_execution(self.settings, self.acquire)
@@ -204,6 +210,11 @@ class CashCowScreen:
             if moment.tzinfo is None:
                 raise ValueError('Collection requires a timezone-aware datetime')
             state = self.read_state()
+            if state.get('run_isolated'):
+                quarantine_publication(self, 'public_publication', state)
+            state['run_isolated'] = slot is None and manual_failure_isolated(moment)
+            if slot is None:
+                restore_manual_publication(self, 'public_publication', state)
             state.update(run_id=uuid.uuid4().hex, active=True, stage='读取全A股股票池（统一更新3/5/10年）',
                          phase='读取全A股股票池', processed=0, total=None, error=None,
                          last_attempt_at=moment.isoformat(), current_scheduled_slot=slot)
@@ -239,7 +250,10 @@ class CashCowScreen:
         LOG.info('Cash cow collection started source=asharehub+eastmoney+tushare periods=3,5,10')
 
         def check_cancel():
-            if self.stop_event.is_set() or marker.exists():
+            if state.get('current_scheduled_slot') is None and not state.get('run_isolated') and manual_failure_isolated(moment + timedelta(seconds=monotonic()-started)):
+                state['run_isolated'] = True
+                self.write_state(state)
+            if (state.get('current_scheduled_slot') is not None and not automatic_collection_allowed(moment + timedelta(seconds=monotonic()-started))) or self.stop_event.is_set() or marker.exists():
                 raise CollectionCancelled()
 
         def progress(stage, processed=None, total=None):
@@ -336,6 +350,11 @@ class CashCowScreen:
         finally:
             state['active'] = False
             try:
+                if not published and state.get('current_scheduled_slot') is None and (manual_failure_isolated(moment) or manual_failure_isolated(moment + timedelta(seconds=monotonic()-started))):
+                    state['run_isolated'] = True
+                    self.write_state(state)
+                    quarantine_publication(self, 'public_publication', state)
+                    state['manual_failure_isolated'] = True
                 if publication is not None:
                     publication.close()
                 if not published:
