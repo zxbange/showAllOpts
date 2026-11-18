@@ -1,3 +1,4 @@
+from app.services.collection_outcomes import record_task
 from app.services.collection_failure_isolation import quarantine_publication, restore_manual_publication
 from app.services.collection_calendar import next_automatic_collection, automatic_collection_allowed, manual_failure_isolated
 from app.core.history_sync import mark_sync_owner, clear_sync_owner, database_syncing, SYNC_MESSAGE
@@ -479,6 +480,7 @@ class GrowthDividend:
                 raise
             finally:
                 try:
+                    record_task(self.settings, 'growth_dividend', outcome=outcome, scheduled=slot is not None or state.get('trigger') == 'startup', run_key=state['run_id'])
                     lock.release()
                 except BaseException as exc:
                     outcome = 'failed'

@@ -282,3 +282,36 @@ test('uncertain cancellation retries only the current manual task', async ({ pag
   expect(ids).toEqual(['existing-job', 'existing-job'])
   expect(starts).toBe(0)
 })
+
+test('recent collection history keeps failure and shows newer manual success first', async ({ page }) => {
+  await page.route('**/api/v1/etf-shares/collection-status', route => route.fulfill({ json: {
+    ...ready,
+    runs: [{ slot: '2026-11-18T09:00:00+08:00', status: 'failed', error: 'source_unavailable' }],
+    recent_runs: [
+      { id: 'manual-success', trigger: 'manual', status: 'complete', requested_at: '2026-11-18T10:00:00+08:00', finished_at: '2026-11-18T10:02:00+08:00', time_basis: 'completed_at' },
+      { id: 'auto-failed', trigger: 'scheduled', status: 'failed', requested_at: '2026-11-18T09:00:00+08:00', finished_at: '2026-11-18T09:01:00+08:00', attempt: 1, time_basis: 'completed_at' },
+    ],
+  } }))
+  await page.goto('/etf-shares')
+  await page.getByText('最近采集记录', { exact: true }).click()
+  const rows = page.locator('.etf-collection-panel details li')
+  await expect(rows).toHaveCount(2)
+  await expect(rows.nth(0)).toContainText('手动采集 · 本次日常采集完成')
+  await expect(rows.nth(1)).toContainText('自动采集 · 失败')
+})
+
+test('automatic retry success remains separate from the original failed attempt', async ({ page }) => {
+  await page.route('**/api/v1/etf-shares/collection-status', route => route.fulfill({ json: {
+    ...ready,
+    recent_runs: [
+      { id: 'retry-success', trigger: 'scheduled', status: 'complete', requested_at: '2026-11-18T09:30:00+08:00', finished_at: '2026-11-18T09:31:00+08:00', attempt: 2, time_basis: 'completed_at' },
+      { id: 'auto-failed', trigger: 'scheduled', status: 'failed', requested_at: '2026-11-18T09:00:00+08:00', finished_at: null, attempt: 1, time_basis: 'legacy_request_time' },
+    ],
+  } }))
+  await page.goto('/etf-shares')
+  await page.getByText('最近采集记录', { exact: true }).click()
+  const rows = page.locator('.etf-collection-panel details li')
+  await expect(rows).toHaveCount(2)
+  await expect(rows.nth(0)).toContainText('自动采集（第2次尝试） · 本次日常采集完成')
+  await expect(rows.nth(1)).toContainText('失败 · 旧记录，显示请求时间')
+})

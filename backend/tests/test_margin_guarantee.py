@@ -1,3 +1,4 @@
+from app.services.collection_outcomes import latest_outcomes
 """Local-only collection/scheduling tests; no real database or provider requests."""
 from contextlib import nullcontext
 from datetime import date, datetime, timedelta, timezone
@@ -66,6 +67,7 @@ def test_first_backfill_then_incremental_never_redownloads_saved_days(monitor, m
     assert monitor.refresh(background=False, moment=MOMENT)
     assert calls['points'][-1] == date(2026, 10, 28)
     assert len(calls['points']) == 4
+    assert latest_outcomes(monitor.settings)['items']['margin-guarantee']['outcome'] == 'success'
 
 
 def test_failed_old_day_is_retried_after_restart_outside_new_listing_window(monitor, monkeypatch):

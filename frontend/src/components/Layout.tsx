@@ -2,12 +2,21 @@ import { useLayoutEffect, useRef } from 'react'
 import { ChartNoAxesCombined, ChevronRight, House, Layers3 } from 'lucide-react'
 import { Link, NavLink, Outlet, useLocation } from 'react-router-dom'
 import { PageHeaderActionsProvider } from './PageHeaderActions'
+import { CollectionOutcomesProvider, CollectionOutcomeLight } from './CollectionOutcome'
 import { CacheControl } from './CacheControl'
 import { useAuth } from './AccountAccess'
 import { accountRequest } from '../api/http'
 import { researchModules, navigationModules, groupForPath } from '../lib/modules'
 
 export function Layout() {
+  return (
+    <CollectionOutcomesProvider>
+      <LayoutContent />
+    </CollectionOutcomesProvider>
+  )
+}
+
+function LayoutContent() {
   const { session, signedOut } = useAuth()
   const location = useLocation()
   const navigation = useRef<HTMLElement>(null)
@@ -70,7 +79,10 @@ export function Layout() {
           {session?.user?.role === 'admin' && (
             <NavLink to="/personal-holdings" aria-label="个人持仓" title="个人持仓">
               <Layers3 size={18} />
-              <span>个人持仓</span>
+              <span>
+                个人持仓
+                <CollectionOutcomeLight moduleKey="personal-holdings" />
+              </span>
               <span className="nav-key">私</span>
             </NavLink>
           )}
@@ -124,7 +136,9 @@ export function Layout() {
           </div>
         </header>
         <main id="main-content" className="main-content">
-          <PageHeaderActionsProvider key={location.pathname}><Outlet /></PageHeaderActionsProvider>
+          <PageHeaderActionsProvider key={location.pathname}>
+            <Outlet />
+          </PageHeaderActionsProvider>
         </main>
       </div>
     </div>

@@ -1,3 +1,4 @@
+from app.services.collection_outcomes import latest_outcomes
 from datetime import date, datetime, timezone
 import json
 import httpx
@@ -204,6 +205,7 @@ def test_partial_network_failure_and_changed_counts(tmp_path, monkeypatch):
     store=CCICoal(Settings(_env_file=None,log_dir=tmp_path));old=store.history()['rows']
     store.collect(store.lock())
     assert store.status()['outcome']=='partial' and store.status()['inserted']==2
+    assert latest_outcomes(store.settings)['items']['commodities-cci']['outcome'] == 'partial'
     assert store.status()['grades'][1]['error']=='请求超时'
     value[0]=1016
     store.collect(store.lock())

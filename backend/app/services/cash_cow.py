@@ -1,3 +1,4 @@
+from app.services.collection_outcomes import record_task
 from app.services.collection_failure_isolation import quarantine_publication, restore_manual_publication
 from app.services.collection_calendar import automatic_collection_allowed, manual_failure_isolated
 """Shared external 3/5/10-year screen, published to MySQL and local SQLite.
@@ -373,6 +374,7 @@ class CashCowScreen:
                     raise
                 finally:
                     try:
+                        record_task(self.settings, 'cash_cow', outcome=run_outcome, scheduled=state.get('current_scheduled_slot') is not None, run_key=state['run_id'])
                         lock.release()
                     except BaseException as exc:
                         run_outcome = 'failed'

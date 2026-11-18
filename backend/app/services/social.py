@@ -830,13 +830,25 @@ class SocialMonitor(NotificationMixin, CubeMonitorMixin):
                 if not self.active_task(db, author):
                     continue
             checked = True
+            outcome = 'failed'
+            outcome_run = uuid.uuid4().hex
+            outcome_key = 'social-cubes' if author.get('_kind') == 'cube' else 'social-' + platform
             try:
                 if author.get('_kind') == 'cube':
                     self.check_cube(author, current, fetch_cube_rebalances)
                 else:
                     self.check_author(author, current)
+                # Only a fully accepted scan clears its persistent cursor.
+                with self.db() as db:
+                    table = 'cubes' if author.get('_kind') == 'cube' else 'authors'
+                    cursor = 'scan_started_at' if table == 'cubes' else 'scan_since'
+                    completed = db.execute(f'SELECT {cursor},last_success_at FROM {table} WHERE id=?',
+                                           (author['id'],)).fetchone()
+                outcome = ('success' if completed and completed[0] is None and completed[1]
+                           else 'partial')
                 self.record_login_result(platform, current[platform + '_cookie'], 'normal')
             except PlatformIntervention as error:
+                outcome = 'failed'
                 LOG.warning('Social monitoring paused platform=%s reason=%s status=%s',
                             author['platform'], error.reason_code, error.http_status)
                 if not self.record_login_result(platform, current[platform + '_cookie'],
@@ -851,6 +863,7 @@ class SocialMonitor(NotificationMixin, CubeMonitorMixin):
                         db.execute(f'UPDATE {table} SET last_check=?,last_error=? WHERE id=?', (now(), str(error), author['id']))
                 error_message = '平台监控已暂停，需要人工处理；详情见平台状态'
             except RateLimited as error:
+                outcome = 'failed'
                 LOG.warning('Social monitoring deferred platform=%s reason=rate_limited retry_seconds=%s',
                             author['platform'], error.retry_after)
                 self.platform_state(author['platform'], retry_at=time.time() + error.retry_after, reason=str(error), reason_code='rate_limited', http_status=None)
@@ -861,8 +874,9 @@ class SocialMonitor(NotificationMixin, CubeMonitorMixin):
                         db.execute(f'UPDATE {table} SET last_check=?,last_error=? WHERE id=?', (now(), str(error), author['id']))
                 error_message = '平台已限流，已遵守等待时间暂缓请求'
             except MonitoringDeferred:
-                pass
+                outcome = 'interrupted' if self.stop_event.is_set() else 'cancelled'
             except Exception as error:
+                outcome = 'failed'
                 # Only controlled RuntimeError strings are safe for UI/logs.
                 message = str(error) if type(error) is RuntimeError else '抓取失败，请检查网络、UID、Cookie 或平台访问限制'
                 if isinstance(error, httpx.TimeoutException):
@@ -884,6 +898,10 @@ class SocialMonitor(NotificationMixin, CubeMonitorMixin):
                 LOG.warning('Social fetch failed platform=%s kind=%s %s', author['platform'],
                             'cube' if author.get('_kind') == 'cube' else 'author', diagnostic_details(error))
             finally:
+                # Collection results are independent of delivery attempts below.
+                from app.services.collection_outcomes import record_outcome
+                record_outcome(self.settings, outcome_key, run_key=outcome_run,
+                               outcome=outcome, trigger='scheduled')
                 self.finish_scheduled_author(platform, queue_id)
             try:
                 # Do not hold one author's new posts until the whole queue finishes.

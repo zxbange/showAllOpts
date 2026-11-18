@@ -1,3 +1,5 @@
+from app.services.collection_outcomes import record_outcome
+from uuid import uuid4
 from app.services.collection_calendar import automatic_collection_allowed
 """Private holdings monitoring: one leader, bounded reads, atomic snapshots/events."""
 from contextlib import contextmanager
@@ -298,6 +300,7 @@ class PersonalHoldings:
             if not manual:
                 state['next_poll'] = moment.timestamp()+schedule['interval_seconds']
                 self.write(db, state)
+        outcome_run = uuid4().hex
         stage = 'source_connect'
         try:
             if self.source_ref != state['source']:
@@ -334,6 +337,7 @@ class PersonalHoldings:
                     if manual:
                         current['manual'] = dict(current['manual'], status='completed', error=None)
                     self.write(db, current)
+            record_outcome(self.settings, 'personal-holdings', run_key=outcome_run, outcome='success', trigger='manual' if manual else 'scheduled')
             return True
         except Exception as error:
             # Record the original failure before cleanup; never log SQL/messages.
@@ -354,6 +358,7 @@ class PersonalHoldings:
                         current['manual'] = dict(current['manual'], status='failed', error='同步失败，原持仓和历史保留，请重试')
                         current['error'] = current['manual']['error']
                     self.write(db, current)
+            record_outcome(self.settings, 'personal-holdings', run_key=outcome_run, outcome='failed', trigger='manual' if manual else 'scheduled')
             return False
         finally:
             if manual and (not self.state()['enabled'] or not in_window(clock(), self.settings)):

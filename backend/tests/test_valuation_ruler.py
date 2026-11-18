@@ -1,3 +1,4 @@
+from app.services.collection_outcomes import latest_outcomes
 """Offline service regression. Every source value in this module is synthetic."""
 from contextlib import nullcontext
 from datetime import date, datetime, timedelta
@@ -67,6 +68,7 @@ def test_first_run_latest_only_gap_rows_and_complete_day_quantiles(monitor):
     assert all(date.fromisoformat(p['date']).weekday()<5 for p in data['points'])
     calls.clear();monitor.refresh(background=False,moment=MOMENT)
     assert calls==[]
+    assert latest_outcomes(monitor.settings)['items']['valuation-ruler']['outcome'] == 'success'
 
 
 def test_empty_history_unknown_coverage_and_no_false_equivalence(monitor):
@@ -109,6 +111,7 @@ def test_common_access_denial_stops_without_retry_and_plan_survives(monitor):
     assert calls==[date(2026,11,9)]
     assert monitor.status()['failed_days']==2 and monitor.status()['status']=='failed'
     assert monitor.history(MOMENT)['latest']['date']=='2026-11-06'
+    assert latest_outcomes(monitor.settings)['items']['valuation-ruler']['outcome'] == 'failed'
 
 
 def test_old_date_without_snapshot_is_not_retried_with_current_members(monitor):

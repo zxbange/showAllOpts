@@ -1,3 +1,4 @@
+from app.services.collection_outcomes import latest_outcomes
 from contextlib import nullcontext
 from copy import deepcopy
 from datetime import date, datetime
@@ -120,6 +121,7 @@ def test_injected_source_shares_one_collection_and_preserves_failure(tmp_path, m
     assert service.status()['stage'] == 'failed'
     assert read(engine) == before
     assert len(calls) == 2
+    assert latest_outcomes(service.settings)['items']['dividend-selection']['outcome'] == 'failed'
 
 
 def test_schedule_is_once_per_day_and_cross_process_lock(tmp_path, monkeypatch):

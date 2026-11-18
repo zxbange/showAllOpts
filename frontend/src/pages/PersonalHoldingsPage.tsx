@@ -1,3 +1,4 @@
+import { CollectionOutcomeLight } from '../components/CollectionOutcome'
 import { PageHeaderActions } from '../components/PageHeaderActions'
 import { PageHeader } from '../components/PageHeader'
 import { useEffect, useMemo, useRef, useState } from 'react'
@@ -180,7 +181,7 @@ function Holdings() {
     <div className="holdings-page">
       <PageHeader>
         <div>
-          <h1>个人持仓</h1>
+          <h1 aria-label="个人持仓">个人持仓<CollectionOutcomeLight moduleKey="personal-holdings" /></h1>
         </div>
         <span className="holdings-status">
           {!status

@@ -359,6 +359,7 @@ export function CommoditiesPage() {
             items={[
               {
                 id: 'a00',
+                collectionKey: 'commodities-a00',
                 name: 'A00铝',
                 description: 'A00铝报价',
                 icon: Coins,
@@ -366,6 +367,7 @@ export function CommoditiesPage() {
               },
               {
                 id: 'cci',
+                collectionKey: 'commodities-cci',
                 name: 'CCI动力煤',
                 description: 'CCI动力煤三档报价',
                 icon: Coins,

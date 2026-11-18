@@ -24,6 +24,7 @@ const labels: Record<string, string> = {
   partial: '部分完成，仍有缺口',
   failed: '失败',
   interrupted: '已中断',
+  abandoned: '已停止补采',
 }
 export function ETFCollectionPanel({ onCollected }: { onCollected: () => void }) {
   const admin = useAuth().session?.user?.role === 'admin'
@@ -158,7 +159,19 @@ export function ETFCollectionPanel({ onCollected }: { onCollected: () => void })
     }
   }
   const progress = status?.progress
-  if (!admin && !progress && !status?.cache_pending && !status?.runs?.length) return null
+  const recent =
+    status?.recent_runs ??
+    status?.runs?.map((run, i) => ({
+      ...run,
+      id: `legacy-${i}`,
+      trigger: 'scheduled' as const,
+      requested_at: run.slot,
+      finished_at: null,
+      attempt: null,
+      time_basis: 'legacy_request_time' as const,
+    })) ??
+    []
+  if (!admin && !progress && !status?.cache_pending && !recent.length) return null
   return (
     <section className="panel etf-collection-panel" aria-label="ETF采集管理">
       <div className="etf-collection-overview">
@@ -213,13 +226,19 @@ export function ETFCollectionPanel({ onCollected }: { onCollected: () => void })
         </p>
       )}
       {!!status?.gap_count && <p>当前交易日缺失 {status.gap_count} 项，可重试。</p>}
-      {!!status?.runs?.length && (
+      {!!recent.length && (
         <details>
           <summary>最近采集记录</summary>
           <ul>
-            {status.runs.map((run, i) => (
-              <li key={`${run.slot}-${i}`}>
-                {run.slot} · {labels[run.status] ?? '状态待确认'}
+            {recent.map((run) => (
+              <li key={run.id}>
+                {run.finished_at || run.requested_at} ·{' '}
+                {run.trigger === 'manual' ? '手动采集' : '自动采集'}
+                {run.attempt && run.attempt > 1 ? `（第${run.attempt}次尝试）` : ''}
+                {' · '}
+                {labels[run.status] ?? '状态待确认'}
+                {run.time_basis === 'legacy_request_time' ? ' · 旧记录，显示请求时间' : ''}
+                {run.time_basis === 'recovered_at' ? ' · 显示中断确认时间' : ''}
                 {run.error ? ` · ${collectionErrorMessage(run.error)}` : ''}
               </li>
             ))}

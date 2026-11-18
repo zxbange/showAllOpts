@@ -1,3 +1,4 @@
+from app.services.collection_outcomes import latest_outcomes
 """One shared acquisition, independently correct windows, atomic publication."""
 from collections import Counter
 from contextlib import nullcontext
@@ -207,6 +208,7 @@ def test_cross_period_run_status_lock_cancel_and_restart_keep_all_snapshots(tmp_
         assert screen.latest()['snapshot'] == before[period]
         assert screen.status()['stage'] == '已取消，保留上次结果'
         assert not screen.status()['running']
+    assert latest_outcomes(screens[3].settings)['items']['cash-cow']['outcome'] == 'cancelled'
 
 
 def test_second_snapshot_write_failure_rolls_back_every_period(tmp_path, monkeypatch):

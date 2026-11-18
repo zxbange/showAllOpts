@@ -1,3 +1,4 @@
+from app.services.collection_outcomes import record_task
 from app.services.collection_calendar import next_automatic_collection, automatic_collection_allowed, manual_failure_isolated
 from app.services.system_configuration import task_config, latest_task_slot
 """两融担保比例：东方财富接口、独立本地存储、北京时间08点调度。"""
@@ -395,6 +396,7 @@ class MarginGuarantee:
                 raise
             finally:
                 try:
+                    record_task(self.settings, 'margin', outcome=outcome, scheduled=state.get('current_scheduled_slot') is not None, run_key=state['run_id'])
                     lock.release()
                 except BaseException as exc:
                     outcome = 'failed'

@@ -1,3 +1,4 @@
+from app.services.collection_outcomes import latest_outcomes
 from contextlib import contextmanager, nullcontext
 from copy import deepcopy
 from datetime import date, datetime, timedelta, timezone
@@ -235,6 +236,7 @@ def test_startup_after_18_collects_once_verified_qfq_comparison_and_eligible_den
     assert not collection.tick(clock.advance(minutes=1))
     assert collection.status()['updated_at'] == stamp
     assert len(provider.quote_calls) == N
+    assert latest_outcomes(collection.settings)['items']['market-sentiment']['outcome'] == 'partial'
 
 
 def test_before_18_no_new_snapshot_and_naive_times_rejected(tmp_path):
@@ -275,6 +277,7 @@ def test_only_failed_stock_retried_and_universe_shared_with_both_metrics(tmp_pat
     assert len(provider.quote_calls) == (N + 4)
     assert provider.quote_calls[-1][0] == 'sh600003'
     assert writer.calls[0][3] == writer.calls[-1][3]
+    assert latest_outcomes(collection.settings)['items']['market-crowding']['outcome'] == 'partial'
 
 
 def test_crowding_waits_for_every_dated_price_volume_after_three_market_samples(tmp_path):
@@ -1576,3 +1579,19 @@ def test_manual_collection_notifications_obey_switch_and_no_change(tmp_path, mon
     collection.tick(clock.advance(minutes=1))
     with notifications._database(collection.settings) as db:
         assert db.execute('SELECT count(*) FROM outbox').fetchone()[0] == int(notify_enabled)
+
+
+def test_module_outcomes_require_completed_cache_publication_and_keep_failures(tmp_path):
+    from app.services.collection_outcomes import database
+    collection, provider, writer, clock = worker(tmp_path, refresh=lambda: True)
+    provider.failures = {'sh600003'}
+    assert not collection.tick()
+    assert latest_outcomes(collection.settings)['items']['market-sentiment']['outcome'] == 'failed'
+    provider.failures.clear()
+    collection.request_run('outcome-recovery')
+    assert collection.tick(clock.advance(minutes=5))
+    items = latest_outcomes(collection.settings)['items']
+    assert items['market-sentiment']['outcome'] == items['market-crowding']['outcome'] == 'success'
+    assert items['market-sentiment']['trigger'] == 'manual'
+    with database(collection.settings) as db:
+        assert db.execute("SELECT count(*) FROM results WHERE module='market-sentiment' AND outcome='failed'").fetchone()[0] == 1

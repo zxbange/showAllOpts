@@ -44,6 +44,18 @@ export interface ETFCollectionCoverage {
   history_complete?: boolean
 }
 
+export interface ETFCollectionRun {
+  id: string
+  trigger: 'manual' | 'scheduled'
+  status: string
+  error?: string | null
+  requested_at: string
+  finished_at: string | null
+  slot: string | null
+  attempt: number | null
+  time_basis: 'completed_at' | 'legacy_request_time' | 'recovered_at'
+}
+
 export interface ETFCollectionStatus extends ETFCollectionCoverage {
   enabled?: boolean
   configured?: boolean
@@ -59,6 +71,8 @@ export interface ETFCollectionStatus extends ETFCollectionCoverage {
   worker_running?: boolean
   schedule?: string[]
   target_sessions?: number
+  recent_runs?: ETFCollectionRun[]
+  latest_result?: ETFCollectionRun | null
   runs?: Array<{ slot: string; status: string; error?: string | null }>
 }
 

@@ -1,3 +1,4 @@
+from app.services.collection_outcomes import latest_outcomes
 import pytest
 from app.core.config import Settings
 from app.services.commodities import Commodities
@@ -35,6 +36,7 @@ def test_failed_fetch(tmp_path,monkeypatch):
  monkeypatch.setattr(commodities,'fetch',fail);lock=service.lock();service.collect(lock)
  assert service.history()['rows']==old and 'secret' not in str(service.status())
  assert not service.status()['running'] and service.status()['failures']>0
+ assert latest_outcomes(service.settings)['items']['commodities-a00']['outcome'] == 'failed'
 
 def test_api_authentication_and_csrf(tmp_path):
  from fastapi import FastAPI,Depends

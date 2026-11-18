@@ -402,8 +402,8 @@ export function OwnershipPage() {
             value={tab}
             onChange={(id) => setParams({ tab: id, ...(id === 'stock' && code ? { code } : {}) })}
             items={[
-              { id: 'stock', name: '个股查询', description: '机构持仓 · 股东户数', icon: Search },
-              { id: 'social', name: '社保新进', description: '新进组合 · 持股增减', icon: Users },
+              { id: 'stock', collectionKey: 'institution-ownership', name: '个股查询', description: '机构持仓 · 股东户数', icon: Search },
+              { id: 'social', collectionKey: 'institution-ownership', name: '社保新进', description: '新进组合 · 持股增减', icon: Users },
             ]}
           />
         }

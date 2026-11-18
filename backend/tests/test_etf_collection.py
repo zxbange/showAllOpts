@@ -538,3 +538,226 @@ def test_manual_etf_notification_uses_shared_change_gate(tmp_path, monkeypatch):
     w.tick(EVENING)
     with notifications._database(w.settings) as db:
         assert db.execute('SELECT count(*) FROM outbox').fetchone()[0] == 1
+
+
+def test_run_history_keeps_automatic_failure_when_manual_collection_succeeds(tmp_path):
+    w, c, _ = worker(tmp_path, refresh=lambda: True)
+    w.start = lambda: None
+    c.write_failure = True
+    assert not w.tick(EVENING)
+    assert w.status()['latest_result']['status'] == 'failed'
+    c.write_failure = False
+    w.request_run('manual-after-failed-schedule')
+    assert w.tick(EVENING + timedelta(minutes=1))
+    state = w.status()
+    assert [(r['trigger'], r['status']) for r in state['recent_runs']] == [
+        ('manual', 'complete'), ('scheduled', 'failed')]
+    assert state['runs'][0]['status'] == 'failed'
+    assert state['latest_result']['finished_at'] is not None
+    w.request_run('manual-after-failed-schedule')
+    assert len(w.status()['recent_runs']) == 2
+
+
+def test_run_history_preserves_each_automatic_retry_attempt(tmp_path):
+    w, c, _ = worker(tmp_path, refresh=lambda: True)
+    c.write_failure = True
+    assert not w.tick(EVENING)
+    c.write_failure = False
+    assert w.tick(EVENING + timedelta(minutes=30))
+    state = w.status()
+    assert [(r['status'], r['attempt']) for r in state['recent_runs']] == [('complete', 2), ('failed', 1)]
+    assert state['runs'][0]['status'] == 'complete'
+    assert state['runs'][0]['attempts'] == 2
+
+
+def test_legacy_run_history_migration_is_idempotent_and_does_not_invent_finish_time(tmp_path):
+    w, c, _ = worker(tmp_path, refresh=lambda: True)
+    with w.connect() as db:
+        db.execute("DELETE FROM metadata WHERE key='run_history_migrated'")
+        db.execute('INSERT INTO slots VALUES (?,?,?,?,?)',
+                   (EVENING.isoformat(), 'failed', 2, EVENING.isoformat(), 'source_unavailable'))
+        db.execute('INSERT INTO manual_runs(id,status,requested_at) VALUES (?,?,?)',
+                   ('old-manual', 'complete', (EVENING + timedelta(minutes=1)).isoformat()))
+    state = w.status()
+    assert [(r['trigger'], r['status']) for r in state['recent_runs']] == [('manual', 'complete'), ('scheduled', 'failed')]
+    assert all(r['finished_at'] is None and r['time_basis'] == 'legacy_request_time' for r in state['recent_runs'])
+    assert len(w.status()['recent_runs']) == 2
+    assert state['runs'][0]['status'] == 'failed'
+
+
+def test_latest_history_failure_is_not_hidden_by_previous_success(tmp_path):
+    w, c, _ = worker(tmp_path, refresh=lambda: True)
+    w.start = lambda: None
+    assert w.status()['latest_result'] is None
+    w.request_run('first-manual-success')
+    assert w.tick(EVENING)
+    c.write_failure = True
+    w.request_run('second-manual-failure')
+    assert not w.tick(EVENING + timedelta(minutes=1))
+    state = w.status()
+    assert [r['status'] for r in state['recent_runs']] == ['failed', 'complete']
+    assert state['latest_result']['status'] == 'failed'
+
+
+def test_history_does_not_report_success_before_cache_publication(tmp_path):
+    w, c, _ = worker(tmp_path, refresh=lambda: False)
+    assert w.tick(EVENING)  # Preserve collection/automatic scheduling semantics.
+    state = w.status()
+    assert state['runs'][0]['status'] == 'complete'
+    assert state['cache_pending']
+    assert state['latest_result']['status'] == 'partial'
+
+
+def test_etf_terminal_history_and_module_indicator_use_same_latest_outcome(tmp_path):
+    from app.services.collection_outcomes import latest_outcomes
+    w, c, _ = worker(tmp_path, refresh=lambda: True)
+    w.start = lambda: None
+    w.request_run('indicator-success')
+    assert w.tick(EVENING)
+    assert latest_outcomes(w.settings)['items']['etf-shares']['outcome'] == 'success'
+    c.write_failure = True
+    w.request_run('indicator-failure')
+    assert not w.tick(EVENING + timedelta(minutes=1))
+    assert latest_outcomes(w.settings)['items']['etf-shares']['outcome'] == 'failed'
+    assert w.status()['latest_result']['status'] == 'failed'
+
+
+def test_pending_cache_does_not_turn_module_indicator_green(tmp_path):
+    from app.services.collection_outcomes import latest_outcomes
+    w, c, _ = worker(tmp_path, refresh=lambda: False)
+    assert w.tick(EVENING)
+    assert latest_outcomes(w.settings)['items']['etf-shares']['outcome'] == 'partial'
+
+
+def test_recovered_manual_and_scheduled_attempts_remain_visible(tmp_path):
+    w, c, _ = worker(tmp_path)
+    w.start = lambda: None
+    stamp = EVENING.isoformat()
+    with w.connect() as db:
+        db.execute('INSERT INTO manual_runs(id,status,requested_at) VALUES (?,?,?)', ('crashed-manual', 'running', stamp))
+        db.execute('INSERT INTO slots VALUES (?,?,?,?,?)', (stamp, 'running', 1, stamp, None))
+        # Recover while holding the same lock as the normal worker path.
+        w._recover_manual_runs(db)
+    rows = w.status()['recent_runs']
+    assert len(rows) == 2
+    assert all(row['status'] == 'interrupted' and row['time_basis'] == 'recovered_at' for row in rows)
+    assert all(row['finished_at'] == stamp for row in rows)
+    with w.connect() as db:
+        w._recover_manual_runs(db)
+    assert len(w.status()['recent_runs']) == 2
+
+
+def test_crash_between_remote_completion_and_cache_publication_is_not_success(tmp_path):
+    w, c, _ = worker(tmp_path, refresh=lambda: True)
+    def crash(db):
+        raise SystemExit('simulated process exit')
+    w._refresh = crash
+    w.start = lambda: None
+    w.request_run('crashed-publication')
+    with pytest.raises(SystemExit):
+        w.tick(EVENING)
+    assert w.status()['manual']['status'] == 'complete'
+    assert w.status()['latest_result'] is None
+    with w.connect() as db:
+        assert db.execute('SELECT status FROM run_history').fetchone()[0] == 'publishing'
+        w._recover_manual_runs(db)
+    assert w.status()['latest_result']['status'] == 'interrupted'
+    assert w.status()['latest_result']['time_basis'] == 'recovered_at'
+
+
+def test_queued_cancel_is_recorded_once_without_starting_collection(tmp_path):
+    w, c, _ = worker(tmp_path)
+    w.start = lambda: None
+    w.request_run('never-started')
+    assert w.request_cancel('never-started')['status'] == 'cancelled'
+    assert w.request_cancel('never-started')['status'] == 'cancelled'
+    assert len(w.status()['recent_runs']) == 1
+    assert w.status()['latest_result']['status'] == 'cancelled'
+    assert not c.calls
+
+
+def test_history_write_failure_does_not_rollback_scheduling_outcome(tmp_path):
+    w, c, _ = worker(tmp_path)
+    with w.connect() as db:
+        db.execute('INSERT INTO slots VALUES (?,?,?,?,?)', (EVENING.isoformat(), 'complete', 1, EVENING.isoformat(), None))
+        assert not w._write_history(db, 'INSERT INTO missing_history_table VALUES (?)', ('ignored',))
+    assert w.status()['runs'][0]['status'] == 'complete'
+
+
+def test_failure_history_survives_exit_before_cache_refresh(tmp_path):
+    w, c, _ = worker(tmp_path)
+    w.start = lambda: None
+    c.write_failure = True
+    w._refresh = lambda db: (_ for _ in ()).throw(SystemExit('simulated process exit'))
+    w.request_run('failed-before-cache')
+    with pytest.raises(SystemExit):
+        w.tick(EVENING)
+    assert w.status()['latest_result']['status'] == 'failed'
+    assert w.status()['manual']['status'] == 'failed'
+    from app.services.collection_outcomes import latest_outcomes
+    assert latest_outcomes(w.settings)['items']['etf-shares']['outcome'] == 'unknown'
+    with w.connect() as db:
+        w._recover_manual_runs(db)
+    assert latest_outcomes(w.settings)['items']['etf-shares']['outcome'] == 'failed'
+
+
+def test_recent_results_sort_by_finish_not_start_or_manual_request_time(tmp_path):
+    w, c, _ = worker(tmp_path)
+    with w.connect() as db:
+        # A scheduled task starts first but finishes after a queued manual cancel.
+        for args in [
+            ('auto', 'scheduled', 'complete', None, EVENING.isoformat(),
+             (EVENING + timedelta(minutes=3)).isoformat(), EVENING.isoformat(), 1, 'completed_at'),
+            ('cancel', 'manual', 'cancelled', None, (EVENING + timedelta(minutes=1)).isoformat(),
+             (EVENING + timedelta(minutes=2)).isoformat(), None, None, 'completed_at'),
+            ('legacy', 'manual', 'failed', None, (EVENING + timedelta(days=1)).isoformat(),
+             None, None, None, 'legacy_request_time'),
+        ]:
+            db.execute('INSERT INTO run_history VALUES (?,?,?,?,?,?,?,?,?)', args)
+    assert [row['id'] for row in w.status()['recent_runs']] == ['auto', 'cancel', 'legacy']
+    assert w.status()['latest_result']['id'] == 'auto'
+
+
+def test_repeated_old_cancel_does_not_get_a_new_completion_time(tmp_path):
+    from app.services.collection_outcomes import latest_outcomes, database
+    w, c, _ = worker(tmp_path, refresh=lambda: True)
+    w.start = lambda: None
+    w.request_run('old-cancel')
+    w.request_cancel('old-cancel')
+    original_stamp = w.status()['latest_result']['finished_at']
+    # Model a ledger observation missing after a crash while history is durable.
+    with database(w.settings) as db:
+        db.execute('DELETE FROM results')
+    w.clock = lambda: EVENING + timedelta(minutes=1)
+    w.request_run('new-success')
+    assert w.tick(EVENING + timedelta(minutes=1))
+    w.clock = lambda: EVENING + timedelta(minutes=2)
+    w.request_cancel('old-cancel')
+    assert latest_outcomes(w.settings)['items']['etf-shares']['outcome'] == 'success'
+    old = next(row for row in w.status()['recent_runs'] if row['id'] == 'manual:old-cancel')
+    assert old['finished_at'] == original_stamp
+
+
+def test_repeated_legacy_cancel_keeps_unknown_completion_time_and_latest_indicator(tmp_path):
+    from app.services.collection_outcomes import latest_outcomes
+    w, c, _ = worker(tmp_path, refresh=lambda: True)
+    w.start = lambda: None
+    with w.connect() as db:
+        db.execute("DELETE FROM metadata WHERE key='run_history_migrated'")
+        db.execute('INSERT INTO manual_runs(id,status,requested_at) VALUES (?,?,?)',
+                   ('legacy-cancel', 'cancelled', EVENING.isoformat()))
+    legacy = w.status()['latest_result']
+    assert legacy['id'] == 'legacy-manual:legacy-cancel'
+    assert legacy['finished_at'] is None
+    assert latest_outcomes(w.settings)['items']['etf-shares']['outcome'] == 'unknown'
+    w.clock = lambda: EVENING + timedelta(minutes=1)
+    w.request_run('newer-success')
+    assert w.tick(EVENING + timedelta(minutes=1))
+    w.clock = lambda: EVENING + timedelta(minutes=2)
+    for _ in range(2):
+        assert w.request_cancel('legacy-cancel')['status'] == 'cancelled'
+    rows = w.status()['recent_runs']
+    assert len(rows) == 2
+    assert rows[1] == legacy
+    assert not any(row['id'] == 'manual:legacy-cancel' for row in rows)
+    assert latest_outcomes(w.settings)['items']['etf-shares']['outcome'] == 'success'

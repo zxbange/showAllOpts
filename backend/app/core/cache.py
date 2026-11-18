@@ -468,11 +468,51 @@ class SnapshotCache:
                 if self.stop_event.wait(delay):
                     return None
 
+    def outcome_has_data(self, module, entry):
+        """A successful copy is not proof that the module has research data.
+
+        Pool/stock catalogues alone are metadata, not ETF metrics or ownership
+        observations. Inspect only immutable local snapshots, never the source.
+        """
+        tables = {
+            'industry-momentum': ('industry_momentum',),
+            'microcap-temperature': ('microcap_temperature',),
+            'microcap-breadth': ('microcap_breadth',),
+            'etf-momentum': ('etf_momentum_heat',),
+            'institution-ownership': ('ownership_report', 'ownership_holders'),
+        }.get(module, ())
+        if not tables or not entry.get('rows'):
+            return False
+        try:
+            path = self.snapshot_path(module, entry)
+            if path is None:
+                return False
+            with closing(sqlite3.connect(path.as_uri() + '?mode=ro', uri=True)) as db:
+                return any(db.execute('SELECT 1 FROM "' + table + '" LIMIT 1').fetchone()
+                           is not None for table in tables)
+        except (OSError, sqlite3.Error, ValueError):
+            return False
+
     def _refresh_locked(self, lock, modules, reason, slot=None, full=False, preserve_pending=False):
         run_id = uuid.uuid4().hex
         marker = self.root / ('cancel-' + run_id)
         deferred, deferred_full = [], False
         isolated_manual = reason == 'manual' and manual_failure_isolated(now())
+        def record_terminal(module, entry, outcome=None):
+            # Collector-owned cache publication must not mask source failures.
+            if module not in DATABASE_SYNC_MODULES or reason not in {'manual', 'scheduled'}:
+                return
+            outcome = outcome or entry.get('progress', {}).get('status')
+            if outcome not in {'complete', 'failed', 'cancelled', 'interrupted'}:
+                return
+            if outcome == 'complete' and not self.outcome_has_data(module, entry):
+                outcome = 'unknown'
+            try:
+                from app.services.collection_outcomes import record_outcome
+                record_outcome(self.settings, module, run_key=run_id + ':' + module,
+                               outcome=outcome, trigger=reason)
+            except Exception as exc:
+                logger.warning('Cache outcome recording failed module=%s error_type=%s', module, type(exc).__name__)
         def check_cancel():
             if reason == 'scheduled' and not automatic_collection_allowed(now()):
                 raise SyncCancelled()
@@ -504,6 +544,7 @@ class SnapshotCache:
                     entry['progress'].update(status='cancelled', stage='已取消排队')
                     state['pending'].remove(module)
                     self.write_state(state)
+                    record_terminal(module, entry)
                     continue
                 started = time.monotonic()
                 entry['last_attempt_at'] = now().isoformat()
@@ -573,6 +614,7 @@ class SnapshotCache:
                     logger.info('Cache module cancelled module=%s run_id=%s', module, run_id)
                 state['pending'].remove(module)
                 self.write_state(state)
+                record_terminal(module, entry)
             if marker.exists():
                 cancelled = [item for item in state['pending'] if item in modules]
                 for pending_module in cancelled:
@@ -582,7 +624,14 @@ class SnapshotCache:
                 state['pending'] = [item for item in state['pending'] if item not in cancelled]
                 state['pending_full'] = deferred_full
                 self.write_state(state)
+                for pending_module in cancelled:
+                    record_terminal(pending_module, state['modules'][pending_module])
                 logger.info('Cache refresh cancelled run_id=%s', run_id)
+            if self.stop_event.is_set():
+                for pending_module in state['pending']:
+                    pending_entry = state['modules'][pending_module]
+                    if pending_module in modules and pending_entry.get('progress', {}).get('status') == 'running':
+                        record_terminal(pending_module, pending_entry, 'interrupted')
             self.cleanup(state)
         finally:
             try:

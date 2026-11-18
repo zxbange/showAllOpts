@@ -1,3 +1,4 @@
+from app.services.collection_outcomes import record_task
 from app.services.collection_calendar import automatic_collection_allowed, manual_failure_isolated
 from app.services.system_configuration import task_config
 """CCI has its own model, history and daily 21:00 scheduling ledger."""
@@ -375,6 +376,7 @@ class CCICoal(Commodities):
                         db.execute('UPDATE schedule_runs SET status=?,finished_at=? WHERE slot=?', (outcome, now().isoformat(), slot.isoformat()))
                 for detail in details:
                     LOG.info('CCI grade result %s', json.dumps(detail, ensure_ascii=False))
+                record_task(self.settings, 'cci', outcome='partial' if outcome == 'no_quote' else outcome, scheduled=slot is not None)
                 LOG.info('CCI collection finish target=%s trigger=%s outcome=%s observed=%s inserted=%s changed=%s recovery=%s elapsedMs=%s slot=%s',
                          day, trigger, outcome, count, inserted, changed, json.dumps(recovery, ensure_ascii=False),
                          round((monotonic()-began)*1000), slot.isoformat() if slot else '-')

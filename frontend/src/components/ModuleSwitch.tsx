@@ -2,6 +2,8 @@ import { useLayoutEffect, useRef, type KeyboardEvent } from 'react'
 import type { LucideIcon } from 'lucide-react'
 import { NavLink, useLocation } from 'react-router-dom'
 import '../styles/page-header.css'
+import { CollectionOutcomeLight } from './CollectionOutcome'
+import { collectionModuleKeys } from '../lib/collectionOutcomes'
 
 export interface ModuleOption<T extends string = string> {
   id: T
@@ -10,6 +12,8 @@ export interface ModuleOption<T extends string = string> {
   icon: LucideIcon
   domId?: string
   controls?: string
+  collectionKeys?: { key: string; name: string }[]
+  collectionKey?: string
   href?: string
 }
 
@@ -78,7 +82,17 @@ export function ModuleSwitch<T extends string>({
           <>
             <Icon size={16} aria-hidden="true" />
             <span className="module-card-text">
-              <strong>{item.name}</strong>
+              <strong>
+                {item.name}
+                {(item.collectionKey || collectionModuleKeys[item.id]) && (
+                  <CollectionOutcomeLight
+                    moduleKey={item.collectionKey || collectionModuleKeys[item.id]}
+                  />
+                )}
+                {item.collectionKeys?.map(({ key, name }) => (
+                  <CollectionOutcomeLight key={key} moduleKey={key} name={name} />
+                ))}
+              </strong>
             </span>
           </>
         )

@@ -1,3 +1,4 @@
+from app.services.collection_outcomes import latest_outcomes
 from datetime import datetime, timedelta, timezone, date
 from decimal import Decimal
 import sqlite3
@@ -85,6 +86,7 @@ def test_baseline_changes_atomic_empty_and_long_connection(monitor):
     assert len(counts)==1 and not closed
     assert not job.connection.in_transaction()
     job.set_enabled(False);job.poll();assert len(closed)==1
+    assert latest_outcomes(job.settings)['items']['personal-holdings']['outcome'] == 'success'
 
 
 def test_failure_incomplete_and_rollback_preserve_old_snapshot(monitor,monkeypatch):

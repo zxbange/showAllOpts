@@ -1,3 +1,4 @@
+from app.services.collection_outcomes import record_task
 from app.services.collection_calendar import automatic_collection_allowed, manual_failure_isolated
 from app.services.holdings_calendar import trading_day
 from app.services.system_configuration import task_config, latest_task_slot, pin_configuration
@@ -423,6 +424,7 @@ class Commodities:
                         db.execute('UPDATE failed_targets SET reason=? WHERE day=?',
                                    (target_result, target_day.isoformat()))
                 status(stage, error, outcome)
+                record_task(self.settings, 'commodities', outcome='partial' if outcome == 'no_quote' else outcome, scheduled=slot is not None)
                 if slot is not None:
                     with self.db() as db:
                         db.execute('UPDATE schedule_runs SET status=?,finished_at=? WHERE slot=?',

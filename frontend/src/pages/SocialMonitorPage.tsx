@@ -213,6 +213,8 @@ export function SocialMonitorPage() {
       onChange={setView}
       items={visibleViews.map((item) => ({
         id: item.id,
+        collectionKeys: item.id === 'feed' ? [{key:'social-weibo', name:'微博'}, {key:'social-xueqiu', name:'雪球'}]
+          : item.id === 'cubes' ? [{key:'social-cubes', name:'组合调仓'}] : undefined,
         name: item.label,
         description: item.label,
         icon: item.icon,

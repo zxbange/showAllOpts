@@ -1,3 +1,4 @@
+from app.services.collection_outcomes import record_task
 from app.services.collection_failure_isolation import quarantine_publication, restore_manual_publication
 from time import monotonic
 from app.services.collection_calendar import automatic_collection_allowed, manual_failure_isolated
@@ -412,6 +413,7 @@ class DividendCollection:
                     state.update(manual_failure_isolated=True, publication_pending=False, stage='failed',
                                  error='休市日手动采集失败，已隔离，不会自动重试；已有结果保留，可手动重试。')
                 self.save_state(state)
+                record_task(self.settings, 'dividend_selection', outcome=state['stage'], scheduled=state.get('current_slot') is not None, run_key=state['run_id'])
             finally:
                 try:
                     marker.unlink(missing_ok=True)

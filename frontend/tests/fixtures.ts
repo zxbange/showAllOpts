@@ -14,6 +14,9 @@ export const adminSession = {
 export const test = base.extend({
   page: async ({ page }, use) => {
     await page.route('**/api/auth/**', (route) => route.fulfill({ json: adminSession }))
+    await page.route('**/api/v1/collection-outcomes', (route) =>
+      route.fulfill({ json: { items: {} } }),
+    )
     await use(page)
   },
 })

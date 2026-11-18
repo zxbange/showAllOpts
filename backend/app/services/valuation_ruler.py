@@ -1,3 +1,4 @@
+from app.services.collection_outcomes import record_task
 from app.services.collection_calendar import automatic_collection_allowed, manual_failure_isolated
 from app.core.history_sync import mark_sync_owner, clear_sync_owner, database_syncing, SYNC_MESSAGE
 from app.services.system_configuration import task_config, latest_task_slot
@@ -371,7 +372,9 @@ class ValuationRuler:
                     self.write_state(state,db)
                     if slot:db.execute('UPDATE slots SET outcome=? WHERE slot=?',(state['phase'],slot))
                 marker.unlink(missing_ok=True)
-            finally:lock.release()
+            finally:
+                record_task(self.settings, 'valuation_ruler', outcome=state['phase'], scheduled=slot is not None, run_key=state['run_id'])
+                lock.release()
 
     def refresh(self,background=True,*,moment=None,slot=None,cutoff=None):
         def runner(monitor,state,check_cancel,moment):

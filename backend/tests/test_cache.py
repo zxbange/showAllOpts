@@ -557,3 +557,108 @@ def test_scheduled_sync_stops_before_next_module_on_closed_day(cached, monkeypat
     monkeypatch.setattr(cache, 'copy_module', copy)
     assert cache.refresh(background=False, reason='scheduled')
     assert len(calls) == 1
+
+
+@pytest.fixture
+def outcome_events(monkeypatch):
+    import sys
+    from types import ModuleType
+    events = []
+    fake = ModuleType('app.services.collection_outcomes')
+    fake.record_outcome = lambda settings, module, **kwargs: events.append(dict(module=module, **kwargs))
+    monkeypatch.setitem(sys.modules, 'app.services.collection_outcomes', fake)
+    return events
+
+
+def test_sync_outcomes_preserve_success_then_later_failure(cached, monkeypatch, outcome_events):
+    _, cache = cached
+    module = 'industry-momentum'
+    cache.refresh(module, background=False)
+    first_file = cache.read_state()['modules'][module]['file']
+    def fail(*args, **kwargs):
+        raise ValueError('invalid source')
+    monkeypatch.setattr(cache, 'copy_module', fail)
+    cache.refresh(module, background=False)
+    assert [e['outcome'] for e in outcome_events] == ['complete', 'failed']
+    assert {e['trigger'] for e in outcome_events} == {'manual'}
+    assert len({e['run_key'] for e in outcome_events}) == 2
+    assert cache.read_state()['modules'][module]['file'] == first_file
+
+
+def test_sync_outcomes_exclude_collector_owned_and_internal_refresh(cached, monkeypatch, outcome_events):
+    _, cache = cached
+    monkeypatch.setattr(cache, 'copy_module', lambda module, **kwargs: (module + '-test.sqlite', 1))
+    for module in COLLECTOR_OWNED_MODULES:
+        cache.refresh(module, background=False)
+    cache.refresh('industry-momentum', background=False, reason='internal-collection')
+    assert outcome_events == []
+
+
+def test_scheduled_sync_outcomes_cover_only_database_modules(cached, monkeypatch, outcome_events):
+    import app.core.cache as module
+    _, cache = cached
+    monkeypatch.setattr(module, 'automatic_collection_allowed', lambda _: True)
+    monkeypatch.setattr(cache, 'copy_module', lambda key, **kwargs: (key + '-test.sqlite', 1))
+    monkeypatch.setattr(cache, 'outcome_has_data', lambda key, entry: True)
+    cache.refresh(background=False, reason='scheduled')
+    assert {e['module'] for e in outcome_events} == set(DATABASE_SYNC_MODULES)
+    assert {e['trigger'] for e in outcome_events} == {'scheduled'}
+    assert {e['outcome'] for e in outcome_events} == {'complete'}
+
+
+def test_cancelled_sync_records_cancelled_not_success(cached, monkeypatch, outcome_events):
+    from app.core.sync_progress import report
+    _, cache = cached
+    def cancel(*args, **kwargs):
+        assert cache.cancel(cache.read_state()['run_id'])
+        report('check cancellation')
+    monkeypatch.setattr(cache, 'copy_module', cancel)
+    cache.refresh('industry-momentum', background=False)
+    assert [e['outcome'] for e in outcome_events] == ['cancelled']
+
+
+def test_stopped_running_sync_records_interruption_not_success(cached, monkeypatch, outcome_events):
+    _, cache = cached
+    def stop(*args, **kwargs):
+        cache.stop_event.set()
+        return None
+    monkeypatch.setattr(cache, 'copy_with_retry', stop)
+    cache.refresh('industry-momentum', background=False)
+    assert [e['outcome'] for e in outcome_events] == ['interrupted']
+    assert cache.read_state()['pending'] == ['industry-momentum']
+
+
+def test_empty_sync_replaces_old_green_with_unknown(cached, session, outcome_events):
+    _, cache = cached
+    cache.refresh('industry-momentum', background=False)
+    session.execute(IndustryMomentum.__table__.delete())
+    session.commit()
+    assert cache.refresh('industry-momentum', background=False, full=True)
+    assert cache.read_state()['modules']['industry-momentum']['progress']['status'] == 'complete'
+    assert [e['outcome'] for e in outcome_events] == ['complete', 'unknown']
+
+
+@pytest.mark.parametrize('module,tables', [
+    ('etf-momentum', ('etf_momentum_pool', 'etf_momentum_heat')),
+    ('institution-ownership', ('ownership_stock', 'ownership_report', 'ownership_holders')),
+])
+def test_catalogue_only_snapshot_does_not_prove_research_data(cached, module, tables):
+    import sqlite3
+    _, cache = cached
+    cache.root.mkdir(parents=True, exist_ok=True)
+    filename = module + '-catalogue.sqlite'
+    with sqlite3.connect(cache.root / filename) as db:
+        for table in tables:
+            db.execute('CREATE TABLE "' + table + '" (id INTEGER)')
+        db.execute('INSERT INTO "' + tables[0] + '" VALUES(1)')
+    entry = dict(file=filename, rows=1)
+    assert not cache.outcome_has_data(module, entry)
+    with sqlite3.connect(cache.root / filename) as db:
+        db.execute('INSERT INTO "' + tables[-1] + '" VALUES(1)')
+    assert cache.outcome_has_data(module, dict(entry, rows=2))
+
+
+@pytest.mark.parametrize('module', sorted(DATABASE_SYNC_MODULES))
+def test_zero_rows_never_proves_research_data(cached, module):
+    _, cache = cached
+    assert not cache.outcome_has_data(module, dict(file=module + '-missing.sqlite', rows=0))

@@ -136,6 +136,10 @@ class ETFCollection:
               total INTEGER DEFAULT 0);
             CREATE TABLE IF NOT EXISTS slots (slot TEXT PRIMARY KEY, status TEXT NOT NULL,
               attempts INTEGER NOT NULL, attempted_at TEXT NOT NULL, error TEXT);
+            CREATE TABLE IF NOT EXISTS run_history (
+              id TEXT PRIMARY KEY, trigger TEXT NOT NULL, status TEXT NOT NULL, error TEXT,
+              requested_at TEXT NOT NULL, finished_at TEXT, slot TEXT, attempt INTEGER,
+              time_basis TEXT NOT NULL);
             CREATE TABLE IF NOT EXISTS observations (kind TEXT, code TEXT, day TEXT, status TEXT,
               attempts INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(kind,code,day));
             CREATE TABLE IF NOT EXISTS metadata (key TEXT PRIMARY KEY, value TEXT);
@@ -143,9 +147,50 @@ class ETFCollection:
         (self.root / 'state.sqlite').chmod(0o600)
         try:
             with db:
+                self._migrate_run_history(db)
+            with db:
                 yield db
         finally:
             db.close()
+
+    @staticmethod
+    def _migrate_run_history(db):
+        # Legacy state records only the most recent attempt for each automatic
+        # slot, and no completion timestamp. Preserve what exists without
+        # inventing previous attempts or their finish times.
+        if db.execute("SELECT 1 FROM metadata WHERE key='run_history_migrated'").fetchone():
+            return
+        records = []
+        terminal = {'complete', 'partial', 'failed', 'interrupted', 'cancelled', 'abandoned'}
+        for row in db.execute('SELECT * FROM slots'):
+            if row['status'] in terminal:
+                records.append(('legacy-slot:' + row['slot'], 'scheduled', row['status'], row['error'],
+                                row['attempted_at'], None, row['slot'], row['attempts'], 'legacy_request_time'))
+        for row in db.execute('SELECT * FROM manual_runs'):
+            if row['status'] in terminal:
+                records.append(('legacy-manual:' + row['id'], 'manual', row['status'], row['error'],
+                                row['requested_at'], None, None, None, 'legacy_request_time'))
+        db.executemany('INSERT OR IGNORE INTO run_history VALUES (?,?,?,?,?,?,?,?,?)',
+                       sorted(records, key=lambda row: row[4]))
+        db.execute("INSERT OR IGNORE INTO metadata VALUES ('run_history_migrated','1')")
+
+    @staticmethod
+    def _write_history(db, statement, values):
+        # Audit storage must not roll back the separately persisted scheduling
+        # outcome or turn a committed MySQL publication into a retry failure.
+        try:
+            db.execute('SAVEPOINT etf_history_write')
+            db.execute(statement, values)
+            db.execute('RELEASE etf_history_write')
+            return True
+        except sqlite3.Error as exc:
+            try:
+                db.execute('ROLLBACK TO etf_history_write')
+                db.execute('RELEASE etf_history_write')
+            except sqlite3.Error:
+                pass
+            LOG.warning('ETF terminal history update unavailable error_type=%s', type(exc).__name__)
+            return False
 
     def _reconcile_target_change(self, issue):
         if issue != 'writer_target_mismatch' or not (self.root / 'state.sqlite').exists():
@@ -172,11 +217,13 @@ class ETFCollection:
                      timezone='Asia/Shanghai', schedule=config['schedule'], target_sessions=1,
                      collection_scope='latest_completed_session', historical_backfill='joinquant_manual',
                      historical_dates_per_run=0, coverage_is_target_not_completion=True,
-                     manual=None, progress=None, runs=[], gaps=[], metadata={})
+                     manual=None, progress=None, runs=[], recent_runs=[], latest_result=None, gaps=[], metadata={})
         if not (self.root / 'state.sqlite').exists():
             return state
         with self.connect() as db:
             state['runs'] = [dict(r) for r in db.execute('SELECT * FROM slots ORDER BY slot DESC LIMIT 9')]
+            state['recent_runs'] = [dict(r) for r in db.execute("SELECT * FROM run_history WHERE status NOT IN ('running','publishing') ORDER BY (finished_at IS NOT NULL) DESC,julianday(COALESCE(finished_at,requested_at)) DESC,rowid DESC LIMIT 20")]
+            state['latest_result'] = next(iter(state['recent_runs']), None)
             state['metadata'] = dict(db.execute('SELECT key,value FROM metadata').fetchall())
             latest = state['metadata'].get('coverage_end')
             where, values = ('day=?', (latest,)) if latest else ('0=1', ())
@@ -255,11 +302,40 @@ class ETFCollection:
         self.wake_event.set()
         return result
 
-    @staticmethod
-    def _recover_manual_runs(db, reason='service_interrupted'):
+    def _recover_manual_runs(self, db, reason='service_interrupted'):
         # Call only while owning collection.lock: no other worker can still run.
+        stamp = self.clock().isoformat()
+        for row in db.execute("SELECT * FROM manual_runs WHERE status IN ('running','cancelling')").fetchall():
+            outcome = 'cancelled' if row['status'] == 'cancelling' else 'interrupted'
+            db.execute('INSERT OR IGNORE INTO run_history VALUES (?,?,?,?,?,?,?,?,?)',
+                       ('manual:' + row['id'], 'manual', 'running', None, row['requested_at'], None,
+                        None, None, 'started_at'))
+            db.execute("UPDATE run_history SET status=?,error=?,finished_at=?,time_basis='recovered_at' "
+                       "WHERE id=? AND status IN ('running','publishing')",
+                       (outcome, None if outcome == 'cancelled' else reason, stamp, 'manual:' + row['id']))
+        # Older versions did not create an attempt row when a scheduled run began.
+        for row in db.execute("SELECT * FROM slots WHERE status='running'").fetchall():
+            if not db.execute('SELECT 1 FROM run_history WHERE slot=? AND attempt=?',
+                              (row['slot'], row['attempts'])).fetchone():
+                db.execute('INSERT INTO run_history VALUES (?,?,?,?,?,?,?,?,?)',
+                           ('recovered-slot:' + row['slot'] + ':' + str(row['attempts']), 'scheduled',
+                            'running', None, row['attempted_at'], None, row['slot'], row['attempts'], 'started_at'))
+        db.execute("UPDATE run_history SET status='interrupted',error=?,finished_at=?,time_basis='recovered_at' "
+                   "WHERE status IN ('running','publishing')", (reason, stamp))
         db.execute("UPDATE manual_runs SET status='cancelled',phase='cancelled',error=NULL WHERE status='cancelling'")
         db.execute("UPDATE manual_runs SET status='interrupted',phase='interrupted',error=? WHERE status='running'", (reason,))
+        db.commit()
+        from app.services.collection_outcomes import record_outcome
+        # Repair the observation gap if a process exited after committing its
+        # terminal state but before calling the shared outcome observer. Unknown
+        # legacy completion times never enter this indicator. The ledger ignores
+        # duplicate run IDs, so recovery cannot rewrite old outcomes.
+        latest = db.execute("SELECT * FROM run_history WHERE finished_at IS NOT NULL "
+                            "AND status NOT IN ('running','publishing') "
+                            "ORDER BY julianday(finished_at) DESC,rowid DESC LIMIT 1").fetchone()
+        if latest:
+            record_outcome(self.settings, 'etf-shares', run_key=latest['id'], outcome=latest['status'],
+                           trigger=latest['trigger'], finished_at=latest['finished_at'])
 
     def request_cancel(self, request_id):
         # The worker owns collection.lock for its entire run. Do not wait for that
@@ -285,7 +361,27 @@ class ETFCollection:
         except portalocker.exceptions.LockException:
             pass
         with self.connect() as db:
-            return dict(db.execute('SELECT * FROM manual_runs WHERE id=?', (request_id,)).fetchone())
+            result = dict(db.execute('SELECT * FROM manual_runs WHERE id=?', (request_id,)).fetchone())
+            if result['status'] == 'cancelled':
+                # Repeating a cancellation from before history tracking began
+                # cannot establish its unknown original completion time.
+                current = db.execute('SELECT 1 FROM run_history WHERE id=?', ('manual:' + request_id,)).fetchone()
+                legacy = db.execute('SELECT 1 FROM run_history WHERE id=?', ('legacy-manual:' + request_id,)).fetchone()
+                if legacy and not current:
+                    return result
+                stamp = self.clock().isoformat()
+                db.execute('INSERT OR IGNORE INTO run_history VALUES (?,?,?,?,?,?,?,?,?)',
+                           ('manual:' + request_id, 'manual', 'cancelled', None,
+                            result['requested_at'], stamp, None, None, 'completed_at'))
+                db.execute("UPDATE run_history SET status='cancelled',error=NULL,finished_at=?,time_basis='recovered_at' "
+                           "WHERE id=? AND status IN ('running','publishing')", (stamp, 'manual:' + request_id))
+                cancel_stamp = db.execute('SELECT finished_at FROM run_history WHERE id=?',
+                                          ('manual:' + request_id,)).fetchone()['finished_at']
+        if result['status'] == 'cancelled':
+            from app.services.collection_outcomes import record_outcome
+            record_outcome(self.settings, 'etf-shares', run_key='manual:' + request_id,
+                           outcome='cancelled', trigger='manual', finished_at=cancel_stamp)
+        return result
 
     def start(self):
         with self.thread_lock:
@@ -389,6 +485,17 @@ class ETFCollection:
         self._notification_summary = []
         started = time.monotonic()
         run = uuid.uuid4().hex[:12]
+        history_id = 'manual:' + manual_id if manual_id else run
+        if manual_id:
+            request = db.execute('SELECT requested_at FROM manual_runs WHERE id=?', (manual_id,)).fetchone()
+            requested_at, attempt = request['requested_at'], None
+        else:
+            request = db.execute('SELECT attempted_at,attempts FROM slots WHERE slot=?', (key,)).fetchone()
+            requested_at, attempt = request['attempted_at'], request['attempts']
+        self._write_history(db, 'INSERT INTO run_history VALUES (?,?,?,?,?,?,?,?,?)',
+                            (history_id, 'manual' if manual_id else 'scheduled', 'running', None,
+                             requested_at, None, key, attempt, 'started_at'))
+        db.commit()
         phase = 'startup'
         last_completed = last_total = 0
         LOG.info('ETF collection start run=%s source=exchanges trigger=%s date=%s',
@@ -442,17 +549,36 @@ class ETFCollection:
                 error=CASE WHEN status='cancelling' THEN NULL ELSE ? END,
                 status=CASE WHEN status='cancelling' THEN 'cancelled' ELSE ? END
                 WHERE id=? AND status IN ('running','cancelling')""", (state, error, state, manual_id))
-            terminal = db.execute('SELECT status FROM manual_runs WHERE id=?', (manual_id,)).fetchone()
-            state = terminal['status']
+            terminal = db.execute('SELECT status,error FROM manual_runs WHERE id=?', (manual_id,)).fetchone()
+            state, error = terminal['status'], terminal['error']
             complete = complete and state == 'complete'
         else:
             db.execute('UPDATE slots SET status=?,error=? WHERE slot=?', (state, error, key))
+        # Preserve the outcome with its scheduling state in the same transaction.
+        # Successful acquisition still awaits local cache publication; a crash in
+        # that window is recovered as interrupted rather than fabricated success.
+        self._write_history(db, "UPDATE run_history SET status=?,error=?,finished_at=?,time_basis=? WHERE id=?",
+                            ('publishing' if state == 'complete' else state, error,
+                             None if state == 'complete' else self.clock().isoformat(),
+                             'started_at' if state == 'complete' else 'completed_at', history_id))
         db.execute("DELETE FROM metadata WHERE key='progress'")
         db.commit()
         LOG.info('ETF collection finish run=%s outcome=%s completed=%s total=%s seconds=%.3f',
                  run, state, last_completed, last_total, time.monotonic() - started)
         if manual_id or automatic_collection_allowed(self.clock()):
             self._refresh(db)
+        pending = db.execute("SELECT value FROM metadata WHERE key='cache_pending'").fetchone()
+        history_status = 'partial' if state == 'complete' and pending and pending[0] == '1' else state
+        finished_at = self.clock().isoformat()
+        history_recorded = self._write_history(db,
+            "INSERT INTO run_history VALUES (?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET "
+            "status=excluded.status,error=excluded.error,finished_at=excluded.finished_at,time_basis=excluded.time_basis",
+            (history_id, 'manual' if manual_id else 'scheduled', history_status, error,
+             requested_at, finished_at, key, attempt, 'completed_at'))
+        db.commit()
+        from app.services.collection_outcomes import record_outcome
+        record_outcome(self.settings, 'etf-shares', run_key=history_id, outcome=history_status if history_recorded else 'partial',
+                       trigger='manual' if manual_id else 'scheduled', finished_at=finished_at)
         emit_collection_result(self.settings, 'etf', scheduled=manual_id is None, run_key=run,
             outcome=state, changed_count=self._notification_changes, summary=self._notification_summary)
         return complete

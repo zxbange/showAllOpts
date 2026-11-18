@@ -1,3 +1,4 @@
+from app.services.collection_outcomes import record_outcome
 """Durable, paced Sina snapshots and verified JoinQuant-method observations.
 
 One process owns collection.lock for a run. SQLite commits the universe before
@@ -887,6 +888,7 @@ class MarketCollection:
         self._blocked_writers = {}
         self._notification_changes = 0
         self._notification_summary = []
+        self._outcome_days = set()
         try:
             with self.connect() as db:
                 reconcile_system_ledger(self.configuration, db,
@@ -1066,6 +1068,20 @@ class MarketCollection:
                             for row in db.execute('SELECT trade_date FROM days').fetchall():
                                 if row[0] not in before_days:
                                     db.execute('DELETE FROM metadata WHERE key=?', ('manual-only:' + row[0],))
+                if run_id:
+                    with self.connect() as db:
+                        terminal = db.execute('SELECT status,error FROM manual_runs WHERE id=?', (run_id,)).fetchone()
+                        touched = [dict(db.execute('SELECT * FROM days WHERE trade_date=?', (day,)).fetchone())
+                                   for day in self._outcome_days]
+                    if terminal and terminal['status'] not in ('queued', 'running'):
+                        for metric, module in (('heat', 'market-sentiment'), ('crowding', 'market-crowding')):
+                            outcome = ('cancelled' if terminal['error'] == 'cancelled' else
+                                       'interrupted' if terminal['error'] == 'service_interrupted' else
+                                       'success' if touched and all(row[metric + '_status'] in PUBLISHED and not row['cache_pending'] for row in touched) else
+                                       'partial' if touched and any(row[metric + '_status'] in PUBLISHED for row in touched) else
+                                       'unknown' if not touched and terminal['status'] == 'complete' else 'failed')
+                            record_outcome(self.settings, module, run_key=run_id, outcome=outcome,
+                                           trigger='manual' if manual else 'scheduled')
                 if run_id and self._notification_changes:
                     with self.connect() as db:
                         terminal = db.execute('SELECT status FROM manual_runs WHERE id=?', (run_id,)).fetchone()
@@ -1083,6 +1099,7 @@ class MarketCollection:
         return code if isinstance(code, str) and code in SAFE_ERRORS else 'unclassified'
 
     def _begin_day(self, day, moment):
+        self._outcome_days.add(str(day))
         row = self._day(day)
         attempts_today = row['attempts_today'] + 1 if row['attempt_date'] == str(moment.date()) else 1
         self._update_day(day, status='running', error=None, attempts=row['attempts'] + 1,

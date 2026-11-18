@@ -1,3 +1,4 @@
+from app.services.collection_outcomes import latest_outcomes
 """Persisted gap recovery, close cutoffs, scheduling, cancellation and authenticated API."""
 from contextlib import nullcontext
 from datetime import date, datetime, timedelta
@@ -54,6 +55,7 @@ def test_first_backfill_includes_2018_and_same_day_ratios_without_fake_star_hist
     assert data['status']['last_success_at']
     assert all(start.year == end.year for _, start, end, _ in calls)
     assert all(day >= date(2020, 1, 2) for code, _, _, days in calls if code == '000688' for day in days)
+    assert latest_outcomes(monitor.settings)['items']['growth-dividend']['outcome'] == 'success'
 
 
 def test_incremental_only_requests_today_and_never_reloads_completed_years(monitor, monkeypatch):

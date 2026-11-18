@@ -1,0 +1,30 @@
+.collection-outcome {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 13px;
+  width: 13px;
+  height: 13px;
+  margin-inline-start: 6px;
+  border-radius: 50%;
+  background: #687181;
+  color: #fff;
+  font-size: 10px;
+  font-weight: 800;
+  line-height: 1;
+  vertical-align: middle;
+}
+.collection-outcome--success {
+  background: #177347;
+}
+.collection-outcome--failed {
+  background: #b33432;
+}
+.collection-outcome--running {
+  background: #80601c;
+}
+@media (forced-colors: active) {
+  .collection-outcome {
+    border: 1px solid CanvasText;
+  }
+}
