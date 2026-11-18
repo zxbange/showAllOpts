@@ -41,7 +41,8 @@ it('renders an accessible non-color-only lamp directly after the unchanged tab l
   expect(html).toContain('<strong>银行<span class="collection-outcome collection-outcome--failed"')
   expect(html).toContain('role="img"')
   expect(html).toContain('aria-label="最近一次已结束手动采集：失败；')
-  expect(html).toContain('data-collection-key="dividend-selection">!</span>')
+  expect(html).toContain('data-collection-key="dividend-selection" data-symbol="!"></span>')
+  expect(html.replace(/<[^>]+>/g, '')).toBe('银行')
 })
 
 it('renders neutral when no completion exists, or the status endpoint is unavailable', () => {

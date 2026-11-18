@@ -9,8 +9,9 @@ import { accountRequest } from '../api/http'
 import { researchModules, navigationModules, groupForPath } from '../lib/modules'
 
 export function Layout() {
+  const { pathname } = useLocation()
   return (
-    <CollectionOutcomesProvider>
+    <CollectionOutcomesProvider enabled={pathname !== '/'}>
       <LayoutContent />
     </CollectionOutcomesProvider>
   )

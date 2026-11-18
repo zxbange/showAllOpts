@@ -28,3 +28,8 @@
     border: 1px solid CanvasText;
   }
 }
+
+/* Preserve the tab's literal textContent while keeping a non-color status cue. */
+.collection-outcome::before {
+  content: attr(data-symbol);
+}

@@ -2,6 +2,7 @@ import { createContext, useContext, useEffect, useState, type ReactNode } from '
 import { getCollectionOutcomes, type CollectionOutcomes } from '../api/collectionOutcomes'
 import { collectionOutcomePresentation } from '../lib/collectionOutcomes'
 import '../styles/collection-outcome.css'
+import { pollCollectionOutcomes } from '../lib/pollCollectionOutcomes'
 
 export const CollectionOutcomeContext = createContext<{
   data: CollectionOutcomes
@@ -12,36 +13,28 @@ export const CollectionOutcomeContext = createContext<{
 })
 
 /** A single authenticated poll shared across labels, including navigation changes. */
-export function CollectionOutcomesProvider({ children }: { children: ReactNode }) {
+export function CollectionOutcomesProvider({
+  children,
+  enabled = true,
+}: {
+  children: ReactNode
+  enabled?: boolean
+}) {
   const [data, setData] = useState<CollectionOutcomes>({ items: {} })
   const [unavailable, setUnavailable] = useState(false)
-  useEffect(() => {
-    let stopped = false
-    let request: AbortController | undefined
-    let timer: ReturnType<typeof setTimeout> | undefined
-    async function poll() {
-      request = new AbortController()
-      const timeout = setTimeout(() => request?.abort(), 10000)
-      try {
-        const next = await getCollectionOutcomes(request.signal)
-        if (!stopped) {
+  useEffect(
+    () =>
+      pollCollectionOutcomes(
+        enabled,
+        getCollectionOutcomes,
+        (next) => {
           setData(next)
           setUnavailable(false)
-        }
-      } catch {
-        if (!stopped) setUnavailable(true)
-      } finally {
-        clearTimeout(timeout)
-        if (!stopped) timer = setTimeout(poll, 5000)
-      }
-    }
-    void poll()
-    return () => {
-      stopped = true
-      request?.abort()
-      clearTimeout(timer)
-    }
-  }, [])
+        },
+        () => setUnavailable(true),
+      ),
+    [enabled],
+  )
   return (
     <CollectionOutcomeContext.Provider value={{ data, unavailable }}>
       {children}
@@ -59,8 +52,7 @@ export function CollectionOutcomeLight({ moduleKey, name }: { moduleKey: string;
       aria-label={name ? `${name}：${label}` : label}
       title={name ? `${name}：${label}` : label}
       data-collection-key={moduleKey}
-    >
-      {symbol}
-    </span>
+      data-symbol={symbol}
+    />
   )
 }
