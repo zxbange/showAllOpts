@@ -374,3 +374,18 @@ def test_monday_before_schedule_does_not_replay_sunday_slot(monitor, monkeypatch
     assert not calls
     monitor.tick(MOMENT.replace(day=9, hour=20))
     assert len(calls) == 1
+
+
+def test_outcome_day_diagnostic_clears_after_retry_success(monitor, monkeypatch):
+    records = []
+    monkeypatch.setattr(m, 'record_task', lambda *args, **kw: records.append(kw))
+    provider(monitor, failures={MOMENT.date(): SourceError('invalid_response')})
+    monitor.refresh(background=False, moment=MOMENT)
+    assert records[-1]['outcome'] == 'failed'
+    error = records[-1]['error_details']
+    assert error['stage'] == 'fetch'
+    assert error['trade_date'] == str(MOMENT.date())
+    provider(monitor)
+    monitor.refresh(background=False, moment=MOMENT)
+    assert records[-1]['outcome'] == 'complete'
+    assert records[-1]['error_details'] is None

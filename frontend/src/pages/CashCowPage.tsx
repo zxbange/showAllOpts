@@ -144,7 +144,7 @@ function CashCowPeriodPage({
   const shownError = error || (!running ? status?.error : null)
   return (
     <div className="page-enter cash-cow-page">
-      <PageHeader>
+      <PageHeader dataUpdatedAt={snapshot?.updated_at}>
         <div>
           <h1>奶牛股</h1>
           <p>近 {years} 年持续分红，兼顾利润与经营现金流。</p>
@@ -166,20 +166,20 @@ function CashCowPeriodPage({
           </label>
           <span className="date-badge">数据截至 {snapshot?.as_of ?? '—'}</span>
           <PageHeaderActions>
-          <button
-            className="button button-primary"
-            disabled={busy || loading || !status || !admin || status.cancelling}
-            onClick={() => void act(running ? 'cancel' : 'refresh')}
-          >
-            {running ? <Square size={16} /> : <RefreshCw size={16} />}
-            {busy
-              ? '正在提交…'
-              : status?.cancelling
-                ? '正在停止…'
-                : running
-                  ? '取消采集'
-                  : '更新数据'}
-          </button>
+            <button
+              className="button button-primary"
+              disabled={busy || loading || !status || !admin || status.cancelling}
+              onClick={() => void act(running ? 'cancel' : 'refresh')}
+            >
+              {running ? <Square size={16} /> : <RefreshCw size={16} />}
+              {busy
+                ? '正在提交…'
+                : status?.cancelling
+                  ? '正在停止…'
+                  : running
+                    ? '取消采集'
+                    : '更新数据'}
+            </button>
           </PageHeaderActions>
         </div>
       </PageHeader>

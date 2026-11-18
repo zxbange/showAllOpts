@@ -1,0 +1,23 @@
+.collection-history-panel {
+  margin-top: 20px;
+}
+.collection-history summary {
+  cursor: pointer;
+  font-weight: 600;
+}
+.collection-history ul {
+  padding-inline-start: 22px;
+  margin-bottom: 0;
+}
+.collection-history li {
+  margin-block: 8px;
+  overflow-wrap: anywhere;
+  line-height: 1.6;
+}
+.collection-history-note {
+  color: var(--muted);
+  font-size: 12px;
+}
+.collection-history-error {
+  color: var(--danger, #b33432);
+}

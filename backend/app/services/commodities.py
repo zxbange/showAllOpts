@@ -1,3 +1,4 @@
+from app.services.collection_errors import safe_error as public_error
 from app.services.collection_outcomes import record_task
 from app.services.collection_calendar import automatic_collection_allowed, manual_failure_isolated
 from app.services.holdings_calendar import trading_day
@@ -214,6 +215,7 @@ class Commodities:
         if skipped:
             lock.release()
             return
+        run_error = None
         failures = fetched = parsed = inserted = changed = requests = 0
         began = monotonic()
         missing = set()
@@ -312,6 +314,7 @@ class Commodities:
                              target_day, quote_date, target_result, home_quote['low'], home_quote['high'],
                              home_quote['mean'], inserted, changed)
                 except Exception as exc:
+                    run_error = public_error(exc, stage='fetch')
                     target_result = ('partial' if isinstance(exc, QuoteIncomplete) else
                                      'unverified' if isinstance(exc, (QuoteError, ValueError)) else 'sourceReadFailed')
                     failures += 1
@@ -385,6 +388,7 @@ class Commodities:
                              ','.join(sorted(missing)[:31]) or '-')
             finished = True
         except Exception as exc:
+            run_error = public_error(exc, stage='collection')
             failures += 1
             LOG.error('Commodity collection failed %s', diagnostic_details(exc))
         finally:
@@ -424,7 +428,8 @@ class Commodities:
                         db.execute('UPDATE failed_targets SET reason=? WHERE day=?',
                                    (target_result, target_day.isoformat()))
                 status(stage, error, outcome)
-                record_task(self.settings, 'commodities', outcome='partial' if outcome == 'no_quote' else outcome, scheduled=slot is not None)
+                record_task(self.settings, 'commodities', outcome='partial' if outcome == 'no_quote' else outcome, scheduled=slot is not None,
+                            error_details=(run_error or public_error(stage='fetch')) if outcome in ('failed', 'partial', 'no_quote') else None)
                 if slot is not None:
                     with self.db() as db:
                         db.execute('UPDATE schedule_runs SET status=?,finished_at=? WHERE slot=?',

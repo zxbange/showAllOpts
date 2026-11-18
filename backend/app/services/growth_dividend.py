@@ -1,4 +1,5 @@
 from app.services.collection_outcomes import record_task
+from app.services.collection_errors import safe_error
 from app.services.collection_failure_isolation import quarantine_publication, restore_manual_publication
 from app.services.collection_calendar import next_automatic_collection, automatic_collection_allowed, manual_failure_isolated
 from app.core.history_sync import mark_sync_owner, clear_sync_owner, database_syncing, SYNC_MESSAGE
@@ -300,6 +301,8 @@ class GrowthDividend:
         local = moment.astimezone(CHINA)
         started = monotonic()
         outcome = 'failed'
+        run_error = None
+        error_stage = 'database_write'
         failed_windows = 0
         publication = None
         LOG.info('Growth/dividend collection started source=public_index trigger=%s cutoff=%s', state.get('trigger', '-'), cutoff)
@@ -337,6 +340,7 @@ class GrowthDividend:
                 self.write_state(state)
             with self.client_factory() as client:
                 check_cancel()
+                error_stage = 'fetch'
                 calendar_ok = False
                 try:
                     days = fetch_calendar(client)
@@ -365,6 +369,7 @@ class GrowthDividend:
                         raise IndexSourceError('公开交易日历尚未覆盖本次截止日，先补齐已知历史并等待重试。')
                     calendar_ok = True
                 except (httpx.HTTPError, ValueError, TypeError) as exc:
+                    run_error = safe_error(exc, stage='fetch')
                     state['calendar_error'] = ('交易日历暂不可用，保留已有数据并等待重试。'
                                               if not isinstance(exc, IndexSourceError) else str(exc))
                     LOG.warning('Growth/dividend calendar failed details=%s', diagnostic_details(exc))
@@ -396,6 +401,7 @@ class GrowthDividend:
                 consecutive_failures = 0
                 for index, target_days in work:
                     check_cancel()
+                    error_stage = 'fetch'
                     state['stage'] = f'更新{index.name} {target_days[0]} — {target_days[-1]}'
                     self.write_state(state)
                     source_error = None
@@ -417,6 +423,7 @@ class GrowthDividend:
                         # Publication failures are not source-window failures. Keep the
                         # durable pending payload and stop before staging another batch.
                         if accepted:
+                            error_stage = 'database_write'
                             publication.stage(dict(points=accepted))
                             publication.resume(write_public, apply, check_cancel)
                         absent = set(target_days) - set(quotes)
@@ -427,6 +434,7 @@ class GrowthDividend:
                             consecutive_failures = 0
                     if source_error is not None:
                         exc = source_error
+                        run_error = safe_error(exc, stage='fetch', start_date=target_days[0], end_date=target_days[-1])
                         consecutive_failures += 1
                         failed_windows += 1
                         state['recent_failures'] = (state['recent_failures'] + [dict(
@@ -458,6 +466,7 @@ class GrowthDividend:
             state.update(stage='已停止，已保存的数据将用于下次继续补齐', error=None)
         except Exception as exc:
             outcome = 'failed'
+            run_error = safe_error(exc, stage=error_stage)
             LOG.error('Growth/dividend collection failed details=%s', diagnostic_details(exc))
             state.update(stage='更新失败，已保存的数据保留', error='更新失败，请重试或等待下个交易日自动补齐。')
         finally:
@@ -476,11 +485,12 @@ class GrowthDividend:
                 marker.unlink(missing_ok=True)
             except BaseException as exc:
                 outcome = 'failed'
+                run_error = safe_error(exc, stage='cache_publish')
                 LOG.error('Growth/dividend finalization failed details=%s', diagnostic_details(exc))
                 raise
             finally:
                 try:
-                    record_task(self.settings, 'growth_dividend', outcome=outcome, scheduled=slot is not None or state.get('trigger') == 'startup', run_key=state['run_id'])
+                    record_task(self.settings, 'growth_dividend', outcome=outcome, scheduled=slot is not None or state.get('trigger') == 'startup', run_key=state['run_id'], error_details=(run_error or safe_error(stage='validate', code='invalid_data')) if outcome in ('failed', 'partial') else None)
                     lock.release()
                 except BaseException as exc:
                     outcome = 'failed'

@@ -36,6 +36,7 @@ export interface HeatSnapshot {
   items: HeatItem[]
 }
 export interface HeatHistory {
+  updated_at?: string | null
   code: string
   name: string
   end_date: string

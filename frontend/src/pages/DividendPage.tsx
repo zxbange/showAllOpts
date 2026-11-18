@@ -32,7 +32,7 @@ export function DividendPage() {
   const maxYield = Math.max(1, ...(group?.items ?? []).map((s) => s.dividend_yield_static))
   return (
     <div className="page-enter dividend-page">
-      <PageHeader>
+      <PageHeader dataTimeNaiveBeijing dataUpdatedAt={data?.snapshot?.updated_at}>
         <div>
           <h1>
             高股息低估值 <span className="heading-tag">银行与非银行</span>

@@ -1,6 +1,6 @@
 from datetime import date
 
-from sqlalchemy import and_, func, inspect, or_, select
+from sqlalchemy import and_, func, inspect, or_, select, union_all
 from sqlalchemy.orm import Session, aliased
 
 from app.models.etf import ETFPrice, ETFShare, ETFTradingDay
@@ -63,3 +63,18 @@ class ETFRepository:
         return self.session.scalars(select(ETFTradingDay.trade_date).where(
             ETFTradingDay.trade_date >= start, ETFTradingDay.trade_date <= end,
         ).order_by(ETFTradingDay.trade_date)).all()
+
+    def data_updated_at(self, codes: list[str], start: date, end: date):
+        """Newest business write in the displayed history, not collection status.
+
+        Legacy snapshots without the optional price table still expose shares.
+        Both collectors persist China wall-clock naive timestamps.
+        """
+        models = [ETFShare]
+        if inspect(self.session.connection()).has_table(ETFPrice.__tablename__):
+            models.append(ETFPrice)
+        queries = [select(func.max(model.updated_at).label('stamp')).where(
+            model.fund_code.in_(codes), model.trade_date >= start, model.trade_date <= end,
+        ) for model in models]
+        values = union_all(*queries).subquery()
+        return self.session.scalar(select(func.max(values.c.stamp)))

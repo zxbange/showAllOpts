@@ -29,6 +29,7 @@ class HeatSnapshot(BaseModel):
 
 
 class HeatHistory(BaseModel):
+    updated_at: datetime | None = None
     code: str
     name: str
     end_date: date

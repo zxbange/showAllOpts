@@ -51,6 +51,7 @@ class HistorySummary(BaseModel):
 
 
 class IndustryHistory(BaseModel):
+    updated_at: datetime | None = None
     code: str
     name: str
     industry_type: str

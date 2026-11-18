@@ -38,7 +38,7 @@ export function MomentumPage() {
   const leader = industries[0]
   return (
     <div className="page-enter">
-      <PageHeader>
+      <PageHeader dataUpdatedAt={data?.updated_at}>
         <div>
           <h1>
             行业动量<span className="heading-tag">申万二级</span>

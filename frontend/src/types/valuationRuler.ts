@@ -14,6 +14,7 @@ export interface ValuationPoint {
   gap?: boolean
 }
 export interface ValuationHistory {
+  updated_at?: string | null
   points: ValuationPoint[]
   latest: ValuationPoint | null
   method: string

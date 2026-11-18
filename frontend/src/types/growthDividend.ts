@@ -43,6 +43,7 @@ export interface GrowthDividendStatus {
 }
 
 export interface GrowthDividendHistory {
+  updated_at?: string | null
   start_date: string | null
   end_date: string | null
   latest: GrowthDividendPoint | null

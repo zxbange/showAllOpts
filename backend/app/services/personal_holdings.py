@@ -1,3 +1,4 @@
+from app.services.collection_errors import safe_error as public_error
 from app.services.collection_outcomes import record_outcome
 from uuid import uuid4
 from app.services.collection_calendar import automatic_collection_allowed
@@ -358,7 +359,7 @@ class PersonalHoldings:
                         current['manual'] = dict(current['manual'], status='failed', error='同步失败，原持仓和历史保留，请重试')
                         current['error'] = current['manual']['error']
                     self.write(db, current)
-            record_outcome(self.settings, 'personal-holdings', run_key=outcome_run, outcome='failed', trigger='manual' if manual else 'scheduled')
+            record_outcome(self.settings, 'personal-holdings', run_key=outcome_run, outcome='failed', trigger='manual' if manual else 'scheduled', error_details=public_error(error, stage='database_sync'))
             return False
         finally:
             if manual and (not self.state()['enabled'] or not in_window(clock(), self.settings)):

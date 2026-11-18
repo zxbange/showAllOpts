@@ -1,3 +1,4 @@
+from app.services.collection_errors import safe_error as public_error
 from app.services.collection_calendar import automatic_collection_allowed, manual_failure_isolated
 from app.core.database import VersionedDatabase, database_identity
 """Shared persistent SQLite snapshots. Only refresh jobs read the source database."""
@@ -498,6 +499,7 @@ class SnapshotCache:
         marker = self.root / ('cancel-' + run_id)
         deferred, deferred_full = [], False
         isolated_manual = reason == 'manual' and manual_failure_isolated(now())
+        run_errors = {}
         def record_terminal(module, entry, outcome=None):
             # Collector-owned cache publication must not mask source failures.
             if module not in DATABASE_SYNC_MODULES or reason not in {'manual', 'scheduled'}:
@@ -510,7 +512,7 @@ class SnapshotCache:
             try:
                 from app.services.collection_outcomes import record_outcome
                 record_outcome(self.settings, module, run_key=run_id + ':' + module,
-                               outcome=outcome, trigger=reason)
+                               outcome=outcome, trigger=reason, error_details=run_errors.get(module) if outcome == 'failed' else None)
             except Exception as exc:
                 logger.warning('Cache outcome recording failed module=%s error_type=%s', module, type(exc).__name__)
         def check_cancel():
@@ -596,6 +598,7 @@ class SnapshotCache:
                     entry['error'] = None
                     entry['progress'].update(status='cancelled', stage='已停止，可手动重新同步')
                 except Exception as exc:
+                    run_errors[module] = public_error(exc, stage='database_sync')
                     if reason == 'manual' and manual_failure_isolated(now()):
                         state['pending_manual_isolated'] = True
                     if marker.exists():

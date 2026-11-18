@@ -84,3 +84,21 @@ def test_no_scan_does_not_invent_success(scan):
     service, events = scan
     service.cycle()
     assert events == []
+
+
+def test_history_network_error_is_safe_and_not_reused_after_success(scan):
+    import httpx
+    service, events = scan
+    service.add_author('weibo', '123456', 'Test')
+    service.update_config({'token': 'test', 'chat_id': '123', 'enabled': True})
+    secret = 'password=private-secret&token=do-not-publish'
+    with patch('app.services.social.fetch_posts', side_effect=httpx.ConnectError(secret)):
+        service.cycle()
+    detail = events[-1][1]['error_details']
+    assert detail['code'] == 'network_error' and detail['stage'] == 'fetch'
+    assert 'private-secret' not in str(detail) and 'do-not-publish' not in str(detail)
+    service.platform_state('weibo', retry_at=0)
+    with clock('2026-10-26T13:00:00+08:00'), patch('app.services.social.fetch_posts', return_value=PostBatch([], complete=True)):
+        service.cycle()
+    assert events[-1][1]['outcome'] == 'success'
+    assert events[-1][1]['error_details'] is None

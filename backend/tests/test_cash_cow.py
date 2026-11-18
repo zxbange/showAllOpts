@@ -271,3 +271,22 @@ def test_failed_snapshot_commit_does_not_advance_success_history(screen, monkeyp
     assert screen.latest()['snapshot'] == previous
     assert screen.read_state()['last_success_at'] == old_success
     assert screen.read_state().get('previous_success_at') is None
+
+
+def test_outcome_diagnostic_clears_after_success(screen, monkeypatch):
+    from app.services import cash_cow as module
+    records = []
+    monkeypatch.setattr(module, 'record_task', lambda *args, **kw: records.append(kw))
+    original = module.screen_cash_cows
+    def fail(*args):
+        raise TimeoutError('password=secret SELECT private')
+    monkeypatch.setattr(module, 'screen_cash_cows', fail)
+    run(screen)
+    assert records[-1]['outcome'] == 'failed'
+    error = records[-1]['error_details']
+    assert error['code'] == 'timeout' and error['stage'] == 'fetch'
+    assert 'secret' not in str(error)
+    monkeypatch.setattr(module, 'screen_cash_cows', original)
+    run(screen)
+    assert records[-1]['outcome'] == 'success'
+    assert records[-1]['error_details'] is None

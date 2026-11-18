@@ -1,3 +1,4 @@
+from app.services.collection_errors import safe_error as public_error
 from app.services.collection_calendar import automatic_collection_allowed
 from app.services.system_configuration import SystemConfiguration, task_config, window_open, next_window_time
 """Persistent social monitoring, independent of the market snapshot database."""
@@ -831,6 +832,7 @@ class SocialMonitor(NotificationMixin, CubeMonitorMixin):
                     continue
             checked = True
             outcome = 'failed'
+            run_error = None
             outcome_run = uuid.uuid4().hex
             outcome_key = 'social-cubes' if author.get('_kind') == 'cube' else 'social-' + platform
             try:
@@ -876,6 +878,7 @@ class SocialMonitor(NotificationMixin, CubeMonitorMixin):
             except MonitoringDeferred:
                 outcome = 'interrupted' if self.stop_event.is_set() else 'cancelled'
             except Exception as error:
+                run_error = public_error(error, stage='fetch')
                 outcome = 'failed'
                 # Only controlled RuntimeError strings are safe for UI/logs.
                 message = str(error) if type(error) is RuntimeError else '抓取失败，请检查网络、UID、Cookie 或平台访问限制'
@@ -901,7 +904,7 @@ class SocialMonitor(NotificationMixin, CubeMonitorMixin):
                 # Collection results are independent of delivery attempts below.
                 from app.services.collection_outcomes import record_outcome
                 record_outcome(self.settings, outcome_key, run_key=outcome_run,
-                               outcome=outcome, trigger='scheduled')
+                               outcome=outcome, trigger='scheduled', error_details=run_error if outcome in ('failed', 'partial') else None)
                 self.finish_scheduled_author(platform, queue_id)
             try:
                 # Do not hold one author's new posts until the whole queue finishes.

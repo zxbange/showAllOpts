@@ -34,7 +34,7 @@ export function IndustryPage() {
         <ArrowLeft size={15} />
         返回行业热力图
       </Link>
-      <PageHeader>
+      <PageHeader dataUpdatedAt={data?.updated_at}>
         <div>
           <span className="page-code">{code}</span>
           <h1>

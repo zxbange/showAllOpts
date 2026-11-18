@@ -168,7 +168,7 @@ export function ValuationRulerPage() {
   const peLabel = data?.basis === 'lyr' ? '静态' : '滚动'
   return (
     <div className="page-enter valuation-page">
-      <PageHeader>
+      <PageHeader dataTimeNaiveBeijing dataUpdatedAt={data?.updated_at}>
         <div>
           <h1>
             市场情绪 <span className="heading-tag">估值标尺</span>

@@ -53,6 +53,7 @@ def test_history_is_chronological_and_missing_is_null_not_zero(client, session):
     result = client.get('/api/v1/industry-momentum/industries/A/history').json()
     assert [p['date'] for p in result['points']] == ['2026-01-05', '2026-01-06', '2026-01-07', '2026-01-08']
     assert [p['momentum'] for p in result['points']] == [2, None, 0, 5]
+    assert result['updated_at'] == '2026-01-06T17:00:00'
     assert result['summary']['missing_days'] == 1
     assert result['summary']['observed_days'] == 3
     assert result['summary']['change'] == 3
@@ -75,6 +76,7 @@ def test_existing_industry_with_empty_window_returns_empty_points(client, sessio
     session.add_all([row(date(2025, 1, 2), 'A', 2), row(date(2026, 1, 6), 'B', 4)])
     session.commit()
     result = client.get('/api/v1/industry-momentum/industries/A/history?days=30').json()
+    assert result['updated_at'] is None
     assert result['summary']['observed_days'] == 0
     assert result['summary']['latest_momentum'] is None
     assert all(point['momentum'] is None for point in result['points'])

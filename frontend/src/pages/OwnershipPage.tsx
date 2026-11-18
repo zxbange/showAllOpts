@@ -40,9 +40,18 @@ const categories = [
 const num = (value: number | null | undefined, digits = 0) =>
   value == null ? '—' : value.toLocaleString('zh-CN', { maximumFractionDigits: digits })
 
-function StockView({ code }: { code: string }) {
+function StockView({
+  code,
+  onDataTime,
+}: {
+  code: string
+  onDataTime: (value: string | null) => void
+}) {
   const loader = useCallback((signal: AbortSignal) => getOwnership(code, signal), [code])
   const { data, error, loading, reload } = useResource(loader)
+  useEffect(() => {
+    onDataTime(!loading && !error ? (data?.updated_at ?? null) : null)
+  }, [data, loading, error, onDataTime])
   if (loading) return <LoadingState />
   if (error) return <ErrorState message={error} retry={reload} />
   if (!data) return null
@@ -154,7 +163,13 @@ function StockView({ code }: { code: string }) {
   )
 }
 
-function SocialView({ onSelect }: { onSelect: (code: string) => void }) {
+function SocialView({
+  onSelect,
+  onDataTime,
+}: {
+  onSelect: (code: string) => void
+  onDataTime: (value: string | null) => void
+}) {
   const [period, setPeriod] = useState('')
   const [mode, setMode] = useState<SocialMode>('first')
   const [query, setQuery] = useState('')
@@ -166,6 +181,9 @@ function SocialView({ onSelect }: { onSelect: (code: string) => void }) {
     [period, mode],
   )
   const { data, error, loading, reload } = useResource(loader)
+  useEffect(() => {
+    onDataTime(!loading && !error ? (data?.updated_at ?? null) : null)
+  }, [data, loading, error, onDataTime])
   useEffect(() => {
     if (data) setReportOptions({ period: data.period, periods: data.periods })
   }, [data])
@@ -380,6 +398,12 @@ export function OwnershipPage() {
   const [params, setParams] = useSearchParams()
   const code = params.get('code') || ''
   const tab = params.get('tab') || 'stock'
+  const timeKey = `${tab}:${code}`
+  const [dataTime, setDataTime] = useState<{ key: string; value: string | null } | null>(null)
+  const onDataTime = useCallback(
+    (value: string | null) => setDataTime({ key: timeKey, value }),
+    [timeKey],
+  )
   const [query, setQuery] = useState('')
   const [term, setTerm] = useState('')
   useEffect(() => {
@@ -396,14 +420,28 @@ export function OwnershipPage() {
   return (
     <div className="page-enter ownership-page">
       <PageHeader
+        dataTimeNaiveBeijing
+        dataUpdatedAt={dataTime?.key === timeKey ? dataTime.value : null}
         switcher={
           <ModuleSwitch
             label="机构持仓模块切换"
             value={tab}
             onChange={(id) => setParams({ tab: id, ...(id === 'stock' && code ? { code } : {}) })}
             items={[
-              { id: 'stock', collectionKey: 'institution-ownership', name: '个股查询', description: '机构持仓 · 股东户数', icon: Search },
-              { id: 'social', collectionKey: 'institution-ownership', name: '社保新进', description: '新进组合 · 持股增减', icon: Users },
+              {
+                id: 'stock',
+                collectionKey: 'institution-ownership',
+                name: '个股查询',
+                description: '机构持仓 · 股东户数',
+                icon: Search,
+              },
+              {
+                id: 'social',
+                collectionKey: 'institution-ownership',
+                name: '社保新进',
+                description: '新进组合 · 持股增减',
+                icon: Users,
+              },
             ]}
           />
         }
@@ -418,7 +456,7 @@ export function OwnershipPage() {
       </PageHeader>
 
       {tab === 'social' ? (
-        <SocialView onSelect={select} />
+        <SocialView onSelect={select} onDataTime={onDataTime} />
       ) : (
         <>
           <p className="ownership-note">
@@ -461,7 +499,7 @@ export function OwnershipPage() {
               !data?.stocks.length && <p>暂无匹配股票；尚未采集的股票需先入库并同步。</p>}
           </section>
           {code ? (
-            <StockView key={code} code={code} />
+            <StockView key={code} code={code} onDataTime={onDataTime} />
           ) : (
             <EmptyState title="选择股票查看持仓" description="输入代码或名称，或从社保列表进入。" />
           )}

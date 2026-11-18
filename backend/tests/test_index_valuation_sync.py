@@ -35,6 +35,7 @@ def test_summary_only_sync_and_static_ttm_are_separate(synced, monkeypatch):
         ttm = service.history(index_code=code, basis='ttm')
         lyr = service.history(index_code=code, basis='lyr')
         assert len(ttm['points']) == len(lyr['points']) == 3
+        assert ttm['updated_at'] == max(dt.datetime.fromisoformat(p['updated_at']) for p in ttm['points'])
         assert ttm['latest']['mean_pe'] == 10
         assert lyr['latest']['mean_pe'] == 20
         assert lyr['latest']['mean_pe_ttm'] == 10  # static selection must not relabel raw TTM

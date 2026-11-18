@@ -1,3 +1,4 @@
+from app.services.collection_errors import safe_error as public_error
 from app.services.collection_outcomes import record_task
 from app.services.collection_failure_isolation import quarantine_publication, restore_manual_publication
 from time import monotonic
@@ -326,6 +327,7 @@ class DividendCollection:
 
     def _collect(self, lock, state, moment):
         marker = self.root / ('cancel-' + state['run_id'])
+        run_error = None
         engine = None
         started = monotonic()
         def check():
@@ -398,6 +400,7 @@ class DividendCollection:
                          '银行：' + str(sum(row['method'] == 'bank' for row in records))])
             LOG.info('Dividend collection complete date=%s rows=%s run=%s', meta['trade_date'], written, state['run_id'])
         except Exception as exc:
+            run_error = public_error(exc, stage='database_write' if state.get('stage') == 'publishing' else 'cache_publish' if state.get('stage') == 'syncing_local' else 'collection')
             pending = self.pending() is not None
             state['failed_stage'] = state.get('stage')
             state.update(stage='publication_pending' if pending else 'failed', publication_pending=pending,
@@ -413,7 +416,7 @@ class DividendCollection:
                     state.update(manual_failure_isolated=True, publication_pending=False, stage='failed',
                                  error='休市日手动采集失败，已隔离，不会自动重试；已有结果保留，可手动重试。')
                 self.save_state(state)
-                record_task(self.settings, 'dividend_selection', outcome=state['stage'], scheduled=state.get('current_slot') is not None, run_key=state['run_id'])
+                record_task(self.settings, 'dividend_selection', outcome=state['stage'], scheduled=state.get('current_slot') is not None, run_key=state['run_id'], error_details=run_error if state['stage'] != 'complete' else None)
             finally:
                 try:
                     marker.unlink(missing_ok=True)

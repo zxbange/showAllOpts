@@ -26,7 +26,7 @@ export function SentimentPage() {
   const mixedSources = marketSourceSegments(data?.points ?? [], 'heat').length > 1
   return (
     <div className="page-enter sentiment-page">
-      <PageHeader>
+      <PageHeader dataTimeNaiveBeijing dataUpdatedAt={latest?.updated_at}>
         <div>
           <h1>
             市场情绪 <span className="heading-tag">市场热度</span>

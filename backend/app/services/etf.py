@@ -121,7 +121,10 @@ class ETFService:
                     fund.shares_change = str(row.shares - previous)
                     fund.daily_change_pct = percent(row.shares, previous)
             funds.append(fund)
+        data_stamp = self.repository.data_updated_at(codes, start, anchor)
+        stamps = [data_stamp, *(row.updated_at for row, _ in snapshots.values())]
         return ETFHistory(
+            updated_at=max((stamp for stamp in stamps if stamp is not None), default=None),
             group=group, group_name=GROUP_NAMES[group], start_date=start if days else min(all_dates),
             end_date=anchor, baseline_date=baseline, funds=funds, observed_days=len(all_dates),
             available_funds=len(available), market_values=market_values, group_options=options,

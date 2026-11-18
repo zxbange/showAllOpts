@@ -33,6 +33,7 @@ export interface HistoryPoint {
 }
 
 export interface IndustryHistory {
+  updated_at?: string | null
   code: string
   name: string
   industry_type: string

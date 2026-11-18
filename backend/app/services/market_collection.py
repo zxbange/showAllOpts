@@ -1,3 +1,4 @@
+from app.services.collection_errors import safe_error as public_error
 from app.services.collection_outcomes import record_outcome
 """Durable, paced Sina snapshots and verified JoinQuant-method observations.
 
@@ -959,6 +960,7 @@ class MarketCollection:
         self._notification_changes = 0
         self._notification_summary = []
         self._outcome_days = set()
+        self._outcome_error = None
         try:
             with self.connect() as db:
                 reconcile_system_ledger(self.configuration, db,
@@ -1120,6 +1122,7 @@ class MarketCollection:
                 self._finish_run(run_id, 'paused', code)
             return False
         except Exception as error:
+            self._outcome_error = public_error(error, stage='collection')
             code = getattr(error, 'code', 'calendar_unavailable' if active_day is None else 'source_unavailable')
             if not isinstance(code, str) or code not in SAFE_ERRORS:
                 code = 'source_unavailable'
@@ -1161,7 +1164,8 @@ class MarketCollection:
                                        'partial' if touched and any(row[metric + '_status'] in PUBLISHED for row in touched) else
                                        'unknown' if not touched and terminal['status'] == 'complete' else 'failed')
                             record_outcome(self.settings, module, run_key=run_id, outcome=outcome,
-                                           trigger='manual' if manual else 'scheduled')
+                                           trigger='manual' if manual else 'scheduled',
+                                           error_details=getattr(self, '_outcome_error', None) if outcome in ('failed', 'partial') else None)
                 if run_id and self._notification_changes:
                     with self.connect() as db:
                         terminal = db.execute('SELECT status FROM manual_runs WHERE id=?', (run_id,)).fetchone()
@@ -1674,6 +1678,7 @@ class MarketCollection:
         except (CollectionInterrupted, SinaRateLimitError, MarketDependencyError):
             raise
         except Exception as error:
+            self._outcome_error = public_error(error, stage='database_write')
             code = getattr(error, 'code', 'writer_write_failed')
             if not isinstance(code, str) or code not in SAFE_ERRORS:
                 code = 'writer_write_failed'
@@ -1704,4 +1709,5 @@ class MarketCollection:
                 with self.connect() as db:
                     db.executemany('UPDATE days SET cache_pending=0 WHERE trade_date=?', [(day,) for day in days])
         except Exception as error:
+            self._outcome_error = public_error(error, stage='collection')
             LOG.warning('Market cache publish failed pending_days=%d %s', len(days), diagnostic_details(error))

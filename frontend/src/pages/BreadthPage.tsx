@@ -23,7 +23,7 @@ export function BreadthPage() {
   const latest = data?.latest
   return (
     <div className="page-enter breadth-page">
-      <PageHeader>
+      <PageHeader dataTimeNaiveBeijing dataUpdatedAt={latest?.updated_at}>
         <div>
           <h1>
             微盘新高新低 <span className="heading-tag">宽度观察</span>
@@ -33,7 +33,7 @@ export function BreadthPage() {
         <div className="heading-actions">
           <span className="date-badge">
             <CalendarDays size={15} />
-            最新记录 {formatDate(latest?.date)}
+            统计日期 {formatDate(latest?.date)}
           </span>
           <button
             className="button button-quiet icon-button"

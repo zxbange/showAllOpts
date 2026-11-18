@@ -17,6 +17,7 @@ import time
 import uuid
 
 from app.core.diagnostics import diagnostic_details
+from app.services.collection_errors import safe_error
 
 from app.services.etf_configuration import ETFConfiguration, ConfigurationFailure, DEFAULT_COLLECTION_TIME, target_key, reconcile_system_ledger
 from app.services.etf_diagnostics import log_database_failure
@@ -140,6 +141,7 @@ class ETFCollection:
               id TEXT PRIMARY KEY, trigger TEXT NOT NULL, status TEXT NOT NULL, error TEXT,
               requested_at TEXT NOT NULL, finished_at TEXT, slot TEXT, attempt INTEGER,
               time_basis TEXT NOT NULL);
+            CREATE TABLE IF NOT EXISTS run_history_errors (id TEXT PRIMARY KEY, details TEXT NOT NULL);
             CREATE TABLE IF NOT EXISTS observations (kind TEXT, code TEXT, day TEXT, status TEXT,
               attempts INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(kind,code,day));
             CREATE TABLE IF NOT EXISTS metadata (key TEXT PRIMARY KEY, value TEXT);
@@ -223,6 +225,9 @@ class ETFCollection:
         with self.connect() as db:
             state['runs'] = [dict(r) for r in db.execute('SELECT * FROM slots ORDER BY slot DESC LIMIT 9')]
             state['recent_runs'] = [dict(r) for r in db.execute("SELECT * FROM run_history WHERE status NOT IN ('running','publishing') ORDER BY (finished_at IS NOT NULL) DESC,julianday(COALESCE(finished_at,requested_at)) DESC,rowid DESC LIMIT 20")]
+            for item in state['recent_runs']:
+                detail = db.execute('SELECT details FROM run_history_errors WHERE id=?', (item['id'],)).fetchone()
+                item['error_details'] = json.loads(detail[0]) if detail else None
             state['latest_result'] = next(iter(state['recent_runs']), None)
             state['metadata'] = dict(db.execute('SELECT key,value FROM metadata').fetchall())
             latest = state['metadata'].get('coverage_end')
@@ -334,18 +339,35 @@ class ETFCollection:
                             "AND status NOT IN ('running','publishing') "
                             "ORDER BY julianday(finished_at) DESC,rowid DESC LIMIT 1").fetchone()
         if latest:
+            detail = db.execute('SELECT details FROM run_history_errors WHERE id=?', (latest['id'],)).fetchone()
+            error_details = json.loads(detail[0]) if detail else (safe_error(code='interrupted', stage='collection') if latest['status'] == 'interrupted' else None)
+            if error_details and not detail:
+                self._write_history(db, 'INSERT OR REPLACE INTO run_history_errors VALUES (?,?)',
+                                    (latest['id'], json.dumps(error_details)))
+                db.commit()
             record_outcome(self.settings, 'etf-shares', run_key=latest['id'], outcome=latest['status'],
-                           trigger=latest['trigger'], finished_at=latest['finished_at'])
+                           trigger=latest['trigger'], finished_at=latest['finished_at'], error_details=error_details)
+        self._retain_history()
+
+    def _retain_history(self):
+        if getattr(self.settings, 'collection_history_retention_enabled', False):
+            from app.services.etf_collection_history import prune_native_history
+            try:
+                prune_native_history(self.settings, apply=True, confirmed=True)
+            except Exception as exc:
+                LOG.warning('ETF history archival unavailable error_type=%s', type(exc).__name__)
+
 
     def request_cancel(self, request_id):
         # The worker owns collection.lock for its entire run. Do not wait for that
         # lock before recording cancellation: another API process must be able to
         # cancel while a network call or a MySQL transaction is still in flight.
+        transitioned = False
         with self.connect() as db:
-            db.execute("""UPDATE manual_runs SET
+            transitioned = bool(db.execute("""UPDATE manual_runs SET
                 phase=CASE WHEN status='queued' THEN 'cancelled' ELSE phase END,
                 status=CASE WHEN status='queued' THEN 'cancelled' ELSE 'cancelling' END,
-                error=NULL WHERE id=? AND status IN ('queued','running')""", (request_id,))
+                error=NULL WHERE id=? AND status IN ('queued','running')""", (request_id,)).rowcount)
             row = db.execute('SELECT * FROM manual_runs WHERE id=?', (request_id,)).fetchone()
             if row is None:
                 raise ConfigurationFailure('未找到该手动采集任务，请刷新采集状态')
@@ -356,6 +378,7 @@ class ETFCollection:
                     # another collection or mistaking a completed run for cancelled.
                     changed = db.execute("UPDATE manual_runs SET status='cancelled',phase='cancelled',error=NULL WHERE id=? AND status='cancelling'",
                                          (request_id,)).rowcount
+                    transitioned = transitioned or bool(changed)
                     if changed:
                         db.execute("DELETE FROM metadata WHERE key='progress'")
         except portalocker.exceptions.LockException:
@@ -367,7 +390,7 @@ class ETFCollection:
                 # cannot establish its unknown original completion time.
                 current = db.execute('SELECT 1 FROM run_history WHERE id=?', ('manual:' + request_id,)).fetchone()
                 legacy = db.execute('SELECT 1 FROM run_history WHERE id=?', ('legacy-manual:' + request_id,)).fetchone()
-                if legacy and not current:
+                if not current and (legacy or not transitioned):
                     return result
                 stamp = self.clock().isoformat()
                 db.execute('INSERT OR IGNORE INTO run_history VALUES (?,?,?,?,?,?,?,?,?)',
@@ -381,6 +404,7 @@ class ETFCollection:
             from app.services.collection_outcomes import record_outcome
             record_outcome(self.settings, 'etf-shares', run_key='manual:' + request_id,
                            outcome='cancelled', trigger='manual', finished_at=cancel_stamp)
+            self._retain_history()
         return result
 
     def start(self):
@@ -481,6 +505,7 @@ class ETFCollection:
             return False
 
     def _run(self, db, slot, config, *, key=None, manual_id=None):
+        self._run_error_details = None
         self._notification_changes = 0
         self._notification_summary = []
         started = time.monotonic()
@@ -532,6 +557,8 @@ class ETFCollection:
         except CollectionCancelled:
             state, error, complete = 'cancelled', None, False
         except Exception as exc:
+            if self._run_error_details is None:
+                self._run_error_details = safe_error(exc, stage={'writing': 'database_write', 'fetching': 'fetch', 'calendar': 'fetch'}.get(phase, 'collection'))
             state, error = 'failed', exc.code if isinstance(exc, WriterFailure) else 'source_unavailable'
             if isinstance(exc, CollectionInterrupted):
                 state, error = 'interrupted', 'service_interrupted'
@@ -561,6 +588,11 @@ class ETFCollection:
                             ('publishing' if state == 'complete' else state, error,
                              None if state == 'complete' else self.clock().isoformat(),
                              'started_at' if state == 'complete' else 'completed_at', history_id))
+        if state == 'cancelled':
+            self._run_error_details = None
+        if self._run_error_details:
+            self._write_history(db, 'INSERT OR REPLACE INTO run_history_errors VALUES (?,?)',
+                                (history_id, json.dumps(self._run_error_details)))
         db.execute("DELETE FROM metadata WHERE key='progress'")
         db.commit()
         LOG.info('ETF collection finish run=%s outcome=%s completed=%s total=%s seconds=%.3f',
@@ -569,6 +601,11 @@ class ETFCollection:
             self._refresh(db)
         pending = db.execute("SELECT value FROM metadata WHERE key='cache_pending'").fetchone()
         history_status = 'partial' if state == 'complete' and pending and pending[0] == '1' else state
+        if history_status == 'partial' and pending and pending[0] == '1':
+            self._run_error_details = safe_error(code='publication_pending', stage='cache_publish')
+        if self._run_error_details:
+            self._write_history(db, 'INSERT OR REPLACE INTO run_history_errors VALUES (?,?)',
+                                (history_id, json.dumps(self._run_error_details)))
         finished_at = self.clock().isoformat()
         history_recorded = self._write_history(db,
             "INSERT INTO run_history VALUES (?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET "
@@ -578,7 +615,8 @@ class ETFCollection:
         db.commit()
         from app.services.collection_outcomes import record_outcome
         record_outcome(self.settings, 'etf-shares', run_key=history_id, outcome=history_status if history_recorded else 'partial',
-                       trigger='manual' if manual_id else 'scheduled', finished_at=finished_at)
+                       trigger='manual' if manual_id else 'scheduled', finished_at=finished_at, error_details=self._run_error_details)
+        self._retain_history()
         emit_collection_result(self.settings, 'etf', scheduled=manual_id is None, run_key=run,
             outcome=state, changed_count=self._notification_changes, summary=self._notification_summary)
         return complete
@@ -674,6 +712,7 @@ class ETFCollection:
                     except CollectionInterrupted:
                         raise
                     except Exception as exc:
+                        self._run_error_details = safe_error(exc, stage='fetch')
                         failures += 1
                         if failures <= 5:
                             LOG.warning('ETF source observation failed kind=%s code=%s date=%s %s',
@@ -699,6 +738,7 @@ class ETFCollection:
             except CollectionInterrupted:
                 raise
             except Exception as exc:
+                self._run_error_details = safe_error(exc, stage='database_write')
                 log_database_failure(exc, operation='collection-write', stage=stage,
                                      target=target_key(config)[:12])
                 raise WriterFailure(writer_error_code(exc)) from None

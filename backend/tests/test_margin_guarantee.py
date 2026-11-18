@@ -489,3 +489,23 @@ def test_resolution_write_failure_rolls_back_new_observation(monitor, monkeypatc
     assert status['pending_reports'] == 1
     assert status['source_corrections'] == []
     assert status['error']
+
+
+def test_outcome_diagnostic_is_current_run_and_never_raw(monitor, monkeypatch):
+    records = []
+    monkeypatch.setattr(m, 'record_task', lambda *args, **kw: records.append(kw))
+    provider(monkeypatch, [MOMENT.date()])
+    def fail(*args):
+        raise TimeoutError('password=secret SELECT private FROM credentials')
+    monkeypatch.setattr(m, 'fetch_point', fail)
+    monitor.refresh(background=False, moment=MOMENT)
+    error = records[-1]['error_details']
+    assert records[-1]['outcome'] == 'partial'
+    assert error['code'] == 'timeout'
+    assert error['stage'] == 'fetch'
+    assert error['trade_date'] == str(MOMENT.date())
+    assert 'secret' not in str(error) and 'SELECT' not in str(error)
+    provider(monkeypatch, [MOMENT.date()])
+    monitor.refresh(background=False, moment=MOMENT)
+    assert records[-1]['outcome'] == 'success'
+    assert records[-1]['error_details'] is None

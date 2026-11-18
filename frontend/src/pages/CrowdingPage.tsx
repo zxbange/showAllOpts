@@ -22,7 +22,7 @@ export function CrowdingPage() {
   const mixedSources = marketSourceSegments(data?.points ?? [], 'crowding').length > 1
   return (
     <div className="page-enter crowding-page">
-      <PageHeader>
+      <PageHeader dataTimeNaiveBeijing dataUpdatedAt={latest?.updated_at}>
         <div>
           <h1>
             市场情绪<span className="heading-tag">抱团拥挤度</span>

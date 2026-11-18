@@ -30,6 +30,7 @@ def test_history_missing_points_and_retired_funds(client,session):
     assert result['points'][0]['details']['status']=='missing'
     result=client.get('/api/v1/etf-momentum/funds/OLD/history').json()
     assert result['fund'] is None and result['points'][-1]['score']==100
+    assert result['updated_at']=='2026-10-20T00:00:00'  # business rows, not pool updated at 17:00
     assert client.get('/api/v1/etf-momentum/funds/NONE/history').status_code==404
     assert client.get('/api/v1/etf-momentum/funds/A/history?days=9999').status_code==422
 
@@ -140,3 +141,13 @@ def test_incremental_cache_downloads_changes_and_removes_expired_heat(engine,ses
         assert not next(m for m in cache.status()['modules'] if m['id']=='etf-momentum')['error']
     finally:
         event.remove(engine,'before_cursor_execute',capture)
+
+
+def test_latest_business_time_includes_same_day_corrections_but_not_excluded_funds(client, session):
+    seed(session)
+    current = session.get(Heat, (date(2026, 10, 20), 'A'))
+    current.updated_at = datetime(2026, 10, 21, 10)
+    excluded = session.get(Heat, (date(2026, 10, 20), 'OLD'))
+    excluded.updated_at = datetime(2026, 10, 22, 10)
+    session.commit()
+    assert client.get('/api/v1/etf-momentum/latest').json()['updated_at'] == '2026-10-21T10:00:00'

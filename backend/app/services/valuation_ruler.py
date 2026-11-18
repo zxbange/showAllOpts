@@ -1,4 +1,5 @@
 from app.services.collection_outcomes import record_task
+from app.services.collection_errors import safe_error
 from app.services.collection_calendar import automatic_collection_allowed, manual_failure_isolated
 from app.core.history_sync import mark_sync_owner, clear_sync_owner, database_syncing, SYNC_MESSAGE
 from app.services.system_configuration import task_config, latest_task_slot
@@ -295,7 +296,7 @@ class ValuationRuler:
             positive_count=None,loss_count=None,missing_pe_count=None,source=None,gap=True)) for day in sorted(days)] if actual else []
         first,last=(rows[0]['trade_date'],rows[-1]['trade_date']) if rows else (None,None)
         complete=state.get('calendar_through','')>=str(cutoff)
-        return dict(points=points,latest=actual.get(last),method=METHOD,
+        return dict(points=points,latest=actual.get(last),method=METHOD,updated_at=None,
             benchmarks=dict(p20=quantile([r['mean_pe_ttm'] for r in rows],.2),p80=quantile([r['mean_pe_ttm'] for r in rows],.8),
                 sample_days=len(rows),start_date=first,end_date=last),
             coverage=dict(requested_start=str(START),first_date=first,last_date=last,missing_count=len(gaps) if complete else None,
@@ -342,6 +343,7 @@ class ValuationRuler:
         marker=self.root/('cancel-'+state['run_id']);started=monotonic()
         isolate = slot is None and manual_failure_isolated(moment)
         old_failures = None
+        state.pop('_outcome_error', None)
         def check_cancel():
             if (slot is not None and not automatic_collection_allowed(moment + timedelta(seconds=monotonic()-started))) or self.stop_event.is_set() or marker.exists():raise CollectionCancelled()
             if monotonic()-started>MAX_RUN_SECONDS:raise SourceError('budget_exceeded',common=True)
@@ -353,6 +355,9 @@ class ValuationRuler:
             if not state.get('error'):state['last_success_at']=now().isoformat()
         except CollectionCancelled:state.update(phase='cancelled',error=None)
         except Exception as exc:
+            state['_outcome_error'] = safe_error(exc,
+                stage={'saving': 'database_write', 'publishing': 'cache_publish'}.get(state.get('phase'), 'fetch' if isinstance(exc, SourceError) else 'collection'),
+                trade_date=(state.get('_outcome_error') or {}).get('trade_date') if isinstance(exc, SourceError) else None)
             LOG.error('Valuation run failed source=valuation_ruler target=%s %s',state.get('target_date'),diagnostic_details(exc))
             message = {'saving': '估值数据库写入失败，请检查连接及写入权限；已有数据保留。',
                        'publishing': '估值数据库已保存，本地更新失败；请重试或同步数据库。'}.get(
@@ -372,8 +377,12 @@ class ValuationRuler:
                     self.write_state(state,db)
                     if slot:db.execute('UPDATE slots SET outcome=? WHERE slot=?',(state['phase'],slot))
                 marker.unlink(missing_ok=True)
+            except BaseException as exc:
+                state['phase'] = 'failed'
+                state['_outcome_error'] = safe_error(exc, stage='cache_publish')
+                raise
             finally:
-                record_task(self.settings, 'valuation_ruler', outcome=state['phase'], scheduled=slot is not None, run_key=state['run_id'])
+                record_task(self.settings, 'valuation_ruler', outcome=state['phase'], scheduled=slot is not None, run_key=state['run_id'], error_details=(state.get('_outcome_error') or safe_error(stage='validate', code='invalid_data')) if state['phase'] == 'failed' else None)
                 lock.release()
 
     def refresh(self,background=True,*,moment=None,slot=None,cutoff=None):
@@ -415,6 +424,7 @@ class ValuationRuler:
                             except ValuationConflict:state['conflict_days']+=1
                             self.write_state(state,db)
                     except SourceError as exc:
+                        state['_outcome_error'] = safe_error(exc, stage='fetch', trade_date=day)
                         with self.db() as db:
                             if db.execute('SELECT 1 FROM points WHERE trade_date=?',(str(day),)).fetchone():
                                 state.update(comparison_error=str(exc),comparison_attempted_date=str(day));self.write_state(state,db)

@@ -1,3 +1,4 @@
+import type { CollectionErrorDetails } from '../api/collectionHistory'
 export interface ETFPoint {
   date: string
   shares: string
@@ -24,6 +25,7 @@ export interface ETFMarketValue {
   quality_flags?: string[]
 }
 export interface ETFHistory {
+  updated_at?: string | null
   market_values?: ETFMarketValue[]
   group_options?: Array<{ id: string; name: string }>
   group: string
@@ -45,6 +47,7 @@ export interface ETFCollectionCoverage {
 }
 
 export interface ETFCollectionRun {
+  error_details?: CollectionErrorDetails | null
   id: string
   trigger: 'manual' | 'scheduled'
   status: string

@@ -136,7 +136,7 @@ export function MarginPage() {
   const shownError = error || pollError || (!running ? status?.error : null)
   return (
     <div className="page-enter margin-page">
-      <PageHeader>
+      <PageHeader dataUpdatedAt={latest?.updated_at}>
         <div>
           <h1>
             市场情绪 <span className="heading-tag">两融担保比例</span>

@@ -82,4 +82,5 @@ class MomentumService:
             observed_days=len(rows), missing_days=len(calendar) - len(rows),
         )
         return IndustryHistory(code=code, name=identity.industry_name, industry_type=industry_type,
-                               start_date=start, end_date=end, summary=summary, points=points)
+                               start_date=start, end_date=end, summary=summary, points=points,
+                               updated_at=max((r.updated_at for r in rows if r.updated_at), default=None))

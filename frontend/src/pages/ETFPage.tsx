@@ -39,7 +39,7 @@ export function ETFPage() {
     data && marketValueSeries(data).series[0].values.some((value) => value != null)
   return (
     <div className="page-enter etf-page">
-      <PageHeader>
+      <PageHeader dataTimeNaiveBeijing dataUpdatedAt={data?.updated_at}>
         <div>
           <h1>
             市场情绪<span className="heading-tag">{groupName} ETF份额与市值</span>
@@ -48,7 +48,7 @@ export function ETFPage() {
         <div className="heading-actions">
           <span className="date-badge">
             <CalendarDays size={15} />
-            最新记录 {data?.end_date ?? '—'}
+            统计日期 {data?.end_date ?? '—'}
           </span>
           <button
             className="button button-quiet icon-button"

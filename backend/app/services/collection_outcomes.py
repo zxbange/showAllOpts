@@ -1,4 +1,4 @@
-"""Append-only, local terminal-result observations, independent of notification delivery.
+"""Local terminal-result observations with optional reversible active-history retention.
 
 Never substitute the last success for a newer failure. Starting/running/skipped jobs
 are not terminal successes and do not change the last completed result.
@@ -6,6 +6,9 @@ are not terminal successes and do not change the last completed result.
 from contextlib import contextmanager
 from datetime import datetime, timezone
 import logging
+import json
+
+from app.services.collection_errors import sanitize_error
 import sqlite3
 
 LOG = logging.getLogger(__name__)
@@ -37,13 +40,16 @@ def database(settings):
                            '(module TEXT NOT NULL, run_key TEXT NOT NULL, outcome TEXT NOT NULL, '
                            'finished_at TEXT NOT NULL, trigger TEXT NOT NULL, PRIMARY KEY(module,run_key))')
         connection.execute('CREATE INDEX IF NOT EXISTS latest_results ON results(module,finished_at DESC)')
+        connection.execute('CREATE TABLE IF NOT EXISTS result_details '
+                           '(module TEXT NOT NULL, run_key TEXT NOT NULL, payload TEXT NOT NULL, '
+                           'PRIMARY KEY(module,run_key))')
         with connection:
             yield connection
     finally:
         connection.close()
 
 
-def record_outcome(settings, module_key, *, run_key, outcome, trigger, finished_at=None):
+def record_outcome(settings, module_key, *, run_key, outcome, trigger, finished_at=None, error_details=None):
     """Best-effort observation only: cannot turn a committed collection into failure."""
     outcome = ALIASES.get(outcome, outcome)
     if module_key not in MODULES or outcome not in TERMINAL or trigger not in ('manual', 'scheduled'):
@@ -54,11 +60,66 @@ def record_outcome(settings, module_key, *, run_key, outcome, trigger, finished_
             return False  # Unknown clock basis cannot establish most-recent completion.
         stamp = stamp.astimezone(timezone.utc).isoformat(timespec='microseconds')
         with database(settings) as db:
-            return bool(db.execute('INSERT OR IGNORE INTO results VALUES(?,?,?,?,?)',
+            db.execute('BEGIN IMMEDIATE')
+            has_tombstones = db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='result_tombstones'").fetchone()
+            if has_tombstones and db.execute('SELECT 1 FROM result_tombstones WHERE module=? AND run_key=?',
+                                             (module_key, str(run_key))).fetchone():
+                return False
+            has_archive = db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='results_archive'").fetchone()
+            if has_archive and db.execute('SELECT 1 FROM results_archive WHERE module=? AND run_key=?',
+                                          (module_key, str(run_key))).fetchone():
+                return False  # Archived completion still owns its idempotency key.
+            inserted = bool(db.execute('INSERT OR IGNORE INTO results VALUES(?,?,?,?,?)',
                                    (module_key, str(run_key), outcome, stamp, trigger)).rowcount)
+            details = sanitize_error(error_details) if outcome != 'success' else None
+            if inserted and details:
+                db.execute('INSERT INTO result_details VALUES(?,?,?)',
+                           (module_key, str(run_key), json.dumps(details, ensure_ascii=False)))
+        if inserted and getattr(settings, 'collection_history_retention_enabled', False):
+            from app.services.collection_retention import retain_history
+            try:
+                retain_history(settings, apply=True, confirmed=True)
+            except Exception as retention_error:
+                LOG.warning('Collection history retention unavailable error_type=%s', type(retention_error).__name__)
+        return inserted
     except Exception as exc:
         LOG.warning('Collection outcome recording unavailable module=%s error_type=%s', module_key, type(exc).__name__)
         return False
+
+
+def outcome_history(settings, module_key, limit=5):
+    """Bounded, read-only real completion history, never synthesized from latest state."""
+    if module_key not in MODULES or type(limit) is not int or not 1 <= limit <= 5:
+        raise ValueError('Invalid collection history request')
+    path = settings.log_path / 'collection-outcomes' / 'outcomes.sqlite3'
+    if not path.exists():
+        return {'items': []}
+    try:
+        connection = sqlite3.connect(path.as_uri() + '?mode=ro', uri=True, timeout=5)
+        connection.row_factory = sqlite3.Row
+        try:
+            rows = connection.execute(
+                'SELECT run_key,outcome,finished_at,trigger FROM results WHERE module=? '
+                'ORDER BY finished_at DESC,rowid DESC LIMIT ?', (module_key, limit)).fetchall()
+            has_details = connection.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='result_details'").fetchone()
+            details = {}
+            if has_details:
+                for row in rows:
+                    saved = connection.execute('SELECT payload FROM result_details WHERE module=? AND run_key=?',
+                                               (module_key, row['run_key'])).fetchone()
+                    if saved:
+                        try:
+                            details[row['run_key']] = sanitize_error(json.loads(saved[0]))
+                        except (ValueError, TypeError):
+                            pass
+        finally:
+            connection.close()
+        kind = 'database_sync' if module_key in SYNC_MODULES else 'collection'
+        return {'items': [dict(row) | {'kind': kind, 'error_details': details.get(row['run_key'])} for row in rows]}
+    except (sqlite3.Error, OSError, ValueError) as exc:
+        LOG.warning('Collection history reading unavailable module=%s error_type=%s',
+                    module_key, type(exc).__name__)
+        raise OutcomeUnavailable('采集历史暂不可用') from None
 
 
 def latest_outcomes(settings):
@@ -97,12 +158,12 @@ TASK_MODULES = {
 }
 
 
-def record_task(settings, task, *, outcome, scheduled, run_key=None):
+def record_task(settings, task, *, outcome, scheduled, run_key=None, error_details=None):
     from uuid import uuid4
     run_key = run_key or uuid4().hex
     for module in TASK_MODULES.get(task, ()):
         record_outcome(settings, module, run_key=run_key, outcome=outcome,
-                       trigger='scheduled' if scheduled else 'manual')
+                       trigger='scheduled' if scheduled else 'manual', error_details=error_details)
 
 
 def legacy_outcomes(settings):

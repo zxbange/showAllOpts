@@ -37,7 +37,7 @@ export function ETFHeatPage() {
   const valid = items.filter((i) => i.score !== null)
   return (
     <div className="page-enter">
-      <PageHeader>
+      <PageHeader dataTimeNaiveBeijing dataUpdatedAt={data?.updated_at}>
         <div>
           <h1>
             ETF动量热度<span className="heading-tag">收盘观察</span>
@@ -220,7 +220,7 @@ export function ETFHeatDetailPage() {
         <ArrowLeft size={15} />
         返回ETF热力图
       </Link>
-      <PageHeader>
+      <PageHeader dataTimeNaiveBeijing dataUpdatedAt={data?.updated_at}>
         <div>
           <span className="page-code">{code}</span>
           <h1>{data?.name ?? 'ETF动量走势'}</h1>

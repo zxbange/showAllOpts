@@ -1,9 +1,11 @@
+import { dataUpdateInstant, formatDataUpdatedAt } from '../lib/dataUpdatedAt'
+import { CollectionHistoryFrame, CollectionHistoryError } from './CollectionHistory'
 import { PageHeaderActions } from './PageHeaderActions'
 import { useEffect, useRef, useState } from 'react'
 import { useAuth } from './AccountAccess'
 import { getETFCollectionStatus } from '../api/client'
 import { cancelCollection, runCollection } from '../api/etfCollection'
-import type { ETFCollectionStatus } from '../types/etf'
+import type { ETFCollectionStatus, ETFCollectionRun } from '../types/etf'
 import { collectionErrorMessage, withManualRun } from '../lib/etf'
 
 const active = (s?: ETFCollectionStatus | null) =>
@@ -30,6 +32,7 @@ export function ETFCollectionPanel({ onCollected }: { onCollected: () => void })
   const admin = useAuth().session?.user?.role === 'admin'
   const [status, setStatus] = useState<ETFCollectionStatus | null>(null)
   const [error, setError] = useState('')
+  const [historyUnavailable, setHistoryUnavailable] = useState(false)
   const [busy, setBusy] = useState('')
   const [uncertain, setUncertain] = useState(false)
   const [retryExhausted, setRetryExhausted] = useState(false)
@@ -85,8 +88,10 @@ export function ETFCollectionPanel({ onCollected }: { onCollected: () => void })
           reload.current()
         previous.current = next
         setStatus(next)
+        setHistoryUnavailable(false)
         if (active(next) || next.cache_pending) delay = 2000
       } catch {
+        if (live) setHistoryUnavailable(true)
         // Keep saved charts visible while the next poll retries status retrieval.
       }
       if (live) timer = setTimeout(poll, delay)
@@ -159,7 +164,7 @@ export function ETFCollectionPanel({ onCollected }: { onCollected: () => void })
     }
   }
   const progress = status?.progress
-  const recent =
+  const recent: ETFCollectionRun[] =
     status?.recent_runs ??
     status?.runs?.map((run, i) => ({
       ...run,
@@ -226,25 +231,30 @@ export function ETFCollectionPanel({ onCollected }: { onCollected: () => void })
         </p>
       )}
       {!!status?.gap_count && <p>当前交易日缺失 {status.gap_count} 项，可重试。</p>}
-      {!!recent.length && (
-        <details>
-          <summary>最近采集记录</summary>
-          <ul>
-            {recent.map((run) => (
-              <li key={run.id}>
-                {run.finished_at || run.requested_at} ·{' '}
-                {run.trigger === 'manual' ? '手动采集' : '自动采集'}
-                {run.attempt && run.attempt > 1 ? `（第${run.attempt}次尝试）` : ''}
-                {' · '}
-                {labels[run.status] ?? '状态待确认'}
-                {run.time_basis === 'legacy_request_time' ? ' · 旧记录，显示请求时间' : ''}
-                {run.time_basis === 'recovered_at' ? ' · 显示中断确认时间' : ''}
-                {run.error ? ` · ${collectionErrorMessage(run.error)}` : ''}
-              </li>
-            ))}
-          </ul>
-        </details>
-      )}
+      <CollectionHistoryFrame
+        hasRecords={recent.length > 0}
+        loading={!status && !historyUnavailable}
+        error={historyUnavailable ? '暂时无法读取最新采集记录' : ''}
+      >
+        {recent.slice(0, 5).map((run) => (
+          <li key={run.id}>
+            {dataUpdateInstant(run.finished_at || run.requested_at) != null
+              ? formatDataUpdatedAt(run.finished_at || run.requested_at)
+              : '记录时间未确认'}{' '}
+            · {run.trigger === 'manual' ? '手动采集' : '自动采集'}
+            {run.attempt && run.attempt > 1 ? `（第${run.attempt}次尝试）` : ''}
+            {' · '}
+            {labels[run.status] ?? '状态待确认'}
+            {run.time_basis === 'legacy_request_time' ? ' · 旧记录，显示请求时间' : ''}
+            {run.time_basis === 'recovered_at' ? ' · 显示中断确认时间' : ''}
+            {run.error ? ` · ${collectionErrorMessage(run.error)}` : ''}
+            <CollectionHistoryError
+              details={run.error_details}
+              failed={run.status === 'failed' || run.status === 'partial'}
+            />
+          </li>
+        ))}
+      </CollectionHistoryFrame>
     </section>
   )
 }

@@ -37,6 +37,7 @@ class ETFGroupOption(BaseModel):
 
 
 class ETFHistory(BaseModel):
+    updated_at: datetime | None = None
     group: str
     group_name: str
     start_date: DateValue | None = None

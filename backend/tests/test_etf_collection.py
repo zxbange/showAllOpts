@@ -761,3 +761,204 @@ def test_repeated_legacy_cancel_keeps_unknown_completion_time_and_latest_indicat
     assert rows[1] == legacy
     assert not any(row['id'] == 'manual:legacy-cancel' for row in rows)
     assert latest_outcomes(w.settings)['items']['etf-shares']['outcome'] == 'success'
+
+
+def test_native_history_pruning_is_opt_in_and_never_touches_recovery_ledgers(tmp_path):
+    from app.services.etf_collection_history import prune_native_history
+    w, _, _ = worker(tmp_path)
+    with w.connect() as db:
+        for index in range(8):
+            stamp = (EVENING + timedelta(minutes=index)).isoformat()
+            db.execute('INSERT INTO run_history VALUES (?,?,?,?,?,?,?,?,?)',
+                       (str(index), 'manual', 'failed', None, stamp, stamp, None, None, 'completed_at'))
+            db.execute('INSERT INTO run_history_errors VALUES (?,?)', (str(index), '{}'))
+        db.execute('INSERT INTO run_history VALUES (?,?,?,?,?,?,?,?,?)',
+                   ('active', 'scheduled', 'publishing', None, EVENING.isoformat(), None, None, 1, 'started_at'))
+        db.execute('INSERT INTO manual_runs(id,status,requested_at) VALUES (?,?,?)', ('old', 'failed', EVENING.isoformat()))
+        db.execute('INSERT INTO slots VALUES (?,?,?,?,?)', (EVENING.isoformat(), 'failed', 1, EVENING.isoformat(), 'old'))
+        db.execute('INSERT INTO observations VALUES (?,?,?,?,?)', ('shares', 'x', DAY.isoformat(), 'pending', 2))
+        before = {name: [tuple(r) for r in db.execute('SELECT * FROM ' + name)] for name in ('slots', 'manual_runs', 'observations', 'metadata')}
+    assert prune_native_history(w.settings) == {'module': 'etf-shares', 'candidates': 3, 'deleted': 0}
+    with pytest.raises(ValueError):
+        prune_native_history(w.settings, apply=True)
+    assert len(w.status()['recent_runs']) == 8
+    assert prune_native_history(w.settings, apply=True, confirmed=True)['deleted'] == 3
+    with w.connect() as db:
+        assert [r[0] for r in db.execute('SELECT id FROM run_history ORDER BY id')] == ['3', '4', '5', '6', '7', 'active']
+        assert db.execute('SELECT COUNT(*) FROM run_history_errors').fetchone()[0] == 5
+        assert before == {name: [tuple(r) for r in db.execute('SELECT * FROM ' + name)] for name in before}
+    assert prune_native_history(w.settings)['candidates'] == 0
+    from app.services.etf_collection_history import restore_native_history
+    assert restore_native_history(w.settings)['candidates'] == 3
+    assert len(w.status()['recent_runs']) == 5
+    with pytest.raises(ValueError):
+        restore_native_history(w.settings, apply=True)
+    assert restore_native_history(w.settings, apply=True, confirmed=True)['restored'] == 3
+    assert len(w.status()['recent_runs']) == 8
+    assert restore_native_history(w.settings)['candidates'] == 0
+    with w.connect() as db:
+        assert db.execute('SELECT COUNT(*) FROM run_history_archive').fetchone()[0] == 3
+
+
+def test_pruned_cancel_history_cannot_reappear_on_repeat_cancel(tmp_path):
+    w, _, _ = worker(tmp_path)
+    w.start = lambda: None
+    w.request_run('old-cancel')
+    w.request_cancel('old-cancel')
+    with w.connect() as db:
+        db.execute('DELETE FROM run_history')
+    assert w.request_cancel('old-cancel')['status'] == 'cancelled'
+    assert not w.status()['recent_runs']
+
+
+def test_etf_history_safe_details_preserve_stage_without_driver_secrets(tmp_path):
+    w, c, _ = worker(tmp_path)
+    c.write_failure = True
+    w.tick(EVENING)
+    row = w.status()['latest_result']
+    assert row['status'] == 'failed'
+    assert row['error_details']['stage'] == 'database_write'
+    assert 'secret' not in str(row['error_details'])
+    assert 'DSN' not in str(row['error_details'])
+
+
+def test_native_history_archive_mismatch_rolls_back_without_losing_active_rows(tmp_path):
+    from app.services.etf_collection_history import prune_native_history
+    w, _, _ = worker(tmp_path)
+    with w.connect() as db:
+        for index in range(6):
+            stamp = (EVENING + timedelta(minutes=index)).isoformat()
+            db.execute('INSERT INTO run_history VALUES (?,?,?,?,?,?,?,?,?)',
+                       (str(index), 'manual', 'failed', None, stamp, stamp, None, None, 'completed_at'))
+        db.execute('CREATE TABLE run_history_archive (id TEXT PRIMARY KEY, original_rowid INTEGER, payload TEXT, details TEXT)')
+        db.execute('INSERT INTO run_history_archive VALUES (?,?,?,?)', ('0', 1, '{}', None))
+    with pytest.raises(ValueError, match='verification failed'):
+        prune_native_history(w.settings, apply=True, confirmed=True)
+    assert len(w.status()['recent_runs']) == 6
+
+
+def test_native_history_default_retention_does_not_archive(tmp_path):
+    w, _, _ = worker(tmp_path)
+    assert not getattr(w.settings, 'collection_history_retention_enabled', False)
+    w._retain_history()
+    assert not (w.root / 'state.sqlite').exists()
+
+
+def test_native_retention_only_when_explicitly_enabled(tmp_path):
+    w, _, _ = worker(tmp_path)
+    with w.connect() as db:
+        for index in range(6):
+            stamp = (EVENING + timedelta(minutes=index)).isoformat()
+            db.execute('INSERT INTO run_history VALUES (?,?,?,?,?,?,?,?,?)',
+                       (str(index), 'manual', 'failed', None, stamp, stamp, None, None, 'completed_at'))
+    w._retain_history()
+    assert len(w.status()['recent_runs']) == 6
+    w.settings = w.settings.model_copy(update={'collection_history_retention_enabled': True})
+    w._retain_history()
+    assert len(w.status()['recent_runs']) == 5
+    with w.connect() as db:
+        assert db.execute('SELECT COUNT(*) FROM run_history_archive').fetchone()[0] == 1
+
+
+def test_native_history_restore_after_multiple_archive_cycles(tmp_path):
+    from app.services.etf_collection_history import prune_native_history, restore_native_history
+    w, _, _ = worker(tmp_path)
+    for start in (0, 6):
+        with w.connect() as db:
+            for index in range(start, start + 6):
+                stamp = (EVENING + timedelta(minutes=index)).isoformat()
+                db.execute('INSERT INTO run_history VALUES (?,?,?,?,?,?,?,?,?)',
+                           (str(index), 'manual', 'failed', None, stamp, stamp, None, None, 'completed_at'))
+        prune_native_history(w.settings, apply=True, confirmed=True)
+    assert len(w.status()['recent_runs']) == 5
+    assert restore_native_history(w.settings, apply=True, confirmed=True)['restored'] == 7
+    assert [row['id'] for row in w.status()['recent_runs']] == [str(i) for i in reversed(range(12))]
+    w.settings = w.settings.model_copy(update={'collection_history_retention_enabled': True})
+    with pytest.raises(ValueError, match='Disable'):
+        restore_native_history(w.settings, apply=True, confirmed=True)
+
+
+def test_history_cli_preview_and_restore_preview_do_not_write(tmp_path, monkeypatch, capsys):
+    import importlib.util
+    import sys
+    from pathlib import Path
+    from app.services.etf_collection_history import prune_native_history
+    w, _, _ = worker(tmp_path)
+    with w.connect() as db:
+        for index in range(6):
+            stamp = (EVENING + timedelta(minutes=index)).isoformat()
+            db.execute('INSERT INTO run_history VALUES (?,?,?,?,?,?,?,?,?)',
+                       (str(index), 'manual', 'failed', None, stamp, stamp, None, None, 'completed_at'))
+    path = Path(__file__).resolve().parents[2] / 'scripts' / 'prune_collection_history.py'
+    spec = importlib.util.spec_from_file_location('prune_cli_test', path)
+    cli = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(cli)
+    monkeypatch.setattr(cli, 'Settings', lambda: w.settings)
+    for args in ([], ['--restore']):
+        before = (w.root / 'state.sqlite').read_bytes()
+        monkeypatch.setattr(sys, 'argv', [str(path), *args])
+        cli.main()
+        assert (w.root / 'state.sqlite').read_bytes() == before
+    prune_native_history(w.settings, apply=True, confirmed=True)
+    before = (w.root / 'state.sqlite').read_bytes()
+    monkeypatch.setattr(sys, 'argv', [str(path), '--restore'])
+    cli.main()
+    assert (w.root / 'state.sqlite').read_bytes() == before
+
+
+def test_native_permanent_purge_keeps_union_latest_five_and_never_operations(tmp_path):
+    import json
+    from app.services.etf_collection_history import purge_native_history, prune_native_history
+    w, _, _ = worker(tmp_path)
+    with w.connect() as db:
+        for index in range(8):
+            stamp = (EVENING + timedelta(minutes=index)).isoformat()
+            db.execute('INSERT INTO run_history VALUES (?,?,?,?,?,?,?,?,?)',
+                       (str(index), 'manual', 'failed', None, stamp, stamp, None, None, 'completed_at'))
+            db.execute('INSERT INTO run_history_errors VALUES (?,?)', (str(index), '{}'))
+        db.execute('INSERT INTO slots VALUES (?,?,?,?,?)', (EVENING.isoformat(), 'failed', 1, EVENING.isoformat(), 'error'))
+    prune_native_history(w.settings, apply=True, confirmed=True)
+    with w.connect() as db:
+        # Simulate a later valid completion archived while fewer active rows exist.
+        row = dict(db.execute("SELECT * FROM run_history WHERE id='7'").fetchone())
+        db.execute('INSERT INTO run_history_archive VALUES (?,?,?,?)', ('7', 8, json.dumps(row, sort_keys=True), '{}'))
+        db.execute("DELETE FROM run_history WHERE id='7'")
+        db.execute('INSERT INTO run_history VALUES (?,?,?,?,?,?,?,?,?)',
+                   ('live', 'scheduled', 'publishing', None, EVENING.isoformat(), None, None, 1, 'started_at'))
+        before = {name: [tuple(r) for r in db.execute('SELECT * FROM ' + name)] for name in ('slots', 'manual_runs', 'observations', 'metadata')}
+    database_bytes = (w.root / 'state.sqlite').read_bytes()
+    assert purge_native_history(w.settings) == {'module': 'etf-shares', 'candidates': 3, 'deleted': 0}
+    assert (w.root / 'state.sqlite').read_bytes() == database_bytes
+    with pytest.raises(ValueError, match='permanent'):
+        purge_native_history(w.settings, apply=True)
+    assert purge_native_history(w.settings, apply=True, confirmed=True)['deleted'] == 3
+    with w.connect() as db:
+        assert {r[0] for r in db.execute('SELECT id FROM run_history')} == {'3', '4', '5', '6', 'live'}
+        assert {r[0] for r in db.execute('SELECT id FROM run_history_archive')} == {'7'}
+        assert not db.execute("SELECT 1 FROM run_history_errors WHERE id IN ('0','1','2')").fetchone()
+        assert before == {name: [tuple(r) for r in db.execute('SELECT * FROM ' + name)] for name in before}
+    assert purge_native_history(w.settings)['candidates'] == 0
+
+
+def test_native_permanent_purge_protects_unknown_states_and_unparseable_times(tmp_path):
+    from app.services.etf_collection_history import purge_native_history
+    w, _, _ = worker(tmp_path)
+    with w.connect() as db:
+        for index in range(6):
+            stamp = (EVENING + timedelta(minutes=index)).isoformat()
+            db.execute('INSERT INTO run_history VALUES (?,?,?,?,?,?,?,?,?)',
+                       (str(index), 'manual', 'failed', None, stamp, stamp, None, None, 'completed_at'))
+        for key, state, requested, finished in [
+            ('unknown-state', 'future_status', EVENING.isoformat(), EVENING.isoformat()),
+            ('bad-finish', 'failed', EVENING.isoformat(), 'invalid'),
+            ('bad-legacy', 'failed', 'invalid', None),
+            ('valid-legacy', 'failed', EVENING.isoformat(), None),
+        ]:
+            db.execute('INSERT INTO run_history VALUES (?,?,?,?,?,?,?,?,?)',
+                       (key, 'manual', state, None, requested, finished, None, None, 'completed_at'))
+    assert purge_native_history(w.settings, apply=True, confirmed=True)['deleted'] == 2
+    with w.connect() as db:
+        ids = {row[0] for row in db.execute('SELECT id FROM run_history')}
+    assert {'unknown-state', 'bad-finish', 'bad-legacy'} <= ids
+    assert '0' not in ids and 'valid-legacy' not in ids
+    assert len(ids) == 8

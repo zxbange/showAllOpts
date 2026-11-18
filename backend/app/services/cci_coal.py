@@ -1,3 +1,4 @@
+from app.services.collection_errors import safe_error as public_error
 from app.services.collection_outcomes import record_task
 from app.services.collection_calendar import automatic_collection_allowed, manual_failure_isolated
 from app.services.system_configuration import task_config
@@ -218,6 +219,7 @@ class CCICoal(Commodities):
         details = []
         count = inserted = changed = target_hits = 0
         outcome = 'failed'
+        run_error = None
         trigger = 'scheduled' if slot else 'manual'
         isolated = slot is None and manual_failure_isolated(now())
         manual_snapshot = None
@@ -349,6 +351,7 @@ class CCICoal(Commodities):
                        inserted=inserted, changed=changed, recovery=recovery,
                        grades=details, elapsedMs=round((monotonic()-began)*1000))
         except Exception as exc:
+            run_error = public_error(exc, stage='collection')
             outcome = 'interrupted' if self.stopping.is_set() else 'failed'
             summarize()
             LOG.warning('CCI collection failed target=%s type=%s error=%s', day, type(exc).__name__, safe_error(exc))
@@ -376,7 +379,8 @@ class CCICoal(Commodities):
                         db.execute('UPDATE schedule_runs SET status=?,finished_at=? WHERE slot=?', (outcome, now().isoformat(), slot.isoformat()))
                 for detail in details:
                     LOG.info('CCI grade result %s', json.dumps(detail, ensure_ascii=False))
-                record_task(self.settings, 'cci', outcome='partial' if outcome == 'no_quote' else outcome, scheduled=slot is not None)
+                record_task(self.settings, 'cci', outcome='partial' if outcome == 'no_quote' else outcome, scheduled=slot is not None,
+                            error_details=(run_error or public_error(stage='fetch')) if outcome in ('failed', 'partial', 'no_quote') else None)
                 LOG.info('CCI collection finish target=%s trigger=%s outcome=%s observed=%s inserted=%s changed=%s recovery=%s elapsedMs=%s slot=%s',
                          day, trigger, outcome, count, inserted, changed, json.dumps(recovery, ensure_ascii=False),
                          round((monotonic()-began)*1000), slot.isoformat() if slot else '-')

@@ -234,7 +234,7 @@ def history(service, cutoff, index_code, basis):
     points = []
     for row in rows:
         counts = row['statistics'][basis]
-        point = dict(date=row['trade_date'], index_close=float(row['index_close']), source=row['source'],
+        point = dict(date=row['trade_date'], updated_at=row.get('updated_at'), index_close=float(row['index_close']), source=row['source'],
                      member_count=row['member_count'], positive_count=counts['eligible'], loss_count=counts['loss'],
                      missing_pe_count=counts['missing_pe'], excluded_high_pe_count=counts['over_limit'])
         point.update({key: None if row[key] is None else float(row[key]) for key in METRICS})
@@ -245,6 +245,7 @@ def history(service, cutoff, index_code, basis):
     values = [p['mean_pe'] for p in points if p['mean_pe'] is not None]
     first, last = (points[0]['date'], points[-1]['date']) if points else (None, None)
     return dict(points=points, latest=points[-1] if points else None, method=METHOD, index_code=index_code,
+        updated_at=max((datetime.fromisoformat(r['updated_at']) for r in rows if r.get('updated_at')), default=None),
         index_name=INDICES[index_code][0], basis=basis,
         benchmarks=dict(p20=quantile(values, .2), p50=quantile(values, .5), p80=quantile(values, .8),
                         sample_days=len(values), start_date=first, end_date=last),

@@ -1,4 +1,5 @@
 from app.services.collection_outcomes import record_task
+from app.services.collection_errors import safe_error
 from app.services.collection_calendar import next_automatic_collection, automatic_collection_allowed, manual_failure_isolated
 from app.services.system_configuration import task_config, latest_task_slot
 """两融担保比例：东方财富接口、独立本地存储、北京时间08点调度。"""
@@ -239,6 +240,7 @@ class MarginGuarantee:
     def _collect(self, lock, state, moment):
         started = monotonic()
         outcome = 'failed'
+        run_error = None
         marker = self.root / ('cancel-' + state['run_id'])
         def check_cancel():
             if (state.get('current_scheduled_slot') is not None and not automatic_collection_allowed(moment + timedelta(seconds=monotonic()-started))) or self.stop_event.is_set() or marker.exists():
@@ -298,11 +300,13 @@ class MarginGuarantee:
                     state['stage'] = '保存两融担保比例 ' + row['trade_date']
                     self.write_state(state)
                     report = None
+                    report_stage = 'fetch'
                     try:
                         report = fetched.get((row['trade_date'], row['source_url'])) or MarginReport(
                             date.fromisoformat(row['trade_date']), row['source_url'])
                         point = fetch_point(client, report)
                         check_cancel()
+                        report_stage = 'validate'
                         correction = point.get('source_correction')
                         corrected = (correction == TITLE_DATE_CORRECTION
                                      and row['trade_date'] == TITLE_DATE_CORRECTION['report_date']
@@ -321,6 +325,7 @@ class MarginGuarantee:
                             raise MarginSourceError('中证日报比例不是有效数字或超出合理范围。') from None
                         if not math.isfinite(ratio) or not 0 < ratio < 10000:
                             raise MarginSourceError('中证日报比例不是有效数字或超出合理范围。')
+                        report_stage = 'database_write'
                         # Commit each verified day immediately; a failed later request cannot lose it.
                         with self.db() as db:
                             existing = db.execute('SELECT ratio FROM points WHERE trade_date=?',
@@ -340,6 +345,7 @@ class MarginGuarantee:
                     except CollectionCancelled:
                         raise
                     except Exception as exc:
+                        run_error = safe_error(exc, stage=report_stage, trade_date=row['trade_date'])
                         failures += 1
                         consecutive_failures += 1
                         failure = dict(scope='report', date=row['trade_date'],
@@ -369,6 +375,7 @@ class MarginGuarantee:
             outcome = 'cancelled'
         except Exception as exc:
             if not stopped_after_failures:
+                run_error = safe_error(exc, stage='collection')
                 state['last_failure'] = dict(scope=scope, **safe_error_details(exc))
             prefix = ('连续三份日报读取失败，已停止本轮。' if stopped_after_failures
                       else '两融数据读取或校验失败。')
@@ -392,11 +399,12 @@ class MarginGuarantee:
                 marker.unlink(missing_ok=True)
             except BaseException as exc:
                 outcome = 'failed'
+                run_error = safe_error(exc, stage='cache_publish')
                 LOG.error('Margin finalization failed details=%s', diagnostic_details(exc))
                 raise
             finally:
                 try:
-                    record_task(self.settings, 'margin', outcome=outcome, scheduled=state.get('current_scheduled_slot') is not None, run_key=state['run_id'])
+                    record_task(self.settings, 'margin', outcome=outcome, scheduled=state.get('current_scheduled_slot') is not None, run_key=state['run_id'], error_details=run_error if outcome in ('failed', 'partial') else None)
                     lock.release()
                 except BaseException as exc:
                     outcome = 'failed'

@@ -3,6 +3,7 @@ import { ChartNoAxesCombined, ChevronRight, House, Layers3 } from 'lucide-react'
 import { Link, NavLink, Outlet, useLocation } from 'react-router-dom'
 import { PageHeaderActionsProvider } from './PageHeaderActions'
 import { CollectionOutcomesProvider, CollectionOutcomeLight } from './CollectionOutcome'
+import { PageCollectionHistory } from './CollectionHistory'
 import { CacheControl } from './CacheControl'
 import { useAuth } from './AccountAccess'
 import { accountRequest } from '../api/http'
@@ -139,6 +140,7 @@ function LayoutContent() {
         <main id="main-content" className="main-content">
           <PageHeaderActionsProvider key={location.pathname}>
             <Outlet />
+            <PageCollectionHistory admin={session?.user?.role === 'admin'} />
           </PageHeaderActionsProvider>
         </main>
       </div>

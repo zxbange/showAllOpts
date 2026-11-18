@@ -28,6 +28,7 @@ export interface HolderPoint {
   payload: { a_share_holders: number | null; share_holders: number | null }
 }
 export interface OwnershipDetail {
+  updated_at?: string | null
   stock: OwnershipStock
   reports: OwnershipReport[]
   holders: HolderPoint[]
@@ -54,6 +55,7 @@ export interface SocialEntry extends OwnershipStock {
   pub_date: string | null
 }
 export interface SocialEntries {
+  updated_at?: string | null
   period: string
   periods: string[]
   items: SocialEntry[]

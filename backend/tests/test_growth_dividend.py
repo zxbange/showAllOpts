@@ -441,3 +441,22 @@ def test_publication_failure_stops_before_next_window_and_replays_pending(
     assert monitor.status(MOMENT)['error'] is None
     with monitor.db() as db:
         assert db.execute('SELECT count(*) FROM public_publication').fetchone()[0] == 0
+
+
+def test_outcome_window_diagnostic_clears_after_success(monitor, monkeypatch):
+    records = []
+    monkeypatch.setattr(m, 'record_task', lambda *args, **kw: records.append(kw))
+    provider(monkeypatch)
+    def fail(*args, **kwargs):
+        raise httpx.ReadTimeout('token=secret SELECT private')
+    monkeypatch.setattr(m, 'fetch_prices', fail)
+    monitor.refresh(background=False, moment=MOMENT)
+    error = records[-1]['error_details']
+    assert records[-1]['outcome'] == 'partial'
+    assert error['code'] == 'timeout' and error['stage'] == 'fetch'
+    assert error['start_date'] <= error['end_date']
+    assert 'secret' not in str(error)
+    provider(monkeypatch)
+    monitor.refresh(background=False, moment=MOMENT)
+    assert records[-1]['outcome'] == 'success'
+    assert records[-1]['error_details'] is None

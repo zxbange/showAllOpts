@@ -16,8 +16,10 @@ def test_api_search_detail_and_social(client,session):
     detail=client.get('/api/v1/institution-ownership/stocks/600001').json()
     assert detail['holder_change']==-20 and detail['holder_change_pct']==-20
     assert len(detail['holders'])==2
+    assert detail['updated_at']==stamp.isoformat()
     result=client.get('/api/v1/institution-ownership/social-entries?period=2026-09-30').json()
     assert len(result['items'])==1 and result['comparable_count']==1
+    assert result['updated_at']==stamp.isoformat()
     assert client.get('/api/v1/institution-ownership/stocks/invalid').status_code==422
     assert client.get('/api/v1/institution-ownership/stocks/999999').status_code==404
     assert client.get('/api/v1/institution-ownership/social-entries?period=2026-09-29').status_code==422
@@ -231,3 +233,19 @@ def test_resolved_social_flags_preserve_quantity_and_ratio_validation():
         assert result['current_ratio'] is None
     assert social_total({'float_complete': True, 'float_members': [
         {'class_id': 307004, 'shares': 100}, {'class_id': 307099, 'shares': None}]}) == 100
+
+
+def test_business_updated_at_ignores_newer_stock_directory_and_future_rows(client, session):
+    code = '600010.XSHG'
+    session.add(OwnershipStock(code=code, name='测试', updated_at=datetime(2030, 1, 1)))
+    session.commit()
+    assert client.get('/api/v1/institution-ownership/stocks/600010').json()['updated_at'] is None
+    assert client.get('/api/v1/institution-ownership/social-entries?period=2026-09-30').json()['updated_at'] is None
+    session.add_all([
+        OwnershipReport(code=code, report_date=date(2026, 9, 30), payload={}, updated_at=datetime(2026, 10, 1)),
+        OwnershipHolders(code=code, end_date=date(2026, 9, 30), payload={}, updated_at=datetime(2026, 10, 2)),
+        OwnershipReport(code=code, report_date=date(2099, 9, 30), payload={}, updated_at=datetime(2099, 10, 1)),
+    ])
+    session.commit()
+    assert client.get('/api/v1/institution-ownership/stocks/600010').json()['updated_at'] == '2026-10-02T00:00:00'
+    assert client.get('/api/v1/institution-ownership/social-entries?period=2026-09-30').json()['updated_at'] == '2026-10-01T00:00:00'

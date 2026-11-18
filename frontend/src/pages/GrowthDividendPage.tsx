@@ -174,7 +174,7 @@ export function GrowthDividendPage() {
 
   return (
     <div className="page-enter growth-dividend-page">
-      <PageHeader>
+      <PageHeader dataUpdatedAt={data?.updated_at}>
         <div>
           <h1>
             市场情绪 <span className="heading-tag">创红比</span>
@@ -399,8 +399,8 @@ export function GrowthDividendPage() {
         </div>
         {status?.sync_summary && (
           <p role="status">
-            数据库同步：新增 {status.sync_summary.inserted} 条， 已存在 {status.sync_summary.existing}{' '}
-            条。
+            数据库同步：新增 {status.sync_summary.inserted} 条， 已存在{' '}
+            {status.sync_summary.existing} 条。
             {status.sync_summary.coverage}
           </p>
         )}

@@ -39,6 +39,7 @@ def resolve_env_file() -> Path:
 
 
 class Settings(BaseSettings):
+    collection_history_retention_enabled: bool = False
     _resolved_env_file: Path | None = PrivateAttr(default=None)
 
     @property

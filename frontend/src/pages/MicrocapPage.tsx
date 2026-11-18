@@ -28,7 +28,7 @@ export function MicrocapPage() {
   const latest = data?.latest
   return (
     <div className="page-enter microcap-page">
-      <PageHeader>
+      <PageHeader dataTimeNaiveBeijing dataUpdatedAt={latest?.updated_at}>
         <div>
           <h1>
             微盘温度计<span className="heading-tag">估值 · 交易 · 温度</span>

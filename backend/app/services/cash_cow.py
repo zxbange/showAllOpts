@@ -1,4 +1,5 @@
 from app.services.collection_outcomes import record_task
+from app.services.collection_errors import safe_error
 from app.services.collection_failure_isolation import quarantine_publication, restore_manual_publication
 from app.services.collection_calendar import automatic_collection_allowed, manual_failure_isolated
 """Shared external 3/5/10-year screen, published to MySQL and local SQLite.
@@ -248,6 +249,8 @@ class CashCowScreen:
         publication = None
         started = monotonic()
         run_outcome = 'failed'
+        run_error = None
+        error_stage = 'database_write'
         LOG.info('Cash cow collection started source=asharehub+eastmoney+tushare periods=3,5,10')
 
         def check_cancel():
@@ -303,6 +306,7 @@ class CashCowScreen:
                 source = (self.source_factory or (lambda client, **kw: CombinedCashCowSource(client, settings=self.settings, **kw)))(client, check_cancel=check_cancel,
                     as_of=moment.astimezone(CHINA).date(), progress=progress,
                     cache_dir=self.root / 'source-cache')
+                error_stage = 'fetch'
                 items, outcomes, stocks = screen_cash_cows(source, end_year, progress, check_cancel)
                 check_cancel()
                 updated_at = now().isoformat()
@@ -329,6 +333,7 @@ class CashCowScreen:
                         excluded_count=excluded, insufficient_count=insufficient, matched_count=len(items[period]),
                         source=PUBLIC_SOURCE, rule_version=RULE_VERSION)
                     payloads[str(period)] = dict(snapshot=snapshot, items=items[period])
+                error_stage = 'database_write'
                 state['stage'] = '写入数据库并发布本地结果'
                 self.write_state(state)
                 publication.stage(payloads)
@@ -345,6 +350,7 @@ class CashCowScreen:
             state.update(stage='已取消，保留上次结果')
         except Exception as exc:
             run_outcome = 'failed'
+            run_error = safe_error(exc, stage=error_stage)
             LOG.error('Cash cow screen failed details=%s', diagnostic_details(exc))
             state.update(stage='更新失败，保留上次结果',
                          error=str(exc) if isinstance(exc, CashCowSourceError) else '筛选暂未完成，请稍后重试。')
@@ -363,6 +369,7 @@ class CashCowScreen:
                         self.write_state(state)
             except BaseException as exc:
                 run_outcome = 'failed'
+                run_error = safe_error(exc, stage='cache_publish')
                 LOG.error('Cash cow state finalization failed details=%s', diagnostic_details(exc))
                 raise
             finally:
@@ -370,11 +377,12 @@ class CashCowScreen:
                     marker.unlink(missing_ok=True)
                 except BaseException as exc:
                     run_outcome = 'failed'
+                    run_error = safe_error(exc, stage='collection')
                     LOG.error('Cash cow marker cleanup failed details=%s', diagnostic_details(exc))
                     raise
                 finally:
                     try:
-                        record_task(self.settings, 'cash_cow', outcome=run_outcome, scheduled=state.get('current_scheduled_slot') is not None, run_key=state['run_id'])
+                        record_task(self.settings, 'cash_cow', outcome=run_outcome, scheduled=state.get('current_scheduled_slot') is not None, run_key=state['run_id'], error_details=run_error if run_outcome == 'failed' else None)
                         lock.release()
                     except BaseException as exc:
                         run_outcome = 'failed'

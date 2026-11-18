@@ -17,6 +17,9 @@ export const test = base.extend({
     await page.route('**/api/v1/collection-outcomes', (route) =>
       route.fulfill({ json: { items: {} } }),
     )
+    await page.route('**/api/v1/collection-outcomes/history?**', (route) =>
+      route.fulfill({ json: { items: [] } }),
+    )
     await use(page)
   },
 })

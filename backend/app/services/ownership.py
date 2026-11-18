@@ -113,6 +113,7 @@ class OwnershipService:
                 change = current - previous
                 pct = change / previous * 100 if previous > 0 else None
         return {'stock': stock_item(stock),
+                'updated_at': max((r.updated_at for r in [*reports, *holders] if r.updated_at), default=None),
                 'reports': [{'date': r.report_date, 'payload': disclosed_report(r.payload)} for r in reports],
                 'holders': [{'date': h.end_date, 'pub_date': h.pub_date, 'payload': h.payload} for h in holders],
                 'holder_change': change, 'holder_change_pct': pct}
@@ -144,5 +145,6 @@ class OwnershipService:
         items.sort(key=lambda r: (r.get(sort_key) is None, -(r.get(sort_key) or 0), r['code']))
         periods = sorted(set(self.repository.periods(today) + [latest_quarter(today)]), reverse=True)
         return {'period': period, 'periods': periods, 'items': items,
+                'updated_at': max((r.updated_at for r, _ in rows if r.updated_at), default=None),
                 'comparable_count': eligible, 'unknown_count': unknown,
                 'collected_count': len(rows)}
