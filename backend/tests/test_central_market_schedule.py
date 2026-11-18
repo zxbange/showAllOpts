@@ -20,8 +20,8 @@ def test_midnight_batch_keeps_previous_day_even_if_recovered_evening(tmp_path):
     assert owner._data_cutoff(now, False) == DAY
     assert owner._data_cutoff(now.replace(hour=20), False) == DAY
     assert owner._data_cutoff(now.replace(hour=20), True).isoformat() == '2026-11-11'
-    assert owner._scheduled_scope(now) == 'scheduled:2026-11-11'
-    assert owner._scheduled_scope(now - timedelta(seconds=1)) == 'scheduled:2026-11-10'
+    assert owner._scheduled_scope(now) == 'scheduled:v2:2026-11-11T00:01+08:00'
+    assert owner._scheduled_scope(now - timedelta(seconds=1)) == 'scheduled:v2:2026-11-10T00:01+08:00'
 
 
 def test_status_has_daily_next_slot_without_calendar(tmp_path):
@@ -59,8 +59,8 @@ def test_dynamic_schedule_changes_scope_and_next_run(tmp_path, monkeypatch):
     del owner._auto_time
     monkeypatch.setattr('app.services.market_collection.task_config', lambda settings, key: {'times': ['01:30'], 'enabled': True})
     now = datetime(2026, 11, 11, 1, 29, tzinfo=CHINA)
-    assert owner._scheduled_scope(now) == 'scheduled:2026-11-10'
-    assert owner._scheduled_scope(now + timedelta(minutes=1)) == 'scheduled:2026-11-11'
+    assert owner._scheduled_scope(now) == 'scheduled:v2:2026-11-10T01:30+08:00'
+    assert owner._scheduled_scope(now + timedelta(minutes=1)) == 'scheduled:v2:2026-11-11T01:30+08:00'
     assert owner.status()['next_run_at'] == '2026-11-11T01:30:00+08:00'
 
 

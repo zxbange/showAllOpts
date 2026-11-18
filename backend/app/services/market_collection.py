@@ -233,6 +233,8 @@ class MarketCollection:
         self.wake_event = threading.Event()
         self.thread_lock = threading.Lock()
         self.worker = None
+        self._scheduler_notes = {}
+        self._scheduler_notes_lock = threading.Lock()
 
     @contextmanager
     def connect(self):
@@ -672,7 +674,7 @@ class MarketCollection:
     def _data_cutoff(self, moment, manual):
         if manual:
             return moment.date() if moment.time() >= time(18, 30) else moment.date() - timedelta(days=1)
-        slot = moment.date() if moment.time() >= self._auto_time() else moment.date() - timedelta(days=1)
+        slot = self._scheduled_slot(moment).date()
         return slot if self._auto_time() >= time(18, 30) else slot - timedelta(days=1)
 
     def start(self):
@@ -694,7 +696,7 @@ class MarketCollection:
             try:
                 self.tick(self.clock())
             except Exception as error:
-                LOG.warning('Market collection scheduler failed %s', diagnostic_details(error))
+                self._scheduler_note('scheduler_error', self.clock(), details=diagnostic_details(error))
             self.wake_event.wait(30)
             self.wake_event.clear()
 
@@ -793,9 +795,72 @@ class MarketCollection:
                             None if complete or reset else row['next_attempt_at'],
                             stamp if complete or reset else row['updated_at'], day))
 
+    def _scheduled_slot(self, moment):
+        local = moment.astimezone(CHINA)
+        slot = datetime.combine(local.date(), self._auto_time(), CHINA)
+        return slot if slot <= local else slot - timedelta(days=1)
+
     def _scheduled_scope(self, moment):
-        slot = moment.date() if moment.time() >= self._auto_time() else moment.date() - timedelta(days=1)
-        return 'scheduled:' + str(slot)
+        # The wall-clock slot, not merely its date, identifies a durable batch.
+        return 'scheduled:v2:' + self._scheduled_slot(moment).isoformat(timespec='minutes')
+
+    def _scheduler_note(self, reason, moment, scope=None, *, details=None):
+        # No credentials, upstream bodies or user identifiers. Bound both memory
+        # and repeated idle logging; lock contention must not mutate SQLite.
+        stamp = monotonic_time.monotonic()
+        key = (reason, scope)
+        with self._scheduler_notes_lock:
+            notes = self._scheduler_notes
+            if key in notes and stamp - notes[key] < 300:
+                return
+            if len(notes) >= 64:
+                del notes[min(notes, key=notes.get)]
+            notes[key] = stamp
+        log = LOG.warning if reason == 'scheduler_error' else LOG.info
+        log('Market scheduler decision=%s scope=%s observed_at=%s%s',
+                 reason, scope or '-', _stamp(moment),
+                 ' details=' + details if details else '')
+
+    def _migrate_schedule_scope(self, moment, scope):
+        """Preserve legacy retry evidence without treating an old clock as done.
+
+        Called under collection.lock. A date-only planned_scope cannot prove
+        which time/data cutoff ran. Re-plan once, retaining published metrics,
+        access cooldowns and per-target retry budgets. Legacy rows remain intact.
+        """
+        slot = self._scheduled_slot(moment)
+        legacy = 'scheduled:' + str(slot.date())
+        marker = 'scope-migrated:' + scope
+        with self.connect() as db:
+            if db.execute('SELECT 1 FROM metadata WHERE key=?', (marker,)).fetchone():
+                return
+            prefix = 'pass-budget:' + legacy + ':'
+            rows = list(db.execute('SELECT key,value FROM metadata WHERE key LIKE ?', (prefix + '%',)))
+            cutoff = str(self._data_cutoff(moment, False))
+            # An old midnight batch can retry after 23:58. Time alone is not
+            # evidence: only a run targeting the new cutoff may carry its global
+            # dependency budget to this slot.
+            matching_target = False
+            for run in db.execute('SELECT requested_at,day FROM manual_runs WHERE day=?', (cutoff,)):
+                try:
+                    requested = datetime.fromisoformat(run[0])
+                    matching_target |= slot <= requested < slot + timedelta(days=1)
+                except (ValueError, TypeError):
+                    continue
+            # Earlier targets keep their conservative budget. A new cutoff
+            # must not inherit an earlier manual run's exhausted budget unless
+            # that run really belonged to this due window.
+            rows = [row for row in rows if row[0][len(prefix):] < cutoff
+                    or (row[0][len(prefix):] == cutoff and matching_target)]
+            if matching_target:
+                rows += list(db.execute('SELECT key,value FROM metadata WHERE key=?', ('dependency-budget:' + legacy,)))
+            for old_key, value in rows:
+                key = old_key.replace(legacy, scope, 1)
+                old = db.execute('SELECT value FROM metadata WHERE key=?', (key,)).fetchone()
+                count = max(int(value), int(old[0]) if old else 0)
+                db.execute('INSERT OR REPLACE INTO metadata VALUES (?,?)', (key, str(count)))
+            db.execute('INSERT INTO metadata VALUES (?,?)', (marker, _stamp(moment)))
+        self._scheduler_note('scope_initialized', moment, scope)
 
     def _pass_count(self, scope, day):
         return int(self._meta('pass-budget:' + scope + ':' + day, '0'))
@@ -877,13 +942,18 @@ class MarketCollection:
         moment = (moment or self.clock())
         _stamp(moment)
         moment = moment.astimezone(CHINA)
-        if self.stop_event.is_set() or not self.configured or self._worker_disabled():
+        if self.stop_event.is_set():
+            self._scheduler_note('stopping', moment)
             return False
+        if not self.configured or self._worker_disabled():
+            self._scheduler_note('configuration_or_worker_disabled', moment)
+            return False
+        scope = self._scheduled_scope(moment)
         lock = self._acquire()
         if lock is None:
+            self._scheduler_note('lock_busy', moment, scope)
             return False
         run_id, active_day, manual = None, None, False
-        scope = self._scheduled_scope(moment)
         manual_snapshot = None
         self._blocked_writers = {}
         self._notification_changes = 0
@@ -899,10 +969,14 @@ class MarketCollection:
             with self.connect() as db:
                 queued = db.execute("SELECT * FROM manual_runs WHERE status='queued' ORDER BY rowid LIMIT 1").fetchone()
                 manual = queued is not None
-                pending_exists = db.execute("""SELECT 1 FROM days WHERE status NOT IN ('complete','blocked','superseded')
-                    AND NOT EXISTS (SELECT 1 FROM metadata WHERE key='manual-only:' || trade_date) LIMIT 1""").fetchone()
             if not manual and (not config['enabled'] or not automatic_collection_allowed(moment)):
+                self._scheduler_note('disabled_or_closed_day', moment, scope)
                 return False
+            if not manual and not automatic_collection_allowed(self._scheduled_slot(moment)):
+                self._scheduler_note('closed_or_unverified_slot', moment, scope)
+                return False
+            if not manual:
+                self._migrate_schedule_scope(moment, scope)
             self._refresh_pending()
             isolated = manual and manual_failure_isolated(moment)
             if manual:
@@ -915,23 +989,28 @@ class MarketCollection:
             # this legacy marker, determine the current backfill window.
             with self.connect() as db:
                 db.execute("INSERT OR IGNORE INTO metadata VALUES ('activation_date',?)", (str(moment.date()),))
-            if not manual and moment.time() < self._auto_time() and not pending_exists:
-                return False
+            # A restart just after midnight still owns yesterday's due slot.
+            # Its date/clock identity and planned_scope prevent duplicate runs.
             paused_until = self._meta('source_paused_until')
             next_check = self._meta('scheduler_next_attempt_at')
-            if not manual and self._meta('manual_paused_on') == str(moment.date()):
+            if not manual and self._meta('manual_paused_on') in {str(moment.date()), str(self._scheduled_slot(moment).date())}:
+                self._scheduler_note('manual_pause', moment, scope)
                 return False
             if paused_until and datetime.fromisoformat(paused_until) > moment:
+                self._scheduler_note('source_cooldown', moment, scope)
                 if queued:
                     self._finish_run(queued['id'], 'paused', self._meta('last_error') or 'source_rate_limited')
                 return False
             if not manual and next_check and datetime.fromisoformat(next_check) > moment:
+                self._scheduler_note('dependency_backoff', moment, scope)
                 return False
             if not manual and int(self._meta('dependency-budget:' + scope, '0')) >= MAX_PASSES_PER_RUN:
+                self._scheduler_note('dependency_budget_exhausted', moment, scope)
                 return False
             # A completed/non-trading day needs no repeated source calls every 30s.
             planned_scope = self._meta('planned_scope')
             if not manual and planned_scope == scope and not self._targets(moment, False):
+                self._scheduler_note('no_eligible_targets', moment, scope)
                 return False
             run_id = queued['id'] if queued else uuid.uuid4().hex
             scope = 'manual:' + run_id if manual else scope
@@ -945,6 +1024,7 @@ class MarketCollection:
                 else:
                     db.execute('INSERT INTO manual_runs(id,status,trigger,phase,requested_at,updated_at) VALUES(?,?,?,?,?,?)',
                                (run_id, 'running', 'scheduled', 'calendar', stamp, stamp))
+            self._scheduler_note('manual_started' if manual else 'scheduled_started', moment, scope)
             check = lambda: self._check(run_id)
             check()
             completed = False

@@ -239,10 +239,10 @@ def test_startup_after_18_collects_once_verified_qfq_comparison_and_eligible_den
     assert latest_outcomes(collection.settings)['items']['market-sentiment']['outcome'] == 'partial'
 
 
-def test_before_18_no_new_snapshot_and_naive_times_rejected(tmp_path):
+def test_before_todays_slot_catches_latest_due_and_rejects_naive_time(tmp_path):
     collection, provider, writer, clock = worker(tmp_path, moment=EVENING.replace(hour=0,minute=0))
-    assert not collection.tick()
-    assert not provider.universe_calls and not writer.calls
+    assert collection.tick()
+    assert provider.universe_calls == [DAY - timedelta(days=1)]
     with pytest.raises(ValueError):
         collection.tick(EVENING.replace(tzinfo=None))
     clock.advance(minutes=1)
@@ -251,9 +251,9 @@ def test_before_18_no_new_snapshot_and_naive_times_rejected(tmp_path):
 
 def test_empty_database_restart_bootstraps_only_latest_closed_session(tmp_path):
     first, provider, writer, clock = worker(tmp_path, moment=EVENING.replace(hour=0,minute=0))
-    assert not first.tick()
+    assert first.tick()
     assert first._meta('activation_date') == str(EVENING.date())
-    assert not provider.universe_calls and not provider.quote_calls and not writer.calls
+    assert provider.universe_calls == [DAY - timedelta(days=1)]
     restarted, resumed, saved, later = worker(tmp_path, moment=EVENING + timedelta(days=1))
     assert restarted.tick()
     missed = restarted._day(DAY)
@@ -1132,10 +1132,10 @@ def historical_provider(provider):
     provider.fetch_universe = dated
 
 
-def test_exact_1830_boundary_and_shanghai_timezone(tmp_path):
+def test_exact_due_boundary_and_shanghai_timezone(tmp_path):
     collection, provider, writer, clock = worker(tmp_path, moment=EVENING.replace(minute=0))
-    assert not collection.tick()
-    assert not provider.universe_calls
+    assert collection.tick()
+    assert provider.universe_calls == [DAY - timedelta(days=1)]
     clock.advance(minutes=1)
     assert collection.tick(clock().astimezone(timezone.utc))
     assert collection.status()['schedule'] == ['23:58']

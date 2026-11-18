@@ -372,7 +372,7 @@ def test_cached_calendar_fallback_still_uses_shared_dependency_budget(tmp_path):
         collection.tick()
         clock.advance(minutes=30)
     assert len(calls) <= 4
-    assert collection._meta('dependency-budget:scheduled:2026-11-12') is not None
+    assert collection._meta('dependency-budget:scheduled:v2:2026-11-12T00:01+08:00') is not None
 
 
 def test_manual_dependency_failures_also_consume_current_automatic_slot(tmp_path):
@@ -386,7 +386,7 @@ def test_manual_dependency_failures_also_consume_current_automatic_slot(tmp_path
         collection.request_run(f'manual-calendar-{request}')
         assert not collection.tick()
     assert len(calls) == 4
-    assert collection._meta('dependency-budget:scheduled:2026-11-11') == '4'
+    assert collection._meta('dependency-budget:scheduled:v2:2026-11-11T00:01+08:00') == '4'
     assert not collection.tick(clock.advance(minutes=30))
     assert len(calls) == 4
     # A later explicit request still has its own budget.
