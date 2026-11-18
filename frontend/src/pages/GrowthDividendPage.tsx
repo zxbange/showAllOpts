@@ -351,7 +351,12 @@ export function GrowthDividendPage() {
         </p>
       )}
       {databaseSyncing && <p role="status">数据库同步中，请到顶部“数据同步”查看或取消。</p>}
-      {shownError && <p role="alert">{shownError}</p>}
+      {shownError && (
+        <p role="alert">
+          {shownError}
+          {data?.points.length ? ' 已保留现有数据。' : ''}
+        </p>
+      )}
 
       <details className="method-card growth-dividend-method">
         <summary>统计口径</summary>

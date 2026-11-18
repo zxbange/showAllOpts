@@ -351,6 +351,9 @@ export function ValuationRulerPage() {
               取消采集
             </button>
           )}
+          <button className="button button-quiet" disabled={busy} onClick={() => void readStatus()}>
+            重新读取采集状态
+          </button>
         </PageHeaderActions>
         {(running || databaseSyncing) && (
           <p role="status">

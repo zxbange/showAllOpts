@@ -156,16 +156,16 @@ test('market mood third tab renders official percentage units and keeps chart du
   await expect(page.locator('.margin-stats')).toContainText('255.63%')
   await expect(page.locator('.margin-stats')).toContainText('-1.97 个百分点')
   await expect(page.locator('.margin-stats')).toContainText('25.0%')
-  await expect(page.locator('.date-badge')).toContainText('2026-10-26')
+  await expect(page.getByLabel('数据更新时间', { exact: true })).toContainText(
+    '2026-10-27 20:00:01',
+  )
   await expect(page.getByText('东方财富 · 交易日北京时间 08:00 检查更新')).toHaveCount(0)
   await expect(page.getByRole('region', { name: '两融数据更新' })).toHaveCount(0)
   await expect(page.locator('.margin-chart canvas')).toBeVisible()
-  expect(
-    await page.locator('.margin-update').evaluate((element) => {
-      const chart = document.querySelector('.margin-trend')!
-      return Boolean(chart.compareDocumentPosition(element) & Node.DOCUMENT_POSITION_FOLLOWING)
-    }),
-  ).toBe(true)
+  await expect(page.locator('.margin-update')).toHaveCount(0)
+  await expect(
+    page.locator('.page-header').getByRole('button', { name: '更新数据', exact: true }),
+  ).toBeVisible()
   await expect(page.getByRole('link', { name: '查看数据来源' })).toHaveAttribute(
     'href',
     points[3].source_url,
@@ -282,7 +282,9 @@ test('failed source preserves previous chart and a new collection clears failure
   await expect(page.getByRole('alert')).toHaveCount(0)
   await expect(page.locator('.margin-chart canvas')).toBeVisible()
   await expect(page.getByRole('progressbar')).toHaveCount(0)
-  await expect(page.getByRole('main').getByRole('status').filter({ hasText: '读取目录' })).toBeVisible()
+  await expect(
+    page.getByRole('main').getByRole('status').filter({ hasText: '读取目录' }),
+  ).toBeVisible()
   await expect(page.getByRole('navigation', { name: '市场情绪模块切换' })).toBeVisible()
 })
 

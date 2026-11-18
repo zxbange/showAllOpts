@@ -41,6 +41,7 @@ const points: GrowthDividendPoint[] = [
     index < 2 || index === 4 ? null : (1000 + index * 20) / (4000 + index * 150),
 }))
 const history: GrowthDividendHistory = {
+  updated_at: '2026-11-10T18:00:17+08:00',
   start_date: points[0].date,
   end_date: points.at(-1)!.date,
   latest: points.at(-1)!,
@@ -301,11 +302,14 @@ test('five-year default, all history, date entry and manual zoom survive refresh
   snapshot = {
     ...history,
     end_date: '2026-11-11',
+    updated_at: '2026-11-11T18:01:23+08:00',
     latest: { ...points.at(-1)!, date: '2026-11-11' },
     points: [...points, { ...points.at(-1)!, date: '2026-11-11' }],
   }
   await page.getByRole('button', { name: '刷新创红比展示数据' }).click()
-  await expect(page.locator('.date-badge')).toContainText('2026-11-11')
+  await expect(page.getByLabel('数据更新时间', { exact: true })).toContainText(
+    '2026-11-11 18:01:23',
+  )
   await expect
     .poll(() => inspectChart(page))
     .toMatchObject({
