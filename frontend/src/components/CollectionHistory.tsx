@@ -26,7 +26,7 @@ export function CollectionHistoryFrame({
   return (
     <details className="collection-history">
       <summary>{title}</summary>
-      <p className="collection-history-note">最多显示最近 5 次记录 · 北京时间</p>
+      <p className="collection-history-note">显示最近 5 次记录 · 错误详情可展开</p>
       {error && (
         <p className="collection-history-error">
           {error}
@@ -126,8 +126,8 @@ function CollectionHistoryContent({ moduleKey, title }: { moduleKey: string; tit
         error={error}
       >
         {items.slice(0, 5).map((item, index) => (
-          <li key={`${item.run_key}-${index}`}>
-            {collectionHistoryText(item)}
+          <li key={`${item.run_key}-${index}`} data-outcome={item.outcome}>
+            <div className="collection-history-row-text">{collectionHistoryText(item)}</div>
             <CollectionHistoryError
               details={item.error_details}
               failed={item.outcome === 'failed' || item.outcome === 'partial'}

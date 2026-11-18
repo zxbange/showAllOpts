@@ -20,7 +20,7 @@ vi.mock('../components/CrowdingChart', () => ({ CrowdingChart: () => null }))
 vi.mock('../components/SentimentChart', () => ({ SentimentChart: () => null }))
 vi.mock('../components/MarketCollectionPanel', () => ({
   MarketCollectionPanel: vi.fn(() =>
-    createElement('section', { 'aria-label': '市场日采集' }, 'Shared collection panel'),
+    createElement('span', { 'data-test-controller': 'market-collection' }),
   ),
 }))
 
@@ -89,7 +89,7 @@ describe.each([
   },
 ])('$name collection placement', ({ path, Page, history, methodology, emptyTitle }) => {
   it.each(['populated', 'loading', 'error', 'empty', 'no response'] as const)(
-    'keeps the shared panel last after methodology with the reload callback: %s',
+    'keeps the controller mounted with the reload callback: %s',
     (state) => {
       if (state === 'populated') resource.data = history
       if (state === 'loading') resource.loading = true
@@ -99,13 +99,13 @@ describe.each([
       const html = renderToStaticMarkup(
         createElement(MemoryRouter, { initialEntries: [path] }, createElement(Page)),
       )
-      const panelHtml = '<section aria-label="市场日采集">Shared collection panel</section>'
+      const panelHtml = '<span data-test-controller="market-collection"></span>'
       expect(html).toContain(`<summary>${methodology}</summary>`)
       expect(html.indexOf(`<summary>${methodology}</summary>`)).toBeLessThan(
         html.indexOf(panelHtml),
       )
       expect(html).not.toContain('<details open')
-      // Nothing may render after the shared panel inside the page root.
+      // The controller stays mounted to retain polling and reload hooks, without a visible card.
       expect(html.endsWith(`${panelHtml}</div>`)).toBe(true)
       expect(MarketCollectionPanel).toHaveBeenCalledTimes(1)
       const panelProps = vi.mocked(MarketCollectionPanel).mock.calls[0][0]

@@ -3,7 +3,6 @@ import { useMemo, useState } from 'react'
 import {
   ArrowDownRight,
   ArrowUpRight,
-  CalendarDays,
   ChevronRight,
   Flame,
   Grid2X2,
@@ -46,10 +45,6 @@ export function MomentumPage() {
           <p>按申万二级行业比较强势股集中度。</p>
         </div>
         <div className="heading-actions">
-          <span className="date-badge">
-            <CalendarDays size={15} />
-            {formatDate(data?.trade_date)}
-          </span>
           <button
             className="button button-quiet icon-button"
             onClick={reload}

@@ -1,6 +1,6 @@
 import { PageHeader } from '../components/PageHeader'
 import { useCallback, useState } from 'react'
-import { CalendarDays, ChartNoAxesCombined, RefreshCw, TrendingUp, Trophy } from 'lucide-react'
+import { ChartNoAxesCombined, RefreshCw, TrendingUp, Trophy } from 'lucide-react'
 import { getCrowdingHistory } from '../api/client'
 import { useResource } from '../hooks/useResource'
 import { formatDate } from '../lib/format'
@@ -30,10 +30,6 @@ export function CrowdingPage() {
           <p>成交额前 5% 股票占全市场成交额的比例。</p>
         </div>
         <div className="heading-actions">
-          <span className="date-badge">
-            <CalendarDays size={15} />
-            截至 {formatDate(latest?.date)}
-          </span>
           <button
             className="button button-quiet icon-button"
             onClick={reload}

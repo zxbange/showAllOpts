@@ -2,7 +2,6 @@ import { PageHeader } from '../components/PageHeader'
 import { useCallback, useState } from 'react'
 import {
   ArrowLeft,
-  CalendarDays,
   ChartNoAxesCombined,
   CircleDot,
   RefreshCw,
@@ -44,10 +43,6 @@ export function IndustryPage() {
           <p>查看行业动量、排名及强势股数量的历史变化。</p>
         </div>
         <div className="heading-actions">
-          <span className="date-badge">
-            <CalendarDays size={15} />
-            截至 {formatDate(data?.end_date ?? end)}
-          </span>
           <button
             className="button button-quiet icon-button"
             onClick={reload}

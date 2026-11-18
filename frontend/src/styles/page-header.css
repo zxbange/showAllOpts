@@ -110,12 +110,74 @@
   margin-left: auto;
   padding-block: 6px;
 }
-.page-header-actions:empty { display: none; }
+.page-header-actions:empty {
+  display: none;
+}
 .page-header-toolbar:not(:has(.module-card-switch)):has(.page-header-actions:empty) {
   display: none;
 }
 @media (max-width: 700px) {
-  .page-header-toolbar { gap: 8px; }
-  .page-header-actions { max-width: 62%; gap: 6px; }
-  .page-header-actions .button { padding-inline: 10px; }
+  .page-header-toolbar {
+    gap: 8px;
+  }
+  .page-header-actions {
+    max-width: 62%;
+    gap: 6px;
+  }
+  .page-header-actions .button {
+    padding-inline: 10px;
+  }
+}
+
+/* Keep title and timestamp in separate columns even on narrow screens. */
+.page-header .page-heading-with-time {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 250px);
+  align-items: start;
+  gap: 12px;
+}
+.page-header .page-heading-with-time > :first-child {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.page-header .page-heading-right {
+  margin: 0;
+  min-width: 0;
+  max-width: 100%;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+}
+.page-header .page-heading-right > .heading-actions {
+  min-width: 0;
+  max-width: 100%;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+.page-header .page-data-updated {
+  min-width: 0;
+  max-width: 100%;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  font-variant-numeric: tabular-nums;
+}
+.page-header .page-data-updated > svg {
+  flex-shrink: 0;
+}
+.page-data-updated-text {
+  display: grid;
+  min-width: 0;
+  gap: 3px;
+}
+.page-data-updated-label {
+  font-size: 11px;
+}
+@media (max-width: 700px) {
+  .page-header .page-heading-with-time {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 48%);
+    gap: 8px;
+  }
+  .page-header .page-data-updated {
+    padding: 8px;
+    gap: 6px;
+  }
 }

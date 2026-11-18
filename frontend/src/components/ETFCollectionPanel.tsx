@@ -237,17 +237,19 @@ export function ETFCollectionPanel({ onCollected }: { onCollected: () => void })
         error={historyUnavailable ? '暂时无法读取最新采集记录' : ''}
       >
         {recent.slice(0, 5).map((run) => (
-          <li key={run.id}>
-            {dataUpdateInstant(run.finished_at || run.requested_at) != null
-              ? formatDataUpdatedAt(run.finished_at || run.requested_at)
-              : '记录时间未确认'}{' '}
-            · {run.trigger === 'manual' ? '手动采集' : '自动采集'}
-            {run.attempt && run.attempt > 1 ? `（第${run.attempt}次尝试）` : ''}
-            {' · '}
-            {labels[run.status] ?? '状态待确认'}
-            {run.time_basis === 'legacy_request_time' ? ' · 旧记录，显示请求时间' : ''}
-            {run.time_basis === 'recovered_at' ? ' · 显示中断确认时间' : ''}
-            {run.error ? ` · ${collectionErrorMessage(run.error)}` : ''}
+          <li key={run.id} data-outcome={run.status === 'complete' ? 'success' : run.status}>
+            <div className="collection-history-row-text">
+              {dataUpdateInstant(run.finished_at || run.requested_at) != null
+                ? formatDataUpdatedAt(run.finished_at || run.requested_at)
+                : '记录时间未确认'}{' '}
+              · {run.trigger === 'manual' ? '手动采集' : '自动采集'}
+              {run.attempt && run.attempt > 1 ? `（第${run.attempt}次尝试）` : ''}
+              {' · '}
+              {labels[run.status] ?? '状态待确认'}
+              {run.time_basis === 'legacy_request_time' ? ' · 旧记录，显示请求时间' : ''}
+              {run.time_basis === 'recovered_at' ? ' · 显示中断确认时间' : ''}
+              {run.error ? ` · ${collectionErrorMessage(run.error)}` : ''}
+            </div>
             <CollectionHistoryError
               details={run.error_details}
               failed={run.status === 'failed' || run.status === 'partial'}

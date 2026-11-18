@@ -404,7 +404,10 @@ test('initial backfill, update progress and failed gaps retain existing curves',
   await expect(
     page.getByRole('heading', { name: '正在补齐指数历史数据', exact: true }),
   ).toBeVisible()
-  await expect(page.getByRole('progressbar', { name: '创红比更新进度' })).toBeVisible()
+  await expect(
+    page.getByRole('status').filter({ hasText: '正在补齐2018年以来的指数历史' }),
+  ).toBeVisible()
+  await expect(page.locator('.growth-dividend-update')).toHaveCount(0)
   current = {
     ...status,
     running: false,
@@ -415,16 +418,13 @@ test('initial backfill, update progress and failed gaps retain existing curves',
   }
   snapshot = { ...history, status: current }
   await expect(page.locator('.growth-dividend-chart canvas')).toBeVisible({ timeout: 6000 })
-  await expect(page.locator('.growth-dividend-pending')).toHaveText(
-    '待补 3 个交易日 · 4 条指数数据',
-  )
+  await expect(page.locator('.growth-dividend-pending')).toHaveCount(0)
   await expect(page.getByRole('alert')).toContainText('已保留现有数据')
-  await expect(page.locator('.page-header').getByRole('button', { name: '更新数据', exact: true })).toBeVisible()
+  await expect(
+    page.locator('.page-header').getByRole('button', { name: '更新数据', exact: true }),
+  ).toBeVisible()
   await page.getByRole('button', { name: '更新数据', exact: true }).click()
-  await expect(page.getByRole('progressbar', { name: '创红比更新进度' })).toHaveAttribute(
-    'value',
-    '20',
-  )
+  await expect(page.getByRole('status').filter({ hasText: '正在补齐缺失数据 · 20%' })).toBeVisible()
   await expect(page.locator('.growth-dividend-chart canvas')).toBeVisible()
   expect(posts).toBe(1)
 })

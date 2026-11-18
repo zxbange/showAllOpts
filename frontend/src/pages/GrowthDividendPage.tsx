@@ -1,6 +1,6 @@
 import { PageHeaderActions } from '../components/PageHeaderActions'
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { CalendarDays, Clock3, Download, RefreshCw, Square, TrendingUp } from 'lucide-react'
+import { Download, RefreshCw, Square, TrendingUp } from 'lucide-react'
 import {
   getGrowthDividendHistory,
   getGrowthDividendStatus,
@@ -26,18 +26,6 @@ const message = (error: unknown) =>
   error instanceof Error && error.message !== 'Failed to fetch'
     ? error.message
     : '暂时无法连接数据服务，请稍后重试。'
-const timestamp = (value: string | null | undefined) =>
-  value
-    ? new Date(value).toLocaleString('zh-CN', {
-        timeZone: 'Asia/Shanghai',
-        hour12: false,
-        year: 'numeric',
-        month: '2-digit',
-        day: '2-digit',
-        hour: '2-digit',
-        minute: '2-digit',
-      })
-    : '—'
 
 export function GrowthDividendPage() {
   const admin = useAuth().session?.user?.role === 'admin'
@@ -170,7 +158,6 @@ export function GrowthDividendPage() {
   const running = !databaseSyncing && (status?.running ?? false)
   const progress = status?.percent == null ? null : Math.max(0, Math.min(100, status.percent))
   const shownError = actionError || error || pollError || (!running ? status?.error : null)
-  const pending = status?.pending_dates ?? 0
 
   return (
     <div className="page-enter growth-dividend-page">
@@ -179,13 +166,8 @@ export function GrowthDividendPage() {
           <h1>
             市场情绪 <span className="heading-tag">创红比</span>
           </h1>
-          <p>对照创业板、科创50与中证红利，观察成长与红利的相对强弱。</p>
         </div>
         <div className="heading-actions">
-          <span className="date-badge">
-            <CalendarDays size={15} />
-            数据截至 {data?.end_date ?? '—'}
-          </span>
           <button
             className="button button-quiet icon-button"
             aria-label="刷新创红比展示数据"
@@ -341,94 +323,35 @@ export function GrowthDividendPage() {
         </div>
       </section>
 
-      <section className="panel growth-dividend-update" aria-label="创红比数据更新">
-        <div className="growth-dividend-update-heading">
-          <div>
-            <strong>
-              <Clock3 size={16} /> 数据更新
-            </strong>
-            <p>补齐当天与此前未成功更新的数据，历史记录从2018年起保留。</p>
-          </div>
-          <PageHeaderActions>
-            {running ? (
-              <button
-                className="button button-quiet"
-                onClick={() => void act('cancel')}
-                disabled={busy || stopping || status?.cancelling || !admin || uncertain}
-              >
-                <Square size={15} />
-                {stopping || status?.cancelling ? '正在停止…' : '取消采集'}
-              </button>
-            ) : (
-              <button
-                className="button button-primary"
-                onClick={() => void act('refresh')}
-                disabled={databaseSyncing || busy || loading || !admin || uncertain}
-              >
-                <Download size={16} />
-                {databaseSyncing ? '数据库同步中' : busy ? '正在启动…' : '更新数据'}
-              </button>
-            )}
-          </PageHeaderActions>
-        </div>
-        <div className="growth-dividend-progress" aria-live="polite">
-          {running ? (
-            <>
-              <div className="growth-dividend-progress-label">
-                <span>{status?.stage || '正在更新'}</span>
-                <span>{progress == null ? '处理中' : `${progress.toFixed(0)}%`}</span>
-              </div>
-              <progress aria-label="创红比更新进度" max={100} value={progress ?? undefined} />
-            </>
-          ) : (
-            <span>
-              {databaseSyncing
-                ? '数据库同步中，请到顶部“数据同步”查看或取消。'
-                : status?.stage || '等待更新'}
-            </span>
-          )}
-          <div className="growth-dividend-update-meta">
-            <span>上次完成 {timestamp(status?.last_success_at)}</span>
-            {pending > 0 && (
-              <span className="growth-dividend-pending">
-                待补 {pending.toLocaleString('zh-CN')} 个交易日 ·{' '}
-                {(status?.pending_points ?? 0).toLocaleString('zh-CN')} 条指数数据
-              </span>
-            )}
-          </div>
-        </div>
-        {status?.sync_summary && (
-          <p role="status">
-            数据库同步：新增 {status.sync_summary.inserted} 条， 已存在{' '}
-            {status.sync_summary.existing} 条。
-            {status.sync_summary.coverage}
-          </p>
+      <PageHeaderActions>
+        {running ? (
+          <button
+            className="button button-quiet"
+            onClick={() => void act('cancel')}
+            disabled={busy || stopping || status?.cancelling || !admin || uncertain}
+          >
+            <Square size={15} />
+            {stopping || status?.cancelling ? '正在停止…' : '取消采集'}
+          </button>
+        ) : (
+          <button
+            className="button button-primary"
+            onClick={() => void act('refresh')}
+            disabled={databaseSyncing || busy || loading || !admin || uncertain}
+          >
+            <Download size={16} />
+            {databaseSyncing ? '数据库同步中' : busy ? '正在启动…' : '更新数据'}
+          </button>
         )}
-        {!!status?.comparison_conflicts && (
-          <details>
-            <summary>外部行情修正记录：{status.comparison_conflicts} 条</summary>
-            <ul>
-              {status.recent_conflicts?.map((item) => (
-                <li key={`${item.code}-${item.trade_date}-${item.candidate_close}`}>
-                  {item.trade_date} · {item.code}：已保存 {item.published_close}，公开源候选{' '}
-                  {item.candidate_close}（采集值）
-                </li>
-              ))}
-            </ul>
-          </details>
-        )}
-        {shownError && (
-          <div className="growth-dividend-error" role="alert">
-            <span>
-              {shownError}
-              {data?.points.length ? ' 已保留现有数据。' : ''}
-            </span>
-            <button className="button button-quiet" onClick={reload} disabled={loading}>
-              重新加载
-            </button>
-          </div>
-        )}
-      </section>
+      </PageHeaderActions>
+      {running && (
+        <p role="status">
+          {status?.stage || '正在更新'}
+          {progress != null ? ` · ${progress.toFixed(0)}%` : ''}
+        </p>
+      )}
+      {databaseSyncing && <p role="status">数据库同步中，请到顶部“数据同步”查看或取消。</p>}
+      {shownError && <p role="alert">{shownError}</p>}
 
       <details className="method-card growth-dividend-method">
         <summary>统计口径</summary>

@@ -104,9 +104,12 @@ test('v2 switches indices and static/rolling metrics and keeps automatic collect
   await expect(statisticValue(page, '静态等权PE')).toHaveText('20.00倍')
   await page.getByRole('combobox', { name: '估值指数' }).selectOption('000852.XSHG')
   await expect(statisticValue(page, '中证1000指数')).toBeVisible()
-  await expect(page.locator('.page-header').getByRole('button', { name: '更新数据', exact: true })).toBeVisible()
+  await expect(
+    page.locator('.page-header').getByRole('button', { name: '更新数据', exact: true }),
+  ).toBeVisible()
   await expect(page.getByRole('button', { name: '更新数据' })).toBeVisible()
-  await expect(page.getByText('东方财富 · 交易日北京时间 18:30 更新')).toBeVisible()
+  await expect(page.getByText('东方财富 · 交易日北京时间 18:30 更新')).toHaveCount(0)
+  await expect(page.locator('.valuation-update')).toHaveCount(0)
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
 })
 
@@ -223,8 +226,8 @@ test('viewer cannot mutate and complete JQ day comparison failure is separate fr
   )
   await page.goto('/valuation-ruler')
   await expect(page.getByRole('button', { name: '更新数据', exact: true })).toBeDisabled()
-  await expect(page.getByText(/对照失败不等于该日缺失/)).toBeVisible()
-  await expect(page.getByText(/PE为零，不能作为亏损剔除/)).toBeVisible()
+  await expect(page.getByText(/对照失败不等于该日缺失/)).toHaveCount(0)
+  await expect(page.getByText(/PE为零，不能作为亏损剔除/)).toHaveCount(0)
   const meanPE = statisticValue(page, '成分股平均PE-TTM')
   await expect(meanPE).toBeVisible()
   await expect(meanPE).toHaveText('24.50倍')
@@ -308,6 +311,8 @@ test('database sync cannot be cancelled by the public collection button', async 
   await page.goto('/valuation-ruler')
   await expect(page.getByRole('button', { name: '数据库同步中', exact: true })).toBeDisabled()
   await expect(page.getByRole('button', { name: '取消采集', exact: true })).toHaveCount(0)
-  await expect(page.getByText('数据库同步中，请到顶部“数据同步”查看或取消。')).toBeVisible()
+  await expect(
+    page.getByRole('main').getByRole('status').filter({ hasText: '数据库同步中' }),
+  ).toBeVisible()
   expect(mutations).toBe(0)
 })

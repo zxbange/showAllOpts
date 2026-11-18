@@ -1,16 +1,7 @@
 import { PageHeaderActions } from '../components/PageHeaderActions'
 import { useAuth } from '../components/AccountAccess'
 import { useCallback, useEffect, useRef, useState } from 'react'
-import {
-  CalendarDays,
-  RefreshCw,
-  Download,
-  Square,
-  TrendingUp,
-  TrendingDown,
-  Gauge,
-  Layers3,
-} from 'lucide-react'
+import { RefreshCw, Download, Square, TrendingUp, TrendingDown, Gauge, Layers3 } from 'lucide-react'
 import { getMarginHistory, getMarginStatus, updateMargin } from '../api/client'
 import { PageHeader } from '../components/PageHeader'
 import { StatCard } from '../components/StatCard'
@@ -144,10 +135,6 @@ export function MarginPage() {
           <p>全市场平均维持担保比例，观察两融账户的担保充足程度。</p>
         </div>
         <div className="heading-actions">
-          <span className="date-badge">
-            <CalendarDays size={15} />
-            数据截至 {latest?.date ?? '—'}
-          </span>
           <button
             className="button button-quiet icon-button"
             aria-label="刷新两融展示数据"
@@ -280,75 +267,39 @@ export function MarginPage() {
         </div>
       </section>
 
-      <section className="margin-update panel" aria-label="两融数据更新">
-        <div className="margin-update-row">
-          <div>
-            <strong>东方财富 · 交易日北京时间 {status?.daily_time ?? '按系统配置'} 检查更新</strong>
-            <p>
-              {latest
-                ? `当前展示 ${latest.date} 已公布数据；当天未公布时保留最近一期。`
-                : '首次采集补齐近六年历史，后续按日期增量更新。'}
-            </p>
-          </div>
-          <PageHeaderActions>
-            <div className="margin-update-actions">
-              {running ? (
-                <button
-                  className="button button-quiet"
-                  onClick={() => void act('cancel')}
-                  disabled={busy || cancelling || !admin}
-                >
-                  <Square size={15} />
-                  {cancelling ? '正在停止…' : '取消采集'}
-                </button>
-              ) : (
-                <button
-                  className="button button-primary"
-                  onClick={() => void act('refresh')}
-                  disabled={busy || loading || !admin}
-                >
-                  <Download size={16} />
-                  {busy ? '正在启动…' : '更新数据'}
-                </button>
-              )}
-            </div>
-          </PageHeaderActions>
-        </div>
-        <div className="margin-progress-area" aria-live="polite">
+      <PageHeaderActions>
+        <div className="margin-update-actions">
           {running ? (
-            <>
-              <div className="margin-progress-label">
-                <span>{status?.stage || '准备采集'}</span>
-                <span>
-                  {progress == null ? '处理中' : `${progress.toFixed(0)}%`}
-                  {status?.total
-                    ? ` · ${status.processed.toLocaleString('zh-CN')} / ${status.total.toLocaleString('zh-CN')}`
-                    : ''}
-                </span>
-              </div>
-              <progress aria-label="两融采集进度" max={100} value={progress ?? undefined} />
-            </>
+            <button
+              className="button button-quiet"
+              onClick={() => void act('cancel')}
+              disabled={busy || cancelling || !admin}
+            >
+              <Square size={15} />
+              {cancelling ? '正在停止…' : '取消采集'}
+            </button>
           ) : (
-            <span className="margin-idle-state">
-              {status?.stage || '等待更新'}
-              {status?.last_success_at
-                ? ` · 上次完成 ${new Date(status.last_success_at).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai', hour12: false })}`
-                : ''}
-            </span>
+            <button
+              className="button button-primary"
+              onClick={() => void act('refresh')}
+              disabled={busy || loading || !admin}
+            >
+              <Download size={16} />
+              {busy ? '正在启动…' : '更新数据'}
+            </button>
           )}
         </div>
-        {shownError && (
-          <div className="margin-error" role="alert">
-            <span>
-              {shownError}
-              {data?.points.length ? ' 已保留现有数据。' : ''}
-            </span>
-            <button className="button button-quiet" onClick={reload} disabled={loading}>
-              重新加载
-            </button>
-          </div>
-        )}
-      </section>
+      </PageHeaderActions>
+      {running && (
+        <p role="status">
+          {status?.stage || '准备采集'}
+          {progress != null ? ` · ${progress.toFixed(0)}%` : ''}
+          {status?.total
+            ? ` · ${status.processed.toLocaleString('zh-CN')} / ${status.total.toLocaleString('zh-CN')}`
+            : ''}
+        </p>
+      )}
+      {shownError && <p role="alert">{shownError}</p>}
     </div>
   )
 }

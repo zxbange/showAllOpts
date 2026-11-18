@@ -1,5 +1,6 @@
 import { formatDataUpdatedAt } from '../lib/dataUpdatedAt'
-import type { ReactNode } from 'react'
+import { Children, type ReactNode } from 'react'
+import { CalendarDays } from 'lucide-react'
 import { useLocation } from 'react-router-dom'
 import { groupForPath, individualModules } from '../lib/modules'
 import { PageHeaderActionSlot } from './PageHeaderActions'
@@ -20,6 +21,12 @@ export function PageHeader({
 }) {
   const { pathname, search } = useLocation()
   const group = groupForPath(pathname)
+  const showDataTime = Boolean(
+    group ||
+    pathname === '/personal-holdings' ||
+    individualModules.some((item) => item.path === pathname),
+  )
+  const [heading, ...headingActions] = Children.toArray(children)
   const groupItems = group?.ids.flatMap((id) => {
     const module = individualModules.find((item) => item.id === id)
     if (module?.id === 'dividend-selection') {
@@ -48,14 +55,27 @@ export function PageHeader({
   })
   return (
     <header className="page-header">
-      <div className="page-heading">{children}</div>
-      {(group ||
-        pathname === '/personal-holdings' ||
-        individualModules.some((item) => item.path === pathname)) && (
-        <p className="page-data-updated" aria-label="数据更新时间">
-          数据更新时间：{formatDataUpdatedAt(dataUpdatedAt, dataTimeNaiveBeijing)} · 北京时间
-        </p>
-      )}
+      <div className={`page-heading${showDataTime ? ' page-heading-with-time' : ''}`}>
+        {showDataTime ? (
+          <>
+            {heading}
+            <div className="heading-actions page-heading-right">
+              <span className="date-badge page-data-updated" aria-label="数据更新时间">
+                <CalendarDays size={15} aria-hidden="true" />
+                <span className="page-data-updated-text">
+                  <span className="page-data-updated-label">数据更新时间</span>
+                  <span className="page-data-updated-value">
+                    {formatDataUpdatedAt(dataUpdatedAt, dataTimeNaiveBeijing)}
+                  </span>
+                </span>
+              </span>
+              {headingActions}
+            </div>
+          </>
+        ) : (
+          children
+        )}
+      </div>
       <div className="page-header-toolbar">
         {switcher ??
           (group && groupItems && (

@@ -1,6 +1,6 @@
 import { PageHeaderActions } from '../components/PageHeaderActions'
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { CalendarDays, RefreshCw, Download, Square, Gauge, Layers3 } from 'lucide-react'
+import { RefreshCw, Download, Square, Gauge, Layers3 } from 'lucide-react'
 import { useAuth } from '../components/AccountAccess'
 import { PageHeader } from '../components/PageHeader'
 import { StatCard } from '../components/StatCard'
@@ -176,10 +176,6 @@ export function ValuationRulerPage() {
           <p>指数走势与成分股估值。</p>
         </div>
         <div className="heading-actions">
-          <span className="date-badge">
-            <CalendarDays size={15} />
-            数据截至 {latest?.date ?? '—'}
-          </span>
           <button
             className="button button-quiet"
             aria-label="刷新估值展示数据"
@@ -330,97 +326,46 @@ export function ValuationRulerPage() {
         )}
       </details>
       <>
-        <section className="panel valuation-update" aria-label="估值数据采集">
-          <div className="valuation-update-row">
-            <div>
-              <h2>数据采集</h2>
-              <p>
-                {status
-                  ? status.automatic
-                    ? `东方财富 · 交易日北京时间 ${status.schedule.split(' ')[0]} 更新`
-                    : '自动采集当前未启用，请管理员检查系统配置。'
-                  : '正在核验自动采集状态。'}
-              </p>
-              <p>计算后保存至数据库与本地。历史补采使用聚宽。</p>
-            </div>
-            <PageHeaderActions>
-              <button
-                className="button button-primary"
-                disabled={disabled || running}
-                onClick={() => void act('refresh')}
-              >
-                <Download size={16} />
-                {databaseSyncing
-                  ? '数据库同步中'
-                  : running
-                    ? '采集中'
-                    : busy
-                      ? '正在提交…'
-                      : '更新数据'}
-              </button>
-              {running && (
-                <button
-                  className="button button-quiet"
-                  disabled={!admin || busy || uncertain}
-                  onClick={() => void act('cancel')}
-                >
-                  <Square size={14} />
-                  取消采集
-                </button>
-              )}
-            </PageHeaderActions>
-          </div>
-          {!admin && <p>仅管理员可采集与停止任务。</p>}
-          <div aria-live="polite">
-            {databaseSyncing ? (
-              <p>数据库同步中，请到顶部“数据同步”查看或取消。</p>
-            ) : (
-              <p>
-                {running
-                  ? '采集中'
-                  : status?.cancelled
-                    ? '已停止'
-                    : status?.status === 'failed'
-                      ? '采集未完成'
-                      : '等待更新'}{' '}
-                · {status?.phase ? (phaseLabels[status.phase] ?? status.phase) : '等待状态'} · 目标{' '}
-                {status?.target_date ?? '—'} · 完成 {status?.completed_days ?? 0} 日 / 失败{' '}
-                {status?.failed_days ?? 0} 日
-              </p>
-            )}
-            {status?.joinquant_imported != null && (
-              <p>
-                本次聚宽导入 {status.joinquant_imported} 日 · 冲突 {status.joinquant_conflicts}{' '}
-                日（未覆盖）
-              </p>
-            )}
-          </div>
-          {(statusError || actionError || status?.error) && (
-            <div role="alert" className="valuation-error">
-              {statusError || actionError || status?.error}
-            </div>
-          )}
-          {uncertain && (
-            <p role="alert">
-              上次操作结果不确定，已暂停重复提交。正在读取服务器状态；请勿重复启动。若持续无运行记录，请联系管理员核查服务日志。
-            </p>
-          )}
-          <button className="button button-quiet" disabled={busy} onClick={() => void readStatus()}>
-            重新读取采集状态
+        <PageHeaderActions>
+          <button
+            className="button button-primary"
+            disabled={disabled || running}
+            onClick={() => void act('refresh')}
+          >
+            <Download size={16} />
+            {databaseSyncing
+              ? '数据库同步中'
+              : running
+                ? '采集中'
+                : busy
+                  ? '正在提交…'
+                  : '更新数据'}
           </button>
-          {!!status?.recent_failures.length && (
-            <div className="valuation-failures">
-              <h3>待补日期与持久化失败记录</h3>
-              <ul>
-                {status.recent_failures.map((f) => (
-                  <li key={`${f.trade_date}-${f.code}`}>
-                    <strong>{f.trade_date}</strong> · {f.code} · {f.reason}（尝试 {f.attempts} 次）
-                  </li>
-                ))}
-              </ul>
-            </div>
+          {running && (
+            <button
+              className="button button-quiet"
+              disabled={!admin || busy || uncertain}
+              onClick={() => void act('cancel')}
+            >
+              <Square size={14} />
+              取消采集
+            </button>
           )}
-        </section>
+        </PageHeaderActions>
+        {(running || databaseSyncing) && (
+          <p role="status">
+            {databaseSyncing
+              ? '数据库同步中'
+              : `采集中 · ${status?.phase ? (phaseLabels[status.phase] ?? status.phase) : '等待状态'}`}
+          </p>
+        )}
+        {(statusError || actionError || status?.error) && (
+          <p role="alert">{statusError || actionError || status?.error}</p>
+        )}
+        {uncertain && (
+          <p role="alert">上次操作结果不确定，已暂停重复提交。正在读取服务器状态；请勿重复启动。</p>
+        )}
+
         {!v2 && (
           <section className="panel valuation-comparison">
             <h2>重叠交易日来源对照</h2>

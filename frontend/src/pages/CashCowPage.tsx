@@ -164,7 +164,6 @@ function CashCowPeriodPage({
               ))}
             </select>
           </label>
-          <span className="date-badge">数据截至 {snapshot?.as_of ?? '—'}</span>
           <PageHeaderActions>
             <button
               className="button button-primary"

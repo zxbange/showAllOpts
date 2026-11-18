@@ -1,6 +1,6 @@
 import { PageHeader } from '../components/PageHeader'
 import { useCallback, useState } from 'react'
-import { Activity, ArrowUpDown, CalendarDays, RefreshCw, TrendingUp } from 'lucide-react'
+import { Activity, ArrowUpDown, RefreshCw, TrendingUp } from 'lucide-react'
 import { getBreadthHistory } from '../api/client'
 import { useResource } from '../hooks/useResource'
 import { formatDate } from '../lib/format'
@@ -31,10 +31,6 @@ export function BreadthPage() {
           <p>统计微盘 400 在 5、10、20、30 日周期的新高、新低数量。</p>
         </div>
         <div className="heading-actions">
-          <span className="date-badge">
-            <CalendarDays size={15} />
-            统计日期 {formatDate(latest?.date)}
-          </span>
           <button
             className="button button-quiet icon-button"
             onClick={reload}

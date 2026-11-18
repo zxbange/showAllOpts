@@ -100,3 +100,17 @@ it('does not invent missing status or dates and rejects malformed context', () =
   expect(html).not.toContain('HTTP 状态码')
   expect(html).not.toContain('日期')
 })
+
+it('uses the shared compact journal styling without redundant timezone text', () => {
+  const html = renderToStaticMarkup(
+    <CollectionHistoryFrame hasRecords>
+      <li data-outcome="failed">
+        <div className="collection-history-row-text">自动采集 · 失败</div>
+      </li>
+    </CollectionHistoryFrame>,
+  )
+  expect(html).toContain('class="collection-history"')
+  expect(html).toContain('data-outcome="failed"')
+  expect(html).toContain('显示最近 5 次记录')
+  expect(html).not.toContain('北京时间')
+})

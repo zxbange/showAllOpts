@@ -1,6 +1,6 @@
 import { useSearchParams } from 'react-router-dom'
 import { useCallback, useState } from 'react'
-import { CalendarDays, Coins, Layers3, RefreshCw, Search, SlidersHorizontal } from 'lucide-react'
+import { Coins, Layers3, RefreshCw, Search, SlidersHorizontal } from 'lucide-react'
 import { PageHeader } from '../components/PageHeader'
 import { getDividendOverview } from '../api/client'
 import { useResource } from '../hooks/useResource'
@@ -40,10 +40,6 @@ export function DividendPage() {
           <p>静态股息率 &gt; 3% · 0 &lt; PE &lt; 12 · 非银行前 50 只，银行前 20 只</p>
         </div>
         <div className="heading-actions">
-          <span className="date-badge">
-            <CalendarDays size={15} />
-            数据日期 {data?.snapshot?.trade_date ?? '—'}
-          </span>
           <button
             className="button button-quiet icon-button"
             aria-label="刷新高股息选股"

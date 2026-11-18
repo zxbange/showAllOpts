@@ -3,7 +3,6 @@ import { useCallback, useMemo, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import {
   ArrowLeft,
-  CalendarDays,
   Flame,
   RefreshCw,
   Search,
@@ -45,10 +44,6 @@ export function ETFHeatPage() {
           <p>按年化趋势收益率 × R² 排序，比较 ETF / LOF 动量。</p>
         </div>
         <div className="heading-actions">
-          <span className="date-badge">
-            <CalendarDays size={15} />
-            {data?.trade_date ?? '暂无记录'}
-          </span>
           <button
             className="button button-quiet icon-button"
             aria-label="刷新ETF热度"

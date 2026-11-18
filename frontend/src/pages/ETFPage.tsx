@@ -1,7 +1,7 @@
 import { PageHeader } from '../components/PageHeader'
 import { useCallback, useEffect, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
-import { CalendarDays, Info, RefreshCw } from 'lucide-react'
+import { Info, RefreshCw } from 'lucide-react'
 import { getETFHistory } from '../api/client'
 import { useResource } from '../hooks/useResource'
 import { ETFCollectionPanel } from '../components/ETFCollectionPanel'
@@ -46,10 +46,6 @@ export function ETFPage() {
           </h1>
         </div>
         <div className="heading-actions">
-          <span className="date-badge">
-            <CalendarDays size={15} />
-            统计日期 {data?.end_date ?? '—'}
-          </span>
           <button
             className="button button-quiet icon-button"
             aria-label="刷新ETF数据"

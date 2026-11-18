@@ -1,5 +1,5 @@
 import { useCallback, useState } from 'react'
-import { CalendarDays, RefreshCw, Users, Thermometer, TrendingUp, Snowflake } from 'lucide-react'
+import { RefreshCw, Users, Thermometer, TrendingUp, Snowflake } from 'lucide-react'
 import { getSentimentHistory } from '../api/client'
 import { useResource } from '../hooks/useResource'
 import { PageHeader } from '../components/PageHeader'
@@ -7,7 +7,6 @@ import { StatCard } from '../components/StatCard'
 import { SentimentChart } from '../components/SentimentChart'
 import { MarketCollectionPanel } from '../components/MarketCollectionPanel'
 import { EmptyState, ErrorState } from '../components/States'
-import { formatDate } from '../lib/format'
 import { heatDenominator, heatSourceLabel, marketSourceSegments } from '../lib/marketCollection'
 import '../styles/sentiment.css'
 
@@ -34,10 +33,6 @@ export function SentimentPage() {
           <p>全市场站上20日均线的股票比例：低于20%为冰点，高于80%为过热。</p>
         </div>
         <div className="heading-actions">
-          <span className="date-badge">
-            <CalendarDays size={15} />
-            截至 {formatDate(latest?.date)}
-          </span>
           <button
             className="button button-quiet icon-button"
             aria-label="刷新市场热度数据"

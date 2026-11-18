@@ -1,7 +1,6 @@
 import { PageHeader } from '../components/PageHeader'
 import { useCallback, useState } from 'react'
 import {
-  CalendarDays,
   ChartNoAxesCombined,
   Layers3,
   RefreshCw,
@@ -36,10 +35,6 @@ export function MicrocapPage() {
           <p>市值最小 1000 只股票的估值与交易拥挤度，每个交易日采集。</p>
         </div>
         <div className="heading-actions">
-          <span className="date-badge">
-            <CalendarDays size={15} />
-            截至 {formatDate(latest?.date)}
-          </span>
           <button
             className="button button-quiet icon-button"
             onClick={reload}

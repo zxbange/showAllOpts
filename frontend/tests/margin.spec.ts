@@ -157,7 +157,8 @@ test('market mood third tab renders official percentage units and keeps chart du
   await expect(page.locator('.margin-stats')).toContainText('-1.97 个百分点')
   await expect(page.locator('.margin-stats')).toContainText('25.0%')
   await expect(page.locator('.date-badge')).toContainText('2026-10-26')
-  await expect(page.getByText('东方财富 · 交易日北京时间 08:00 检查更新')).toBeVisible()
+  await expect(page.getByText('东方财富 · 交易日北京时间 08:00 检查更新')).toHaveCount(0)
+  await expect(page.getByRole('region', { name: '两融数据更新' })).toHaveCount(0)
   await expect(page.locator('.margin-chart canvas')).toBeVisible()
   expect(
     await page.locator('.margin-update').evaluate((element) => {
@@ -237,13 +238,12 @@ test('empty history starts explicitly and shows progress with stop only while ru
   await expect(page.getByRole('heading', { name: '暂无两融担保比例数据' })).toBeVisible()
   await expect(page.getByRole('button', { name: '取消采集' })).toHaveCount(0)
   expect(starts).toBe(0)
-  await expect(page.getByRole('region', { name: '两融数据更新' }).getByRole('button', { name: '更新数据', exact: true })).toHaveCount(0)
+  await expect(page.getByRole('region', { name: '两融数据更新' })).toHaveCount(0)
   await page.locator('.page-header').getByRole('button', { name: '更新数据' }).click()
-  await expect(page.getByRole('progressbar', { name: '两融采集进度' })).toHaveAttribute(
-    'value',
-    '35',
+  await expect(page.getByRole('main').getByRole('status').filter({ hasText: '35%' })).toBeVisible()
+  await expect(page.getByRole('main').getByRole('status').filter({ hasText: '/' })).toContainText(
+    '42 / 120',
   )
-  await expect(page.locator('.margin-progress-label')).toContainText('42 / 120')
   await page.locator('.page-header').getByRole('button', { name: '取消采集' }).click()
   await expect(page.getByRole('button', { name: '取消采集' })).toHaveCount(0)
   await expect(page.getByRole('button', { name: '更新数据' })).toBeVisible()
@@ -281,7 +281,8 @@ test('failed source preserves previous chart and a new collection clears failure
   await page.getByRole('button', { name: '更新数据', exact: true }).click()
   await expect(page.getByRole('alert')).toHaveCount(0)
   await expect(page.locator('.margin-chart canvas')).toBeVisible()
-  await expect(page.getByRole('progressbar')).not.toHaveAttribute('value')
+  await expect(page.getByRole('progressbar')).toHaveCount(0)
+  await expect(page.getByRole('main').getByRole('status').filter({ hasText: '读取目录' })).toBeVisible()
   await expect(page.getByRole('navigation', { name: '市场情绪模块切换' })).toBeVisible()
 })
 
@@ -322,7 +323,10 @@ test('first saved record appears during backfill and later history reads are thr
   await expect(page.getByRole('button', { name: '取消采集' })).toBeVisible()
   const reads = historyReads
   processed = 2
-  await expect(page.locator('.margin-progress-label')).toContainText('2 / 120', { timeout: 10000 })
+  await expect(page.getByRole('main').getByRole('status').filter({ hasText: '/' })).toContainText(
+    '2 / 120',
+    { timeout: 10000 },
+  )
   expect(historyReads).toBe(reads)
   expect(peakConcurrent).toBe(1)
 })
