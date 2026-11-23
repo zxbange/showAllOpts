@@ -12,8 +12,9 @@ export interface ModuleOption<T extends string = string> {
   icon: LucideIcon
   domId?: string
   controls?: string
-  collectionKeys?: { key: string; name: string }[]
+  collectionMembers?: { key: string; name: string }[]
   collectionKey?: string
+  collectionName?: string
   href?: string
 }
 
@@ -87,11 +88,10 @@ export function ModuleSwitch<T extends string>({
                 {(item.collectionKey || collectionModuleKeys[item.id]) && (
                   <CollectionOutcomeLight
                     moduleKey={item.collectionKey || collectionModuleKeys[item.id]}
+                    name={item.collectionName}
+                    members={item.collectionMembers}
                   />
                 )}
-                {item.collectionKeys?.map(({ key, name }) => (
-                  <CollectionOutcomeLight key={key} moduleKey={key} name={name} />
-                ))}
               </strong>
             </span>
           </>

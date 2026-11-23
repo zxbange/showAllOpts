@@ -32,11 +32,14 @@ describe('compact collection controls replace obsolete footer cards', () => {
       '对照创业板、科创50与中证红利，观察成长与红利的相对强弱。',
     )
   })
-  it('retains explicit status reread and honest existing-data error feedback', () => {
+  it('keeps valuation status polling automatic with no manual reread control', () => {
     const valuation = source('pages/ValuationRulerPage')
-    expect(valuation).toContain('重新读取采集状态')
-    expect(valuation).toContain('onClick={() => void readStatus()}')
-    expect(valuation).toContain('disabled={busy}')
+    expect(valuation).not.toContain('重新读取采集状态')
+    expect(valuation).not.toContain('onClick={() => void readStatus()}')
+    expect(valuation).toContain('if (!mutation.pending) await readStatus()')
+    expect(valuation).toContain('disabled={disabled || running}')
+  })
+  it('describes preserved growth data honestly on failure', () => {
     expect(source('pages/GrowthDividendPage')).toContain(
       "data?.points.length ? ' 已保留现有数据。' : ''",
     )

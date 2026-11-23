@@ -21,6 +21,7 @@ from sqlalchemy.exc import DBAPIError
 from sqlalchemy import text
 
 from app.services.holdings_snapshot import HoldingsError, MAX_ROWS, changes, normalize
+from app.services import holdings_close
 from app.services.system_configuration import SystemConfiguration, task_config
 from app.services.database_sources import DatabaseSources, SourceError
 
@@ -73,11 +74,13 @@ class PersonalHoldings:
                 day TEXT NOT NULL, observed_at TEXT NOT NULL, payload TEXT NOT NULL)''')
             db.execute('CREATE TABLE IF NOT EXISTS holdings_manual_requests (id TEXT PRIMARY KEY)')
             db.execute('CREATE INDEX IF NOT EXISTS holdings_events_day ON holdings_events(day,id)')
+            holdings_close.initialize(db)
             db.execute('INSERT OR IGNORE INTO holdings_state VALUES(1,?)', (json.dumps(dict(
                 enabled=False, source=None, epoch=uuid.uuid4().hex, baseline=False, rows=[], version=0,
                 checked_at=None, observed_at=None, next_poll=0, error=None)),))
         self.path.chmod(0o600)
         self.sources = DatabaseSources(self, settings)
+        self.close_prices = holdings_close.HoldingsClose(self, lambda: clock(), SHANGHAI)
 
     @contextmanager
     def db(self):
@@ -195,7 +198,12 @@ class PersonalHoldings:
 
     def status(self):
         _, _, ref = self._apply_system_configuration()
-        state = self.state()
+        with self.db() as db:
+            db.execute('BEGIN')
+            state = self.state(db)
+            scoped_ref = ref if state['source'] == ref else None
+            state['close_valuation'] = holdings_close.close_valuation(
+                db, scoped_ref, clock().astimezone(SHANGHAI).date(), state['rows'])
         state.pop('source')
         state.pop('epoch')
         state['window_open'] = in_window(clock(), self.settings)
@@ -382,9 +390,11 @@ class PersonalHoldings:
     def start(self):
         self.thread = threading.Thread(target=self.loop, daemon=True, name='personal-holdings')
         self.thread.start()
+        self.close_prices.start()
 
     def stop(self):
         self.stop_event.set()
+        self.close_prices.stop()
         if self.thread:
             self.thread.join(timeout=2)
         else:

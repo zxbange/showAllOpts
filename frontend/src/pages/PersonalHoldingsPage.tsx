@@ -18,7 +18,13 @@ type Event = {
   kind: string
   observed_at: string
 }
+type CloseValuation = {
+  trade_date: string | null
+  prices: Record<string, string>
+  strategy_totals: Record<string, string | null>
+}
 type Status = {
+  close_valuation?: CloseValuation
   manual?: { id: string; status: string; error: string | null }
   enabled: boolean
   configured: boolean
@@ -44,6 +50,10 @@ const stamp = (value: string | null) =>
   value
     ? new Date(value).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai', hour12: false })
     : '尚未读取'
+
+function valuationValue<T>(values: Record<string, T> | undefined, key: string): T | undefined {
+  return values && Object.hasOwn(values, key) ? values[key] : undefined
+}
 
 async function request<T>(path: string, body?: unknown, signal?: AbortSignal): Promise<T> {
   const response = await apiFetch('/api/v1/personal-holdings' + path, {
@@ -106,6 +116,7 @@ function Holdings() {
         if (!controller.signal.aborted && token === generation.current) {
           setPollError('')
           setStatus((old) => ({
+            // Quotes and totals can change even when the holdings rows did not.
             ...next,
             rows: old?.version === next.version ? old.rows : next.rows,
           }))
@@ -177,11 +188,15 @@ function Holdings() {
       if (mounted.current) setLoadingMore(false)
     }
   }
+  const close = status?.close_valuation
   return (
     <div className="holdings-page">
       <PageHeader>
         <div>
-          <h1 aria-label="个人持仓">个人持仓<CollectionOutcomeLight moduleKey="personal-holdings" /></h1>
+          <h1 aria-label="个人持仓">
+            个人持仓
+            <CollectionOutcomeLight moduleKey="personal-holdings" />
+          </h1>
         </div>
         <span className="holdings-status">
           {!status
@@ -207,41 +222,66 @@ function Holdings() {
         ) : groups.length === 0 ? (
           <p className="holdings-card">当前无持仓（最近一次完整查询为空）。</p>
         ) : (
-          <div className="holdings-groups">
-            {groups.map(([strategy, rows]) => (
-              <article className="holdings-card" key={strategy}>
-                <header>
-                  <h3>{strategy}</h3>
-                  <span>{rows.length} 只</span>
-                </header>
-                <div
-                  className="holdings-scroll"
-                  tabIndex={0}
-                  role="region"
-                  aria-label="持仓表格，可横向滚动"
-                >
-                  <table>
-                    <thead>
-                      <tr>
-                        <th>股票</th>
-                        <th>代码</th>
-                        <th>股数</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {rows.map((row) => (
-                        <tr key={row.code}>
-                          <td>{row.name}</td>
-                          <td>{row.code}</td>
-                          <td>{row.amt}</td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              </article>
-            ))}
-          </div>
+          <>
+            <p className="holdings-valuation-date">
+              {close?.trade_date ? (
+                <>
+                  收盘价日期：<time dateTime={close.trade_date}>{close.trade_date}</time>
+                </>
+              ) : (
+                '收盘价暂不可用'
+              )}
+            </p>
+            <div className="holdings-groups">
+              {groups.map(([strategy, rows]) => {
+                const total = valuationValue(close?.strategy_totals, strategy)
+                return (
+                  <article className="holdings-card" key={strategy}>
+                    <header>
+                      <h3 className="holdings-strategy-heading">
+                        <span>{strategy}</span>
+                        <small className="holdings-valuation-total">
+                          {total == null ? '待定（收盘价缺失）' : `总市值 ${total} 元`}
+                        </small>
+                      </h3>
+                      <span>{rows.length} 只</span>
+                    </header>
+                    <div
+                      className="holdings-scroll"
+                      tabIndex={0}
+                      role="region"
+                      aria-label="持仓表格，可横向滚动"
+                    >
+                      <table>
+                        <thead>
+                          <tr>
+                            <th>股票</th>
+                            <th>代码</th>
+                            <th>股数</th>
+                            <th scope="col" className="holdings-close-price">
+                              收盘价
+                            </th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {rows.map((row) => (
+                            <tr key={row.code}>
+                              <td>{row.name}</td>
+                              <td>{row.code}</td>
+                              <td>{row.amt}</td>
+                              <td className="holdings-close-price">
+                                {valuationValue(close?.prices, row.code) ?? '—'}
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </article>
+                )
+              })}
+            </div>
+          </>
         )}
       </section>
       <section className="holdings-card holdings-history" aria-label="仓位变动">

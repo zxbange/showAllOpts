@@ -171,10 +171,12 @@ test('running prevents duplicate submissions and allows cancellation', async ({ 
   await expect(page.getByRole('button', { name: '更新数据', exact: true })).toBeEnabled()
 })
 
-test('failed uncertain start remains blocked after navigation and fresh idle status', async ({
+test('uncertain start stays locked across navigation until automatic polling sees running then terminal', async ({
   page,
 }) => {
   let starts = 0
+  let statusReads = 0
+  let status = idle
   await page.route('**/api/auth/users', (route) =>
     route.fulfill({ json: { users: [adminSession.user] } }),
   )
@@ -182,19 +184,48 @@ test('failed uncertain start remains blocked after navigation and fresh idle sta
     if (route.request().method() === 'POST') {
       starts++
       await route.abort('failed')
-    } else await route.fulfill({ json: route.request().url().endsWith('/status') ? idle : history })
+    } else if (route.request().url().endsWith('/status')) {
+      statusReads++
+      await route.fulfill({ json: status })
+    } else await route.fulfill({ json: history })
   })
+  await page.clock.install()
   await page.goto('/valuation-ruler')
-  await page.getByRole('button', { name: '更新数据', exact: true }).click()
-  await expect(page.getByText(/上次操作结果不确定/)).toBeVisible()
-  await page.getByRole('button', { name: '重新读取采集状态' }).click()
-  await expect(page.getByRole('button', { name: '更新数据', exact: true })).toBeDisabled()
+  const update = page.getByRole('button', { name: '更新数据', exact: true })
+  const uncertain = page.getByText(/上次操作结果不确定/)
+  await update.click()
+  await expect(uncertain).toBeVisible()
+  await expect(update).toBeDisabled()
+  await expect(page.getByRole('button', { name: '重新读取采集状态' })).toHaveCount(0)
   await page.getByRole('link', { name: '用户管理', exact: true }).click()
   await expect(page).toHaveURL(/\/account$/)
   await expect(page.getByRole('heading', { name: '用户管理', exact: true })).toBeVisible()
+  const readsBeforeReturn = statusReads
   await page.goBack()
   await expect(page).toHaveURL(/\/valuation-ruler$/)
-  await expect(page.getByRole('button', { name: '更新数据', exact: true })).toBeDisabled()
+  await expect.poll(() => statusReads).toBeGreaterThan(readsBeforeReturn)
+  await expect(uncertain).toBeVisible()
+  await expect(update).toBeDisabled()
+
+  status = { ...idle, status: 'running' }
+  const running = page.getByRole('button', { name: '采集中', exact: true })
+  await expect
+    .poll(async () => {
+      await page.clock.fastForward(16000)
+      return running.isVisible()
+    })
+    .toBe(true)
+  await expect(running).toBeDisabled()
+  await expect(uncertain).toBeVisible()
+
+  status = { ...idle, last_success_at: '2026-11-10T18:30:00+08:00' }
+  await expect
+    .poll(async () => {
+      await page.clock.fastForward(16000)
+      return (await update.count()) === 1 && (await update.isEnabled())
+    })
+    .toBe(true)
+  await expect(uncertain).toHaveCount(0)
   expect(starts).toBe(1)
 })
 
@@ -241,31 +272,49 @@ test('older status cannot re-enable collection after a newer running response', 
   let release: (() => void) | undefined
   let hold = false
   let held = false
+  let finishedHeldResponse = false
+  let starts = 0
   await page.route('**/api/v1/valuation-ruler/**', async (route) => {
     const path = new URL(route.request().url()).pathname.split('/').at(-1)
     if (path === 'status') {
       const captured = status
-      if (hold && !held) {
+      const shouldHold = hold && !held
+      if (shouldHold) {
         held = true
         await new Promise<void>((resolve) => {
           release = resolve
         })
       }
       await route.fulfill({ json: captured }).catch(() => {})
+      if (shouldHold) finishedHeldResponse = true
     } else if (path === 'refresh') {
+      starts++
       status = { ...idle, status: 'running' }
       await route.fulfill({ status: 202, json: { started: true } })
     } else await route.fulfill({ json: history })
   })
+  await page.clock.install()
   await page.goto('/valuation-ruler')
   await expect(page.getByRole('button', { name: '更新数据', exact: true })).toBeEnabled()
-  hold = true
-  await page.getByRole('button', { name: '重新读取采集状态' }).click()
-  await expect.poll(() => held).toBe(true)
-  await page.getByRole('button', { name: '更新数据', exact: true }).click()
-  await expect(page.getByRole('button', { name: '采集中', exact: true })).toBeDisabled()
-  release?.()
-  await expect(page.getByRole('button', { name: '采集中', exact: true })).toBeDisabled()
+  try {
+    hold = true
+    await expect
+      .poll(async () => {
+        await page.clock.fastForward(16000)
+        return held
+      })
+      .toBe(true)
+    await page.getByRole('button', { name: '更新数据', exact: true }).click()
+    const running = page.getByRole('button', { name: '采集中', exact: true })
+    await expect(running).toBeDisabled()
+    release?.()
+    await expect.poll(() => finishedHeldResponse).toBe(true)
+    await expect(running).toBeDisabled()
+    await expect(page.getByRole('button', { name: '更新数据', exact: true })).toHaveCount(0)
+    expect(starts).toBe(1)
+  } finally {
+    release?.()
+  }
 })
 
 test('pending POST remains locked across route departure and return', async ({ page }) => {

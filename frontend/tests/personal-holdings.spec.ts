@@ -467,3 +467,68 @@ test('bounded history separates stock columns, scrolls by keyboard and keeps pag
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
   await page.screenshot({ path: info.outputPath('bounded-history.png'), fullPage: true })
 })
+
+test('close prices and strategy totals refresh without a holdings version change', async ({
+  page,
+}) => {
+  let valuation:
+    | {
+        trade_date: string | null
+        prices: Record<string, string>
+        strategy_totals: Record<string, string | null>
+      }
+    | undefined
+  await page.route('**/api/v1/**', (route) => {
+    const path = new URL(route.request().url()).pathname
+    if (path.endsWith('/personal-holdings/history'))
+      return route.fulfill({ json: { days: [], events: [], next_before: null } })
+    if (!path.endsWith('/personal-holdings/status')) return route.fulfill({ json: { modules: [] } })
+    return route.fulfill({
+      json: {
+        configured: true,
+        enabled: false,
+        baseline: true,
+        version: 1,
+        rows: [
+          { strategy2: '完整策略', code: '000001.SZ', name: '模拟股票甲', amt: '100' },
+          { strategy2: '缺价策略', code: '000001.SZ', name: '模拟股票甲', amt: '300' },
+          { strategy2: '缺价策略', code: '000002', name: '模拟股票乙', amt: '2' },
+        ],
+        window_open: false,
+        trading_day: true,
+        error: null,
+        calendar_error: null,
+        observed_at: '2026-11-23T01:30:00Z',
+        close_valuation: valuation,
+      },
+    })
+  })
+  await page.clock.install({ time: new Date('2026-11-23T01:30:00Z') })
+  await page.goto('/personal-holdings')
+  const complete = page.getByRole('article').filter({ hasText: '完整策略' })
+  const incomplete = page.getByRole('article').filter({ hasText: '缺价策略' })
+  await expect(complete.getByRole('columnheader', { name: '收盘价' })).toBeVisible()
+  await expect(complete.getByRole('cell', { name: '—', exact: true })).toBeVisible()
+  await expect(complete.getByRole('heading')).toContainText('待定（收盘价缺失）')
+
+  valuation = {
+    trade_date: '2026-11-20',
+    prices: { '000001.SZ': '9007199254740993.123456' },
+    strategy_totals: { 完整策略: '900719925474099312.345600', 缺价策略: null },
+  }
+  await page.clock.runFor(4000)
+  await expect(page.getByText('收盘价日期：2026-11-20', { exact: true })).toHaveCount(1)
+  await expect(complete.getByRole('cell', { name: '9007199254740993.123456' })).toHaveCount(1)
+  await expect(complete.getByRole('heading')).toContainText('总市值 900719925474099312.345600 元')
+  await expect(incomplete.getByRole('cell', { name: '9007199254740993.123456' })).toHaveCount(1)
+  await expect(incomplete.getByRole('cell', { name: '—', exact: true })).toHaveCount(1)
+  await expect(incomplete.getByRole('heading')).toContainText('待定（收盘价缺失）')
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
+
+  valuation = { trade_date: null, prices: {}, strategy_totals: {} }
+  await page.clock.runFor(4000)
+  await expect(page.getByText('收盘价暂不可用', { exact: true })).toBeVisible()
+  await expect(complete.getByRole('cell', { name: '—', exact: true })).toBeVisible()
+  await expect(complete.getByRole('heading')).toContainText('待定（收盘价缺失）')
+  await expect(complete.getByRole('cell', { name: '100', exact: true })).toBeVisible()
+})

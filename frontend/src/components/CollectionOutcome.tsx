@@ -42,15 +42,42 @@ export function CollectionOutcomesProvider({
   )
 }
 
-export function CollectionOutcomeLight({ moduleKey, name }: { moduleKey: string; name?: string }) {
+type CollectionMember = { key: string; name: string }
+
+export function CollectionOutcomeLight({
+  moduleKey,
+  name,
+  members,
+}: {
+  moduleKey: string
+  name?: string
+  members?: CollectionMember[]
+}) {
   const { data, unavailable } = useContext(CollectionOutcomeContext)
-  const { tone, symbol, label } = collectionOutcomePresentation(data.items[moduleKey], unavailable)
+  const single = collectionOutcomePresentation(data.items[moduleKey], unavailable)
+  const group = members?.map(({ key, name }) => ({
+    ...collectionOutcomePresentation(data.items[key], unavailable),
+    name,
+  }))
+  // A platform with a reported problem must not be hidden behind a different
+  // platform's success. All members must report success to display green.
+  const { tone, symbol } =
+    group?.find((entry) => entry.tone === 'failed') ??
+    group?.find((entry) => entry.tone === 'running') ??
+    group?.find((entry) => entry.tone === 'unknown') ??
+    group?.[0] ??
+    single
+  const label = group?.length
+    ? group.map((entry) => `${entry.name}：${entry.label}`).join('；')
+    : name
+      ? `${name}：${single.label}`
+      : single.label
   return (
     <span
       className={`collection-outcome collection-outcome--${tone}`}
       role="img"
-      aria-label={name ? `${name}：${label}` : label}
-      title={name ? `${name}：${label}` : label}
+      aria-label={label}
+      title={label}
       data-collection-key={moduleKey}
       data-symbol={symbol}
     />

@@ -71,29 +71,66 @@ it('renders neutral when no completion exists, or the status endpoint is unavail
   expect(html).not.toContain('collection-outcome--success')
 })
 
-it('keeps two social platforms distinct and omits lights from settings tabs', () => {
-  const html = renderToStaticMarkup(
-    <MemoryRouter>
-      <ModuleSwitch
-        tabs
-        label="博主监控"
-        items={[
-          {
-            id: 'feed',
-            name: '最新动态',
-            description: '动态',
-            icon: Coins,
-            collectionKeys: [
-              { key: 'social-weibo', name: '微博' },
-              { key: 'social-xueqiu', name: '雪球' },
-            ],
+it.each([
+  ['success', false, 'success'],
+  ['failed', false, 'failed'],
+  ['partial', false, 'failed'],
+  ['running', false, 'running'],
+  ['missing', false, 'unknown'],
+  ['success', true, 'unknown'],
+] as const)(
+  'groups the latest social outcomes into one light: %s, unavailable=%s',
+  (outcome, unavailable, tone) => {
+    const item = {
+      outcome: 'success' as const,
+      finished_at: '2026-11-18T12:00:00+08:00',
+      trigger: 'scheduled' as const,
+    }
+    const html = renderToStaticMarkup(
+      <CollectionOutcomeContext.Provider
+        value={{
+          data: {
+            items: {
+              'social-weibo': item,
+              ...(outcome === 'missing'
+                ? {}
+                : {
+                    'social-xueqiu':
+                      outcome === 'running' ? { ...item, running: true } : { ...item, outcome },
+                  }),
+            },
           },
-          { id: 'settings', name: '平台登录', description: '登录', icon: Coins },
-        ]}
-      />
-    </MemoryRouter>,
-  )
-  expect(html).toContain('aria-label="微博：尚无已完成采集记录"')
-  expect(html).toContain('aria-label="雪球：尚无已完成采集记录"')
-  expect(html).toContain('<strong>平台登录</strong>')
-})
+          unavailable,
+        }}
+      >
+        <MemoryRouter>
+          <ModuleSwitch
+            tabs
+            label="博主监控"
+            items={[
+              {
+                id: 'feed',
+                name: '最新动态',
+                description: '动态',
+                icon: Coins,
+                collectionKey: 'social-feed',
+                collectionMembers: [
+                  { key: 'social-weibo', name: '微博' },
+                  { key: 'social-xueqiu', name: '雪球' },
+                ],
+              },
+              { id: 'settings', name: '平台登录', description: '登录', icon: Coins },
+            ]}
+          />
+        </MemoryRouter>
+      </CollectionOutcomeContext.Provider>,
+    )
+    expect(html.match(/data-collection-key=/g)).toHaveLength(1)
+    expect(html).toContain(
+      `<strong>最新动态<span class="collection-outcome collection-outcome--${tone}"`,
+    )
+    expect(html).toContain('data-collection-key="social-feed"')
+    expect(html).toMatch(/aria-label="微博：[^"]+；雪球：[^"]+"/)
+    expect(html).toContain('<strong>平台登录</strong>')
+  },
+)
