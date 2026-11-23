@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import argparse
 import calendar as month_calendar
+from contextlib import contextmanager
 from datetime import date, datetime, timedelta
 from decimal import Decimal, InvalidOperation
 import sys
@@ -426,34 +427,134 @@ def collect(client, start, end, funds=None, include_prices=True, include_shares=
     return shares, prices, missing
 
 
+# Bound key parameters and each executemany batch for both MySQL and the
+# offline SQLite path. A normal scheduled run needs one request per data table.
+_WRITE_BATCH_SIZE = 250
+
+
+def _write_batches(records):
+    for start in range(0, len(records), _WRITE_BATCH_SIZE):
+        yield records[start:start + _WRITE_BATCH_SIZE]
+
+
+def _read_existing(connection, table, records, *, calendar=False):
+    from sqlalchemy import select, tuple_
+
+    keys = tuple(table.primary_key.columns)
+    columns = tuple(column for column in table.columns if column.name != 'updated_at')
+    query = select(*columns)
+    if not records:
+        return {}
+    if calendar:
+        # Compare the complete *verified* coverage, not just MAX(date). A
+        # sparse legacy baseline or a bad historical predecessor must still
+        # be healed. Do not read or delete dates outside this source's range.
+        day = table.c.trade_date
+        days = [record['trade_date'] for record in records]
+        statements = [query.where(day.between(min(days), max(days)))]
+    else:
+        statements = (query.where(tuple_(*keys).in_([
+            tuple(record[key.name] for key in keys) for record in batch
+        ])) for batch in _write_batches(records))
+    return {tuple(row[key.name] for key in keys): row
+            for statement in statements for row in connection.execute(statement).mappings()}
+
+
+def _record_changes(table, records, existing):
+    keys = tuple(table.primary_key.columns)
+    inserts, updates = [], []
+    for record in records:
+        identity = tuple(record[key.name] for key in keys)
+        old = existing.get(identity)
+        if old is None:
+            inserts.append(record)
+        elif any(old[field] != value for field, value in record.items() if field != 'updated_at'):
+            updates.append(record)
+    return inserts, updates
+
+
+def _flush_records(connection, table, inserts, updates):
+    from sqlalchemy import and_, bindparam
+
+    for batch in _write_batches(inserts):
+        connection.execute(table.insert(), batch)
+    if updates:
+        keys = tuple(table.primary_key.columns)
+        values = {column.name: bindparam(column.name)
+                  for column in table.columns if not column.primary_key}
+        statement = table.update().where(and_(*(
+            key == bindparam('_etf_key_' + key.name) for key in keys
+        ))).values(values)
+        for batch in _write_batches(updates):
+            parameters = [({name: record[name] for name in values} | {
+                '_etf_key_' + key.name: record[key.name] for key in keys
+            }) for record in batch]
+            connection.execute(statement, parameters)
+
+
+@contextmanager
+def _write_transaction(connection):
+    transaction = connection.begin()
+    try:
+        yield transaction
+    except BaseException:
+        if transaction.is_active:
+            try:
+                transaction.rollback()
+            except Exception as cleanup_error:
+                LOG.warning('ETF database rollback failed type=%s', type(cleanup_error).__name__)
+        raise
+
+
 def write_records(engine, shares, prices, calendar=None):
-    from sqlalchemy import select
-    from sqlalchemy.orm import Session
-    from app.models.etf import ETFShare, ETFPrice, ETFTradingDay
-    # Both sources are fetched and validated before entering this transaction.
-    ETFShare.__table__.create(engine, checkfirst=True)
-    ETFPrice.__table__.create(engine, checkfirst=True)
+    from app.models.etf import ETFPrice, ETFShare, ETFTradingDay
+    from app.services.etf_diagnostics import database_phase
+
+    batches = [(ETFShare.__table__, list(shares)), (ETFPrice.__table__, list(prices))]
     if calendar is not None:
-        ETFTradingDay.__table__.create(engine, checkfirst=True)
+        batches.append((ETFTradingDay.__table__, calendar.records()))
     changed_count = 0
-    with Session(engine) as session, session.begin():
-        batches = [(ETFShare, shares), (ETFPrice, prices)]
-        if calendar is not None:
-            batches.append((ETFTradingDay, calendar.records()))
-        for model, records in batches:
-            calendar_rows = ({row.trade_date: row for row in session.scalars(select(ETFTradingDay))}
-                             if model is ETFTradingDay else None)
-            for record in records:
-                identity = record['trade_date'] if model is ETFTradingDay else (record['fund_code'], record['trade_date'])
-                existing = calendar_rows.get(identity) if calendar_rows is not None else session.get(model, identity)
-                if existing is None:
-                    session.add(model(**record))
-                    changed_count += int(model is not ETFTradingDay)
-                elif any(getattr(existing, key) != value for key, value in record.items() if key != 'updated_at'):
-                    changed_count += int(model is not ETFTradingDay)
-                    for key, value in record.items():
-                        setattr(existing, key, value)
-                # An identical recheck preserves updated_at and avoids cache churn.
+    with database_phase('connect'):
+        connection = engine.connect()
+    try:
+        # MySQL CREATE auto-commits, so run checkfirst and any initial DDL in
+        # its own transaction before the atomic data write. One checkout for
+        # all existing tables and both phases.
+        with database_phase('schema_check'):
+            with _write_transaction(connection) as transaction:
+                ETFShare.metadata.create_all(connection, tables=[table for table, _ in batches], checkfirst=True)
+                transaction.commit()
+        with _write_transaction(connection) as transaction:
+            plan = []
+            for table, records in batches:
+                is_calendar = table is ETFTradingDay.__table__
+                phase = ('load_calendar' if is_calendar else
+                         'load_share_keys' if table is ETFShare.__table__ else 'load_price_keys')
+                with database_phase(phase, table.name, rows=len(records)):
+                    existing = _read_existing(connection, table, records, calendar=is_calendar)
+                    inserts, updates = _record_changes(table, records, existing)
+                plan.append((table, inserts, updates))
+                if not is_calendar:
+                    changed_count += len(inserts) + len(updates)
+            for table, inserts, updates in plan:
+                if inserts or updates:
+                    with database_phase('flush', table.name, rows=len(inserts) + len(updates)):
+                        _flush_records(connection, table, inserts, updates)
+            with database_phase('commit'):
+                transaction.commit()
+    finally:
+        # close() may try to rollback a broken socket. Preserve an original
+        # failure or a known successful business commit, rather than treating
+        # a pool cleanup exception as a new write failure.
+        try:
+            connection.close()
+        except Exception as cleanup_error:
+            LOG.warning('ETF database close failed type=%s', type(cleanup_error).__name__)
+
+    counts = {table.name: len(inserts) + len(updates) for table, inserts, updates in plan}
+    LOG.info('ETF database write summary shares_changed=%s prices_changed=%s calendar_changed=%s',
+             counts[ETFShare.__tablename__], counts[ETFPrice.__tablename__],
+             counts.get(ETFTradingDay.__tablename__, 0))
     return changed_count
 
 

@@ -191,8 +191,9 @@ it('renders collection errors without raw internal codes', () => {
 
 it('connection failures refer to database settings without a TLS option', () => {
   expect(collectionErrorMessage('writer_connection_failed')).toBe(
-    '无法连接数据库，请检查网络、账号和数据库配置。',
+    '数据库连接失败或中断，请查看采集日志中的失败阶段。',
   )
+  expect(collectionErrorMessage('writer_commit_unconfirmed')).toContain('提交结果未确认')
 })
 
 it('retains calendar dates with no shares instead of jumping across missing history', () => {

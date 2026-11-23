@@ -13,9 +13,9 @@ python collectors/etf_exchange_collector.py --start 2026-11-02 --end 2026-11-06 
 python collectors/etf_exchange_collector.py --start 2026-11-06 --end 2026-11-06 --prices-only --write
 ```
 
-默认 dry-run；默认日期为官方日历核验过的最近5个已收市交易日（盘中不包含当天）。`--write` 才创建所需表并写入；按基金代码和交易日主键幂等更新，允许交易所同日修订。全部网络请求及响应校验完成才启动数据写入事务；完整已发生交易日及真实前一交易日同步写入独立 `etf_trading_day` 表，和份额、价格共用事务，不改共享 holdings 日历。份额和价格独立补采，不因份额已入库而跳过价格。
+默认 dry-run；默认日期为官方日历核验过的最近5个已收市交易日（盘中不包含当天）。`--write` 才创建所需表并写入；按基金代码和交易日主键幂等更新，允许交易所同日修订。全部网络请求及响应校验完成才启动数据写入事务；已核验交易日及真实前一交易日写入独立 `etf_trading_day` 表，与份额、价格共用事务，不改共享 holdings 日历。份额和价格独立补采，不因份额已入库而跳过价格。
 
-退出码：0 请求范围完整；1 请求/格式/日历/写库错误；2 存在缺失日期（有效观测仍可按 `--write` 写入，缺失绝不填补）。脚本输出缺失总数及前20个代码/日期，不打印数据库密码或连接串。普通服务器无需 SOCKS 依赖；若运行环境使用 SOCKS_PROXY/ALL_PROXY，则该环境需安装 httpx 的 socks 可选依赖。
+退出码：0 请求范围完整；1 请求/格式/日历/写库错误；2 存在缺失日期（有效观测仍可按 `--write` 写入，缺失绝不填补）。脚本按份额与价格分别输出缺失总数及前 20 个代码/日期；有效响应没有可信观测值属于覆盖缺口，与请求或格式错误区分。不打印数据库密码或连接串。普通服务器无需 SOCKS 依赖；若运行环境使用 SOCKS_PROXY/ALL_PROXY，则该环境需安装 httpx 的 socks 可选依赖。
 
 ## 来源、单位和边界
 
@@ -48,7 +48,9 @@ python collectors/etf_exchange_collector.py --start 2026-11-06 --end 2026-11-06 
 - `calendar.range(start, end)`：覆盖范围内实际交易日。
 - `calendar.previous(day)`：真实前一交易日；不跨缺口猜测。
 - `collect(client, start, end, funds=None, include_prices=True, include_shares=True, calendar=calendar)`：返回不变的 `(shares, prices, missing)`。
-- `write_records(engine, shares, prices, calendar=calendar)`：同事务写份额、价格和已发生交易日；完全相同记录保留 `updated_at`。日历批量读取已有行，避免每次回查产生数千次数据库往返。
+- `write_records(engine, shares, prices, calendar=calendar)`：同事务写份额、价格和已核验交易日。按组合主键分批读取已有份额和价格，只写真正新增或修订的记录；完全相同记录保留 `updated_at`。日历读取限定在上游已核验的日期范围，仍修补范围内缺行与错误的前一交易日关系，不改动范围外记录。这不改变独立 CLI 显式历史范围的含义或官方日历验证标准。
+
+表检查、连接、批量读取、flush 和 commit 分别计时，以区分读库拖慢、写入拖慢和提交确认等待。提交阶段明确的 socket 超时或 MySQL 2013 断连不能证明已回滚。CLI 报错即结束，不应直接重跑，应先核查持久化结果；后台自动任务在这种情况下也暂停同一时点的重试，后续新时点照常。普通失败仍按原定重试规则。本次优化不要求迁移或新增索引。
 
 本文说明独立 CLI 及历史只读验证。后台任务的数据库和调度由系统配置统一管理、日常只覆盖最近已收盘交易日，见[自动采集说明](etf-collection.md)。历史 CLI 探测不证明当前线上数据或凭据可用。
 

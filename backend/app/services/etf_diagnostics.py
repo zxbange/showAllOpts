@@ -1,9 +1,18 @@
 """Allowlisted ETF database diagnostics, never raw driver messages or SQL."""
-from dataclasses import dataclass
+import builtins
+from collections import deque
+from contextlib import contextmanager
+from contextvars import ContextVar
+from dataclasses import dataclass, replace
 import logging
+import re
 import socket
+from time import monotonic
 
-from pymysql.err import MySQLError
+from pymysql import err as mysql_errors
+from sqlalchemy import exc as sqlalchemy_errors
+
+MySQLError = mysql_errors.MySQLError
 
 
 LOG = logging.getLogger(__name__)
@@ -39,6 +48,23 @@ MYSQL_REASONS = {
 }
 
 
+_WRITE_PHASES = frozenset(('schema_check', 'connect', 'load', 'load_share_keys',
+                           'load_price_keys', 'load_calendar', 'flush', 'commit'))
+_WRITE_RUN = ContextVar('etf_database_write_run', default='-')
+_STAGES = _WRITE_PHASES | {
+    'engine_create', 'write_records', 'connect', 'connection_close', 'table_check',
+    'resolve', 'validate_address', 'driver_init', 'socket_connect', 'mysql_connect',
+}
+_TABLES = frozenset(('etf_share_daily', 'etf_price_daily', 'etf_trading_day'))
+_TYPE_MAP = {
+    value: f'{value.__module__}.{value.__name__}'
+    for module in (builtins, socket, mysql_errors, sqlalchemy_errors)
+    for value in vars(module).values()
+    if isinstance(value, type) and issubclass(value, BaseException)
+    and not value.__module__.startswith('_')
+}
+
+
 @dataclass(frozen=True)
 class DatabaseDiagnostic:
     driver_type: str
@@ -46,50 +72,124 @@ class DatabaseDiagnostic:
     os_errno: int | None
     reason: str
     stage: str
+    table: str | None = None
+    socket_timeout: bool = False
+    seconds: float | None = None
+
+
+@contextmanager
+def database_write_run(run):
+    """Correlate database diagnostics without accepting arbitrary IDs into logs."""
+    token = _WRITE_RUN.set(run if isinstance(run, str) and re.fullmatch(r'[a-f0-9]{12}', run) else '-')
+    try:
+        yield
+    finally:
+        _WRITE_RUN.reset(token)
+
+
+@contextmanager
+def database_phase(stage, table=None, *, rows=None):
+    """Tag the original exception with its innermost, allowlisted write phase."""
+    started = monotonic()
+    known = isinstance(stage, str) and stage in _WRITE_PHASES
+    table = table if isinstance(table, str) and table in _TABLES else None
+    try:
+        yield
+    except Exception as error:
+        try:
+            if known and not hasattr(error, '_etf_database_phase'):
+                error._etf_database_phase = (stage, table, monotonic() - started)
+        except (AttributeError, TypeError):
+            pass  # A diagnostic tag must not mask an immutable exception.
+        raise
+    else:
+        if known:
+            LOG.info('ETF database phase complete run=%s stage=%s table=%s rows=%s seconds=%.3f',
+                     _WRITE_RUN.get(), stage, table or '-', rows if _number(rows) else '-', monotonic() - started)
 
 
 def error_type(error):
-    return f'{type(error).__module__}.{type(error).__name__}'
+    return next((_TYPE_MAP[cls] for cls in type(error).__mro__ if cls in _TYPE_MAP),
+                'builtins.Exception')
+
+
+def _number(value):
+    return type(value) is int and 0 <= value <= 2**31 - 1
+
+
+def _error_chain(error):
+    """Visit SQLAlchemy driver, PyMySQL socket, and Python exception cause links."""
+    pending, visited = deque([error]), set()
+    while pending and len(visited) < 8:
+        current = pending.popleft()
+        if not isinstance(current, BaseException) or id(current) in visited:
+            continue
+        visited.add(id(current))
+        yield current
+        if isinstance(current, sqlalchemy_errors.StatementError):
+            pending.append(current.orig)
+        if isinstance(current, MySQLError):
+            pending.append(getattr(current, 'original_exception', None))
+        if current.__cause__ is not None:
+            pending.append(current.__cause__)
+        elif not current.__suppress_context__:
+            pending.append(current.__context__)
 
 
 def database_diagnostic(error, stage):
-    original = getattr(error, 'orig', error)
-    saved = getattr(original, 'database_diagnostic', None)
-    if isinstance(saved, DatabaseDiagnostic):
-        return saved
-    args = getattr(original, 'args', ())
-    number = (args[0] if isinstance(original, MySQLError) and args and type(args[0]) is int else None)
-    # PyMySQL retains the underlying socket error here on connection failure.
-    socket_error = getattr(original, 'original_exception', original)
-    os_errno = getattr(socket_error, 'errno', None) if isinstance(socket_error, OSError) else None
-    if type(os_errno) is not int:
-        os_errno = None
+    chain = tuple(_error_chain(error))
+    stage = stage if stage in _STAGES else 'unknown'
+    phase = next((phase for item in chain
+                  if isinstance((phase := getattr(item, '_etf_database_phase', None)), tuple)
+                  and len(phase) == 3 and phase[0] in _WRITE_PHASES), None)
+    original = error.orig if isinstance(error, sqlalchemy_errors.StatementError) else error
+    saved = next((saved for item in chain
+                  if isinstance((saved := getattr(item, 'database_diagnostic', None)),
+                                DatabaseDiagnostic)), None)
+    if saved is not None:
+        # A concrete socket/handshake stage survives a surrounding writer phase.
+        return replace(saved, table=phase[1], seconds=phase[2]) if phase else saved
+    table, seconds = None, None
+    if phase:
+        stage, table, seconds = phase
+    mysql_error = next((item for item in chain if isinstance(item, MySQLError)), None)
+    number = (mysql_error.args[0] if mysql_error is not None and mysql_error.args
+              and _number(mysql_error.args[0]) else None)
+    socket_errors = tuple(item for item in chain if isinstance(item, OSError))
+    os_errno = next((item.errno for item in socket_errors if _number(item.errno)), None)
+    timeout = any(isinstance(item, TimeoutError) for item in socket_errors)
     reason = MYSQL_REASONS.get(number)
     if reason is None:
-        if stage == 'resolve' or isinstance(original, socket.gaierror):
+        if stage == 'resolve' or any(isinstance(item, socket.gaierror) for item in socket_errors):
             reason = 'dns_resolution_failed'
         elif stage == 'validate_address':
             reason = 'target_address_rejected'
-        elif isinstance(socket_error, TimeoutError):
-            reason = 'connection_timeout'
-        elif isinstance(socket_error, ConnectionRefusedError):
+        elif timeout:
+            reason = ('socket_timeout' if stage in _WRITE_PHASES and stage != 'connect'
+                      else 'connection_timeout')
+        elif any(isinstance(item, ConnectionRefusedError) for item in socket_errors):
             reason = 'connection_refused'
-        elif isinstance(socket_error, OSError):
+        elif socket_errors:
             reason = 'network_or_os_error'
         else:
             reason = 'database_operation_failed'
-    return DatabaseDiagnostic(error_type(original), number, os_errno, reason, stage)
+    return DatabaseDiagnostic(error_type(mysql_error if mysql_error is not None else original),
+                              number, os_errno, reason, stage, table, timeout, seconds)
 
 
 def log_database_failure(error, *, operation, stage, target, table=None):
     diagnostic = database_diagnostic(error, stage)
-    # Do not use str/repr(error), exc_info, SQL, parameters or the config/URL.
-    # These structured values remain safe even for unsaved page credentials,
-    # which the global log formatter does not know how to redact.
+    # Never format the error, SQL, parameters, credentials, raw URL or traceback.
     LOG.error(
         'ETF database failure operation=%s stage=%s table=%s target=%s '
-        'error_type=%s driver_error_type=%s mysql_code=%s os_errno=%s reason=%s',
-        operation, diagnostic.stage, table or '-', target, error_type(error),
-        diagnostic.driver_type, diagnostic.mysql_code if diagnostic.mysql_code is not None else '-',
+        'error_type=%s driver_error_type=%s mysql_code=%s os_errno=%s reason=%s '
+        'socket_timeout=%s stage_seconds=%s run=%s',
+        operation if operation in ('collection-write', 'collection-test') else 'unknown',
+        diagnostic.stage, diagnostic.table or (table if table in _TABLES else '-'),
+        target if isinstance(target, str) and re.fullmatch(r'[a-f0-9]{12}', target) else '-',
+        error_type(error), diagnostic.driver_type,
+        diagnostic.mysql_code if diagnostic.mysql_code is not None else '-',
         diagnostic.os_errno if diagnostic.os_errno is not None else '-', diagnostic.reason,
+        'true' if diagnostic.socket_timeout else 'unconfirmed',
+        f'{diagnostic.seconds:.3f}' if diagnostic.seconds is not None else '-', _WRITE_RUN.get(),
     )

@@ -962,3 +962,79 @@ def test_native_permanent_purge_protects_unknown_states_and_unparseable_times(tm
     assert {'unknown-state', 'bad-finish', 'bad-legacy'} <= ids
     assert '0' not in ids and 'valid-legacy' not in ids
     assert len(ids) == 8
+
+
+@pytest.mark.parametrize(('omit_shares', 'omit_prices', 'code'), [
+    (True, False, 'etf_missing_shares'),
+    (False, True, 'etf_missing_prices'),
+    (True, True, 'etf_missing_shares_and_prices'),
+])
+def test_valid_incomplete_source_reports_specific_gap(tmp_path, caplog, omit_shares, omit_prices, code):
+    import logging
+    w, c, _ = worker(tmp_path)
+    collect = c.collect
+
+    def incomplete(*args, **kwargs):
+        shares, prices, extra = collect(*args, **kwargs)
+        return ([] if omit_shares else shares, [] if omit_prices else prices, extra)
+
+    c.collect = incomplete
+    request_id = 'source-gap-check-123'
+    w.request_run(request_id)
+    with caplog.at_level(logging.INFO):
+        assert not w.tick(EVENING)
+    latest = w.status()['latest_result']
+    assert latest['status'] == 'partial'
+    assert latest['error_details']['code'] == code
+    assert latest['error_details']['trade_date'] == DAY.isoformat()
+    assert 'failed=0' in caplog.text
+    assert f'missing_shares={2 if omit_shares else 0}' in caplog.text
+    assert f'missing_prices={2 if omit_prices else 0}' in caplog.text
+    assert len(c.writes) == 1  # Retain verified records even if the other series is missing.
+
+
+def test_database_failure_takes_precedence_over_source_gap(tmp_path, caplog):
+    import logging
+    from pymysql.err import OperationalError
+    w, c, _ = worker(tmp_path)
+    c.collect = lambda *args, **kwargs: ([], [], {})
+
+    def disconnected(*args, **kwargs):
+        raise OperationalError(2013, 'private values')
+
+    c.write_records = disconnected
+    w.request_run('source-gap-write-failed-123')
+    with caplog.at_level(logging.INFO):
+        assert not w.tick(EVENING)
+    latest = w.status()['latest_result']
+    assert latest['status'] == 'failed'
+    assert latest['error_details']['code'] == 'database_error'
+    assert latest['error_details']['mysql_errno'] == 2013
+    assert 'missing_shares=2 missing_prices=2' in caplog.text
+    assert 'private values' not in caplog.text
+
+
+def test_commit_connection_loss_requires_verification_and_does_not_retry_slot(tmp_path, caplog):
+    import logging
+    from pymysql.err import OperationalError
+    from app.services.etf_diagnostics import database_phase
+
+    w, c, _ = worker(tmp_path)
+
+    def ambiguous_commit(*args, **kwargs):
+        with database_phase('commit'):
+            raise OperationalError(2013, 'connection lost after private write')
+
+    c.write_records = ambiguous_commit
+    with caplog.at_level(logging.INFO):
+        assert not w.tick(EVENING)
+    state = w.status()
+    assert state['runs'][0]['error'] == 'writer_commit_unconfirmed'
+    assert state['latest_result']['error_details']['code'] == 'etf_commit_unconfirmed'
+    assert state['latest_result']['error_details']['mysql_errno'] == 2013
+    assert not state['cache_pending']
+    assert 'stage=commit' in caplog.text and 'run=-' not in caplog.text
+    assert 'connection lost after private write' not in caplog.text
+    attempts = len(c.calls)
+    assert not w.tick(EVENING + timedelta(minutes=31))
+    assert len(c.calls) == attempts

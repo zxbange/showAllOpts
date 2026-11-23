@@ -2,6 +2,7 @@
 from contextlib import nullcontext
 import errno
 import logging
+import re
 import socket
 from types import SimpleNamespace
 from unittest.mock import Mock
@@ -11,7 +12,9 @@ import pytest
 from sqlalchemy.exc import OperationalError
 
 from app.services.etf_configuration import ConfigurationFailure, target_key
-from app.services.etf_diagnostics import database_diagnostic, log_database_failure
+from app.services.etf_diagnostics import (
+    database_diagnostic, database_phase, database_write_run, log_database_failure,
+)
 from test_etf_collection import worker, EVENING
 from test_etf_page_configuration import form
 
@@ -33,7 +36,7 @@ def test_mysql_diagnostics_never_format_raw_errors_or_sql(code, reason, caplog):
     output = caplog.text
     assert f'mysql_code={code}' in output and f'reason={reason}' in output
     assert 'error_type=sqlalchemy.exc.OperationalError' in output
-    assert 'driver_error_type=test_etf_diagnostics.UnsafeError' in output
+    assert 'driver_error_type=pymysql.err.OperationalError' in output
     assert all(secret not in output for secret in
                ('password', 'private-db', 'private-user', 'sensitive SQL', 'private_parameter', 'private-value'))
     assert all(record.exc_info is None for record in caplog.records)
@@ -135,3 +138,51 @@ def test_collection_write_failure_records_safe_database_details(tmp_path, caplog
     assert 'mysql_code=1142' in output and 'reason=table_permission_denied' in output
     assert 'secret SQL' not in output and 'private' not in output
     assert w.status()['disabled_reason'] == 'writer_permission_denied'
+
+
+@pytest.mark.parametrize('stage, table', [
+    ('schema_check', 'etf_share_daily'), ('connect', None),
+    ('load_share_keys', 'etf_share_daily'), ('load_price_keys', 'etf_price_daily'),
+    ('load_calendar', 'etf_trading_day'), ('flush', None), ('commit', None),
+])
+def test_writer_preserves_innermost_phase_and_socket_cause(caplog, stage, table):
+    with database_write_run('1f5fe99c63e7'), caplog.at_level(logging.INFO):
+        with pytest.raises(OperationalError) as failed:
+            with database_phase('schema_check'), database_phase(stage, table):
+                try:
+                    raise TimeoutError(errno.ETIMEDOUT, 'socket-secret')
+                except TimeoutError:
+                    raw = pymysql.err.OperationalError(2013, 'driver-secret')
+                    wrapped = OperationalError('sql-secret', {'token': 'parameter-secret'}, raw)
+                    raise wrapped
+        assert failed.value is wrapped and failed.value.orig is raw
+        log_database_failure(failed.value, operation='collection-write', stage='write_records',
+                             target='0123456789ab')
+    output = caplog.text
+    assert f'stage={stage} table={table or "-"}' in output
+    assert f'mysql_code=2013 os_errno={errno.ETIMEDOUT}' in output
+    assert 'reason=connection_lost socket_timeout=true' in output
+    assert re.search(r'stage_seconds=\d+\.\d{3} run=1f5fe99c63e7', output)
+    assert 'secret' not in output
+
+
+def test_lost_connection_alone_does_not_confirm_timeout(caplog):
+    raw = pymysql.err.OperationalError(2013, 'raw text claims timeout but is not inspected')
+    with pytest.raises(pymysql.err.OperationalError):
+        with database_phase('commit', 'untrusted-table'):
+            raise raw
+    log_database_failure(raw, operation='collection-write', stage='write_records',
+                         target='untrusted-target')
+    assert 'stage=commit table=- target=-' in caplog.text
+    assert 'reason=connection_lost socket_timeout=unconfirmed' in caplog.text
+    assert 'untrusted' not in caplog.text
+
+
+def test_stage_completion_logs_counts_with_context_local_run(caplog):
+    with caplog.at_level(logging.INFO):
+        with database_write_run('1f5fe99c63e7'), database_phase('flush', rows=36):
+            pass
+        with database_phase('commit'):
+            pass
+    assert 'run=1f5fe99c63e7 stage=flush table=- rows=36 seconds=' in caplog.text
+    assert 'run=- stage=commit table=- rows=- seconds=' in caplog.text

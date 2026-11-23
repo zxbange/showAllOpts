@@ -17,10 +17,10 @@ import time
 import uuid
 
 from app.core.diagnostics import diagnostic_details
-from app.services.collection_errors import safe_error
+from app.services.collection_errors import safe_error, sanitize_error
 
 from app.services.etf_configuration import ETFConfiguration, ConfigurationFailure, DEFAULT_COLLECTION_TIME, target_key, reconcile_system_ledger
-from app.services.etf_diagnostics import log_database_failure
+from app.services.etf_diagnostics import database_diagnostic, database_write_run, log_database_failure
 
 import httpx
 import portalocker
@@ -493,8 +493,9 @@ class ETFCollection:
                     if prior:
                         return False
                     row = db.execute('SELECT * FROM slots WHERE slot=?', (key,)).fetchone()
-                    if row and (row['status'] == 'complete' or row['attempts'] >= 2 or
-                                moment - datetime.fromisoformat(row['attempted_at']) < timedelta(minutes=30)):
+                    if row and (row['status'] == 'complete' or row['error'] == 'writer_commit_unconfirmed'
+                                or row['attempts'] >= 2
+                                or moment - datetime.fromisoformat(row['attempted_at']) < timedelta(minutes=30)):
                         return False
                     attempts = row['attempts'] + 1 if row else 1
                     db.execute('INSERT OR REPLACE INTO slots VALUES (?,?,?,?,?)',
@@ -550,8 +551,9 @@ class ETFCollection:
             db.commit()
         try:
             progress('calendar')
-            complete = self._collect(db, slot, config=config, progress=progress,
-                                     check_cancelled=check_cancelled, manual=manual_id is not None)
+            with database_write_run(run):
+                complete = self._collect(db, slot, config=config, progress=progress,
+                                         check_cancelled=check_cancelled, manual=manual_id is not None)
             check_cancelled()
             state, error = ('complete' if complete else 'partial'), None
         except CollectionCancelled:
@@ -601,7 +603,8 @@ class ETFCollection:
             self._refresh(db)
         pending = db.execute("SELECT value FROM metadata WHERE key='cache_pending'").fetchone()
         history_status = 'partial' if state == 'complete' and pending and pending[0] == '1' else state
-        if history_status == 'partial' and pending and pending[0] == '1':
+        if (history_status == 'partial' and pending and pending[0] == '1'
+                and (state == 'complete' or self._run_error_details is None)):
             self._run_error_details = safe_error(code='publication_pending', stage='cache_publish')
         if self._run_error_details:
             self._write_history(db, 'INSERT OR REPLACE INTO run_history_errors VALUES (?,?)',
@@ -722,8 +725,18 @@ class ETFCollection:
                         prices.extend(p)
                     completed += 1
                     progress('fetching', completed, total)
-            LOG.info('ETF source finish source=exchanges date=%s attempted=%s failed=%s shares=%s prices=%s suppressed_failures=%s',
-                     end, completed, failures, len(shares), len(prices), max(0, failures - 5))
+            verified_shares = {r['fund_code'] for r in shares if r['trade_date'] == end}
+            verified_prices = {r['fund_code'] for r in prices if r['trade_date'] == end}
+            missing_shares = set(funds) - verified_shares
+            missing_prices = set(funds) - verified_prices
+            LOG.info('ETF source finish source=exchanges date=%s attempted=%s failed=%s shares=%s prices=%s '
+                     'suppressed_failures=%s missing_shares=%s missing_prices=%s',
+                     end, completed, failures, len(shares), len(prices), max(0, failures - 5),
+                     len(missing_shares), len(missing_prices))
+            if failures == 0 and (missing_shares or missing_prices):
+                code = ('etf_missing_shares_and_prices' if missing_shares and missing_prices else
+                        'etf_missing_shares' if missing_shares else 'etf_missing_prices')
+                self._run_error_details = safe_error(code=code, stage='fetch', trade_date=end)
             engine = None
             stage = 'engine_create'
             try:
@@ -739,12 +752,27 @@ class ETFCollection:
                 raise
             except Exception as exc:
                 self._run_error_details = safe_error(exc, stage='database_write')
+                diagnostic = database_diagnostic(exc, stage)
+                code = writer_error_code(exc)
+                commit_disconnected = diagnostic.stage == 'commit' and (
+                    diagnostic.reason == 'connection_lost' or diagnostic.socket_timeout)
+                if commit_disconnected:
+                    # An absent COMMIT reply is neither a successful publication
+                    # nor proof of rollback. Do not automatically replay this slot.
+                    code = 'writer_commit_unconfirmed'
+                    self._run_error_details = sanitize_error(
+                        {**self._run_error_details, 'code': 'etf_commit_unconfirmed'})
                 log_database_failure(exc, operation='collection-write', stage=stage,
                                      target=target_key(config)[:12])
-                raise WriterFailure(writer_error_code(exc)) from None
+                raise WriterFailure(code) from None
             finally:
                 if engine is not None:
-                    engine.dispose()
+                    try:
+                        engine.dispose()
+                    except Exception as exc:
+                        # Pool cleanup must not hide a failure phase or negate a
+                        # confirmed commit.
+                        LOG.warning('ETF writer engine cleanup failed %s', diagnostic_details(exc))
             db.execute("INSERT OR REPLACE INTO metadata VALUES ('writer_error','')")
             # Charge only committed attempts. Preserve old values on an incomplete
             # source response, but do not mistake them for fresh verification.
@@ -764,6 +792,4 @@ class ETFCollection:
                        (end.isoformat(),))
             db.execute("INSERT OR REPLACE INTO metadata VALUES ('cache_pending','1')")
             db.commit()
-            verified_shares = {r['fund_code'] for r in shares if r['trade_date'] == end}
-            verified_prices = {r['fund_code'] for r in prices if r['trade_date'] == end}
             return verified_shares == verified_prices == set(funds)

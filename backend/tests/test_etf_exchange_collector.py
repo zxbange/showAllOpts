@@ -413,6 +413,76 @@ def test_calendar_saved_idempotently_in_same_transaction():
         assert session.get(ETFTradingDay, cal.days[0]).previous_trade_date is None
 
 
+def test_daily_write_batches_primary_keys_and_unchanged_calendar(tmp_path):
+    from sqlalchemy import event
+
+    engine = create_engine(f'sqlite:///{tmp_path / "etf.sqlite"}')
+    dates = [DAY - timedelta(days=offset) for offset in range(8827, -1, -1)]
+    stamp = datetime(2026, 11, 6, 18)
+    calendar = m.ExchangeCalendar(dates, DAY, 163000, now=stamp)
+    shares = [
+        dict(fund_code=code, trade_date=DAY, fund_name=name, shares=10000,
+             previous_trade_date=dates[-2], source='TEST', updated_at=stamp)
+        for code, name in m.catalog().items()
+    ]
+    prices = [
+        dict(fund_code=row['fund_code'], trade_date=DAY, close_price=Decimal('4.80'),
+             source='TEST', updated_at=stamp)
+        for row in shares
+    ]
+    assert len(shares) == len(prices) == 18
+    assert m.write_records(engine, shares, prices, calendar) == 36
+    statements = []
+
+    @event.listens_for(engine, 'before_cursor_execute')
+    def record_sql(_conn, _cursor, statement, _params, _context, _executemany):
+        statements.append(statement.strip().lower())
+
+    later = stamp + timedelta(hours=1)
+    calendar.now = later
+    shares = [row | dict(updated_at=later) for row in shares]
+    prices = [row | dict(updated_at=later) for row in prices]
+    assert m.write_records(engine, shares, prices, calendar) == 0
+    selects = [sql for sql in statements if sql.startswith('select')]
+    assert len(selects) == 3
+    assert '(etf_share_daily.fund_code, etf_share_daily.trade_date) in' in selects[0]
+    assert '(etf_price_daily.fund_code, etf_price_daily.trade_date) in' in selects[1]
+    assert all('updated_at' not in sql for sql in selects)
+    assert 'etf_trading_day.trade_date between' in selects[2]
+    assert not any(sql.startswith(('insert', 'update', 'delete', 'create')) for sql in statements)
+    with Session(engine) as session:
+        assert session.scalar(select(ETFShare.updated_at).limit(1)) == stamp
+        assert session.scalar(select(ETFPrice.updated_at).limit(1)) == stamp
+        assert session.get(ETFTradingDay, DAY).updated_at == stamp
+
+
+def test_calendar_reconciles_historical_holes_and_keeps_outside_coverage():
+    engine = create_engine('sqlite://')
+    calendar = fake_calendar()
+    records = calendar.records()
+    assert m.write_records(engine, [], [], calendar) == 0
+    missing, stale, unchanged = records[10:13]
+    outside = calendar.days[0] - timedelta(days=1)
+    with Session(engine) as session, session.begin():
+        session.delete(session.get(ETFTradingDay, missing['trade_date']))
+        damaged = session.get(ETFTradingDay, stale['trade_date'])
+        damaged.previous_trade_date = outside
+        damaged.source = 'JQDATA.GET_TRADE_DAYS'
+        session.add(ETFTradingDay(trade_date=outside, previous_trade_date=None,
+                                  source='KEEP', updated_at=datetime(2026, 11, 5)))
+    calendar.now += timedelta(hours=1)
+    assert m.write_records(engine, [], [], calendar) == 0
+    with Session(engine) as session:
+        restored = session.get(ETFTradingDay, missing['trade_date'])
+        repaired = session.get(ETFTradingDay, stale['trade_date'])
+        assert restored.previous_trade_date == missing['previous_trade_date']
+        assert repaired.previous_trade_date == stale['previous_trade_date']
+        assert restored.source == repaired.source == calendar.source
+        assert restored.updated_at == repaired.updated_at == calendar.now
+        assert session.get(ETFTradingDay, unchanged['trade_date']).updated_at == unchanged['updated_at']
+        assert session.get(ETFTradingDay, outside).source == 'KEEP'
+
+
 def test_calendar_and_data_write_rollback_together():
     from sqlalchemy.exc import IntegrityError
     engine = create_engine('sqlite://')
@@ -424,6 +494,58 @@ def test_calendar_and_data_write_rollback_together():
     with Session(engine) as session:
         assert not session.scalars(select(ETFTradingDay)).all()
         assert not session.scalars(select(ETFShare)).all()
+
+
+def test_calendar_write_failure_rolls_back_changed_share_and_price(monkeypatch):
+    from sqlalchemy.exc import IntegrityError
+    from app.services.etf_diagnostics import database_diagnostic
+
+    engine = create_engine('sqlite://')
+    calendar = fake_calendar()
+    shares, prices, _ = m.collect(FakeSource(), DAY, DAY, FUNDS, calendar=calendar)
+    assert m.write_records(engine, shares, prices) == 4
+    before = (shares[0].copy(), prices[0].copy())
+    shares[0]['shares'] += 150
+    prices[0]['close_price'] += Decimal('0.25')
+    rows = calendar.records()
+    rows[-1]['source'] = None
+    monkeypatch.setattr(calendar, 'records', lambda: rows)
+
+    with pytest.raises(IntegrityError) as failed:
+        m.write_records(engine, shares, prices, calendar)
+    diagnostic = database_diagnostic(failed.value, 'write_records')
+    assert diagnostic.stage == 'flush'
+    assert diagnostic.table == 'etf_trading_day'
+    with Session(engine) as session:
+        share = session.get(ETFShare, (before[0]['fund_code'], DAY))
+        price = session.get(ETFPrice, (before[1]['fund_code'], DAY))
+        assert share.shares == before[0]['shares']
+        assert price.close_price == before[1]['close_price']
+        assert not session.scalars(select(ETFTradingDay)).all()
+
+
+def test_write_cleanup_cannot_mask_schema_error(monkeypatch, caplog):
+    from types import SimpleNamespace
+    from app.services.etf_diagnostics import database_diagnostic
+
+    original = RuntimeError('private schema error text')
+
+    def schema_failure(*args, **kwargs):
+        raise original
+
+    def cleanup_failure():
+        raise RuntimeError('private cleanup error text')
+
+    monkeypatch.setattr(ETFShare.metadata, 'create_all', schema_failure)
+    transaction = SimpleNamespace(is_active=True, rollback=cleanup_failure)
+    connection = SimpleNamespace(begin=lambda: transaction, close=cleanup_failure)
+    with pytest.raises(RuntimeError) as failed:
+        m.write_records(SimpleNamespace(connect=lambda: connection), [], [])
+    assert failed.value is original
+    assert database_diagnostic(original, 'write_records').stage == 'schema_check'
+    assert 'ETF database rollback failed' in caplog.text
+    assert 'ETF database close failed' in caplog.text
+    assert 'private' not in caplog.text
 
 
 def test_cli_no_dates_uses_dynamic_calendar_default(monkeypatch):
