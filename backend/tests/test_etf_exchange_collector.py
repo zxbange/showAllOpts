@@ -680,3 +680,130 @@ def test_historical_keys_and_insert_only_write_preserve_existing_data(tmp_path):
     with Session(engine) as session:
         assert session.get(ETFShare, (original_share['fund_code'], DAY)).shares == original_share['shares']
         assert session.get(ETFPrice, (original_price['fund_code'], DAY)).close_price == original_price['close_price']
+
+
+def test_scoped_sse_historical_share_uses_exact_filters_and_accepts_result_with_zero_page_total():
+    requests = []
+
+    def handler(req):
+        requests.append(req)
+        return httpx.Response(200, json={
+            'result': [row(shares='5,518,488.77')],
+            'pageHelp': {'total': 0, 'data': []},
+        })
+
+    source = client(handler)
+    shares, prices, missing = m.collect(
+        source, DAY, DAY, funds={'510300.XSHG': '沪'}, include_prices=False,
+        calendar=fake_calendar(), scoped_sse_history=True)
+    assert len(requests) == 1
+    req = requests[0]
+    assert str(req.url.copy_with(query=None)) == m.SSE_SHARES
+    assert dict(req.url.params) == {
+        'sqlId': 'COMMON_SSE_ZQPZ_ETFZL_ETFJBXX_JJGM_SEARCH_L',
+        'SEC_CODE': '510300', 'STAT_DATE': '2026-11-06', 'isPagination': 'false',
+    }
+    assert req.headers['referer'] == (
+        'https://www.sse.com.cn/assortment/fund/list/etfinfo/basic/index.shtml?FUNDID=510300')
+    assert req.headers['user-agent'] == 'Mozilla/5.0'
+    assert req.extensions['timeout']['read'] == 25
+    assert dict(shares[0], updated_at=None) == {
+        'fund_code': '510300.XSHG', 'fund_name': '沪', 'trade_date': DAY,
+        'shares': 55_184_887_700, 'previous_trade_date': date(2026, 11, 5),
+        'source': 'SSE.ETF_SCALE', 'updated_at': None,
+    }
+    assert not prices and not missing['shares']
+
+
+@pytest.mark.parametrize('payload', [
+    {'result': [row(code='510500')]},
+    {'result': [row(day='2026-11-05')]},
+    {'result': [row(), row()]},
+    {'result': [row(shares='0.00001')]},
+    {'result': [row(shares='1.00000000000000000000000000001')]},
+    {'result': [row(shares='1e999999999999999999')]},
+    {'result': [row(shares='NaN')]},
+    {'result': [row(shares='-0.01')]},
+    {'result': [row() | {'TOT_VOL': None}]},
+    {'result': [row()], 'actionErrors': ['private']},
+    {'result': [row()], 'fieldErrors': {'input': 'private'}},
+    {'result': [row()], 'error': 'private'},
+    {'pageHelp': {'total': 0, 'data': [row()]}},
+    {'result': None},
+    [],
+])
+def test_scoped_sse_rejects_bad_response_without_retry_or_bulk_fallback(payload):
+    requests = []
+
+    def handler(req):
+        requests.append(req)
+        return httpx.Response(200, json=payload)
+
+    with pytest.raises(m.SourceError):
+        client(handler).sse_historical_shares('510300.XSHG', DAY)
+    assert len(requests) == 1
+    assert requests[0].url.params['isPagination'] == 'false'
+
+
+@pytest.mark.parametrize('content', [
+    b'not-json',
+    b'{"result":[{"SEC_CODE":"510300","STAT_DATE":"2026-11-06",'
+    b'"TOT_VOL":1.00000000000000000000000000001}]}',
+    b'x' * (64 * 1024 + 1),
+])
+def test_scoped_sse_rejects_invalid_or_oversized_body(content):
+    requests = []
+
+    def handler(req):
+        requests.append(req)
+        return httpx.Response(200, content=content)
+
+    with pytest.raises(m.SourceError):
+        client(handler).sse_historical_shares('510300.XSHG', DAY)
+    assert len(requests) == 1
+
+
+def test_scoped_sse_empty_and_zero_are_different_and_timeout_does_not_retry():
+    requests = []
+
+    def handler(req):
+        requests.append(req)
+        if len(requests) == 1:
+            return httpx.Response(200, json={'result': [], 'pageHelp': {'total': 0}})
+        if len(requests) == 2:
+            return httpx.Response(200, json={'result': [row(shares='0')]})
+        raise httpx.ReadTimeout('private response text', request=req)
+
+    source = client(handler)
+    assert source.sse_historical_shares('510300.XSHG', DAY) == []
+    assert source.sse_historical_shares('510300.XSHG', DAY) == [row(shares='0')]
+    with pytest.raises(m.SourceError) as error:
+        source.sse_historical_shares('510300.XSHG', DAY)
+    assert isinstance(error.value.__cause__, httpx.ReadTimeout)
+    assert 'private' not in str(error.value)
+    assert len(requests) == 3
+
+
+def test_scoped_sse_checks_cancellation_while_streaming():
+    from app.services.etf_collection import CancellableHTTPClient, CollectionCancelled
+
+    chunks = []
+    class Stream(httpx.SyncByteStream):
+        def __iter__(self):
+            chunks.append(1)
+            yield b'{"result":'
+            chunks.append(2)
+            yield b'[]}'
+        def close(self):
+            chunks.append('closed')
+
+    def check():
+        if chunks == [1]:
+            raise CollectionCancelled()
+
+    with httpx.Client(transport=httpx.MockTransport(
+            lambda _: httpx.Response(200, stream=Stream()))) as http:
+        source = m.ExchangeClient(CancellableHTTPClient(http, check))
+        with pytest.raises(CollectionCancelled):
+            source.sse_historical_shares('510300.XSHG', DAY)
+    assert chunks == [1, 'closed']

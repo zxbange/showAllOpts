@@ -11,6 +11,7 @@ import calendar as month_calendar
 from contextlib import contextmanager
 from datetime import date, datetime, timedelta
 from decimal import Decimal, InvalidOperation
+import json
 import sys
 import time
 import logging
@@ -24,6 +25,10 @@ from app.core.diagnostics import diagnostic_details
 LOG = logging.getLogger(__name__)
 
 SSE_SHARES = 'https://query.sse.com.cn/commonQuery.do'
+_SSE_SCOPED_SHARE_ID = 'COMMON_SSE_ZQPZ_ETFZL_ETFJBXX_JJGM_SEARCH_L'
+_SSE_SCOPED_IO_SECONDS = 25
+_SSE_SCOPED_ELAPSED_SECONDS = 30
+_SSE_SCOPED_MAX_BYTES = 64 * 1024
 SZSE_SHARES = 'https://www.szse.cn/api/report/ShowReport/data'
 SSE_PRICE = 'https://yunhq.sse.com.cn:32042/v1/sh1/dayk/'
 SZSE_QUOTE = 'https://www.szse.cn/api/market/ssjjhq/getTimeData'
@@ -275,6 +280,71 @@ class ExchangeClient:
                 raise SourceError('SSE empty intermediate page')
         raise SourceError('SSE pagination limit exceeded')
 
+    def sse_historical_shares(self, code, day):
+        """One fund and exact date; never fall back to the complete daily report."""
+        if len(code) != 11 or code[6:] != '.XSHG' or not code[:6].isascii() or not code[:6].isdigit():
+            raise SourceError('Invalid scoped SSE fund code')
+        params = {'sqlId': _SSE_SCOPED_SHARE_ID, 'SEC_CODE': code[:6],
+                  'STAT_DATE': day.isoformat(), 'isPagination': 'false'}
+        headers = {'Referer': 'https://www.sse.com.cn/assortment/fund/list/etfinfo/basic/'
+                              f'index.shtml?FUNDID={code[:6]}', 'User-Agent': 'Mozilla/5.0'}
+        check = getattr(self.client, 'check', lambda: None)
+        deadline = time.monotonic() + _SSE_SCOPED_ELAPSED_SECONDS
+
+        def check_budget():
+            check()
+            if time.monotonic() >= deadline:
+                raise TimeoutError('Scoped SSE share request exceeded elapsed budget')
+
+        # A single attempt per key in this manual run. HTTPX's cap is I/O
+        # inactivity; the elapsed budget is checked at cooperative boundaries.
+        stream_capped = getattr(self.client, 'stream_capped', None)
+        kwargs = dict(params=params, headers=headers, follow_redirects=False)
+        body = bytearray()
+        check_budget()
+        try:
+            stream = (stream_capped('GET', SSE_SHARES, inactivity_cap_seconds=_SSE_SCOPED_IO_SECONDS, **kwargs)
+                      if stream_capped else self.client.stream(
+                          'GET', SSE_SHARES, timeout=_SSE_SCOPED_IO_SECONDS, **kwargs))
+            with stream as response:
+                check_budget()
+                response.raise_for_status()
+                for block in response.iter_bytes():
+                    check_budget()
+                    if len(body) + len(block) > _SSE_SCOPED_MAX_BYTES:
+                        raise SourceError('Scoped SSE share response exceeds byte limit')
+                    body.extend(block)
+                check_budget()
+            payload = json.loads(body, parse_float=Decimal)
+        except httpx.HTTPError as error:
+            raise SourceError('Scoped SSE share request failed') from error
+        except (ValueError, ArithmeticError, RecursionError) as error:
+            if isinstance(error, SourceError):
+                raise
+            raise SourceError('Invalid scoped SSE JSON response') from error
+        if not isinstance(payload, dict) or any(payload.get(field) for field in (
+                'actionErrors', 'fieldErrors', 'error', 'errors', 'jsonError')):
+            raise SourceError('Scoped SSE share response error')
+        # The official non-paginated response can report pageHelp.total=0
+        # while the authoritative result array holds the requested row.
+        rows = payload.get('result')
+        if not isinstance(rows, list) or len(rows) > 1:
+            raise SourceError('Invalid or duplicate scoped SSE result rows')
+        if rows:
+            row = rows[0]
+            if (not isinstance(row, dict) or str(row.get('SEC_CODE', '')).strip() != code[:6]
+                    or parse_date(row.get('STAT_DATE')) != day or 'TOT_VOL' not in row):
+                raise SourceError('Scoped SSE result code/date/schema mismatch')
+            try:
+                units = normalize_shares(row['TOT_VOL'])
+                # Multiplication under Decimal's default context can round
+                # very long fractional payloads; compare back exactly.
+                if decimal_value(row['TOT_VOL']) != Decimal(units).scaleb(-4):
+                    raise SourceError('Scoped SSE quantity has fractional share units')
+            except ArithmeticError as error:
+                raise SourceError('Invalid scoped SSE share quantity') from error
+        return rows
+
     def szse_shares(self, code, start, end):
         records, expected = [], None
         for page in range(1, 1001):
@@ -369,7 +439,7 @@ def count_value(value):
     return number
 
 
-def collect(client, start, end, funds=None, include_prices=True, include_shares=True, calendar=None):
+def collect(client, start, end, funds=None, include_prices=True, include_shares=True, calendar=None, *, scoped_sse_history=False):
     funds = catalog() if funds is None else funds
     if parse_date(end) > datetime.now(ZoneInfo('Asia/Shanghai')).date():
         raise SourceError('End date must not be in the future')
@@ -398,7 +468,13 @@ def collect(client, start, end, funds=None, include_prices=True, include_shares=
                 source='SSE.ETF_SCALE' if suffix == '.XSHG' else 'SZSE.FUND_SCALE', updated_at=now))
 
     if include_shares:
-        if any(c.endswith('.XSHG') for c in funds):
+        sse_codes = [code for code in funds if code.endswith('.XSHG')]
+        if scoped_sse_history:
+            for day in days:
+                for code in sse_codes:
+                    for raw in client.sse_historical_shares(code, day):
+                        add_share(raw, '.XSHG', day)
+        elif sse_codes:
             for day in days:
                 for raw in client.sse_shares(day):
                     add_share(raw, '.XSHG', day)

@@ -35,7 +35,7 @@ class Collector:
     def ExchangeClient(self, http):
         return SimpleNamespace(calendar=lambda: Calendar())
 
-    def collect(self, client, start, end, funds, include_prices, include_shares, calendar):
+    def collect(self, client, start, end, funds, include_prices, include_shares, calendar, *, scoped_sse_history=False):
         self.calls.append((start, funds, include_prices, include_shares))
         if self.failure:
             raise ValueError('do not expose secret')
@@ -1182,3 +1182,39 @@ def test_manual_checks_mysql_for_previously_complete_inside_known_gap_scope(tmp_
     assert w.tick(moment)
     assert {day for day, *_ in c.calls} == {formerly_complete, latest}
     assert [funds for day, funds, *_ in c.calls if day == formerly_complete] == [{'510300.XSHG': '沪'}]
+
+
+def test_manual_only_scopes_older_sse_shares_and_preserves_oldest_timeout(tmp_path, caplog):
+    import httpx
+    import logging
+
+    w, c, dates, moment = manual_repair_fixture(tmp_path)
+    baseline, history, newest = dates[3:6]
+    with w.connect() as db:
+        seed_covered(db, c, baseline)
+    calls = []
+    original = c.collect
+
+    def record(client, start, end, **kwargs):
+        code = next(iter(kwargs['funds']))
+        scoped = kwargs.get('scoped_sse_history', False)
+        calls.append((start, code, kwargs['include_shares'], scoped))
+        if scoped:
+            raise httpx.ReadTimeout('private upstream text')
+        if start == newest:
+            return [], [], {}
+        return original(client, start, end, **kwargs)
+
+    c.collect = record
+    w.request_run('scoped-sse-history-only')
+    with caplog.at_level(logging.INFO):
+        assert not w.tick(moment)
+    assert [value for value in calls if value[-1]] == [(history, '510300.XSHG', True, True)]
+    assert all(not scoped for day, _, _, scoped in calls if day == newest)
+    assert all(not scoped for _, code, _, scoped in calls if code.endswith('.XSHE'))
+    details = w.status()['latest_result']['error_details']
+    assert (details['code'], details['stage'], details['trade_date']) == (
+        'timeout', 'fetch', history.isoformat())
+    assert 'private upstream text' not in str(details)
+    assert 'attempted=1 found=0 empty=0 failed=1' in caplog.text
+    assert 'private upstream text' not in caplog.text

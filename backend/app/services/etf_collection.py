@@ -734,7 +734,7 @@ class ETFCollection:
         scope, required, unchecked = self._manual_days(db, calendar, end, funds)
         if not required:
             db.execute("DELETE FROM metadata WHERE key='manual_gap_floor' AND value<=?", (end.isoformat(),))
-            return scope, set(), 0, 0
+            return scope, set(), 0, 0, {}
         floor = min(day for _, _, day in required)
         db.execute("INSERT OR REPLACE INTO metadata VALUES ('manual_gap_floor',?)", (floor.isoformat(),))
         db.executemany("INSERT OR IGNORE INTO observations(kind,code,day,status) VALUES (?,?,?,'manual_only')",
@@ -771,30 +771,45 @@ class ETFCollection:
             pending_by_day.setdefault(item[2], []).append(item[:2])
         for item in present & unchecked:
             verified_by_day.setdefault(item[2], set()).add(item)
-        failures = 0
+        failures, history_errors = 0, {}
         for day in sorted(set(pending_by_day) | set(verified_by_day)):
             day_need = pending_by_day.get(day, ())
             verified = verified_by_day.get(day, set())
             shares, prices = [], []
+            scoped = dict(attempted=0, found=0, failed=0)
             for kind, code in day_need:
                 progress('fetching', completed, total + 2 * len(funds))
+                scoped_sse = kind == 'shares' and code.endswith('.XSHG')
+                if scoped_sse:
+                    scoped['attempted'] += 1
                 try:
                     found_shares, found_prices, _ = c.collect(
                         client, day, day, funds={code: funds[code]}, calendar=calendar,
-                        include_prices=kind == 'prices', include_shares=kind == 'shares')
+                        include_prices=kind == 'prices', include_shares=kind == 'shares',
+                        **({'scoped_sse_history': True} if scoped_sse else {}))
                     check_cancelled()
                 except CollectionInterrupted:
                     raise
                 except Exception as exc:
-                    self._run_error_details = safe_error(exc, stage='fetch', trade_date=day)
+                    if day not in history_errors:
+                        history_errors[day] = safe_error(exc, stage='fetch', trade_date=day)
                     failures += 1
+                    if scoped_sse:
+                        scoped['failed'] += 1
                     if failures <= 5:
-                        LOG.warning('ETF historical source observation failed kind=%s code=%s date=%s %s',
-                                    kind, code, day, diagnostic_details(exc))
+                        LOG.warning('ETF historical source observation failed kind=%s code=%s date=%s source=%s %s',
+                                    kind, code, day, 'sse_scoped_shares' if scoped_sse else 'exchanges',
+                                    diagnostic_details(exc))
                 else:
                     shares.extend(found_shares)
                     prices.extend(found_prices)
+                    if scoped_sse and found_shares:
+                        scoped['found'] += 1
                 completed += 1
+            if scoped['attempted']:
+                LOG.info('ETF historical SSE shares date=%s attempted=%s found=%s empty=%s failed=%s',
+                         day, scoped['attempted'], scoped['found'],
+                         scoped['attempted'] - scoped['found'] - scoped['failed'], scoped['failed'])
             check_cancelled()
             # Preserve the earliest dirty date *before* attempting COMMIT.
             # A stop, ambiguous COMMIT or cache lock cannot lose this intent.
@@ -818,7 +833,7 @@ class ETFCollection:
                        (min(day for _, _, day in unresolved).isoformat(),))
         else:
             db.execute("DELETE FROM metadata WHERE key='manual_gap_floor'")
-        return scope, unresolved, completed, total
+        return scope, unresolved, completed, total, history_errors
 
     def _collect(self, db, slot, config=None, progress=None, check_cancelled=None, manual=False):
         config = config or self.configuration.load()
@@ -864,9 +879,9 @@ class ETFCollection:
             cutoff = slot.date() if slot.hour >= 15 else slot.date() - timedelta(days=1)
             while end > cutoff:
                 end = calendar.previous(end)
-            scope, historical_gaps, repaired, history_total = (end,), set(), 0, 0
+            scope, historical_gaps, repaired, history_total, history_errors = (end,), set(), 0, 0, {}
             if manual:
-                scope, historical_gaps, repaired, history_total = self._repair_history(
+                scope, historical_gaps, repaired, history_total, history_errors = self._repair_history(
                     db, c, client, config, calendar, end, funds, progress, check_cancelled)
                 base_progress = progress
                 progress = lambda phase, completed, total: base_progress(
@@ -928,7 +943,7 @@ class ETFCollection:
                 kinds = {kind for kind, _, day in historical_gaps if day == old}
                 code = ('etf_missing_shares_and_prices' if len(kinds) == 2 else
                         'etf_missing_shares' if 'shares' in kinds else 'etf_missing_prices')
-                self._run_error_details = safe_error(code=code, stage='fetch', trade_date=old)
+                self._run_error_details = history_errors.get(old) or safe_error(code=code, stage='fetch', trade_date=old)
             progress('writing', completed, total)
             self._write_day(c, config, calendar, end, shares, prices, check_cancelled)
             db.execute("INSERT OR REPLACE INTO metadata VALUES ('writer_error','')")

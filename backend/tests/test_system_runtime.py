@@ -139,3 +139,25 @@ def test_saved_timeout_reaches_real_httpx_request_without_network(tmp_path):
     assert [r['read'] for r in seen]==[35,90]
     assert [r['connect'] for r in seen]==[30,30]
     assert config.public()['runtime']['sources']['eastmoney']['request_timeout_seconds']==90
+
+
+def test_scoped_etf_stream_timeout_cap_is_optional_and_respects_lower_setting(settings, monkeypatch):
+    config = m.default_runtime(settings)
+    monkeypatch.setattr(m, 'runtime_config', lambda _: config)
+    url = 'https://query.sse.com.cn/commonQuery.do'
+    seen = []
+
+    def transport(req):
+        seen.append(req.extensions['timeout'])
+        return httpx.Response(200, json={'result': []})
+
+    with m.source_client(settings, transport=httpx.MockTransport(transport), follow_redirects=False) as client:
+        client.get(url)
+        with client.stream_capped('GET', url, inactivity_cap_seconds=25):
+            pass
+        config['sources']['sse']['request_timeout_seconds'] = 8
+        with client.stream_capped('GET', url, inactivity_cap_seconds=25):
+            pass
+        client.get(url)
+    assert [r['read'] for r in seen] == [180, 25, 8, 8]
+    assert [r['connect'] for r in seen] == [30, 25, 8, 8]

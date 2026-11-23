@@ -20,6 +20,7 @@ python collectors/etf_exchange_collector.py --start 2026-11-06 --end 2026-11-06 
 ## 来源、单位和边界
 
 - 上交所份额：`query.sse.com.cn/commonQuery.do`，`sqlId=COMMON_SSE_ZQPZ_ETFZL_XXPL_ETFGM_SEARCH_L`。按 `STAT_DATE` 查询，开启 `isPagination=true`，核对 `pageHelp.pageNo/pageCount/total` 并完整分页；不能用未开启分页时总数0判断无数据。
+- 后台手动补采较早沪市份额使用同一主机的基金规模明细报表 `COMMON_SSE_ZQPZ_ETFZL_ETFJBXX_JJGM_SEARCH_L`，精确限制 `SEC_CODE` 和 `STAT_DATE`，关闭分页，仅接受匹配代码和日期的单条 `result` 或合法空结果。不以 `pageHelp.total` 判断此报表的覆盖，不回退到日报表。CLI、最新日和自动采集仍使用上述原日报表。
 - 深交所份额：`www.szse.cn/api/report/ShowReport/data`，`CATALOGID=scsj_fund_jjgm`、`TABKEY=tab1`、`jjlb=ETF`；每只基金90日窗口，按 `PAGENO` 分页，核对总页数和总记录数。
 - 两所份额原始单位均为万份；通过 Decimal 精确乘10000转换为整数份，拒绝负数、非整数和BIGINT溢出，不以成交量或资产净值替代。
 - 上交所价格：`yunhq.sse.com.cn:32042/v1/sh1/dayk/{code}`，`select=date,close&begin=0&end=-1`，取同日日K close，单位元/份。

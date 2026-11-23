@@ -141,6 +141,20 @@ class SourceClient:
     def stream(self, method, url, *args, **kwargs):
         return self.client.stream(method, url, *args, **self.options(url, kwargs))
 
+    def stream_capped(self, method, url, *args, inactivity_cap_seconds, **kwargs):
+        """Optional stricter source limit; ordinary request defaults are unchanged."""
+        options = self.options(url, kwargs)
+        timeout = options.get('timeout')
+        if isinstance(timeout, httpx.Timeout):
+            options['timeout'] = httpx.Timeout(**{
+                stage: min(getattr(timeout, stage), inactivity_cap_seconds)
+                if getattr(timeout, stage) is not None else inactivity_cap_seconds
+                for stage in ('connect', 'read', 'write', 'pool')
+            })
+        else:
+            options['timeout'] = httpx.Timeout(inactivity_cap_seconds)
+        return self.client.stream(method, url, *args, **options)
+
 
 def source_client(settings, *, factory=None, **kwargs):
     return SourceClient(settings, (factory or httpx.Client)(**kwargs))
