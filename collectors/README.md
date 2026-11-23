@@ -111,4 +111,4 @@ python collectors/tools/sync_history_strategies.py --check
 
 创红比（含科创红利比）和奶牛股由后端外部接口统一采集并写入 MySQL 与本地缓存，不属于聚宽入口。
 
-业绩选股（奶牛股、高股息银行与非银行）不参加聚宽批量采集。高股息独立脚本保留供旧口径研究，不再内嵌或注册到批量版。研究恢复应显式使用 `mode='history'`；直接运行脚本默认 `latest`，仍可向空库或旧规则库写最新表，但拒绝覆盖已有 v9 快照，不能替代当前接口策略。详见[恢复边界](../docs/data/selection-history-recovery.md)。
+业绩选股（奶牛股、高股息银行与非银行）不参加聚宽批量采集。高股息独立脚本保留供旧口径研究，不再内嵌或注册到批量版。研究恢复应显式使用 `mode='history'`；直接运行脚本默认 `latest`，仍可向空库或旧规则库写最新表，但拒绝覆盖已有 v9 或 v10 公开快照，不能替代当前接口策略 v10。详见[恢复边界](../docs/data/selection-history-recovery.md)。

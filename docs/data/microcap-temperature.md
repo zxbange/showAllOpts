@@ -1,6 +1,6 @@
 # 微盘温度计：采集与展示
 
-> 默认启用本地缓存：采集入库后，等待每天北京时间 07:00 自动同步，或在网页“数据同步”/服务器命令中手动同步。页面刷新读取当前快照，详见[本地缓存说明](../operations/local-cache.md)。
+> 聚宽计算并向共享 MySQL 写入结果后，网页可手动同步该模块，或等待统一数据库同步（默认 A 股交易日北京时间 07:00，可在系统配置调整）。自动同步不运行聚宽脚本，也不能证明源库已经产出当日结果；页面刷新读取已发布快照。见[本地缓存说明](../operations/local-cache.md)。
 
 
 保留原程序的起始日期 **2021-01-01**、微盘股票数 **1000**，改为 **每个交易日采集一次**，结束日期在每次运行时取北京时间当天。独立采集文件负责写入 MySQL，showAllOpts 增加微盘温度计模块，网页只读数据。
@@ -115,21 +115,9 @@ SAMPLE_STEP = 1
 
 接口：`GET /api/v1/microcap-temperature/history?days=365`。days=0 返回全部；可传历史 end_date，不允许未来日期。空表返回 200 空结果；未建表、数据库连接或权限异常返回 503；非法参数返回 422。响应不返回成员名单或连接信息。
 
-## 已有 Linux 部署升级
+## 生产与同步
 
-先在聚宽运行入库脚本，并为网页只读账号补充新表权限。然后在服务器执行：
-
-```bash
-cd /home/ubuntu/showAllOpts
-git pull --ff-only
-bash scripts/build.sh
-sudo rsync -rlt --chmod=D755,F644 frontend/dist/ /var/www/showallopts/
-sudo systemctl restart showallopts-api
-sudo systemctl status showallopts-api --no-pager
-curl -fsS 'http://127.0.0.1:8000/api/v1/microcap-temperature/history?days=30'
-```
-
-本功能没有新增运行依赖；保留 `config/app.config`、现有 systemd 覆盖配置和 Nginx 端口。首次部署见 [Linux 部署说明](../operations/linux-deployment.md)。Windows 已有环境停止旧启动器后更新代码，重新运行 start.cmd；新建表前页面显示数据库错误，先完成聚宽入库。
+在聚宽完成入库并确认共享 MySQL 账号可读取源表，再在「数据同步」同步对应模块。服务发布参见[标准 Linux 部署](../operations/linux-deployment.md)或[GitHub 自动部署](../operations/github-auto-deployment.md)，不需要为本模块单独覆盖静态文件。
 
 ## 验证范围
 

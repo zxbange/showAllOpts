@@ -20,7 +20,7 @@
 
 依据：[Playwright 官方 CI 容器方案](https://playwright.dev/docs/ci#via-containers)、[官方镜像和版本匹配要求](https://playwright.dev/docs/docker)、[微软镜像清单](https://mcr.microsoft.com/v2/playwright/manifests/v1.64.1-noble)。
 
-固定目标：`ubuntu@119.28.106.127:22`，项目 `/home/ubuntu/showAllOpts`，网站 `http://119.28.106.127:8081`。以下材料尚未执行；代码审核发布后填写真实提交号。
+固定目标：`ubuntu@119.28.106.127:22`，项目 `/home/ubuntu/showAllOpts`，网站 `http://119.28.106.127:8081`。以下为首次安装或重新授权时的操作；已有有效配置不需要重复生成密钥。仅替换为已审阅并发布的提交号。
 
 ## 用户只做三步
 
@@ -63,13 +63,13 @@
 
 停止后续发布：把仓库 `DEPLOY_ENABLED` 改为 `false`。不要中断正在激活/恢复的任务。真实凭据、网络可达性和生产发布仍须验收；本地测试不代表已部署。
 
-## 脚本目录变更不自动部署
+## 仅文档、脚本或测试变更时不实际发布
 
-所有 main 推送仍跑完整 CI，五个分片全部成功且 `DEPLOY_ENABLED=true` 后调用受限服务器入口。是否实际发布，由服务器在部署锁内比较当前健康发布版本与本次已测试 SHA 的累计差异，不再比较单次推送的 before/head。
+正常 main 推送仍跑完整 CI，五个分片全部成功且 `DEPLOY_ENABLED=true` 后调用受限服务器入口。是否实际发布，由服务器在部署锁内比较当前健康发布版本与本次已测试 SHA 的累计差异，不再比较单次推送的 before/head。Actions 仍可能显示 `deploy` 作业成功，因为它运行了受限 SSH 入口及线上基线校验。实际跳过以日志中的 `Deployment cumulative impact ... required=False` 和随后的 `Deployment not required: no cumulative runtime changes; live release unchanged.` 为准，不以作业颜色判断。
 
 基线来自 `backend/.venv` 实际指向的 `.runtime/releases/<release>/status.json`：必须为 `complete`，目标 SHA 与干净生产 checkout 一致，服务、分支及祖先关系均须匹配，并通过现有进程身份和健康检查。仅 CI 成功、check 成功或上一轮跳过发布都不会前移基线。
 
-累计差异仅涉及 `scripts/`、`collectors/`、`docs/`、`backend/tests/`、`frontend/tests/` 时，不创建 release、不构建、不重启、不移动源码或基线。`scripts/deploy.py` 是部署运行器，保持原有运行时代码例外；应用、依赖、工作流及其他目录的变更仍实际发布。相似前缀（如 `scripts-other/`）不在排除范围。空差异同样为 no-op。
+累计差异仅涉及 `scripts/`、`collectors/`、`docs/`、`backend/tests/`、`frontend/tests/` 时，不创建 release、不构建、不重启、不移动源码或基线。`scripts/deploy.py` 是部署运行器，保持原有运行时代码例外；应用、依赖、工作流及其他目录的变更仍实际发布。相似前缀（如 `scripts-other/`）不在排除范围。空差异同样为 no-op。根目录 `README.md` 不在排除范围；如要求仅更新文档且不重部署，不能假定更新根 README 会被视为 no-op。正常推送并希望走 CI 且不实际发布时，应将改动限制在已排除目录（例如 `docs/`、`scripts/README.md`）。
 
 例如功能提交 A 的 CI 失败，随后只改测试的 B 通过，服务器会从仍在运行的旧版比较到 B，发现 A 的未发布功能，正常部署 B。若线上已包含全部功能而只修改采集脚本，则只检查而不发布网站。
 

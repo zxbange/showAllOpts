@@ -9,6 +9,9 @@
 
 ## 运行与维护
 
+- [数据更新时间](operations/data-update-display.md) · [采集状态](operations/collection-status.md) · [历史留存](operations/collection-history-retention.md) · [采集通知](operations/collection-notifications.md)
+- [业绩选股调度](operations/earnings-schedule.md) · [数据库超时](operations/database-timeouts.md)
+
 - [自动采集运行日历与手动失败隔离](operations/collection-calendar.md)
 
 - [缓存同步策略与历史修复](operations/cache-sync-strategies.md)

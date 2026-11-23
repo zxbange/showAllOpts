@@ -4,23 +4,23 @@
 
 ```text
 浏览器 React 页面
-  → frontend/src/api/client.ts
+  → frontend/src/api/ 各模块客户端与共享 apiFetch
   → Vite / Nginx /api 代理
   → FastAPI 路由：校验查询参数
   → Service：确定快照日期、计算区间指标、标记行业缺失
-  → Repository：参数化 SELECT
-  → 本地 SQLite 模块快照（每日 07:00 / 手动从 MySQL 同步）
+  → Repository：参数化 SELECT（以下是快照查询链路）
+  → 本地 SQLite 模块快照（默认交易日 07:00 / 手动从 MySQL 同步）
 
 聚宽采集 → MySQL 模块数据表 → 后台只读同步 → 本地 SQLite 快照
 ```
 
-前后端独立进程、独立依赖、独立构建。后端不返回网页，前端不直接访问数据库。数据库凭据只由后端从环境变量或选中的配置文件读取：Windows 启动器及直接运行 Python 未指定配置时使用 `backend/.env`；Linux `start.sh`、systemd 和 Compose 默认选择项目根目录下的 `config/app.config`。配置优先级与迁移方式见 [配置管理](../operations/configuration.md)。所有查询通过 SQLAlchemy 表达式绑定参数，不拼接用户输入的 SQL。
+前后端独立进程、独立依赖、独立构建。后端不返回网页，前端不直接访问数据库。数据库凭据只由后端从环境变量或选中的配置文件读取：Windows 启动器及直接运行 Python 未指定配置时使用 `backend/.env`；Linux `start.sh`、systemd 和 Compose 默认选择项目根目录下的 `config/app.config`。配置优先级与迁移方式见 [配置管理](../operations/configuration.md)。网页快照查询通过 SQLAlchemy 等方式绑定查询参数。登录会话由 HttpOnly Cookie 管理；同源 API 写请求使用内存中的 CSRF 令牌，后端仍负责鉴别权限。公开源采集和社交等服务另有数据源、状态和存储，不都走上述 MySQL 同步链路。
 
 ## Linux 部署约定
 
-当前部署目录为 `/home/ubuntu/showAllOpts`，systemd 服务名为 `showallopts-api`，运行账号和组为 `ubuntu`。基础 service 配合本机 `99-ubuntu-home.conf` 覆盖配置运行，最终读取 `config/app.config`，写入项目 `log/`。`ProtectHome=read-only` 允许读取家目录中的代码，`ReadWritePaths` 精确允许写入日志目录和配置目录，后者用于系统配置页面的原子写回。
+Linux 部署指南中的示例目录为 `/home/ubuntu/showAllOpts`，systemd 服务名为 `showallopts-api`，运行账号和组为 `ubuntu`。基础 service 配合本机 `99-ubuntu-home.conf` 覆盖配置运行，最终读取 `config/app.config`，写入项目 `log/`。`ProtectHome=read-only` 允许读取家目录中的代码，`ReadWritePaths` 精确允许写入日志目录和配置目录，后者用于系统配置页面的原子写回。
 
-Nginx 从 `/var/www/showallopts` 提供前端静态资源，将 `/api` 代理到 `127.0.0.1:8000`。前端资源发布与后端进程启停分别管理。安装、权限、服务配置和升级步骤见 [Linux 部署指南](../operations/linux-deployment.md#4-systemd--nginx-后台服务)。
+按该示例配置，Nginx 从 `/var/www/showallopts` 提供前端静态资源，将 `/api` 代理到 `127.0.0.1:8000`。前端资源发布与后端进程启停分别管理。安装、权限、服务配置和升级步骤见 [Linux 部署指南](../operations/linux-deployment.md#4-systemd--nginx-后台服务)。
 
 ## 数据一致性
 
@@ -34,32 +34,37 @@ Nginx 从 `/var/www/showallopts` 提供前端静态资源，将 `/api` 代理到
 
 1. 在后端增加对应 model / repository / service / schema / router；业务不堆叠到 `main.py`。
 2. 在 `/api/v1/modules` 注册模块元信息。
-3. 在前端增加页面与 API 类型，在 `App.tsx` 注册路由，并在 `src/lib/modules.ts` 登记名称、路径、分类、说明、标签、图标与视觉类型。首页卡片、搜索、分类计数、导航和面包屑共用此注册表，不必逐个修改入口。后端 `/modules` 元信息仍需同步维护。
-4. 增加必要的查询边界测试及浏览器用户流程测试。
+3. 在前端增加页面与 API 类型，在 `App.tsx` 注册路由，并在 `src/lib/modules.ts` 登记公开研究模块。总览卡片、搜索、分类、导航和面包屑共享公开模块注册表；分组、专用标签、详情路由及管理员入口仍需按场景接线。后端 `/modules` 元信息仍需同步维护。
+4. 如有采集或同步，使用实际任务的状态键，并分别接入可信业务更新时间、状态灯和完成记录。不要用页面分组名、缓存发布时间或任务结束时间替代业务字段。
+5. 增加必要的查询边界测试及浏览器用户流程测试。
 
 ### 功能清单与逻辑检查入口
 
 | 功能 | 主要逻辑与检查边界 | 说明 |
 | --- | --- | --- |
 | 总览、导航、模块切换 | 共用模块注册表；直接链接、返回、空状态和错误状态仍保留导航 | 本文“总览与亮色主题” |
-| 行业动量 | 同一分类和交易日排名、零分保留、历史范围和 180 交易日清理 | [采集与保留规则](../data/collector-retention.md) |
-| ETF/LOF 动量 | 候选去重、规模与范围限制、计算结果完整性、热度曲线及 180 交易日清理 | [ETF 动量](../data/etf-momentum.md) |
+| 行业动量 | 同一分类和交易日排名、零分保留、日常 180 交易日窗口，不自动删除旧结果 | [采集与保留规则](../data/collector-retention.md) |
+| ETF/LOF 动量 | 候选去重、规模与范围限制、计算结果完整性、热度曲线与日常 180 交易日窗口，不自动删除旧结果 | [ETF 动量](../data/etf-momentum.md) |
 | 抱团拥挤度 | 分组数据日期、原始比例与百分比单位、EMA 和区间统计 | [拥挤度](../data/market-crowding.md) |
 | 市场热度 | 有效 A 股分母、站上 MA20 比例、20%/80% 边界与三年历史 | [市场热度](../data/market-sentiment.md) |
-| 两融担保比例 | 东方财富接口、日期和单位校验、历史续传、每日 08:00 调度、失败保留旧值 | [两融监控](../data/margin-guarantee.md) |
-| 创红比 | 三指数同日收盘点位、独立交易日历补缺、2018年以来历史、交易日18:00调度、双轴缩放 | [创红比](../data/growth-dividend.md) |
+| 两融担保比例 | 东方财富接口、日期和单位校验、历史续传、默认交易日 08:00 调度、失败保留旧值 | [两融监控](../data/margin-guarantee.md) |
+| 创红比 | 三指数同日收盘点位、独立交易日历补缺、2018年以来历史、默认交易日 18:00 调度、双轴缩放 | [创红比](../data/growth-dividend.md) |
 | 微盘温度计 | 每日补缺、旧指标复用、分位与指数衔接、已有数据幂等 | [微盘温度计](../data/microcap-temperature.md) |
 | 微盘新高新低 | 四窗口统计、源日期缺口、只新增和历史保留 | [新高新低](../data/microcap-breadth.md) |
 | ETF 份额 | 分基金续传、前一交易日对齐、缺数不补零、共同基准 | [ETF 份额](../data/etf-shares.md) |
+| 估值标尺 | 沪深300、上证50、中证1000，支持 TTM/LYR 口径切换与来源对照 | [估值标尺](../data/valuation-ruler.md) |
+| 奶牛股 | 3/5/10 年窗口分别展示，按分红、利润和现金流覆盖筛选 | [奶牛股](../data/cash-cow.md) |
 | 高股息选股 | 银行与非银行分组、排序、完整快照事务替换、合法零入选 | [高股息](../data/dividend-selection.md) |
 | 个股机构持仓 | 新披露影响范围、股东类型兜底、披露股数、户数、社保三种比较、增量断点 | [机构持仓](../data/institution-ownership.md) |
+| 大宗商品 | A00 铝与 CCI 动力煤分别展示行情、采集状态与历史 | [大宗商品](../data/commodities.md) |
+| 个人持仓 | 管理员查看按策略归组的现有持仓和按日期查询的仓位变动 | [个人持仓](../data/personal-holdings.md) |
 | 独立采集与研究脚本 | 日常采集、历史补采、私有配置隔离与保留的历史研究 | [脚本使用说明](../../collectors/README.md) |
 | 博主与组合监控 | 监控时段、去重、限流、登录状态、Telegram/飞书独立开关与投递记录 | [博主监控](../data/social-monitor.md)、[飞书配置](../operations/飞书通知配置.md) |
 | 数据同步与运行管理 | 模块隔离、完整性检查、原子发布、失败保留旧快照、逐任务停止、日程与资源清理 | [本地缓存](../operations/local-cache.md)、[部署](../operations/linux-deployment.md) |
 
 抱团拥挤度对应 `market_crowding` 表，复合主键为 `(top_pct, trade_date)`，每次请求一次 SELECT 获取数据，在服务层计算统计和 EMA 10；前端只将比例转换为百分比显示。模型共用 `models/base.py` 中的 Base，网页不创建表。
 
-各类采集的保留规则独立：行业和 ETF 动量仅保留 180 个交易日；拥挤度默认保留 2020 年以来的完整历史；微盘温度计从 2021 年起每日采集并补缺，旧五日指标按迁移规则复用；ETF 份额日常更新最新已收市交易日，历史由聚宽补采脚本补齐，不自动清理。细节见 [抱团拥挤度说明](../data/market-crowding.md) 与 [微盘温度计说明](../data/microcap-temperature.md)。
+各类采集的保留规则独立：行业和 ETF 动量日常默认使用 180 个交易日窗口，但不自动删除旧结果；拥挤度默认保留 2020 年以来的完整历史；微盘温度计从 2021 年起每日采集并补缺，旧五日指标按迁移规则复用；ETF 份额日常更新最新已收市交易日，历史由聚宽补采脚本补齐，不自动清理。细节见 [抱团拥挤度说明](../data/market-crowding.md) 与 [微盘温度计说明](../data/microcap-temperature.md)。
 
 微盘温度计使用独立的 `microcap_temperature` 表。采集器保存原始指标、当期历史分位、综合温度、累计指数和成分股；刷新最后一期时从该期之前的基准续算，避免重复计数。网页模型将成分股字段设为延迟加载，页面接口只读指标，不传输名单。网页不会在切换范围时重算分位或重新设置指数基期。
 
@@ -73,7 +78,7 @@ ETF 份额按基金独立续传，源数据缺口不会补零。复合主键 `(f
 - 同步状态、博主动态和组合调仓共用 `usePolling`：上次请求结束后才计时发起下一次轮询；手动刷新、筛选变化和卸载取消旧请求，过期响应不更新当前结果。博主与组合监控的读取错误与操作错误分开保存，后台轮询不会清除操作失败提示。
 - ECharts 实例在组件卸载时销毁，容器变化通过 ResizeObserver 调整。
 - 热力图单元格使用原生链接，可键盘操作和新标签打开；图表尊重减少动态效果偏好。
-- 浏览器只使用 JSON API；所有文字通过 React 渲染，图表 tooltip 使用 canvas richText，避免拼接 HTML。
+- 业务查询主要使用 JSON API；社交平台登录等还有图像响应。页面文本用 React 渲染，图表提示应避免拼接不受信任的 HTML。
 - 应用按资源创建顺序注册清理回调；启动中途失败或某个任务停止报错时，仍尝试关闭其余后台任务及数据库连接。
 
 ## Windows 开发启动器的进程管理
@@ -94,11 +99,11 @@ Windows 集成测试创建随机本地端口的子进程和孙进程，分别验
 
 ## 总览与亮色主题
 
-总览使用前端模块注册表展示全部已接入页面，进入具体模块后才请求对应业务数据。首页不调用行业快照或其他数据库接口，也不把采样频率不同的模块共用一个“最新日期”。分类和搜索在本地完成；无匹配时可重置。新增模块会自动进入目录和导航，移动导航可横向滚动。
+总览使用前端模块注册表展示公开研究入口，进入具体模块后才请求相应研究数据。总览不请求行业快照或统一采集结果；管理员顶栏仍可独立轮询数据库同步状态。分类和搜索在本地完成，无匹配时可重置，移动导航可横向滚动。个人持仓、系统配置与账号从各自的导航入口进入，不属于公开目录。
 
-主背景、正文、边框和强调色集中在 `frontend/src/styles/global.css` 的 CSS 变量中；总览专属布局在 `styles/overview.css`；ECharts 的亮色画布配色统一在 `lib/chartTheme.ts`。行业热力图保留原有对数映射及排序，色阶由浅米金到朱红，文字按实际背景亮度选用黑色或白色。总览插画标注为视觉示意，不用于表达市场涨跌。
+主背景、正文、边框和强调色集中在 `frontend/src/styles/global.css` 的 CSS 变量中；总览专属布局在 `styles/overview.css`；ECharts 的亮色画布配色统一在 `lib/chartTheme.ts`。行业热力图保留原有对数映射及排序，色阶由浅米金到朱红，文字按实际背景亮度选用黑色或白色。
 
-本节的总览与主题调整只涉及网页展示，不更改采集、数据库结构和指标口径。桌面与手机浏览器测试覆盖搜索与分类组合、空结果重置、键盘跳转、所有已注册模块导航、数据库故障状态和原有图表交互。
+桌面与手机浏览器用例覆盖目录搜索与分类、空结果、导航、数据库故障状态和图表交互。业务页统一页头和采集入口布局，三种时间及异常显示见[数据更新时间与最近采集记录](../operations/data-update-display.md)。
 
 微盘新高新低使用 `microcap_breadth`，按 `(series_id, trade_date)` 唯一保存每日四周期数量。只新增续传，历史不清理；后端一次限量 SELECT，跳过成分股文本，按需计算比例和滚动指标。详见 [统计与部署说明](../data/microcap-breadth.md)。
 
@@ -106,7 +111,7 @@ Windows 集成测试创建随机本地端口的子进程和孙进程，分别验
 
 ## 本地快照查询层
 
-`get_session` 默认按 API 模块选择 `SnapshotCache` 的只读 SQLite 会话，现有 repository/service 查询和响应格式保持一致。只有同步任务连接源 MySQL，网页查询没有自动回源分支；`CACHE_ENABLED=false` 恢复原会话工厂。展示表按模块分事务复制，详情 JSON 保留，不复制网页不用的成分股和已删除分析字段。MySQL 使用 REPEATABLE READ，确保同一模块的快照头和明细来自同一事务。两融监控、博主监控等公开源服务各自维护独立状态，采集任务通过统一配置管理。
+`get_session` 默认按 API 模块选择 `SnapshotCache` 的只读 SQLite 会话，现有 repository/service 查询和响应格式保持一致。启用缓存时，网页快照查询不自动回源；同步任务读取源 MySQL。显式设为 `CACHE_ENABLED=false` 才走该查询依赖的直连分支，具体连接选择由 `get_session` 决定。展示表按模块分事务复制，详情 JSON 保留，不复制网页不用的成分股和已删除分析字段。MySQL 使用 REPEATABLE READ，确保同一模块的快照头和明细来自同一事务。两融监控、博主监控等公开源服务各自维护独立状态，采集任务通过统一配置管理。
 
 每次生成一个新的 SQLite 文件，完成写入与完整性检查后原子替换元信息；已有请求继续读取旧版本，新请求读取新版本。源数据库保持只读，建表和索引操作仅发生在本地 SQLite。独立文件锁协调 Uvicorn 多进程、每日调度和 CLI/网页手动同步。未完成模块记录在元信息中，进程中断后可继续；数据库/账号/映射结构变化会切换缓存命名空间，避免复用错误数据。详情见[本地缓存说明](../operations/local-cache.md)。
 

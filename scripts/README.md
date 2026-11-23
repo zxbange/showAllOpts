@@ -13,7 +13,7 @@
 | `windows_job.py` | 被 `dev.py` 调用，Windows 启动器退出时回收子进程 |
 | `build.sh` | 单独安装前端依赖并构建，供手动更新使用 |
 | `deploy.py` | 发布、健康检查和失败恢复，由 `deploy.sh` 及自动部署入口调用 |
-| `deployment_impact.py` | GitHub Actions 判断本次变更是否需要部署 |
+| `deployment_impact.py` | 独立变更范围比较工具；现行发布以 `deploy.py` 核验健康基线后的累计比较为准 |
 
 ## 数据库与缓存维护
 
@@ -21,6 +21,7 @@
 | --- | --- |
 | `check_database.py` | 只读检查数据库连接和行业动量表；发布准备阶段也会调用 |
 | `refresh_cache.py` | 不启动网页，手动查看缓存状态或同步，可指定模块及全量重建 |
+| `prune_collection_history.py` | 只读预览完成历史；归档、恢复与永久删除需明确选择及确认。详见[采集历史保留](../docs/operations/collection-history-retention.md) |
 | `repair_ownership_classification.py` | 检查并修复历史机构持仓分类；默认预览，`--apply` 才写入，支持限定股票 |
 
 分类修复工具读取 `collectors/个股机构持仓_数据库版.py` 的定义并复用分类逻辑，不请求聚宽。它是项目维护工具；聚宽采集脚本不会反向调用它。

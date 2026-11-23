@@ -18,7 +18,7 @@ systemd 模板通过 `APP_ENV_FILE=config/app.config` 选择生产配置；Docke
 
 进程环境变量优先于选中的配置文件，未提供的字段使用程序默认值。选中生产配置时不与开发配置合并。相对路径以项目根目录为基准，不受终端工作目录或 systemd 工作目录影响。显式指定的文件不存在、不可读或路径为空时启动失败。
 
-配置项见 [config/app.config.example](../../config/app.config.example)。`APP_ENV_FILE` 设置在启动进程的环境中，不要写进 `app.config` 内部。配置修改后需重启。
+配置项见 [config/app.config.example](../../config/app.config.example)。`APP_ENV_FILE` 设置在启动进程的环境中，不要写进 `app.config` 内部。手工修改文件或进程环境后应重启；系统配置页明确支持热更新的设置无需重启。
 
 ## Linux 生产配置和现有配置迁移
 
@@ -98,10 +98,10 @@ Compose 在宿主机读取文件，将键值注入后端容器环境。`config/`
 
 ## 本地缓存配置
 
-默认使用磁盘快照，`CACHE_ENABLED=true`、`CACHE_AUTO_REFRESH=true`、`CACHE_REFRESH_TIME=07:00`（北京时间）。快照目录固定为当前 `LOG_DIR` 下的 `cache/`，可复用现有目录权限和持久化挂载。网页可直接选择全部模块或指定模块同步，无需密钥；旧的 `CACHE_REFRESH_TOKEN` 配置已不再使用。CLI 仍须使用与服务相同的配置和运行账号。后台同步读取超时 `CACHE_DB_READ_TIMEOUT=600`（秒），网络失败总尝试次数 `CACHE_SYNC_ATTEMPTS=3`；这两个默认值无需在旧配置中补填即可生效。同步时间可在页面直接保存，无需重启；页面保存优先，旧默认20:00自动迁移为07:00，其他自定义配置保留，详见[本地缓存时间设置](local-cache.md)。其他配置修改后重启后端。
+默认使用磁盘快照，`CACHE_ENABLED=true`、`CACHE_AUTO_REFRESH=true`、`CACHE_REFRESH_TIME=07:00`（北京时间）。快照目录固定为当前 `LOG_DIR` 下的 `cache/`，可复用现有目录权限和持久化挂载。登录管理员可通过网页选择全部模块或指定模块同步，无需另外的同步密钥；旧的 `CACHE_REFRESH_TOKEN` 配置已不再使用。CLI 仍须使用与服务相同的配置和运行账号。后台同步读取超时 `CACHE_DB_READ_TIMEOUT=600`（秒），网络失败总尝试次数 `CACHE_SYNC_ATTEMPTS=3`；这两个默认值无需在旧配置中补填即可生效。管理员可在“系统配置”管理同步开关、时间及运行参数，无需重启；旧默认20:00迁移规则详见[本地缓存时间设置](local-cache.md)。手工修改配置文件后应重启。
 
-两融担保比例使用独立的东方财富接口采集任务，`MARGIN_WORKER_ENABLED=true` 为默认值，旧配置无需补填。每天北京时间08:00检查（约30秒调度间隔），不受 `CACHE_REFRESH_TIME` 影响；设为 `false` 只关闭该模块定时任务，仍可手动更新。本地数据与续传清单位于 `LOG_DIR/market-data/margin-guarantee/`，需持久化保留。启动不立即补跑，首次可在“两融担保比例”页面点击“更新数据”。
+两融担保比例使用独立的东方财富接口采集任务，`MARGIN_WORKER_ENABLED=true` 为默认值，旧配置无需补填。默认交易日北京时间08:00检查（约30秒调度间隔），不受 `CACHE_REFRESH_TIME` 影响；设为 `false` 只关闭该模块定时任务，仍可手动更新。本地数据与续传清单位于 `LOG_DIR/market-data/margin-guarantee/`，需持久化保留。启动不立即补跑，首次可在“两融担保比例”页面点击“更新数据”。
 
-创红比的 `GROWTH_DIVIDEND_WORKER_ENABLED=true` 默认启用，旧配置无需补填。首次启动自动后台补齐2018年以来的指数日线，此后每个交易日北京时间18:00更新当天并重试历史缺口，独立于 `CACHE_REFRESH_TIME`。设为 `false` 关闭自动回填与定时采集，保留页面手动更新。行情、交易日历和进度位于 `LOG_DIR/market-data/growth-dividend/`，应随现有 `log/` 持久化；无需添加 MySQL 表或公开行情接口密钥。口径、数据起点与错误恢复见[创红比](../data/growth-dividend.md)。
+创红比的 `GROWTH_DIVIDEND_WORKER_ENABLED=true` 默认启用，旧配置无需补填。自动任务在交易日可执行首次后台回填2018年以来的指数日线，此后默认每个交易日北京时间18:00更新当天并重试历史缺口，独立于 `CACHE_REFRESH_TIME`。设为 `false` 关闭自动回填与定时采集，保留页面手动更新。行情、交易日历和进度位于 `LOG_DIR/market-data/growth-dividend/`，应随现有 `log/` 持久化；无需手工初始化 MySQL 表或填写公开行情接口密钥。在线采集先发布到共享 MySQL 再更新本地数据，数据库账号须具备该功能需要的权限。口径、数据起点与错误恢复见[创红比](../data/growth-dividend.md)。
 
-修改这些配置后重启后端。缓存开关和命令用法见[本地缓存说明](local-cache.md)，真实配置仍按本文规则排除 GitHub。
+上述时间是默认值；实际调度见[系统配置](system-configuration.md)和[自动运行日历](collection-calendar.md)。缓存开关和命令用法见[本地缓存说明](local-cache.md)，真实配置仍按本文规则排除 GitHub。

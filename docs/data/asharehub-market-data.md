@@ -22,11 +22,11 @@
 
 ## 启用与回退
 
-代码发布不会保存或自动配置之前用于测试的凭据。服务器管理员在受保护的服务环境变量中配置 `ASHAREHUB_API_KEY`，然后按既有方式重启 API。应用既有服务端配置文件也支持此字段，但不要把真实密钥提交到仓库、聊天或日志。示例文件仅保留空值。
+代码发布不会保存或自动配置之前用于测试的凭据。管理员在「系统配置 → 数据接口与消息凭证」保存或清除 AShareHub Token。应用读取实际生效的 `ASHAREHUB_API_KEY`；既有环境变量覆盖、写入权限等规则见[系统配置](../operations/system-configuration.md)。不要把真实密钥提交到仓库、聊天或日志。
 
 - 未设置或为空：继续原 TDX 输入，旧配置正常工作。
 - 非空：后续未完成采集选择 AShareHub；没有运行时失败后偷偷切回 TDX 的逻辑。
-- 删除此配置并重启：后续未完成采集重新选择 TDX。
+- 清空生效凭据后：后续未完成采集重新选择 TDX。
 - `/api/v1/market-collection/status` 的 `raw_price_source` 返回当前配置选择的 `asharehub_daily` 或 `tdx_daily_archive`。它不是某条历史结果实际来源或实时可用性的证明，不返回密钥。
 
 精简行情缓存在 `LOG_DIR/market-data/market-collection/source-cache/asharehub-raw-daily-v2`，不包含密钥、响应头或衍生技术因子。日期核验缓存与 TDX 使用不同目录；未完成任务的旧源快照需要重建，但已发布结果与原审计记录保留，不自动回写覆盖历史。
