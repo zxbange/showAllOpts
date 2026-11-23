@@ -123,10 +123,13 @@ class ExchangeCalendar:
         self.require_fresh()
         return self.days[-lookback], self.days[-1]
 
-    def records(self):
+    def records(self, *, target=None):
+        # Preserve the predecessor mapping from the full verified calendar,
+        # even for the previous row when its own prior date is not written.
+        days = self.days if target is None else (self.previous(target), target)
         stamp = self.now.replace(tzinfo=None)
         return [dict(trade_date=day, previous_trade_date=self.before.get(day),
-                     source=self.source, updated_at=stamp) for day in self.days]
+                     source=self.source, updated_at=stamp) for day in days]
 
 
 def decimal_value(value):
@@ -437,7 +440,7 @@ def _write_batches(records):
         yield records[start:start + _WRITE_BATCH_SIZE]
 
 
-def _read_existing(connection, table, records, *, calendar=False):
+def _read_existing(connection, table, records, *, historical_calendar=False):
     from sqlalchemy import select, tuple_
 
     keys = tuple(table.primary_key.columns)
@@ -445,13 +448,17 @@ def _read_existing(connection, table, records, *, calendar=False):
     query = select(*columns)
     if not records:
         return {}
-    if calendar:
+    if historical_calendar:
         # Compare the complete *verified* coverage, not just MAX(date). A
         # sparse legacy baseline or a bad historical predecessor must still
         # be healed. Do not read or delete dates outside this source's range.
         day = table.c.trade_date
         days = [record['trade_date'] for record in records]
         statements = [query.where(day.between(min(days), max(days)))]
+    elif len(keys) == 1:
+        key = keys[0]
+        statements = (query.where(key.in_([record[key.name] for record in batch]))
+                      for batch in _write_batches(records))
     else:
         statements = (query.where(tuple_(*keys).in_([
             tuple(record[key.name] for key in keys) for record in batch
@@ -506,13 +513,16 @@ def _write_transaction(connection):
         raise
 
 
-def write_records(engine, shares, prices, calendar=None):
+def write_records(engine, shares, prices, calendar=None, *, calendar_target=None):
     from app.models.etf import ETFPrice, ETFShare, ETFTradingDay
     from app.services.etf_diagnostics import database_phase
 
     batches = [(ETFShare.__table__, list(shares)), (ETFPrice.__table__, list(prices))]
     if calendar is not None:
-        batches.append((ETFTradingDay.__table__, calendar.records()))
+        days = calendar.records() if calendar_target is None else calendar.records(target=calendar_target)
+        batches.append((ETFTradingDay.__table__, days))
+    elif calendar_target is not None:
+        raise ValueError('ETF daily writes require a verified calendar')
     changed_count = 0
     with database_phase('connect'):
         connection = engine.connect()
@@ -531,7 +541,8 @@ def write_records(engine, shares, prices, calendar=None):
                 phase = ('load_calendar' if is_calendar else
                          'load_share_keys' if table is ETFShare.__table__ else 'load_price_keys')
                 with database_phase(phase, table.name, rows=len(records)):
-                    existing = _read_existing(connection, table, records, calendar=is_calendar)
+                    existing = _read_existing(connection, table, records,
+                                              historical_calendar=is_calendar and calendar_target is None)
                     inserts, updates = _record_changes(table, records, existing)
                 plan.append((table, inserts, updates))
                 if not is_calendar:

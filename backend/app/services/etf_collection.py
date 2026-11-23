@@ -744,7 +744,7 @@ class ETFCollection:
                 engine = self.configuration.engine(config)
                 check_cancelled()
                 stage = 'write_records'
-                changed = c.write_records(engine, shares, prices, calendar=calendar)
+                changed = c.write_records(engine, shares, prices, calendar=calendar, calendar_target=end)
                 if type(changed) is int and changed > 0:
                     self._notification_changes = getattr(self, '_notification_changes', 0) + changed
                     self._notification_summary = getattr(self, '_notification_summary', []) + [f'{end}: shares={len(shares)}, prices={len(prices)}']

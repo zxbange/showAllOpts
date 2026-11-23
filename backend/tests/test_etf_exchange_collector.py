@@ -456,6 +456,69 @@ def test_daily_write_batches_primary_keys_and_unchanged_calendar(tmp_path):
         assert session.get(ETFTradingDay, DAY).updated_at == stamp
 
 
+def test_daily_calendar_selects_exact_keys_and_keeps_previous_mapping(tmp_path):
+    from sqlalchemy import event
+    from sqlalchemy.dialects import mysql
+
+    engine = create_engine(f'sqlite:///{tmp_path / "daily.sqlite"}')
+    cal = fake_calendar()
+    target = DAY
+    previous = cal.previous(target)
+    previous_previous = cal.previous(previous)
+    older_gap = cal.days[10]
+    with Session(engine) as session:
+        ETFTradingDay.__table__.create(engine)
+        session.add(ETFTradingDay(
+            trade_date=previous, previous_trade_date=older_gap,
+            source='LEGACY', updated_at=datetime(2026, 11, 1)))
+        session.commit()
+
+    sql = []
+
+    @event.listens_for(engine, 'before_cursor_execute')
+    def capture(_conn, _cursor, statement, params, context, _many):
+        if 'etf_trading_day' in statement.lower():
+            sql.append((statement.lower(), params, context.compiled.statement if context.compiled else None))
+
+    # No observed shares/prices is not a reason to skip the official day keys.
+    assert m.write_records(engine, [], [], cal, calendar_target=target) == 0
+    selections = [(stmt, params, query) for stmt, params, query in sql if stmt.startswith('select')]
+    assert len(selections) == 1
+    stmt, params, query = selections[0]
+    assert 'etf_trading_day.trade_date in (?, ?)' in stmt
+    assert set(params) == {target.isoformat(), previous.isoformat()}
+    compiled = str(query.compile(dialect=mysql.dialect(), compile_kwargs={'literal_binds': True}))
+    assert 'WHERE etf_trading_day.trade_date IN (' in compiled
+    assert 'BETWEEN' not in compiled
+    assert set(table_date for table_date in cal.days if f"'{table_date}'" in compiled) == {target, previous}
+
+    checked_at = cal.now
+    with Session(engine) as session:
+        assert session.scalars(select(ETFTradingDay.trade_date).order_by(ETFTradingDay.trade_date)).all() == [
+            previous, target
+        ]
+        assert session.get(ETFTradingDay, target).previous_trade_date == previous
+        assert session.get(ETFTradingDay, previous).previous_trade_date == previous_previous
+        assert session.get(ETFTradingDay, previous).source == cal.source
+        assert session.get(ETFTradingDay, older_gap) is None
+        assert session.get(ETFTradingDay, target).updated_at == checked_at
+
+    cal.now += timedelta(hours=1)
+    sql.clear()
+    assert m.write_records(engine, [], [], cal, calendar_target=target) == 0
+    assert not any(stmt.startswith(('insert', 'update', 'delete', 'create')) for stmt, _, _ in sql)
+    with Session(engine) as session:
+        assert session.get(ETFTradingDay, target).updated_at == checked_at
+
+
+def test_unverified_daily_target_does_not_open_a_database():
+    from types import SimpleNamespace
+
+    engine = SimpleNamespace(connect=lambda: pytest.fail('unverified date must not open a connection'))
+    with pytest.raises(m.SourceError, match='coverage'):
+        m.write_records(engine, [], [], fake_calendar(), calendar_target=DAY + timedelta(days=1))
+
+
 def test_calendar_reconciles_historical_holes_and_keeps_outside_coverage():
     engine = create_engine('sqlite://')
     calendar = fake_calendar()

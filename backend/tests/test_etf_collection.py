@@ -27,6 +27,7 @@ class Collector:
         self.writes = []
         self.failure = False
         self.write_failure = False
+        self.calendar_targets = []
 
     def catalog(self):
         return {'510300.XSHG': '沪', '159919.XSHE': '深'}
@@ -41,7 +42,8 @@ class Collector:
         rows = [dict(fund_code=code, trade_date=start) for code in funds]
         return rows if include_shares else [], rows if include_prices else [], {}
 
-    def write_records(self, engine, shares, prices, calendar):
+    def write_records(self, engine, shares, prices, calendar, *, calendar_target):
+        self.calendar_targets.append(calendar_target)
         if self.write_failure:
             raise RuntimeError('secret writer DSN')
         self.writes.append((shares, prices))
@@ -991,6 +993,7 @@ def test_valid_incomplete_source_reports_specific_gap(tmp_path, caplog, omit_sha
     assert f'missing_shares={2 if omit_shares else 0}' in caplog.text
     assert f'missing_prices={2 if omit_prices else 0}' in caplog.text
     assert len(c.writes) == 1  # Retain verified records even if the other series is missing.
+    assert c.calendar_targets == [DAY]
 
 
 def test_database_failure_takes_precedence_over_source_gap(tmp_path, caplog):
