@@ -10,6 +10,7 @@ from datetime import date, datetime, timedelta
 from contextlib import contextmanager
 from zoneinfo import ZoneInfo
 import sqlite3
+import errno
 import threading
 import logging
 import json
@@ -20,7 +21,7 @@ from app.core.diagnostics import diagnostic_details
 from app.services.collection_errors import safe_error, sanitize_error
 
 from app.services.etf_configuration import ETFConfiguration, ConfigurationFailure, DEFAULT_COLLECTION_TIME, target_key, reconcile_system_ledger
-from app.services.etf_diagnostics import database_diagnostic, database_write_run, log_database_failure
+from app.services.etf_diagnostics import database_diagnostic, database_write_run, log_database_failure, log_database_retry
 
 import httpx
 import portalocker
@@ -75,6 +76,96 @@ def writer_error_code(exc):
     if number in {2002, 2003, 2005, 2006, 2013, 2055}:
         return 'writer_connection_failed'
     return 'writer_write_failed'
+
+
+# A writer retry is only safe at checkout, before any schema check,
+# business DML or COMMIT. The separate historic probe has no writes at all.
+_CHECKOUT_PHASES = frozenset({
+    'connect', 'socket_connect', 'mysql_connect', 'connect_socket', 'authenticate',
+})
+_HISTORICAL_READ_PHASES = frozenset({'load_historical_keys', 'load_share_keys', 'load_price_keys'})
+_TRANSIENT_MYSQL = frozenset({2006, 2013, 2055})
+_TRANSIENT_SOCKET = frozenset({errno.ECONNRESET, errno.ECONNABORTED, errno.EPIPE, errno.ETIMEDOUT})
+
+
+def _transient_pre_write_failure(diagnostic, operation_stage):
+    safe_phase = (diagnostic.stage in _CHECKOUT_PHASES or
+                  (operation_stage == 'load_historical_keys' and diagnostic.stage in _HISTORICAL_READ_PHASES))
+    if not safe_phase:
+        return False
+    transient_socket = diagnostic.socket_timeout or diagnostic.os_errno in _TRANSIENT_SOCKET
+    if diagnostic.mysql_code is not None:
+        return (diagnostic.mysql_code in _TRANSIENT_MYSQL or
+                (diagnostic.mysql_code == 2003 and transient_socket))
+    return transient_socket
+
+
+def _safe_database_error(exc, diagnostic):
+    details = safe_error(exc, stage='database_write')
+    # The shared connector can deliberately detach the raw driver exception
+    # while retaining its numeric code and verified socket-timeout flag.
+    if diagnostic.socket_timeout:
+        details['code'] = 'timeout'
+    elif diagnostic.mysql_code is not None and details['code'] in ('unknown', 'invalid_data'):
+        details['code'] = 'database_error'
+    if diagnostic.mysql_code is not None:
+        details['mysql_errno'] = diagnostic.mysql_code
+    return sanitize_error(details)
+
+
+class _RunDatabase:
+    """A lazy engine for one pinned config; no connection is held across HTTP."""
+    def __init__(self, engine_factory, config, check_cancelled):
+        self.engine_factory = engine_factory
+        self.config = config
+        self.check_cancelled = check_cancelled
+        self.engine = None
+        self.retry_used = False
+        self.stage = 'engine_create'
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_):
+        if self.engine is not None:
+            try:
+                self.engine.dispose()
+            except Exception as exc:
+                # Cleanup cannot hide the previous phase or negate a commit.
+                LOG.warning('ETF writer engine cleanup failed %s', diagnostic_details(exc))
+
+    def execute(self, operation, *, stage):
+        self.check_cancelled()
+        self.stage = 'engine_create'
+        if self.engine is None:
+            self.engine = self.engine_factory(self.config)
+        self.stage = stage
+        try:
+            return operation(self.engine)
+        except CollectionInterrupted:
+            raise
+        except Exception as exc:
+            diagnostic = database_diagnostic(exc, stage)
+            if self.retry_used or not _transient_pre_write_failure(diagnostic, stage):
+                raise
+            self.check_cancelled()
+            self.retry_used = True
+            try:
+                # No checkout remains at this point. Replace the old pool
+                # on the same pinned engine; next checkout opens a new socket.
+                self.engine.dispose()
+            except Exception as cleanup:
+                LOG.warning('ETF writer retry cleanup failed %s', diagnostic_details(cleanup))
+                replacement_failed = True
+            else:
+                replacement_failed = False
+            if replacement_failed:
+                raise
+            log_database_retry(diagnostic)
+        # Outside the first failure handler: a retry fault must not inherit
+        # the first error's raw driver context or be classified by its phase.
+        self.check_cancelled()
+        return operation(self.engine)
 
 
 def scheduled_slots(moment, schedule=None):
@@ -646,25 +737,21 @@ class ETFCollection:
         except Exception as exc:
             LOG.warning('ETF cache publish failed %s', diagnostic_details(exc))
 
-    def _write_day(self, c, config, calendar, end, shares, prices, check_cancelled, *, historical=False):
-        engine = None
-        stage = 'engine_create'
+    def _write_day(self, c, config, writer, calendar, end, shares, prices, *, historical=False):
         try:
-            engine = self.configuration.engine(config)
-            check_cancelled()
-            stage = 'write_records'
             options = dict(calendar=calendar, calendar_target=end)
             if historical:
                 options['insert_only'] = True
-            changed = c.write_records(engine, shares, prices, **options)
+            changed = writer.execute(lambda engine: c.write_records(engine, shares, prices, **options),
+                                     stage='write_records')
             if type(changed) is int and changed > 0:
                 self._notification_changes = getattr(self, '_notification_changes', 0) + changed
                 self._notification_summary = getattr(self, '_notification_summary', []) + [f'{end}: shares={len(shares)}, prices={len(prices)}']
         except CollectionInterrupted:
             raise
         except Exception as exc:
-            self._run_error_details = safe_error(exc, stage='database_write')
-            diagnostic = database_diagnostic(exc, stage)
+            diagnostic = database_diagnostic(exc, writer.stage)
+            self._run_error_details = _safe_database_error(exc, diagnostic)
             code = writer_error_code(exc)
             commit_disconnected = diagnostic.stage == 'commit' and (
                 diagnostic.reason == 'connection_lost' or diagnostic.socket_timeout)
@@ -674,17 +761,9 @@ class ETFCollection:
                 code = 'writer_commit_unconfirmed'
                 self._run_error_details = sanitize_error(
                     {**self._run_error_details, 'code': 'etf_commit_unconfirmed'})
-            log_database_failure(exc, operation='collection-write', stage=stage,
+            log_database_failure(exc, operation='collection-write', stage=writer.stage,
                                  target=target_key(config)[:12])
             raise WriterFailure(code) from None
-        finally:
-            if engine is not None:
-                try:
-                    engine.dispose()
-                except Exception as exc:
-                    # Pool cleanup must not hide a failure phase or negate a
-                    # confirmed commit.
-                    LOG.warning('ETF writer engine cleanup failed %s', diagnostic_details(exc))
 
     @staticmethod
     def _manual_days(db, calendar, end, funds):
@@ -730,7 +809,7 @@ class ETFCollection:
                      if observed.get(day, {}).get((kind, code)) != 'complete'}
         return scope, required, unchecked
 
-    def _repair_history(self, db, c, client, config, calendar, end, funds, progress, check_cancelled):
+    def _repair_history(self, db, c, client, config, writer, calendar, end, funds, progress, check_cancelled):
         scope, required, unchecked = self._manual_days(db, calendar, end, funds)
         if not required:
             db.execute("DELETE FROM metadata WHERE key='manual_gap_floor' AND value<=?", (end.isoformat(),))
@@ -741,23 +820,16 @@ class ETFCollection:
                        ((kind, code, day.isoformat()) for kind, code, day in sorted(unchecked)))
         db.commit()  # Persist intended repair scope before source I/O or publication.
         check_cancelled()
-        engine = None
-        stage = 'engine_create'
         try:
-            engine = self.configuration.engine(config)
-            stage = 'load_historical_keys'
-            present = c.existing_observations(engine, required)
+            present = writer.execute(lambda engine: c.existing_observations(engine, required),
+                                     stage='load_historical_keys')
+        except CollectionInterrupted:
+            raise
         except Exception as exc:
-            self._run_error_details = safe_error(exc, stage='database_write')
-            log_database_failure(exc, operation='collection-write', stage=stage,
+            self._run_error_details = _safe_database_error(exc, database_diagnostic(exc, writer.stage))
+            log_database_failure(exc, operation='collection-write', stage=writer.stage,
                                  target=target_key(config)[:12])
             raise WriterFailure(writer_error_code(exc)) from None
-        finally:
-            if engine is not None:
-                try:
-                    engine.dispose()
-                except Exception as exc:
-                    LOG.warning('ETF writer engine cleanup failed %s', diagnostic_details(exc))
 
         pending = required - present
         # A once-complete local row can no longer hide a deleted MySQL row.
@@ -820,7 +892,7 @@ class ETFCollection:
                 db.execute("INSERT OR REPLACE INTO metadata VALUES ('cache_pending','1')")
                 db.commit()
                 progress('writing', completed, total + 2 * len(funds))
-                self._write_day(c, config, calendar, day, shares, prices, check_cancelled, historical=True)
+                self._write_day(c, config, writer, calendar, day, shares, prices, historical=True)
             done = set(verified)
             done.update((kind, row['fund_code'], row['trade_date']) for kind, records in
                         (('shares', shares), ('prices', prices)) for row in records)
@@ -843,7 +915,7 @@ class ETFCollection:
         isolated = manual and manual_failure_isolated(slot)
         c = self.collector or collector_module()
         funds = c.catalog()
-        with self.client_factory() as http:
+        with self.client_factory() as http, _RunDatabase(self.configuration.engine, config, check_cancelled) as writer:
             client = c.ExchangeClient(CancellableHTTPClient(http, check_cancelled))
             calendar = client.calendar()
             check_cancelled()
@@ -882,7 +954,7 @@ class ETFCollection:
             scope, historical_gaps, repaired, history_total, history_errors = (end,), set(), 0, 0, {}
             if manual:
                 scope, historical_gaps, repaired, history_total, history_errors = self._repair_history(
-                    db, c, client, config, calendar, end, funds, progress, check_cancelled)
+                    db, c, client, config, writer, calendar, end, funds, progress, check_cancelled)
                 base_progress = progress
                 progress = lambda phase, completed, total: base_progress(
                     phase, completed + repaired, total + history_total)
@@ -945,7 +1017,7 @@ class ETFCollection:
                         'etf_missing_shares' if 'shares' in kinds else 'etf_missing_prices')
                 self._run_error_details = history_errors.get(old) or safe_error(code=code, stage='fetch', trade_date=old)
             progress('writing', completed, total)
-            self._write_day(c, config, calendar, end, shares, prices, check_cancelled)
+            self._write_day(c, config, writer, calendar, end, shares, prices)
             db.execute("INSERT OR REPLACE INTO metadata VALUES ('writer_error','')")
             # Charge only committed attempts. Preserve old values on an incomplete
             # source response, but do not mistake them for fresh verification.

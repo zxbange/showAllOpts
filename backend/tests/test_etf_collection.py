@@ -1218,3 +1218,184 @@ def test_manual_only_scopes_older_sse_shares_and_preserves_oldest_timeout(tmp_pa
     assert 'private upstream text' not in str(details)
     assert 'attempted=1 found=0 empty=0 failed=1' in caplog.text
     assert 'private upstream text' not in caplog.text
+
+
+def test_manual_run_reuses_engine_and_returns_checkouts_before_exchange_fetches(tmp_path):
+    from decimal import Decimal
+    from sqlalchemy import create_engine, event, select
+    from app.models.etf import ETFShare
+    from app.services import etf_exchange
+
+    w, c, dates, moment = manual_repair_fixture(tmp_path)
+    with w.connect() as db:
+        seed_covered(db, c, dates[1])
+    engine = create_engine(f'sqlite:///{tmp_path / "writer-test.sqlite"}', pool_size=1, max_overflow=0)
+    money = []
+    configs = []
+    physical = []
+    disposals = []
+    def engine_for(config):
+        configs.append(config.copy())
+        return engine
+    w.configuration.engine = engine_for
+    event.listen(engine, 'connect', lambda *_: physical.append(True))
+    event.listen(engine, 'engine_disposed', lambda *_: disposals.append(True))
+    c.existing_observations = etf_exchange.existing_observations
+    c.write_records = etf_exchange.write_records
+    def source(client, start, end, funds, include_prices, include_shares, calendar, **kwargs):
+        # A live connection may be pooled but there is no checkout/transaction
+        # across network work for any date.
+        assert engine.pool.checkedout() == 0
+        money.append(start)
+        base = [dict(fund_code=code, trade_date=start, source='TEST',
+                     updated_at=moment.replace(tzinfo=None)) for code in funds]
+        return ([row | dict(fund_name=funds[row['fund_code']], shares=10,
+                            previous_trade_date=calendar.previous(start)) for row in base] if include_shares else [],
+                [row | dict(close_price=Decimal('4')) for row in base] if include_prices else [], {})
+    c.collect = source
+    w.request_run('shared-one-engine-repair')
+    assert w.tick(moment)
+    assert len(configs) == len(physical) == len(disposals) == 1
+    assert sorted(set(money)) == dates[2:6]
+    with engine.connect() as reader:
+        assert set(reader.scalars(select(ETFShare.trade_date))) == set(dates[2:6])
+
+
+def test_etf_prewrite_reconnect_budget_allows_exactly_one_replacement_per_run(tmp_path, caplog):
+    from pymysql.err import OperationalError
+    from app.services.etf_diagnostics import database_phase
+
+    w, c, dates, moment = manual_repair_fixture(tmp_path)
+    with w.connect() as db:
+        seed_covered(db, c, dates[3])
+    configurations, disposals, probes, writes = [], [], [], []
+    engine = SimpleNamespace(dispose=lambda: disposals.append(True))
+    def factory(config):
+        configurations.append(config.copy())
+        return engine
+    def verify(current, targets):
+        probes.append(current)
+        if len(probes) == 1:
+            with database_phase('connect'):
+                raise OperationalError(2013, 'private initial connector text')
+        return set()
+    def write(current, *_args, **_kwargs):
+        writes.append(current)
+        with database_phase('connect'):
+            raise OperationalError(2013, 'private later connector text')
+
+    w.configuration.engine = factory
+    c.existing_observations = verify
+    c.write_records = write
+    w.request_run('shared-connection-budget')
+    assert not w.tick(moment)
+    assert probes == [engine, engine]
+    assert writes == [engine]
+    assert len(configurations) == 1
+    assert len(disposals) == 2  # Fresh pool for retry, then final cleanup.
+    assert 'ETF database retry stage=connect mysql_code=2013' in caplog.text
+    assert 'private' not in caplog.text
+
+
+@pytest.mark.parametrize('phase,mysql_code', [
+    ('schema_check', 2013), ('flush', 2013), ('commit', 2013),
+    ('load_share_keys', 2013), ('load_price_keys', 2013), ('load_calendar', 2013),
+    ('connect', 1045), ('connect', 1142), ('connect', 9999), ('connect', 2003),
+    ('write_records', 2013),
+])
+def test_etf_run_does_not_retry_ambiguous_unknown_or_permanent_phases(phase, mysql_code):
+    from pymysql.err import OperationalError
+    from app.services.etf_collection import _RunDatabase
+    from app.services.etf_diagnostics import database_phase
+
+    attempts, disposals = [], []
+    engine = SimpleNamespace(dispose=lambda: disposals.append(True))
+    def operation(current):
+        attempts.append(current)
+        with database_phase(phase):
+            raise OperationalError(mysql_code, 'never print')
+    with _RunDatabase(lambda _: engine, {}, lambda: None) as writer:
+        with pytest.raises(OperationalError):
+            writer.execute(operation, stage='write_records')
+    assert attempts == [engine]
+    assert disposals == [True]
+
+
+def test_etf_cancellation_before_reconnect_keeps_retry_unused():
+    from pymysql.err import OperationalError
+    from app.services.etf_collection import _RunDatabase, CollectionCancelled
+    from app.services.etf_diagnostics import database_phase
+
+    attempts, disposals = [], []
+    engine = SimpleNamespace(dispose=lambda: disposals.append(True))
+    def check():
+        if attempts:
+            raise CollectionCancelled()
+    def operation(current):
+        attempts.append(current)
+        with database_phase('connect'):
+            raise OperationalError(2013, 'private driver text')
+    with _RunDatabase(lambda _: engine, {}, check) as writer:
+        with pytest.raises(CollectionCancelled):
+            writer.execute(operation, stage='write_records')
+        assert writer.retry_used is False
+    assert attempts == [engine]
+    assert disposals == [True]
+
+
+def test_historical_read_reconnects_once_with_a_fresh_sqlalchemy_pool(tmp_path, caplog):
+    from pymysql.err import OperationalError
+    from sqlalchemy import create_engine, event, text
+    from app.services.etf_collection import _RunDatabase
+    from app.services.etf_diagnostics import database_phase, database_write_run
+
+    engine = create_engine(f'sqlite:///{tmp_path / "pool-reconnect.sqlite"}', pool_size=1, max_overflow=0)
+    pools = []
+    @event.listens_for(engine, 'do_connect')
+    def fault_once(*_):
+        pools.append(engine.pool)
+        if len(pools) == 1:
+            # Emulate a MySQL driver failing before returning its connection.
+            raise OperationalError(2013, 'private server text')
+
+    def probe(current):
+        with database_phase('connect'):
+            with current.connect() as conn:
+                return conn.scalar(text('SELECT 1'))
+
+    with database_write_run('a1b2c3d4e5f6'):
+        with _RunDatabase(lambda _: engine, {}, lambda: None) as writer:
+            assert writer.execute(probe, stage='load_historical_keys') == 1
+            assert writer.retry_used
+            assert engine.pool.checkedout() == 0
+    assert len(pools) == 2 and pools[0] is not pools[1]
+    assert 'ETF database retry stage=connect mysql_code=2013' in caplog.text
+    assert 'run=a1b2c3d4e5f6' in caplog.text
+    assert 'private server text' not in caplog.text
+
+
+def test_etf_projected_shared_connection_failure_keeps_code_and_timeout_without_raw_cause(tmp_path, caplog):
+    from app.services.etf_configuration import ConfigurationFailure
+    from app.services.etf_diagnostics import DatabaseDiagnostic
+
+    w, c, dates, moment = manual_repair_fixture(tmp_path)
+    with w.connect() as db:
+        seed_covered(db, c, dates[3])
+    attempts = []
+    def probe(*_):
+        attempts.append(True)
+        failure = ConfigurationFailure('safe generic error')
+        failure.database_error_number = 2013
+        failure.database_diagnostic = DatabaseDiagnostic(
+            'pymysql.err.OperationalError', 2013, None, 'connection_lost', 'mysql_connect',
+            socket_timeout=True)
+        raise failure from None
+    c.existing_observations = probe
+    w.request_run('projected-shared-connection')
+    assert not w.tick(moment)
+    assert len(attempts) == 2 and not c.calls
+    details = w.status()['latest_result']['error_details']
+    assert details['code'] == 'timeout'
+    assert details['mysql_errno'] == 2013
+    assert 'stage=mysql_connect' in caplog.text
+    assert 'safe generic error' not in caplog.text

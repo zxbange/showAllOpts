@@ -54,6 +54,7 @@ _WRITE_RUN = ContextVar('etf_database_write_run', default='-')
 _STAGES = _WRITE_PHASES | {
     'engine_create', 'write_records', 'connect', 'connection_close', 'table_check',
     'resolve', 'validate_address', 'driver_init', 'socket_connect', 'mysql_connect',
+    'load_historical_keys', 'connect_socket', 'authenticate',
 }
 _TABLES = frozenset(('etf_share_daily', 'etf_price_daily', 'etf_trading_day'))
 _TYPE_MAP = {
@@ -175,6 +176,12 @@ def database_diagnostic(error, stage):
             reason = 'database_operation_failed'
     return DatabaseDiagnostic(error_type(mysql_error if mysql_error is not None else original),
                               number, os_errno, reason, stage, table, timeout, seconds)
+
+def log_database_retry(diagnostic):
+    LOG.warning('ETF database retry stage=%s mysql_code=%s reason=%s timeout=%s run=%s',
+                diagnostic.stage, diagnostic.mysql_code if diagnostic.mysql_code is not None else '-',
+                diagnostic.reason, diagnostic.socket_timeout, _WRITE_RUN.get())
+
 
 
 def log_database_failure(error, *, operation, stage, target, table=None):

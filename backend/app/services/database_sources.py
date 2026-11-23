@@ -89,7 +89,12 @@ class DatabaseSources:
             raise SourceError('数据库目标未获部署者允许，请检查 VALIDATION_ALLOWED_TARGETS')
         # Resolve once and pin the resulting socket, so DNS cannot rebind between check/use.
         try:
-            addresses = sorted({item[4][0] for item in resolve_addresses(host, port)})
+            try:
+                resolved = resolve_addresses(host, port)
+            except SourceError as exc:
+                exc.database_target_stage = 'resolve'
+                raise
+            addresses = sorted({item[4][0] for item in resolved})
             if not addresses:
                 raise ValueError()
             for raw in addresses:

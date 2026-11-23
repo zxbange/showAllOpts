@@ -82,7 +82,7 @@ class MarketConfiguration:
 
     def engine(self, config):
         from app.services.etf_configuration import ETFConfiguration
-        return ETFConfiguration.engine(self,dict(config,target_mode='custom'))
+        return ETFConfiguration.legacy_writer_engine(self,dict(config,target_mode='custom'))
 
     def test(self, body):
         config = self.validate(body)

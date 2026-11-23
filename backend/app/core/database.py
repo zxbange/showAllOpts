@@ -19,7 +19,9 @@ def database_identity(config):
 
 
 def build_engine(settings: Settings, *, for_cache: bool = False, configuration=None,
-                 read_timeout_seconds=None, write_timeout_seconds=None, connect_timeout_seconds=None) -> Engine:
+                 read_timeout_seconds=None, write_timeout_seconds=None, connect_timeout_seconds=None,
+                 engine_factory=None, connection_error_factory=None, pool_size=5, max_overflow=5) -> Engine:
+    """Build a pinned shared connection; a caller may project a safe driver diagnostic."""
     from app.services.system_configuration import database_config, SystemConfiguration
     from app.services.database_sources import DatabaseSources, SourceError
     from app.core.diagnostics import diagnostic_details
@@ -33,6 +35,8 @@ def build_engine(settings: Settings, *, for_cache: bool = False, configuration=N
     read_seconds = max(60, read_timeout_seconds if read_timeout_seconds is not None else
                        (sync_options['read_timeout_seconds'] if for_cache else 20))
     write_seconds = max(60, write_timeout_seconds if write_timeout_seconds is not None else 20)
+    socket_options = dict(connect_timeout=connect_seconds, read_timeout=read_seconds,
+                          write_timeout=write_seconds, ssl_disabled=True)
     validator = object.__new__(DatabaseSources)
     validator.settings = settings
     def connect():
@@ -40,24 +44,40 @@ def build_engine(settings: Settings, *, for_cache: bool = False, configuration=N
         stage = 'validate_address'
         try:
             address = validator.allowed(config)
+            if connection_error_factory is not None:
+                stage = 'driver_init'
             connection = pymysql.connect(host=config['host'], port=config['port'], user=config['username'],
                 password=config['password'], database=config['database'], charset='utf8mb4',
-                connect_timeout=connect_seconds, read_timeout=read_seconds,
-                write_timeout=write_seconds, ssl_disabled=True, defer_connect=True, autocommit=False)
+                defer_connect=True, autocommit=False, **socket_options)
             stage = 'connect_socket'
             sock = socket.create_connection((address, config['port']), timeout=connect_seconds)
             stage = 'authenticate'
             connection.connect(sock=sock)
             return connection
         except Exception as exc:
-            logging.getLogger(__name__).error('Shared database failed stage=%s %s', stage, diagnostic_details(exc))
             if connection is not None:
                 try: connection.close()
                 except Exception: pass
-            if sock is not None: sock.close()
-            raise SourceError('数据库连接失败，请检查网络、账号和库名；详细凭证不会返回') from None
-    return create_engine(SystemConfiguration.url(config), creator=connect, pool_pre_ping=True,
-        pool_recycle=1800, pool_size=5, max_overflow=5, hide_parameters=True)
+            if sock is not None:
+                try: sock.close()
+                except Exception: pass
+            if connection_error_factory is not None:
+                # The scoped owner reports the safe split-stage diagnostic once.
+                if stage == 'validate_address' and getattr(exc, 'database_target_stage', None) == 'resolve':
+                    stage = 'resolve'
+                failure = connection_error_factory(exc, stage)
+            else:
+                logging.getLogger(__name__).error('Shared database failed stage=%s %s', stage, diagnostic_details(exc))
+                raise SourceError('数据库连接失败，请检查网络、账号和库名；详细凭证不会返回') from None
+        # No raw driver exception as cause or context of a public error.
+        raise failure from None
+    options = dict(creator=connect, pool_pre_ping=True, pool_recycle=1800,
+                   pool_size=pool_size, max_overflow=max_overflow, hide_parameters=True)
+    if engine_factory is not None:
+        # Keep the existing ETF injection contract; the real DBAPI creator above
+        # is authoritative when SQLAlchemy builds a pinned connection.
+        options['connect_args'] = socket_options.copy()
+    return (engine_factory or create_engine)(SystemConfiguration.url(config), **options)
 
 
 class VersionedDatabase:

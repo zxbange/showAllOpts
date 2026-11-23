@@ -100,6 +100,23 @@ class ETFConfiguration:
                           query={'charset': 'utf8mb4'})
 
     def engine(self, config):
+        from app.core.database import build_engine
+        if config.get('target_mode') != 'custom':
+            self.validate_target(self.url(config))
+
+        def connection_error(error, stage):
+            # Keep the existing ETF phase labels for operator log searches.
+            stage = {'connect_socket': 'socket_connect', 'authenticate': 'mysql_connect'}.get(stage, stage)
+            failure = ConfigurationFailure('数据库连接失败，请检查目标地址、网络及账号权限')
+            failure.database_diagnostic = database_diagnostic(error, stage)
+            failure.database_error_number = failure.database_diagnostic.mysql_code
+            return failure
+
+        return build_engine(self.settings, configuration=config, engine_factory=self.owner.engine_factory,
+                            connection_error_factory=connection_error, pool_size=1, max_overflow=0)
+
+    def legacy_writer_engine(self, config):
+        """Original connector retained for the separately scheduled market writer."""
         if config.get('target_mode') != 'custom':
             self.validate_target(self.url(config))
         # ETF database transport is intentionally non-TLS, including legacy records
