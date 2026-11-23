@@ -6,7 +6,7 @@ from app.services.collection_calendar import automatic_collection_allowed, manua
 from app.services.system_runtime import source_client
 from app.services.system_configuration import pin_configuration
 from app.services.collection_notifications import emit_collection_result
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from contextlib import contextmanager
 from zoneinfo import ZoneInfo
 import sqlite3
@@ -218,6 +218,7 @@ class ETFCollection:
                      disabled_reason=issue, worker_running=bool(self.worker and self.worker.is_alive()),
                      timezone='Asia/Shanghai', schedule=config['schedule'], target_sessions=1,
                      collection_scope='latest_completed_session', historical_backfill='joinquant_manual',
+                     manual_collection_scope='known_trading_session_gaps', manual_gap_start=None,
                      historical_dates_per_run=0, coverage_is_target_not_completion=True,
                      manual=None, progress=None, runs=[], recent_runs=[], latest_result=None, gaps=[], metadata={})
         if not (self.root / 'state.sqlite').exists():
@@ -230,6 +231,7 @@ class ETFCollection:
                 item['error_details'] = json.loads(detail[0]) if detail else None
             state['latest_result'] = next(iter(state['recent_runs']), None)
             state['metadata'] = dict(db.execute('SELECT key,value FROM metadata').fetchall())
+            state['manual_gap_start'] = state['metadata'].get('manual_gap_floor')
             latest = state['metadata'].get('coverage_end')
             where, values = ('day=?', (latest,)) if latest else ('0=1', ())
             counts = dict(db.execute(f'SELECT status,COUNT(*) FROM observations WHERE {where} GROUP BY status', values))
@@ -635,11 +637,188 @@ class ETFCollection:
         db.execute("INSERT OR REPLACE INTO metadata VALUES ('cache_attempt',?)", (now.isoformat(),))
         db.commit()
         try:
-            if self.refresh() is not False:
+            repair = db.execute("SELECT value FROM metadata WHERE key='cache_repair_start'").fetchone()
+            published = self.refresh(repair_start=date.fromisoformat(repair[0])) if repair else self.refresh()
+            if published is not False:
+                db.execute("DELETE FROM metadata WHERE key='cache_repair_start'")
                 db.execute("INSERT OR REPLACE INTO metadata VALUES ('cache_pending','0')")
                 db.commit()
         except Exception as exc:
             LOG.warning('ETF cache publish failed %s', diagnostic_details(exc))
+
+    def _write_day(self, c, config, calendar, end, shares, prices, check_cancelled, *, historical=False):
+        engine = None
+        stage = 'engine_create'
+        try:
+            engine = self.configuration.engine(config)
+            check_cancelled()
+            stage = 'write_records'
+            options = dict(calendar=calendar, calendar_target=end)
+            if historical:
+                options['insert_only'] = True
+            changed = c.write_records(engine, shares, prices, **options)
+            if type(changed) is int and changed > 0:
+                self._notification_changes = getattr(self, '_notification_changes', 0) + changed
+                self._notification_summary = getattr(self, '_notification_summary', []) + [f'{end}: shares={len(shares)}, prices={len(prices)}']
+        except CollectionInterrupted:
+            raise
+        except Exception as exc:
+            self._run_error_details = safe_error(exc, stage='database_write')
+            diagnostic = database_diagnostic(exc, stage)
+            code = writer_error_code(exc)
+            commit_disconnected = diagnostic.stage == 'commit' and (
+                diagnostic.reason == 'connection_lost' or diagnostic.socket_timeout)
+            if commit_disconnected:
+                # An absent COMMIT reply is neither a successful publication
+                # nor proof of rollback. Do not automatically replay this slot.
+                code = 'writer_commit_unconfirmed'
+                self._run_error_details = sanitize_error(
+                    {**self._run_error_details, 'code': 'etf_commit_unconfirmed'})
+            log_database_failure(exc, operation='collection-write', stage=stage,
+                                 target=target_key(config)[:12])
+            raise WriterFailure(code) from None
+        finally:
+            if engine is not None:
+                try:
+                    engine.dispose()
+                except Exception as exc:
+                    # Pool cleanup must not hide a failure phase or negate a
+                    # confirmed commit.
+                    LOG.warning('ETF writer engine cleanup failed %s', diagnostic_details(exc))
+
+    @staticmethod
+    def _manual_days(db, calendar, end, funds):
+        expected = {(kind, code) for kind in ('shares', 'prices') for code in funds}
+        observed = {}
+        for row in db.execute("SELECT kind,code,day,status FROM observations WHERE day<=?",
+                              (end.isoformat(),)):
+            key = row['kind'], row['code']
+            if key in expected:
+                try:
+                    day = date.fromisoformat(row['day'])
+                except (TypeError, ValueError):
+                    continue
+                observed.setdefault(day, {})[key] = row['status']
+        completed = sorted(day for day, rows in observed.items()
+                           if all(rows.get(key) == 'complete' for key in expected))
+        has_floor = db.execute("SELECT value FROM metadata WHERE key='manual_gap_floor'").fetchone()
+        candidates = [completed[-1] if completed else end]
+        if completed:
+            # A later fully covered scheduled date does not erase a known
+            # earlier gap, but old blocked history alone does not open a range.
+            candidates.extend(day for day, rows in observed.items() if completed[0] < day
+                              and any(value in ('pending', 'manual_only', 'retry_exhausted')
+                                      for value in rows.values()))
+        if has_floor:
+            candidates.append(date.fromisoformat(has_floor[0]))
+        available = getattr(calendar, 'days', ())
+        if not completed and not has_floor:
+            # Bootstrap checks only the latest three verified sessions,
+            # including sessions that never ran. The first known date has no
+            # proven predecessor and cannot be written as a repair target.
+            recent = [day for day in available[1:] if day <= end][-3:]
+            if recent:
+                candidates.append(recent[0])
+        start = min(candidates)
+        if available:
+            start = max(start, available[0])
+        scope = (end,) if start >= end else tuple(dict.fromkeys(calendar.range(start, end)))
+        # A new target without reliable coverage never walks unbounded prior history.
+        required = {(kind, code, day) for day in scope if day < end
+                    and (day != scope[0] or day not in completed) for kind, code in expected}
+        unchecked = {(kind, code, day) for kind, code, day in required
+                     if observed.get(day, {}).get((kind, code)) != 'complete'}
+        return scope, required, unchecked
+
+    def _repair_history(self, db, c, client, config, calendar, end, funds, progress, check_cancelled):
+        scope, required, unchecked = self._manual_days(db, calendar, end, funds)
+        if not required:
+            db.execute("DELETE FROM metadata WHERE key='manual_gap_floor' AND value<=?", (end.isoformat(),))
+            return scope, set(), 0, 0
+        floor = min(day for _, _, day in required)
+        db.execute("INSERT OR REPLACE INTO metadata VALUES ('manual_gap_floor',?)", (floor.isoformat(),))
+        db.executemany("INSERT OR IGNORE INTO observations(kind,code,day,status) VALUES (?,?,?,'manual_only')",
+                       ((kind, code, day.isoformat()) for kind, code, day in sorted(unchecked)))
+        db.commit()  # Persist intended repair scope before source I/O or publication.
+        check_cancelled()
+        engine = None
+        stage = 'engine_create'
+        try:
+            engine = self.configuration.engine(config)
+            stage = 'load_historical_keys'
+            present = c.existing_observations(engine, required)
+        except Exception as exc:
+            self._run_error_details = safe_error(exc, stage='database_write')
+            log_database_failure(exc, operation='collection-write', stage=stage,
+                                 target=target_key(config)[:12])
+            raise WriterFailure(writer_error_code(exc)) from None
+        finally:
+            if engine is not None:
+                try:
+                    engine.dispose()
+                except Exception as exc:
+                    LOG.warning('ETF writer engine cleanup failed %s', diagnostic_details(exc))
+
+        pending = required - present
+        # A once-complete local row can no longer hide a deleted MySQL row.
+        db.executemany("UPDATE observations SET status='manual_only' WHERE kind=? AND code=? AND day=? AND status='complete'",
+                       ((kind, code, day.isoformat()) for kind, code, day in sorted(pending - unchecked)))
+        db.commit()
+        completed, total = 0, len(pending)
+        unresolved = set(pending)
+        pending_by_day, verified_by_day = {}, {}
+        for item in sorted(pending):
+            pending_by_day.setdefault(item[2], []).append(item[:2])
+        for item in present & unchecked:
+            verified_by_day.setdefault(item[2], set()).add(item)
+        failures = 0
+        for day in sorted(set(pending_by_day) | set(verified_by_day)):
+            day_need = pending_by_day.get(day, ())
+            verified = verified_by_day.get(day, set())
+            shares, prices = [], []
+            for kind, code in day_need:
+                progress('fetching', completed, total + 2 * len(funds))
+                try:
+                    found_shares, found_prices, _ = c.collect(
+                        client, day, day, funds={code: funds[code]}, calendar=calendar,
+                        include_prices=kind == 'prices', include_shares=kind == 'shares')
+                    check_cancelled()
+                except CollectionInterrupted:
+                    raise
+                except Exception as exc:
+                    self._run_error_details = safe_error(exc, stage='fetch', trade_date=day)
+                    failures += 1
+                    if failures <= 5:
+                        LOG.warning('ETF historical source observation failed kind=%s code=%s date=%s %s',
+                                    kind, code, day, diagnostic_details(exc))
+                else:
+                    shares.extend(found_shares)
+                    prices.extend(found_prices)
+                completed += 1
+            check_cancelled()
+            # Preserve the earliest dirty date *before* attempting COMMIT.
+            # A stop, ambiguous COMMIT or cache lock cannot lose this intent.
+            if shares or prices or verified:
+                earliest = calendar.previous(day).isoformat()
+                db.execute("INSERT INTO metadata VALUES ('cache_repair_start',?) "
+                           "ON CONFLICT(key) DO UPDATE SET value=min(value,excluded.value)", (earliest,))
+                db.execute("INSERT OR REPLACE INTO metadata VALUES ('cache_pending','1')")
+                db.commit()
+                progress('writing', completed, total + 2 * len(funds))
+                self._write_day(c, config, calendar, day, shares, prices, check_cancelled, historical=True)
+            done = set(verified)
+            done.update((kind, row['fund_code'], row['trade_date']) for kind, records in
+                        (('shares', shares), ('prices', prices)) for row in records)
+            db.executemany("UPDATE observations SET status='complete' WHERE kind=? AND code=? AND day=?",
+                           ((kind, code, target.isoformat()) for kind, code, target in done))
+            unresolved -= done
+            db.commit()
+        if unresolved:
+            db.execute("INSERT OR REPLACE INTO metadata VALUES ('manual_gap_floor',?)",
+                       (min(day for _, _, day in unresolved).isoformat(),))
+        else:
+            db.execute("DELETE FROM metadata WHERE key='manual_gap_floor'")
+        return scope, unresolved, completed, total
 
     def _collect(self, db, slot, config=None, progress=None, check_cancelled=None, manual=False):
         config = config or self.configuration.load()
@@ -679,19 +858,26 @@ class ETFCollection:
                             raise
                     return share_cache[day]
                 client.sse_shares = cached_shares
-            # Historical backfill belongs to the explicit JoinQuant script. The
-            # daily exchange job only refreshes the latest confirmed closed session.
+            # Automatic jobs remain latest-only; the manual repair plan
+            # uses official sessions and does not extend the automatic budget.
             _, end = calendar.default_range(1)
             cutoff = slot.date() if slot.hour >= 15 else slot.date() - timedelta(days=1)
             while end > cutoff:
                 end = calendar.previous(end)
+            scope, historical_gaps, repaired, history_total = (end,), set(), 0, 0
+            if manual:
+                scope, historical_gaps, repaired, history_total = self._repair_history(
+                    db, c, client, config, calendar, end, funds, progress, check_cancelled)
+                base_progress = progress
+                progress = lambda phase, completed, total: base_progress(
+                    phase, completed + repaired, total + history_total)
             for code in funds:
                 for kind in ('shares', 'prices'):
                     db.execute('INSERT OR IGNORE INTO observations(kind,code,day,status) VALUES (?,?,?,?)',
                                (kind, code, end.isoformat(), 'manual_only' if manual else 'pending'))
-            db.execute("INSERT OR REPLACE INTO metadata VALUES ('coverage_start',?)", (end.isoformat(),))
+            db.execute("INSERT OR REPLACE INTO metadata VALUES ('coverage_start',?)", (scope[0].isoformat(),))
             db.execute("INSERT OR REPLACE INTO metadata VALUES ('coverage_end',?)", (end.isoformat(),))
-            db.execute("INSERT OR REPLACE INTO metadata VALUES ('coverage_target_sessions','1')")
+            db.execute("INSERT OR REPLACE INTO metadata VALUES ('coverage_target_sessions',?)", (str(len(scope)),))
             db.commit()
             exhausted = {(row['kind'], row['code']) for row in db.execute(
                 "SELECT kind,code FROM observations WHERE day=? AND status='retry_exhausted'", (end.isoformat(),))}
@@ -737,42 +923,14 @@ class ETFCollection:
                 code = ('etf_missing_shares_and_prices' if missing_shares and missing_prices else
                         'etf_missing_shares' if missing_shares else 'etf_missing_prices')
                 self._run_error_details = safe_error(code=code, stage='fetch', trade_date=end)
-            engine = None
-            stage = 'engine_create'
-            try:
-                progress('writing', completed, total)
-                engine = self.configuration.engine(config)
-                check_cancelled()
-                stage = 'write_records'
-                changed = c.write_records(engine, shares, prices, calendar=calendar, calendar_target=end)
-                if type(changed) is int and changed > 0:
-                    self._notification_changes = getattr(self, '_notification_changes', 0) + changed
-                    self._notification_summary = getattr(self, '_notification_summary', []) + [f'{end}: shares={len(shares)}, prices={len(prices)}']
-            except CollectionInterrupted:
-                raise
-            except Exception as exc:
-                self._run_error_details = safe_error(exc, stage='database_write')
-                diagnostic = database_diagnostic(exc, stage)
-                code = writer_error_code(exc)
-                commit_disconnected = diagnostic.stage == 'commit' and (
-                    diagnostic.reason == 'connection_lost' or diagnostic.socket_timeout)
-                if commit_disconnected:
-                    # An absent COMMIT reply is neither a successful publication
-                    # nor proof of rollback. Do not automatically replay this slot.
-                    code = 'writer_commit_unconfirmed'
-                    self._run_error_details = sanitize_error(
-                        {**self._run_error_details, 'code': 'etf_commit_unconfirmed'})
-                log_database_failure(exc, operation='collection-write', stage=stage,
-                                     target=target_key(config)[:12])
-                raise WriterFailure(code) from None
-            finally:
-                if engine is not None:
-                    try:
-                        engine.dispose()
-                    except Exception as exc:
-                        # Pool cleanup must not hide a failure phase or negate a
-                        # confirmed commit.
-                        LOG.warning('ETF writer engine cleanup failed %s', diagnostic_details(exc))
+            if historical_gaps:
+                old = min(day for _, _, day in historical_gaps)
+                kinds = {kind for kind, _, day in historical_gaps if day == old}
+                code = ('etf_missing_shares_and_prices' if len(kinds) == 2 else
+                        'etf_missing_shares' if 'shares' in kinds else 'etf_missing_prices')
+                self._run_error_details = safe_error(code=code, stage='fetch', trade_date=old)
+            progress('writing', completed, total)
+            self._write_day(c, config, calendar, end, shares, prices, check_cancelled)
             db.execute("INSERT OR REPLACE INTO metadata VALUES ('writer_error','')")
             # Charge only committed attempts. Preserve old values on an incomplete
             # source response, but do not mistake them for fresh verification.
@@ -792,4 +950,4 @@ class ETFCollection:
                        (end.isoformat(),))
             db.execute("INSERT OR REPLACE INTO metadata VALUES ('cache_pending','1')")
             db.commit()
-            return verified_shares == verified_prices == set(funds)
+            return not historical_gaps and verified_shares == verified_prices == set(funds)

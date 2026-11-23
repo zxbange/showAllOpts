@@ -675,7 +675,7 @@ class SnapshotCache:
             self._refresh_locked(lock, selected, reason, slot, full)
         return True
 
-    def refresh_etf_collection(self):
+    def refresh_etf_collection(self, *, repair_start=None):
         """Publish only ETF changes; leave interrupted non-ETF work for its own run."""
         if not self.settings.cache_enabled:
             return True  # Direct reads already see committed collector data.
@@ -684,7 +684,12 @@ class SnapshotCache:
             return False
         state = self.read_state()
         full = bool('etf-shares' in state.get('pending', []) and state.get('pending_full'))
-        self._refresh_locked(lock, ['etf-shares'], 'etf-collection', full=full, preserve_pending=True)
+        from app.core.etf_sync import repair_window_start
+        token = repair_window_start.set(repair_start)
+        try:
+            self._refresh_locked(lock, ['etf-shares'], 'etf-collection', full=full, preserve_pending=True)
+        finally:
+            repair_window_start.reset(token)
         entry = self.read_state().get('modules', {}).get('etf-shares', {})
         return not entry.get('error') and entry.get('progress', {}).get('status') == 'complete'
 

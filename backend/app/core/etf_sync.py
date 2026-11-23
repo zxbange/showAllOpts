@@ -3,6 +3,7 @@
 Keep the existing cache namespace and share schema. Old sources without the optional
 price table remain readable, and old immutable snapshots are upgraded on refresh.
 """
+from contextvars import ContextVar
 import shutil
 
 from sqlalchemy import create_engine, func, inspect, select, union
@@ -12,6 +13,8 @@ from app.core.cache_sync import chunks, key_filter, read_batches
 from app.core.sync_progress import report
 from app.models.etf import ETFPrice, ETFShare, ETFTradingDay
 
+
+repair_window_start = ContextVar("etf_cache_repair_start", default=None)
 
 def manifest(connection, table, since=None):
     # Compare values too: timestamps may have only second precision.
@@ -53,7 +56,9 @@ def copy_etf(cache, path, previous, full=False, *, source=None, identity=None):
                 for table in tables:
                     if table.name not in local_names:
                         continue
-                    bounds[table.name] = recent_start(connection, table, local_names)
+                    bound = recent_start(connection, table, local_names)
+                    earlier = repair_window_start.get()
+                    bounds[table.name] = min(bound, earlier) if bound is not None and earlier is not None else bound
                     local_maps[table.name] = manifest(connection, table, bounds[table.name])
                     local_counts[table.name] = connection.scalar(select(func.count()).select_from(table))
         finally:

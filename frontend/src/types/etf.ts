@@ -40,6 +40,8 @@ export interface ETFHistory {
 
 export interface ETFCollectionCoverage {
   collection_scope?: 'latest_completed_session'
+  manual_collection_scope?: 'known_trading_session_gaps'
+  manual_gap_start?: string | null
   pending_count?: number
   blocked_count?: number
   retry_exhausted_count?: number

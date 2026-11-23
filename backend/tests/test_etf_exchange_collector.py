@@ -658,3 +658,25 @@ def test_intraday_completed_only_dayk_resolves_holiday_gap():
     cal = m.ExchangeCalendar([date(2026, 9, 29), date(2026, 9, 30)], date(2026, 10, 8), 113000,
                              now=datetime(2026, 10, 8, 11, 30), official_days=official)
     assert cal.default_range(1) == (date(2026, 9, 30), date(2026, 9, 30))
+
+
+def test_historical_keys_and_insert_only_write_preserve_existing_data(tmp_path):
+    engine = create_engine(f'sqlite:///{tmp_path / "historical.sqlite"}')
+    cal = fake_calendar()
+    shares, prices, _ = m.collect(FakeSource(), DAY, DAY, FUNDS, calendar=cal)
+    original_share = shares[0]
+    original_price = prices[0]
+    assert m.write_records(engine, [original_share], [original_price], cal, calendar_target=DAY) == 2
+    other_day = cal.previous(DAY)
+    keys = {('shares', original_share['fund_code'], DAY), ('prices', original_price['fund_code'], DAY),
+            ('shares', original_share['fund_code'], other_day), ('prices', prices[1]['fund_code'], DAY)}
+    assert m.existing_observations(engine, keys) == {
+        ('shares', original_share['fund_code'], DAY), ('prices', original_price['fund_code'], DAY)
+    }
+    changed_share = original_share | dict(shares=1)
+    changed_price = original_price | dict(close_price=Decimal('1.01'))
+    assert m.write_records(engine, [changed_share, shares[1]], [changed_price, prices[1]], cal,
+                           calendar_target=DAY, insert_only=True) == 2
+    with Session(engine) as session:
+        assert session.get(ETFShare, (original_share['fund_code'], DAY)).shares == original_share['shares']
+        assert session.get(ETFPrice, (original_price['fund_code'], DAY)).close_price == original_price['close_price']

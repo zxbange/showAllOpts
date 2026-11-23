@@ -467,7 +467,38 @@ def _read_existing(connection, table, records, *, historical_calendar=False):
             for statement in statements for row in connection.execute(statement).mappings()}
 
 
-def _record_changes(table, records, existing):
+def existing_observations(engine, targets):
+    """Read only the exact historical business keys this repair may need."""
+    from sqlalchemy import inspect, select, tuple_
+    from app.models.etf import ETFPrice, ETFShare
+    from app.services.etf_diagnostics import database_phase
+
+    present = set()
+    with database_phase('connect'):
+        connection = engine.connect()
+    try:
+        for kind, model, phase in (('shares', ETFShare, 'load_share_keys'),
+                                   ('prices', ETFPrice, 'load_price_keys')):
+            keys = sorted((code, day) for series, code, day in targets if series == kind)
+            if not keys:
+                continue
+            table = model.__table__
+            with database_phase(phase, table.name, rows=len(keys)):
+                if not inspect(connection).has_table(table.name):
+                    continue
+                code, day = table.c.fund_code, table.c.trade_date
+                for batch in _write_batches(keys):
+                    present.update((kind, found_code, found_day) for found_code, found_day in
+                                   connection.execute(select(code, day).where(tuple_(code, day).in_(batch))))
+    finally:
+        try:
+            connection.close()
+        except Exception as cleanup_error:
+            LOG.warning('ETF historical check cleanup failed type=%s', type(cleanup_error).__name__)
+    return present
+
+
+def _record_changes(table, records, existing, *, insert_only=False):
     keys = tuple(table.primary_key.columns)
     inserts, updates = [], []
     for record in records:
@@ -475,7 +506,7 @@ def _record_changes(table, records, existing):
         old = existing.get(identity)
         if old is None:
             inserts.append(record)
-        elif any(old[field] != value for field, value in record.items() if field != 'updated_at'):
+        elif not insert_only and any(old[field] != value for field, value in record.items() if field != 'updated_at'):
             updates.append(record)
     return inserts, updates
 
@@ -513,7 +544,7 @@ def _write_transaction(connection):
         raise
 
 
-def write_records(engine, shares, prices, calendar=None, *, calendar_target=None):
+def write_records(engine, shares, prices, calendar=None, *, calendar_target=None, insert_only=False):
     from app.models.etf import ETFPrice, ETFShare, ETFTradingDay
     from app.services.etf_diagnostics import database_phase
 
@@ -543,7 +574,8 @@ def write_records(engine, shares, prices, calendar=None, *, calendar_target=None
                 with database_phase(phase, table.name, rows=len(records)):
                     existing = _read_existing(connection, table, records,
                                               historical_calendar=is_calendar and calendar_target is None)
-                    inserts, updates = _record_changes(table, records, existing)
+                    inserts, updates = _record_changes(table, records, existing,
+                                                      insert_only=insert_only and not is_calendar)
                 plan.append((table, inserts, updates))
                 if not is_calendar:
                     changed_count += len(inserts) + len(updates)

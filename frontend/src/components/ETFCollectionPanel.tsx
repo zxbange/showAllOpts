@@ -203,7 +203,7 @@ export function ETFCollectionPanel({ onCollected }: { onCollected: () => void })
                 重新尝试当前目标日已耗尽重试的数据（{status.retry_exhausted_count}项）
               </label>
             )}
-            {uncertain && <p>重试会沿用上次请求的日常采集选项，不新增历史补采。</p>}
+            {uncertain && <p>重试会沿用上次请求，不会重复排队。</p>}
             {cancelling && <p>正在等待当前采集步骤结束，取消后可重新开始。</p>}
             <PageHeaderActions>
               <button
@@ -231,6 +231,7 @@ export function ETFCollectionPanel({ onCollected }: { onCollected: () => void })
         </p>
       )}
       {!!status?.gap_count && <p>当前交易日缺失 {status.gap_count} 项，可重试。</p>}
+      {status?.manual_gap_start && <p>手动补采仍有历史缺口，最早为 {status.manual_gap_start}。</p>}
       <CollectionHistoryFrame
         hasRecords={recent.length > 0}
         loading={!status && !historyUnavailable}

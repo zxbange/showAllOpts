@@ -208,3 +208,24 @@ def test_other_pending_is_durable_even_during_etf_copy(cached, monkeypatch):
     assert cache.refresh_etf_collection() is False
     assert cache.read_state()['pending'] == ['industry-momentum']
     assert cache.read_state()['pending_full'] is True
+
+
+def test_repair_publication_widens_only_etf_window_then_returns_to_usual_tail(cached, session, engine):
+    _, cache = cached
+    days = [date(2026, 1, day) for day in (5, 6, 7, 8, 9, 12, 13)]
+    session.add_all(row(day, 10) for day in days if day != days[1])
+    session.commit()
+    assert cache.refresh_etf_collection()
+    session.add(row(days[1], 15))
+    session.get(ETFShare, ('510300.XSHG', days[0])).shares = 99
+    session.commit()
+    assert cache.refresh_etf_collection(repair_start=days[1])
+    with cache.session('etf-shares') as local:
+        assert local.get(ETFShare, ('510300.XSHG', days[1])).shares == 15
+        assert local.get(ETFShare, ('510300.XSHG', days[0])).shares == 10
+
+    session.get(ETFShare, ('510300.XSHG', days[1])).shares = 25
+    session.commit()
+    assert cache.refresh_etf_collection()
+    with cache.session('etf-shares') as local:
+        assert local.get(ETFShare, ('510300.XSHG', days[1])).shares == 15

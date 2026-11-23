@@ -42,7 +42,10 @@ class Collector:
         rows = [dict(fund_code=code, trade_date=start) for code in funds]
         return rows if include_shares else [], rows if include_prices else [], {}
 
-    def write_records(self, engine, shares, prices, calendar, *, calendar_target):
+    def existing_observations(self, engine, targets):
+        return set()
+
+    def write_records(self, engine, shares, prices, calendar, *, calendar_target, insert_only=False):
         self.calendar_targets.append(calendar_target)
         if self.write_failure:
             raise RuntimeError('secret writer DSN')
@@ -1041,3 +1044,141 @@ def test_commit_connection_loss_requires_verification_and_does_not_retry_slot(tm
     attempts = len(c.calls)
     assert not w.tick(EVENING + timedelta(minutes=31))
     assert len(c.calls) == attempts
+
+
+def manual_repair_fixture(tmp_path, **kwargs):
+    from app.services.etf_exchange import ExchangeCalendar
+
+    w, c, _ = worker(tmp_path, **kwargs)
+    dates = [date(2026, 11, value) for value in (16, 17, 18, 19, 20, 23, 24)]
+    moment = datetime(2026, 11, 23, 18, 30, tzinfo=CHINA)
+    w.clock = lambda: moment
+    w.start = lambda: None
+    c.ExchangeClient = lambda _: SimpleNamespace(calendar=lambda: ExchangeCalendar(
+        [day for day in dates if day <= w.clock().date()], w.clock().date(), 160000,
+        now=w.clock(), official_days={day: True for day in dates}))
+    return w, c, dates, moment
+
+
+def seed_covered(db, collector, day):
+    db.executemany("INSERT INTO observations VALUES (?,?,?,'complete',1)",
+                   ((kind, code, day.isoformat()) for kind in ('shares', 'prices')
+                    for code in collector.catalog()))
+
+
+def test_manual_repairs_all_official_sessions_since_covered_day_even_if_latest_partial(tmp_path):
+    w, c, dates, moment = manual_repair_fixture(tmp_path)
+    _, baseline, *_, target = dates[:-1]
+    with w.connect() as db:
+        seed_covered(db, c, baseline)
+    original = c.collect
+
+    def missing_latest_shares(client, start, end, **kwargs):
+        rows = original(client, start, end, **kwargs)
+        return ([], rows[1], {}) if start == target else rows
+
+    c.collect = missing_latest_shares
+    w.request_run('manual-all-trading-gaps')
+    assert not w.tick(moment)
+    assert sorted({day for day, *_ in c.calls}) == dates[2:-1]
+    assert c.calendar_targets == dates[2:-1]
+    assert all(rows for rows, _ in c.writes[:-1]) and not c.writes[-1][0]
+    with w.connect() as db:
+        assert db.execute('SELECT COUNT(*) FROM observations WHERE status=? AND day=?',
+                          ('complete', '2026-11-20')).fetchone()[0] == 4
+        assert db.execute('SELECT SUM(attempts) FROM observations WHERE day=?',
+                          ('2026-11-20',)).fetchone()[0] == 0
+    assert w.status()['latest_result']['status'] == 'partial'
+
+
+def test_manual_repair_respects_source_rows_persists_gap_after_newer_success(tmp_path):
+    calls = []
+    w, c, dates, moment = manual_repair_fixture(tmp_path, refresh=lambda **options: calls.append(options) or False)
+    baseline, gap, newest = dates[3:6]
+    shenzhen = '159919.XSHE'
+    with w.connect() as db:
+        seed_covered(db, c, baseline)
+        # A previously observed gap must survive even when a newer daily slot completed.
+        seed_covered(db, c, newest)
+        db.execute("INSERT INTO observations VALUES ('prices',?,?, 'pending',0)",
+                   (shenzhen, gap.isoformat()))
+    original = c.collect
+    needed = ('prices', shenzhen, gap)
+    def verify_existing(engine, targets):
+        return targets - {needed}
+    def unavailable(client, start, end, **kwargs):
+        rows = original(client, start, end, **kwargs)
+        return (rows[0], [], {}) if start == gap else rows
+    c.existing_observations = verify_existing
+    c.collect = unavailable
+    w.request_run('manual-sticky-gap-1')
+    assert not w.tick(moment)
+    assert w.status()['manual_gap_start'] == gap.isoformat()
+    assert w.status()['latest_result']['error_details']['trade_date'] == gap.isoformat()
+    assert [kind for day, _, kind, _ in c.calls if day == gap] == [True]
+    assert calls == [{'repair_start': baseline}]
+    assert w.status()['metadata']['cache_repair_start'] == baseline.isoformat()
+
+    # The next normal scheduled job moves forward but does not retry the old gap.
+    c.calls.clear()
+    w.clock = lambda: moment + timedelta(days=1)
+    assert w.tick(w.clock())
+    assert {day for day, *_ in c.calls} == {dates[-1]}
+    assert w.status()['manual_gap_start'] == gap.isoformat()
+
+    c.collect = original
+    w.request_run('manual-sticky-gap-2')
+    assert w.tick(w.clock())
+    assert w.status()['manual_gap_start'] is None
+    assert [day for day, *_ in c.calls].count(gap) == 1
+
+
+def test_bootstrap_includes_unobserved_recent_gap_not_unrelated_legacy_history(tmp_path):
+    w, c, dates, moment = manual_repair_fixture(tmp_path)
+    old, _, _, thursday, friday, monday, _ = dates
+    with w.connect() as db:
+        db.execute("INSERT INTO observations VALUES ('prices','159919.XSHE',?, 'pending',0)",
+                   (old.isoformat(),))
+    # Friday never ran; Thursday already has all data in MySQL but no ledger.
+    c.existing_observations = lambda engine, keys: {key for key in keys if key[2] == thursday}
+    w.request_run('manual-recent-bootstrap')
+    assert w.tick(moment)
+    assert {day for day, *_ in c.calls} == {friday, monday}
+
+
+def test_historical_cache_intent_survives_lock_and_clears_only_on_publication(tmp_path):
+    attempts = []
+    w, _, dates, moment = manual_repair_fixture(tmp_path, refresh=lambda **kw: attempts.append(kw) or False)
+    with w.connect() as db:
+        db.execute("INSERT INTO metadata VALUES ('cache_pending','1')")
+        db.execute("INSERT INTO metadata VALUES ('cache_repair_start',?)", (dates[1].isoformat(),))
+        w._refresh(db)
+    assert attempts == [{'repair_start': dates[1]}]
+    assert w.status()['metadata']['cache_repair_start'] == dates[1].isoformat()
+    w.clock = lambda: moment + timedelta(minutes=6)
+    w.refresh = lambda **kw: attempts.append(kw) or True
+    with w.connect() as db:
+        w._refresh(db)
+    assert len(attempts) == 2
+    assert 'cache_repair_start' not in w.status()['metadata']
+    assert not w.status()['cache_pending']
+
+
+def test_manual_checks_mysql_for_previously_complete_inside_known_gap_scope(tmp_path):
+    w, c, dates, moment = manual_repair_fixture(tmp_path)
+    anchor, registered, formerly_complete, latest = dates[2:6]
+    with w.connect() as db:
+        seed_covered(db, c, anchor)
+        seed_covered(db, c, formerly_complete)
+        db.execute("INSERT INTO observations VALUES ('shares','510300.XSHG',?,'pending',0)",
+                   (registered.isoformat(),))
+    key = ('prices', '510300.XSHG', formerly_complete)
+    def data_present(engine, required):
+        assert anchor not in {day for _, _, day in required}
+        assert key in required
+        return required - {key}
+    c.existing_observations = data_present
+    w.request_run('manual-check-authoritative-rows')
+    assert w.tick(moment)
+    assert {day for day, *_ in c.calls} == {formerly_complete, latest}
+    assert [funds for day, funds, *_ in c.calls if day == formerly_complete] == [{'510300.XSHG': '沪'}]
