@@ -1,4 +1,4 @@
-from app.services.collection_outcomes import latest_outcomes
+from app.services.collection_outcomes import latest_outcomes, outcome_history
 from contextlib import contextmanager, nullcontext
 from copy import deepcopy
 from datetime import date, datetime, timedelta, timezone
@@ -1211,6 +1211,93 @@ def test_completed_previous_session_manual_morning_is_success_not_time_error(tmp
     assert not writer.calls and not provider.universe_calls
 
 
+@pytest.mark.parametrize('manual', [False, True])
+def test_already_present_target_records_success_without_new_collection(tmp_path, manual, caplog):
+    collection, provider, writer, clock = worker(tmp_path, refresh=lambda: True)
+    writer.dates = {'heat': {str(DAY)}, 'crowding': {str(DAY)}}
+    if manual:
+        collection.request_run('confirmed-existing')
+    with caplog.at_level('INFO', logger='app.services.market_collection'):
+        assert not collection.tick()
+    assert not writer.calls and not provider.universe_calls and not provider.quote_calls
+    assert collection.status()['runs'][0]['status'] == 'complete'
+    for module in ('market-sentiment', 'market-crowding'):
+        row = outcome_history(collection.settings, module)['items'][0]
+        assert row['outcome'] == 'success' and row['error_details'] is None
+        assert row['trigger'] == ('manual' if manual else 'scheduled')
+    assert 'Market run finished' in caplog.text and 'heat=success' in caplog.text
+
+
+def test_existing_future_row_is_not_evidence_for_current_target(tmp_path):
+    collection, provider, writer, clock = worker(tmp_path, refresh=lambda: True)
+    writer.dates = {'heat': {str(DAY)}, 'crowding': {str(DAY + timedelta(days=1))}}
+    assert not collection.tick()
+    assert not writer.calls and not provider.universe_calls
+    items = latest_outcomes(collection.settings)['items']
+    assert items['market-sentiment']['outcome'] == 'success'
+    assert items['market-crowding']['outcome'] == 'unknown'
+
+
+def test_noop_with_pending_cache_is_partial_until_publication(tmp_path):
+    ready = False
+    collection, provider, writer, clock = worker(tmp_path, refresh=lambda: ready)
+    assert collection.tick()
+    collection.request_run('cache-still-pending')
+    assert not collection.tick(clock.advance(minutes=1))
+    for module in ('market-sentiment', 'market-crowding'):
+        row = outcome_history(collection.settings, module)['items'][0]
+        assert row['outcome'] == 'partial'
+        assert row['error_details']['code'] == 'publication_pending'
+        assert row['error_details']['stage'] == 'cache_publish'
+        assert row['error_details']['trade_date'] == str(DAY)
+    ready = True
+    collection.request_run('cache-published')
+    assert not collection.tick(clock.advance(minutes=5))
+    for module in ('market-sentiment', 'market-crowding'):
+        assert outcome_history(collection.settings, module)['items'][0]['outcome'] == 'success'
+
+
+def test_automatic_partial_has_gap_date_without_polluting_other_module(tmp_path):
+    collection, provider, writer, clock = worker(tmp_path, moment=EVENING.replace(day=16), refresh=lambda: True)
+    historical_provider(provider)
+    writer.dates = {'heat': {'2026-11-09'}, 'crowding': {'2026-11-09'}}
+    original = provider.fetch_quote
+
+    def quote(symbol, day, **kwargs):
+        result = original(symbol, day, **kwargs)
+        if day == DAY and symbol == 'sh600003':
+            result.update(status='transient_failure', error='adjustment_unavailable')
+        return result
+
+    provider.fetch_quote = quote
+    assert collection.tick()
+    assert collection.status()['runs'][0]['status'] == 'partial'
+    heat = outcome_history(collection.settings, 'market-sentiment')['items'][0]
+    crowding = outcome_history(collection.settings, 'market-crowding')['items'][0]
+    assert heat['outcome'] == 'partial' and heat['trigger'] == 'scheduled'
+    assert heat['error_details']['code'] == 'market_gap_pending'
+    assert heat['error_details']['trade_date'] == str(DAY)
+    assert crowding['outcome'] == 'success' and crowding['error_details'] is None
+
+def test_cache_timeout_detail_is_safe_and_partial(tmp_path, caplog):
+    secret = 'private-cache-url-with-token'
+
+    def refresh():
+        raise TimeoutError(secret)
+
+    collection, _, writer, _ = worker(tmp_path, refresh=refresh)
+    with caplog.at_level('INFO', logger='app.services.market_collection'):
+        assert collection.tick()
+    for module in ('market-sentiment', 'market-crowding'):
+        row = outcome_history(collection.settings, module)['items'][0]
+        assert row['outcome'] == 'partial'
+        assert row['error_details']['code'] == 'timeout'
+        assert row['error_details']['stage'] == 'cache_publish'
+        assert row['error_details']['trade_date'] == str(DAY)
+        assert secret not in json.dumps(row)
+    assert secret not in caplog.text
+
+
 def test_source_read_failure_preserves_completed_rows_and_cache_pending(tmp_path):
     collection, provider, writer, clock = worker(tmp_path, refresh=lambda: False)
     assert collection.tick()
@@ -1224,6 +1311,10 @@ def test_source_read_failure_preserves_completed_rows_and_cache_pending(tmp_path
     assert collection.status()['cache_pending'] is True
     assert collection.status()['runs'][0]['error'] == 'writer_connection_failed'
     assert collection.status()['heat_status'] == 'written'
+    for module in ('market-sentiment', 'market-crowding'):
+        row = outcome_history(collection.settings, module)['items'][0]
+        assert row['outcome'] == 'failed'
+        assert row['error_details']['code'] == 'database_error'
 
 
 def test_stream_and_get_share_request_start_budget(tmp_path, monkeypatch):

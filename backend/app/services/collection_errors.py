@@ -14,6 +14,10 @@ MESSAGES = {
     'etf_missing_shares_and_prices': '目标交易日的 ETF 份额和收盘价均未全部返回。',
     'cancelled': '采集已取消。',
     'interrupted': '采集被中断，尚未确认完整完成。',
+    'market_history_unverified': '未能核验该交易日的历史行情快照。',
+    'market_heat_unverified': '尚未核验市场热度所需的复权及 MA20 口径。',
+    'market_source_not_ready': '数据源尚未提供该交易日可核验的行情。',
+    'market_gap_pending': '市场指标仍有交易日未取得或未入库，不计为采集成功。',
     'publication_pending': '数据尚未完整发布到页面缓存。',
     'unknown': '采集未完成，未保存可公开的详细原因。',
 }

@@ -795,6 +795,66 @@ class MarketCollection:
                             None if complete or reset else row['error'],
                             None if complete or reset else row['next_attempt_at'],
                             stamp if complete or reset else row['updated_at'], day))
+        # Source MAX per metric is evidence only for that exact planned target,
+        # never for older sessions or for a target earlier than MAX.
+        return target, {kind for kind, values in existing.items() if target in values}
+
+    def _record_run_outcomes(self, run_id, moment, manual, target, verified):
+        cutoff = str(self._data_cutoff(moment, manual))
+        with self.connect() as db:
+            terminal = db.execute('SELECT status,error FROM manual_runs WHERE id=?', (run_id,)).fetchone()
+            rows = [dict(row) for row in db.execute(
+                "SELECT trade_date,status,error,heat_status,crowding_status,cache_pending FROM days "
+                "WHERE trade_date<=? AND (status!='superseded' OR cache_pending=1) "
+                "AND (? OR NOT EXISTS (SELECT 1 FROM metadata WHERE key='manual-only:' || days.trade_date)) "
+                "ORDER BY trade_date DESC", (cutoff, manual))]
+        if not terminal or terminal['status'] in ('queued', 'running'):
+            return
+        outcomes = {}
+        for metric, module in (('heat', 'market-sentiment'), ('crowding', 'market-crowding')):
+            status_key = metric + '_status'
+            verified_target = terminal['status'] in ('complete', 'partial') and metric in verified
+            published = verified_target or any(
+                row[status_key] in PUBLISHED and row['trade_date'] in self._outcome_days for row in rows)
+            gap = next((row for row in rows if row['status'] != 'superseded'
+                        and row[status_key] not in METRIC_DONE), None)
+            pending = next((row for row in rows if row['cache_pending'] and row[status_key] in PUBLISHED), None)
+            detail = None
+            if terminal['error'] in ('cancelled', 'service_interrupted'):
+                outcome = 'cancelled' if terminal['error'] == 'cancelled' else 'interrupted'
+            elif gap:
+                outcome = 'partial' if published else 'failed'
+                detail = self._outcome_errors.get((metric, gap['trade_date']))
+                if detail is None and terminal['status'] == 'failed':
+                    detail = self._outcome_error
+                if detail is None:
+                    code = {
+                        'historical_snapshot_missing': 'market_history_unverified',
+                        'historical_snapshot_unverified': 'market_history_unverified',
+                        'source_not_ready': 'market_source_not_ready',
+                    }.get(gap['error'], 'market_gap_pending')
+                    if metric == 'heat' and gap['error'] == 'heat_methodology_unverified':
+                        code = 'market_heat_unverified'
+                    detail = public_error(code=code, stage='collection', trade_date=gap['trade_date'])
+            elif pending and published:
+                outcome = 'partial'
+                detail = (self._cache_outcome_error | {'trade_date': pending['trade_date']}
+                          if self._cache_outcome_error else public_error(
+                              code='publication_pending', stage='cache_publish', trade_date=pending['trade_date']))
+            elif published:
+                outcome = 'success'
+            elif terminal['status'] in ('complete', 'partial'):
+                outcome = 'unknown'
+            else:
+                outcome = 'failed'
+                detail = self._outcome_error or public_error(stage='collection')
+            outcomes[metric] = (outcome, (detail or {}).get('code', '-'))
+            record_outcome(self.settings, module, run_key=run_id, outcome=outcome,
+                           trigger='manual' if manual else 'scheduled', error_details=detail)
+        LOG.info('Market run finished run=%s trigger=%s status=%s target=%s heat=%s heat_reason=%s '
+                 'crowding=%s crowding_reason=%s', hashlib.sha256(run_id.encode()).hexdigest()[:12],
+                 'manual' if manual else 'scheduled', terminal['status'], target or '-',
+                 *outcomes['heat'], *outcomes['crowding'])
 
     def _scheduled_slot(self, moment):
         local = moment.astimezone(CHINA)
@@ -961,6 +1021,9 @@ class MarketCollection:
         self._notification_summary = []
         self._outcome_days = set()
         self._outcome_error = None
+        self._outcome_errors = {}
+        self._cache_outcome_error = None
+        target, verified = None, set()
         try:
             with self.connect() as db:
                 reconcile_system_ledger(self.configuration, db,
@@ -1044,7 +1107,9 @@ class MarketCollection:
                     if not saved_gaps and self._meta('calendar_through', '') < str(moment.date()):
                         raise SourceFailure(calendar_error) from None
                     self._record_dependency_failure(scope, moment)
-                self._ensure_days(moment, manual=manual)
+                target, verified = self._ensure_days(moment, manual=manual)
+                if calendar_error:
+                    verified = set()
                 self._put_meta(last_error=calendar_error or '',
                                scheduler_next_attempt_at=_stamp(moment + timedelta(minutes=30)) if calendar_error and not isolated else '')
                 if not calendar_error and not isolated:
@@ -1081,6 +1146,15 @@ class MarketCollection:
                                 code = getattr(error, 'code', None)
                                 code = code if isinstance(code, str) and code in SAFE_ERRORS else 'quote_unavailable'
                                 self._defer_day(active_day, code, moment)
+                                row = self._day(active_day)
+                                for kind in ('heat', 'crowding'):
+                                    if row[kind + '_status'] not in METRIC_DONE:
+                                        detail_code = {
+                                            'historical_snapshot_unverified': 'market_history_unverified',
+                                            'source_not_ready': 'market_source_not_ready',
+                                        }.get(code, 'market_gap_pending')
+                                        self._outcome_errors[(kind, active_day)] = public_error(
+                                            error, code=detail_code, stage='fetch', trade_date=active_day)
                                 LOG.warning('Market snapshot failed date=%s reason=%s source_reason=%s %s %s',
                                             active_day, code, self._safe_source_reason(error),
                                             source_failure_details(error), diagnostic_details(error))
@@ -1122,10 +1196,12 @@ class MarketCollection:
                 self._finish_run(run_id, 'paused', code)
             return False
         except Exception as error:
-            self._outcome_error = public_error(error, stage='collection')
             code = getattr(error, 'code', 'calendar_unavailable' if active_day is None else 'source_unavailable')
             if not isinstance(code, str) or code not in SAFE_ERRORS:
                 code = 'source_unavailable'
+            self._outcome_error = public_error(
+                error, code='database_error' if code.startswith('writer_') else None,
+                stage='collection', trade_date=active_day)
             self._record_dependency_failure(scope, moment)
             self._put_meta(last_error=code, scheduler_next_attempt_at='' if manual and manual_failure_isolated(moment) else _stamp(moment + timedelta(minutes=30)))
             if active_day:
@@ -1152,20 +1228,7 @@ class MarketCollection:
                                 if row[0] not in before_days:
                                     db.execute('DELETE FROM metadata WHERE key=?', ('manual-only:' + row[0],))
                 if run_id:
-                    with self.connect() as db:
-                        terminal = db.execute('SELECT status,error FROM manual_runs WHERE id=?', (run_id,)).fetchone()
-                        touched = [dict(db.execute('SELECT * FROM days WHERE trade_date=?', (day,)).fetchone())
-                                   for day in self._outcome_days]
-                    if terminal and terminal['status'] not in ('queued', 'running'):
-                        for metric, module in (('heat', 'market-sentiment'), ('crowding', 'market-crowding')):
-                            outcome = ('cancelled' if terminal['error'] == 'cancelled' else
-                                       'interrupted' if terminal['error'] == 'service_interrupted' else
-                                       'success' if touched and all(row[metric + '_status'] in PUBLISHED and not row['cache_pending'] for row in touched) else
-                                       'partial' if touched and any(row[metric + '_status'] in PUBLISHED for row in touched) else
-                                       'unknown' if not touched and terminal['status'] == 'complete' else 'failed')
-                            record_outcome(self.settings, module, run_key=run_id, outcome=outcome,
-                                           trigger='manual' if manual else 'scheduled',
-                                           error_details=getattr(self, '_outcome_error', None) if outcome in ('failed', 'partial') else None)
+                    self._record_run_outcomes(run_id, moment, manual, target, verified)
                 if run_id and self._notification_changes:
                     with self.connect() as db:
                         terminal = db.execute('SELECT status FROM manual_runs WHERE id=?', (run_id,)).fetchone()
@@ -1678,7 +1741,11 @@ class MarketCollection:
         except (CollectionInterrupted, SinaRateLimitError, MarketDependencyError):
             raise
         except Exception as error:
-            self._outcome_error = public_error(error, stage='database_write')
+            if hasattr(self, '_outcome_errors'):
+                for kind, supplied in (('heat', heat), ('crowding', crowding)):
+                    if supplied is not None:
+                        self._outcome_errors[(kind, day)] = public_error(
+                            error, code='database_error', stage='database_write', trade_date=day)
             code = getattr(error, 'code', 'writer_write_failed')
             if not isinstance(code, str) or code not in SAFE_ERRORS:
                 code = 'writer_write_failed'
@@ -1709,5 +1776,6 @@ class MarketCollection:
                 with self.connect() as db:
                     db.executemany('UPDATE days SET cache_pending=0 WHERE trade_date=?', [(day,) for day in days])
         except Exception as error:
-            self._outcome_error = public_error(error, stage='collection')
+            self._cache_outcome_error = public_error(
+                error, code='publication_pending', stage='cache_publish')
             LOG.warning('Market cache publish failed pending_days=%d %s', len(days), diagnostic_details(error))
