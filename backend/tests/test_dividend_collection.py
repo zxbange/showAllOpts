@@ -368,13 +368,14 @@ def test_schema_permission_failure_retains_old_results_and_pending_for_retry(tmp
     write_result(local, old_meta, old_rows)
     before_remote, before_local = read(remote), read(local)
     original = module.ensure_rule_version_capacity
-    def denied(engine):
+    def denied(engine, *, progress=None):
         raise OperationalError('ALTER TABLE synthetic', {}, Exception(1142, 'ALTER denied'))
     monkeypatch.setattr(module, 'ensure_rule_version_capacity', denied)
     moment = datetime(2026, 11, 16, 21, tzinfo=CHINA)
     assert service.refresh(background=False, moment=moment)
     assert service.pending() is not None
-    assert service.status()['stage'] == 'publication_pending'
+    assert service.status()['stage'] == 'failed'
+    assert latest_outcomes(service.settings)['items']['dividend-selection']['outcome'] == 'failed'
     assert read(remote) == before_remote
     assert read(local) == before_local
     assert calls == [1]
@@ -469,7 +470,7 @@ def test_closed_day_migration_failure_is_retained_but_not_automatically_replayed
     write_result(local, old_meta, old_rows)
     before = read(remote), read(local)
     original = module.ensure_rule_version_capacity
-    def denied(engine):
+    def denied(engine, *, progress=None):
         raise OperationalError('ALTER TABLE synthetic', {}, Exception(1142, 'ALTER denied'))
     monkeypatch.setattr(module, 'ensure_rule_version_capacity', denied)
     weekend = datetime(2026, 11, 14, 21, tzinfo=CHINA)

@@ -1,14 +1,18 @@
 """Validate, persist and restore the authoritative external cash-cow snapshot."""
 from datetime import date, datetime, timezone
+import logging
 import math
+from time import monotonic
 
 from sqlalchemy import select
 from app.core.cache_errors import SnapshotDataError
+from app.core.diagnostics import diagnostic_details
 from app.models.cash_cow import CashCowSnapshot
 from app.services.cash_cow_rules import PERIODS, evaluate_year, finish_stock
 
 RULE_VERSION = 'cash_cow_payout100_v3'
 PUBLIC_SOURCE = 'AShareHub财务与股票池 / 东方财富分红与股本 / Tushare不复权行情'
+LOG = logging.getLogger(__name__)
 
 
 def validate_snapshot(connection):
@@ -71,22 +75,65 @@ def latest_cached(cache, years):
         return None
 
 
-def write_public(engine, payload, check):
+def write_public(engine, payload, check, *, progress=None):
+    def publication_stamp(snapshot):
+        try:
+            value = datetime.fromisoformat(snapshot['updated_at'])
+            if value.tzinfo is None:
+                raise ValueError('Missing timestamp timezone')
+            return value.astimezone(timezone.utc).replace(tzinfo=None)
+        except (KeyError, TypeError, ValueError) as exc:
+            raise SnapshotDataError('奶牛股快照发布时间无效，保留已有结果。') from exc
+
     meta = payload['3']['snapshot']
-    stamp = datetime.fromisoformat(meta['updated_at']).astimezone(timezone.utc).replace(tzinfo=None)
+    stamp = publication_stamp(meta)
     record = dict(id=1, as_of_date=date.fromisoformat(meta['as_of']), updated_at=stamp, payload=payload)
     validate_payload(record)
     table = CashCowSnapshot.__table__
-    with engine.begin() as conn:
-        table.create(conn, checkfirst=True)
-        old = conn.execute(select(table).where(table.c.id == 1).with_for_update()).mappings().first()
-        if old:
-            old_meta = old['payload'].get('3', {}).get('snapshot', {})
-            if old_meta.get('source') == PUBLIC_SOURCE and (old['as_of_date'], old['updated_at']) > (record['as_of_date'], stamp):
-                validate_payload(old)
-                return old['payload']
-            conn.execute(table.update().where(table.c.id == 1).values(**record))
-        else:
-            conn.execute(table.insert().values(**record))
+    stage, started = None, monotonic()
+
+    def phase(value):
+        nonlocal stage, started
+        if stage is not None:
+            LOG.info('Cash cow database phase complete stage=%s seconds=%.3f', stage, monotonic() - started)
+        stage, started = value, monotonic()
+        if progress is not None:
+            progress(value)
+        LOG.info('Cash cow database phase started stage=%s', value)
+
+    try:
         check()
+        # MySQL DDL can implicitly commit; keep it outside the snapshot transaction.
+        phase('schema')
+        table.create(engine, checkfirst=True)
+        phase('lock')
+        with engine.begin() as conn:
+            old = conn.execute(select(table).where(table.c.id == 1).with_for_update()).mappings().first()
+            if old:
+                # A lost COMMIT acknowledgement is reconciled by a complete
+                # read. Do not issue a second UPDATE for an already stored result.
+                # MySQL DATETIME can lose fractional seconds; the complete JSON
+                # retains the original precise timestamp and publication run id.
+                if old['as_of_date'] == record['as_of_date'] and old['payload'] == payload:
+                    return old['payload']
+                old_meta = old['payload'].get('3', {}).get('snapshot', {})
+                if old_meta.get('source') == PUBLIC_SOURCE:
+                    old_stamp = publication_stamp(old_meta)
+                    if (old['as_of_date'], old_stamp) > (record['as_of_date'], stamp):
+                        validate_payload(old)
+                        return old['payload']
+            check()
+            phase('write')
+            if old:
+                conn.execute(table.update().where(table.c.id == 1).values(**record))
+            else:
+                conn.execute(table.insert().values(**record))
+            check()
+            phase('commit')
+    except BaseException as exc:
+        LOG.error('Cash cow database phase failed stage=%s seconds=%.3f details=%s',
+                  stage, monotonic() - started, diagnostic_details(exc))
+        raise
+    else:
+        LOG.info('Cash cow database phase complete stage=%s seconds=%.3f', stage, monotonic() - started)
     return payload

@@ -17,6 +17,8 @@ class PublicPublication:
         self.config = database_config(service.settings)
         self.engine = build_engine(service.settings, configuration=self.config)
         self.target = source_identity(self.engine)
+        self.database_committed = False
+        self.phase = 'database_write'
         try:
             with service.db() as db:
                 db.execute('CREATE TABLE IF NOT EXISTS public_publication '
@@ -33,25 +35,45 @@ class PublicPublication:
         with self.service.db() as db:
             # Never discard a previous database commit awaiting local publication.
             db.execute('INSERT INTO public_publication VALUES (1,?,?)', (self.target, encoded))
+        self.database_committed = False
+        self.phase = 'database_write'
 
-    def resume(self, writer, apply, check, prepare=None):
+    def resume(self, writer, apply, check, prepare=None, *, database_retry=False, on_retry=None):
         with self.service.db() as db:
             row = db.execute('SELECT target,payload FROM public_publication WHERE id=1').fetchone()
         if row is None:
             return False
         if row[0] != self.target:
             raise RuntimeError('待写入结果属于另一个数据库，请恢复原数据库配置后重试。')
-        check()
-        canonical = writer(self.engine, json.loads(row[1]), check)
+        self.database_committed = False
+        self.phase = 'database_write'
+
+        def checked():
+            check()
+            if database_config(self.service.settings) != self.config:
+                raise RuntimeError('数据库配置已变化，已保留待发布结果。')
+
+        def write():
+            # Decode anew: a failed attempt may have mutated its private input.
+            return writer(self.engine, json.loads(row[1]), checked)
+
+        checked()
+        if database_retry:
+            # Opt in only for writers that reread and reconcile the complete
+            # canonical snapshot before DML. Other callers retain one attempt.
+            from app.services.database_retry import retry_database
+            canonical = retry_database(write, reset=self.engine.dispose, check=checked, on_retry=on_retry)
+        else:
+            canonical = write()
+        self.database_committed = True
+        self.phase = 'cache_publish'
         if prepare is not None:
             canonical = prepare(canonical)
-        check()
-        if database_config(self.service.settings) != self.config:
-            raise RuntimeError('数据库配置已变化，已保留待发布结果。')
+        checked()
         lock = getattr(self.service, 'publication_lock', nullcontext)
         with lock(), self.service.db() as db:
             db.execute('BEGIN IMMEDIATE')
             apply(canonical, db)
-            check()
+            checked()
             db.execute('DELETE FROM public_publication WHERE id=1')
         return True

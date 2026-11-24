@@ -224,7 +224,8 @@ class CashCowScreen:
             restored = slot is None and restore_manual_publication(self, 'public_publication', state)
             with self.db() as db:
                 pending = (db.execute(
-                    "SELECT json_extract(payload, '$.\"3\".snapshot.as_of') FROM public_publication WHERE id=1"
+                    "SELECT json_extract(payload, '$.\"3\".snapshot.as_of'), "
+                    "json_extract(payload, '$.\"3\".snapshot.run_id') FROM public_publication WHERE id=1"
                 ).fetchone() if db.execute(
                     "SELECT 1 FROM sqlite_master WHERE type='table' AND name='public_publication'"
                 ).fetchone() else None)
@@ -234,8 +235,14 @@ class CashCowScreen:
                 if restored:
                     quarantine_publication(self, 'public_publication', state)
                 raise EarningsNotDue(earnings_not_due_message(due_day))
+            same_pending = bool(pending and pending[1] == state.get('pending_run_id'))
             state.update(run_id=uuid.uuid4().hex, active=True, stage='读取全A股股票池（统一更新3/5/10年）',
                          due_day=due_day.isoformat(),
+                         target_date=pending[0] if pending else due_day.isoformat(),
+                         database_committed=bool(same_pending and state.get('database_committed')),
+                         database_commit_uncertain=bool(same_pending and state.get('database_commit_uncertain')),
+                         database_phase=None, database_retry_attempt=1,
+                         publication_pending=bool(pending), changed_count_unconfirmed=False,
                          phase='读取全A股股票池', processed=0, total=None, error=None,
                          last_attempt_at=moment.isoformat(), current_scheduled_slot=slot)
             if slot:
@@ -292,6 +299,13 @@ class CashCowScreen:
             self.write_state(state)
 
         def prepare(payloads):
+            nonlocal error_stage
+            # The remote writer returned only after a successful transaction or
+            # a full canonical read. Failures after this point are local publication.
+            error_stage = 'cache_publish'
+            state.update(database_committed=True, database_commit_uncertain=False,
+                         database_phase='local_publish', stage='发布本地3/5/10年结果')
+            self.write_state(state)
             result = {}
             for period in PERIODS:
                 check_cancel()
@@ -303,18 +317,75 @@ class CashCowScreen:
             for period in PERIODS:
                 db.execute('INSERT OR REPLACE INTO snapshots VALUES(?,?)',
                     (period, payloads[str(period)]))
-            state.update(active=False, last_success_at=meta['updated_at'],
+            completed_state = dict(state, active=False, last_success_at=meta['updated_at'],
                 previous_success_at=meta.get('previous_updated_at'),
                 previous_previous_success_at=meta.get('previous_previous_updated_at'),
                 processed=meta['universe_count'], total=meta['universe_count'],
-                stage='3/5/10年筛选完成', error=None)
+                stage='3/5/10年筛选完成', error=None, result_date=meta['as_of'],
+                target_date=meta['as_of'], publication_pending=False,
+                database_commit_uncertain=False, changed_count_unconfirmed=False,
+                pending_run_id=None, database_phase=None)
             if state.get('current_scheduled_slot') and meta['as_of'] >= state['current_scheduled_slot']:
-                state['scheduled_success_slot'] = state['current_scheduled_slot']
-            db.execute('UPDATE state SET payload=? WHERE id=1', (json.dumps(state, ensure_ascii=False),))
+                completed_state['scheduled_success_slot'] = state['current_scheduled_slot']
+            # Mutate the live state only after the local transaction commits.
+            # A cancelled/failed apply must not advance success timestamps.
+            db.execute('UPDATE state SET payload=? WHERE id=1', (json.dumps(completed_state, ensure_ascii=False),))
+
+        def database_progress(phase):
+            stages = {'schema': '检查奶牛股数据库表结构', 'lock': '读取并锁定奶牛股数据库快照',
+                      'write': '写入奶牛股数据库快照', 'commit': '提交奶牛股数据库事务'}
+            state.update(database_phase=phase, stage=stages[phase])
+            if phase == 'commit':
+                # Record before COMMIT: process death can lose its acknowledgement
+                # without running an exception handler. Reconciliation clears it.
+                state['database_commit_uncertain'] = True
+            self.write_state(state)
+
+        def write_cash(engine, payload, check):
+            nonlocal error_stage
+            error_stage = 'database_write'
+            meta = payload['3']['snapshot']
+            if state.get('pending_run_id') != meta['run_id']:
+                state.update(database_committed=False, database_commit_uncertain=False)
+            state.update(target_date=meta['as_of'], pending_run_id=meta['run_id'],
+                         database_phase=None, publication_pending=True)
+            self.write_state(state)
+            try:
+                return write_public(engine, payload, check, progress=database_progress)
+            except BaseException:
+                # Keep an ambiguous acknowledgement across retries/restarts. A
+                # successful full-snapshot reconciliation clears it in prepare().
+                if state.get('database_phase') == 'commit':
+                    state['database_commit_uncertain'] = True
+                    self.write_state(state)
+                raise
+
+        def retrying(attempt, exc):
+            state.update(database_retry_attempt=attempt, stage=f'奶牛股数据库重试 {attempt}/3')
+            self.write_state(state)
+
+        def resume_cash():
+            restored = publication.resume(write_cash, apply, check_cancel, prepare,
+                                         database_retry=True, on_retry=retrying)
+            if restored:
+                state.update(self.read_state())
+            return restored
+
+        def pending_status():
+            with self.db() as db:
+                pending = (db.execute('SELECT 1 FROM public_publication WHERE id=1').fetchone()
+                           if db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='public_publication'").fetchone()
+                           else None)
+            committed = bool(pending and (state.get('database_committed')
+                             or (publication is not None and publication.database_committed)))
+            uncertain = bool(pending and state.get('database_commit_uncertain'))
+            state.update(publication_pending=bool(pending), database_committed=committed,
+                         changed_count_unconfirmed=committed or uncertain)
+            return committed or uncertain
 
         try:
             publication = PublicPublication(self)
-            if publication.resume(write_public, apply, check_cancel, prepare):
+            if resume_cash():
                 with self.db() as db:
                     restored = json.loads(db.execute('SELECT payload FROM snapshots WHERE years=3').fetchone()[0])
                 if (restored['snapshot']['as_of'] >= moment.date().isoformat()
@@ -323,6 +394,12 @@ class CashCowScreen:
                     return
                 state.update(active=True, processed=0, total=None, stage='读取本期公开数据')
                 self.write_state(state)
+            error_stage = 'fetch'
+            state.update(target_date=moment.date().isoformat(), database_committed=False,
+                         database_commit_uncertain=False, publication_pending=False,
+                         changed_count_unconfirmed=False, pending_run_id=None,
+                         database_phase=None, database_retry_attempt=1)
+            self.write_state(state)
             end_year = moment.astimezone(CHINA).year - 1
             with self.client_factory() as client:
                 source = (self.source_factory or (lambda client, **kw: CombinedCashCowSource(client, settings=self.settings, **kw)))(client, check_cancel=check_cancel,
@@ -360,7 +437,7 @@ class CashCowScreen:
                 self.write_state(state)
                 publication.stage(payloads)
                 # Remote I/O does not hold the UI/cancel publication lock.
-                publication.resume(write_public, apply, check_cancel, prepare)
+                resume_cash()
                 published, run_outcome = True, 'success'
                 for period in PERIODS:
                     LOG.info('Cash cow period complete years=%s matched=%s excluded=%s insufficient=%s',
@@ -369,10 +446,12 @@ class CashCowScreen:
                              sum(value == 'insufficient' for value in outcomes[period].values()))
         except CollectionCancelled:
             run_outcome = 'cancelled'
+            pending_status()
             state.update(stage='已取消，保留上次结果')
         except Exception as exc:
-            run_outcome = 'failed'
-            run_error = safe_error(exc, stage=error_stage)
+            run_outcome = 'publication_pending' if pending_status() else 'failed'
+            run_error = safe_error(exc, stage=error_stage, operation=state.get('database_phase'),
+                                   trade_date=state.get('target_date'))
             LOG.error('Cash cow screen failed details=%s', diagnostic_details(exc))
             state.update(stage='更新失败，保留上次结果',
                          error=str(exc) if isinstance(exc, CashCowSourceError) else '筛选暂未完成，请稍后重试。')
@@ -404,7 +483,7 @@ class CashCowScreen:
                     raise
                 finally:
                     try:
-                        record_task(self.settings, 'cash_cow', outcome=run_outcome, scheduled=state.get('current_scheduled_slot') is not None, run_key=state['run_id'], error_details=run_error if run_outcome == 'failed' else None)
+                        record_task(self.settings, 'cash_cow', outcome=run_outcome, scheduled=state.get('current_scheduled_slot') is not None, run_key=state['run_id'], error_details=run_error if run_outcome != 'success' else None)
                         lock.release()
                     except BaseException as exc:
                         run_outcome = 'failed'

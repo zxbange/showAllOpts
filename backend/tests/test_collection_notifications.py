@@ -98,6 +98,50 @@ class Lock:
     def __init__(self,callback=lambda:None):self.callback=callback
     def release(self):self.callback()
 
+
+@pytest.mark.parametrize('unconfirmed,expected', [(False, '0'), (True, '未核实')])
+def test_cash_recovery_reports_actual_pending_day_and_unconfirmed_write_count(settings, unconfirmed, expected):
+    monitor = Monitor(settings)
+    with monitor.db() as db:
+        db.execute('CREATE TABLE snapshots(years INTEGER PRIMARY KEY, payload TEXT)')
+        for years in (3, 5, 10):
+            db.execute('INSERT INTO snapshots VALUES(?,?)', (years, json.dumps({
+                'snapshot': {'as_of': '2026-11-17', 'matched_count': 0}, 'items': []})))
+
+    @n.notify_collection('cash_cow')
+    def collect(self, lock, state):
+        state.update(target_date='2026-11-17', due_day='2026-11-24',
+                     changed_count_unconfirmed=unconfirmed, error='Publication unavailable')
+        with self.db() as db:
+            db.execute('UPDATE state SET payload=? WHERE id=1', (json.dumps(state),))
+        n.capture_task_outcome('cash_cow', 'publication_pending' if unconfirmed else 'failed',
+                               {'code': 'timeout', 'stage': 'database_write',
+                                'operation': 'commit' if unconfirmed else 'schema', 'mysql_errno': 2013})
+        lock.release()
+
+    collect(monitor, Lock(), {'run_id': 'cash-recovery', 'current_scheduled_slot': '2026-11-24'})
+    message = rows(settings)[0]['message']
+    assert '目标数据日期：2026-11-17' in message
+    assert '目标数据日期：2026-11-24' not in message
+    assert f'更新记录：{expected}' in message
+    assert '数据库写入' in message and 'MySQL 2013' in message
+    assert ('提交事务' if unconfirmed else '检查表结构') in message
+    assert '筛选日 2026-11-17' in message
+
+
+def test_database_operation_is_whitelisted_and_never_prints_private_values():
+    from app.services.collection_errors import safe_error, sanitize_error
+    error = safe_error(TimeoutError('PRIVATE SQL password'), stage='database_write', operation='lock')
+    assert error['operation'] == 'lock'
+    body = n.format_result('cash_cow', 'failed', 0, [], error_details=error)
+    assert '数据库写入，锁定快照' in body
+    assert 'PRIVATE' not in body
+    private = {'code': 'timeout', 'stage': 'database_write', 'operation': 'PRIVATE SQL password'}
+    assert 'operation' not in sanitize_error(private)
+    assert 'PRIVATE' not in n.format_result('cash_cow', 'failed', 0, [], error_details=private)
+    for malformed in (['commit'], {'sql': 'PRIVATE SQL'}):
+        assert 'operation' not in sanitize_error(dict(private, operation=malformed))
+
 def test_hooks_snapshot_before_release_and_ignore_timestamp_only(settings):
     m=Monitor(settings)
     m.collect(Lock(),{'run_id':'1','current_scheduled_slot':'2026-11-12'})

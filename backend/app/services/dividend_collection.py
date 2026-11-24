@@ -23,6 +23,8 @@ from sqlalchemy import delete, select, inspect, text
 from app.core.database import build_engine, database_identity
 from app.core.diagnostics import diagnostic_details
 from app.services.dividend_limits import DIVIDEND_GROUP_LIMITS
+from app.services.database_retry import retry_database
+from app.services.dividend_notification_facts import dividend_facts, published_dividend_facts
 from app.models.dividend import DividendSnapshot, DividendStock
 from app.services.system_configuration import database_config
 from app.services.system_runtime import source_client
@@ -32,6 +34,14 @@ CHINA = timezone(timedelta(hours=8))
 RULE_VERSION = 'dividend_dps_proposal_age3_annual_history_v10'
 PUBLIC_SOURCE_READY = True
 NOT_READY = '当前候选池与同日估值覆盖尚未完成验证，保留原结果。'
+DATABASE_OPERATIONS = {
+    '检查数据库表结构': 'schema', '检查规则版本字段': 'schema',
+    '扩容规则版本字段': 'schema', '检查股票字段': 'schema', '迁移股票字段': 'schema',
+    '锁定数据库快照': 'lock', '读取现有股票记录': 'read',
+    '写入两组股票快照': 'write', '提交数据库事务': 'commit',
+    '刷新本地高股息缓存': 'cache_refresh', '核验本地完整快照': 'cache_verify',
+    '保存发布进度': 'local_publish',
+}
 
 
 class DividendCollectionError(ValueError):
@@ -315,7 +325,8 @@ class DividendCollection:
                 return False
             state.update(run_id=uuid.uuid4().hex, active=True, stage='collecting', error=None,
                          processed=None, total=None, failed_stage=None, stage_started_at=datetime.now(CHINA).isoformat(),
-                         last_attempt_at=moment.isoformat(), database_committed=False, current_slot=slot, scheduled_slot=slot or state.get('scheduled_slot'))
+                         last_attempt_at=moment.isoformat(), database_committed=False, commit_unconfirmed=False,
+                         written=0, database_attempt=1, current_slot=slot, scheduled_slot=slot or state.get('scheduled_slot'))
             self.save_state(state)
             if background:
                 self.collection_thread = threading.Thread(target=self._collect, args=(lock, state, moment), daemon=True, name='dividend-collection')
@@ -336,15 +347,7 @@ class DividendCollection:
 
     @staticmethod
     def _notification_facts(meta, records):
-        facts = {key: meta[key] for key in ('universe_count', 'eligible_count', 'value_candidates')}
-        groups = {}
-        for group in ('value', 'bank'):
-            rows = [row for row in records if row['method'] == group]
-            best = max(rows, key=lambda row: Decimal(str(row['dividend_yield_1y'])), default=None)
-            items = ([{'dividend_yield_1y': str(best['dividend_yield_1y']),
-                       'pe_ttm': str(best['pe_ttm'])}] if best else [])
-            groups[group] = {'count': len(rows), 'items': items}
-        return facts | {'trade_date': meta['trade_date'].isoformat(), 'groups': groups}
+        return dividend_facts(meta, records)
 
     def _collect(self, lock, state, moment):
         marker = self.root / ('cancel-' + state['run_id'])
@@ -354,6 +357,9 @@ class DividendCollection:
         facts = previous_facts = None
         target_date = None
         interruption = None
+        error_phase = 'collection'
+        commit_started = False
+        changed_count_unknown = False
         scheduled = state.get('current_slot') is not None
         started = monotonic()
         def check():
@@ -365,11 +371,23 @@ class DividendCollection:
                 interruption = 'cancelled' if marker.exists() else 'interrupted'
                 raise DividendCollectionError('采集已取消；未提交的结果不发布。')
         def progress(stage, processed=None, total=None):
+            nonlocal commit_started
             check()
             if stage != state.get('stage'):
                 state['stage_started_at'] = datetime.now(CHINA).isoformat()
             state.update(stage=stage, processed=processed, total=total)
             self.save_state(state)
+            if stage == '提交数据库事务':
+                was_unconfirmed = state.get('commit_unconfirmed', False)
+                state['commit_unconfirmed'] = True
+                try:
+                    # The durable marker precedes COMMIT: a process exit can
+                    # otherwise lose both the acknowledgement and the exception.
+                    save_pending_progress()
+                except Exception:
+                    state['commit_unconfirmed'] = was_unconfirmed
+                    raise
+                commit_started = True
         try:
             config = database_config(self.settings)
             target = database_identity(config)
@@ -377,14 +395,31 @@ class DividendCollection:
             if saved_facts.get('target') != target:
                 saved_facts = {'target': target}
             facts, previous_facts = saved_facts.get('current'), saved_facts.get('previous')
+            if facts is None:
+                facts = published_dividend_facts(self.cache)
+                if config != database_config(self.settings):
+                    facts = None
+                elif facts is not None:
+                    saved_facts = dict(saved_facts, current=facts)
+                    state['notification_facts'] = saved_facts
             pending = self.pending()
             if pending is not None:
                 if pending[0] != target:
                     raise DividendCollectionError('待发布结果属于其他数据库，请恢复原配置后重试。')
                 meta, records = pending[1]['meta'], pending[1]['records']
                 target_date = meta['trade_date']
+                known_count = pending[1].get('changed_count')
+                written = known_count if type(known_count) is int and known_count >= 0 else 0
+                changed_count_unknown = (pending[1].get('changed_count_unknown') is True or
+                                         pending[1].get('commit_unconfirmed') is True)
+                if changed_count_unknown:
+                    written = None
+                state.update(database_committed=pending[1].get('database_committed',
+                             'changed_count' in pending[1]) is True,
+                             commit_unconfirmed=pending[1].get('commit_unconfirmed') is True)
             else:
                 target_date = moment.date()
+                error_phase = 'fetch'
                 with self.client_factory() as client:
                     from app.services.dividend_public_source import DividendPublicSource
                     source = (self.source_factory or DividendPublicSource)(client, settings=self.settings,
@@ -393,11 +428,13 @@ class DividendCollection:
                         source.on_progress = progress
                     meta, records = source.collect()
                 check()
+                error_phase = 'validate'
                 progress('validating')
                 validate_result(meta, records)
                 if meta['trade_date'] != moment.date():
                     raise DividendCollectionError('Source date does not match collection date')
                 self.stage(target, meta, records)
+            error_phase = 'database_write'
             progress('publishing')
             state.update(publication_pending=True)
             self.save_state(state)
@@ -408,12 +445,43 @@ class DividendCollection:
                 check()
                 if config != database_config(self.settings):
                     raise DividendCollectionError('数据库配置已变化，请重新采集。')
-            written = max(write_result(engine, meta, records, commit_check, progress=progress),
-                          int(pending[1].get('changed_count', 0)) if pending is not None else 0)
-            with self.db() as db:
-                payload = json.dumps(dict(meta=meta, records=records, changed_count=written), default=str, allow_nan=False)
-                db.execute('UPDATE pending SET payload=? WHERE id=1', (payload,))
-            state.update(database_committed=True, publication_pending=True)
+            def save_pending_progress():
+                payload = json.dumps(dict(meta=meta, records=records, changed_count=written,
+                    changed_count_unknown=changed_count_unknown,
+                    database_committed=state.get('database_committed', False),
+                    commit_unconfirmed=state.get('commit_unconfirmed', False)), default=str, allow_nan=False)
+                with self.db() as db:
+                    db.execute('UPDATE pending SET payload=? WHERE id=1 AND target=?', (payload, target))
+            def write_once():
+                nonlocal commit_started, changed_count_unknown, written
+                commit_started = False
+                try:
+                    return write_result(engine, meta, records, commit_check, progress=progress)
+                except Exception:
+                    if commit_started:
+                        # A dropped COMMIT acknowledgement is not a confirmed
+                        # rollback. Preserve that uncertainty through restarts.
+                        changed_count_unknown = True
+                        written = None
+                        state['commit_unconfirmed'] = True
+                        try:
+                            save_pending_progress()
+                        except Exception as persistence_error:
+                            LOG.error('Dividend commit uncertainty persistence failed details=%s',
+                                      diagnostic_details(persistence_error))
+                    raise
+            def retry_progress(attempt, exc):
+                state['database_attempt'] = attempt
+                LOG.warning('Dividend database retry attempt=%s details=%s', attempt, diagnostic_details(exc))
+                progress(f'数据库重试 {attempt}/3')
+            acknowledged = retry_database(write_once, reset=engine.dispose, check=commit_check,
+                                          on_retry=retry_progress)
+            if not changed_count_unknown:
+                written = max(acknowledged, written)
+            state.update(database_committed=True, commit_unconfirmed=False, publication_pending=True)
+            error_phase = 'cache_publish'
+            progress('保存发布进度')
+            save_pending_progress()
             progress('syncing_local')
             self.save_state(state)
             check()
@@ -444,11 +512,16 @@ class DividendCollection:
                 db.execute('DELETE FROM pending WHERE id=1')
             LOG.info('Dividend collection complete date=%s rows=%s run=%s', meta['trade_date'], written, state['run_id'])
         except Exception as exc:
-            run_error = public_error(exc, stage='database_write' if state.get('stage') == 'publishing' else 'cache_publish' if state.get('stage') == 'syncing_local' else 'collection')
+            run_error = public_error(exc, stage=error_phase, trade_date=target_date,
+                                     operation=DATABASE_OPERATIONS.get(state.get('stage')), code=interruption)
             pending = self.pending() is not None
             state['failed_stage'] = state.get('stage')
-            state.update(stage='publication_pending' if pending else 'failed', publication_pending=pending,
-                         error='数据库/本地同步尚未全部确认，已保留待发布结果；重试将恢复同步。' if pending else '采集未完成；已保留上次成功结果。')
+            publication_unconfirmed = state.get('database_committed') or state.get('commit_unconfirmed')
+            state.update(stage='publication_pending' if pending and publication_unconfirmed else 'failed',
+                         publication_pending=pending,
+                         error=('数据库/本地同步尚未全部确认，已保留待发布结果；重试将恢复同步。'
+                                if publication_unconfirmed else '数据库发布未完成，已保留待发布结果；重试将恢复同步。')
+                         if pending else '采集未完成；已保留上次成功结果。')
             LOG.error('Dividend collection failed run=%s details=%s', state['run_id'], diagnostic_details(exc))
         finally:
             state['active'] = False
@@ -459,19 +532,23 @@ class DividendCollection:
                     quarantine_publication(self, 'pending', state)
                     state.update(manual_failure_isolated=True, publication_pending=False, stage='failed',
                                  error='休市日手动采集失败，已隔离，不会自动重试；已有结果保留，可手动重试。')
-                self.save_state(state)
                 outcome = state['stage']
                 if outcome != 'complete':
                     if interruption:
                         outcome = interruption
-                    elif state.get('database_committed'):
+                    elif state.get('database_committed') or state.get('commit_unconfirmed'):
                         outcome = 'publication_pending'
+                    else:
+                        outcome = 'failed'
+                state['outcome'] = outcome
+                state['written'] = written
+                self.save_state(state)
                 record_task(self.settings, 'dividend_selection', outcome=outcome, scheduled=scheduled, run_key=state['run_id'], error_details=run_error if state['stage'] != 'complete' else None)
                 try:
                     from app.services.collection_notifications import emit_collection_result
                     from app.services.collection_summary import summarize_dividend
                     emit_collection_result(self.settings, 'dividend_selection', scheduled=scheduled,
-                        run_key=state['run_id'], outcome=outcome, changed_count=max(written, 0),
+                        run_key=state['run_id'], outcome=outcome, changed_count=written,
                         summary=summarize_dividend(facts, previous_facts),
                         data_date=target_date, error_details=run_error)
                 except Exception as exc:

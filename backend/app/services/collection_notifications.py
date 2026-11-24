@@ -59,6 +59,9 @@ MAX_TELEGRAM_UNITS = 3900
 _CHINA = ZoneInfo('Asia/Shanghai')
 _ERROR_STAGES = {'fetch': '数据读取', 'validate': '数据核验', 'database_write': '数据库写入',
                  'cache_publish': '缓存发布', 'collection': '采集', 'database_sync': '数据库同步'}
+_ERROR_OPERATIONS = {'schema': '检查表结构', 'lock': '锁定快照', 'read': '读取快照',
+                     'write': '写入快照', 'commit': '提交事务', 'cache_refresh': '刷新缓存',
+                     'cache_verify': '核验缓存', 'local_publish': '发布本地快照'}
 
 
 def _data_day(value):
@@ -114,6 +117,8 @@ def format_result(task_id, outcome, changed_count, summary, collected_at=None, *
         tokens = []
         if error.get('stage') in _ERROR_STAGES:
             tokens.append(_ERROR_STAGES[error['stage']])
+        if error.get('operation') in _ERROR_OPERATIONS:
+            tokens.append(_ERROR_OPERATIONS[error['operation']])
         if error.get('trade_date'):
             tokens.append(error['trade_date'])
         elif error.get('start_date') and error.get('end_date'):
@@ -433,8 +438,13 @@ def notify_collection(task):
                             except Exception as exc:
                                 summary = []
                                 LOG.warning('Collection notification summary unavailable task=%s error_type=%s', task, type(exc).__name__)
+                            changed_count = len(changes) if changes is not None else None
+                            if task == 'cash_cow' and latest.get('changed_count_unconfirmed'):
+                                # Local snapshots cannot establish the remote write count
+                                # while a commit/publication acknowledgement is unresolved.
+                                changed_count = None
                             emit_collection_result(self.settings, task, scheduled=scheduled, run_key=run, outcome=outcome,
-                                                   changed_count=len(changes) if changes is not None else None,
+                                                   changed_count=changed_count,
                                                    summary=summary, manual_result=regular_collection,
                                                    error_details=raised or captured.get('error_details'), data_date=data_date)
                     except Exception as exc:

@@ -25,6 +25,8 @@ MESSAGES = {
     'unknown': '采集未完成，未保存可公开的详细原因。',
 }
 STAGES = frozenset(('fetch', 'validate', 'database_write', 'cache_publish', 'collection', 'database_sync'))
+OPERATIONS = frozenset(('schema', 'lock', 'read', 'write', 'commit',
+                        'cache_refresh', 'cache_verify', 'local_publish'))
 
 
 def sanitize_error(value):
@@ -33,6 +35,8 @@ def sanitize_error(value):
     result = dict(code=value['code'], message=MESSAGES[value['code']])
     if value.get('stage') in STAGES:
         result['stage'] = value['stage']
+    if isinstance(value.get('operation'), str) and value['operation'] in OPERATIONS:
+        result['operation'] = value['operation']
     for key in ('mysql_errno', 'sqlite_errno'):
         number = value.get(key)
         if type(number) is int and 0 <= number <= 65535:
@@ -52,12 +56,14 @@ def sanitize_error(value):
     return result
 
 
-def safe_error(exc=None, *, stage=None, code=None, trade_date=None, start_date=None, end_date=None):
+def safe_error(exc=None, *, stage=None, code=None, trade_date=None, start_date=None, end_date=None,
+               operation=None):
     """Classify exception chains using types/numeric driver codes, never str(exc)."""
     import httpx
     from pymysql.err import MySQLError
     from sqlalchemy.exc import SQLAlchemyError
-    result = {'code': code if code in MESSAGES else 'unknown', 'stage': stage, 'trade_date': trade_date, 'start_date': start_date, 'end_date': end_date}
+    result = {'code': code if code in MESSAGES else 'unknown', 'stage': stage, 'operation': operation,
+              'trade_date': trade_date, 'start_date': start_date, 'end_date': end_date}
     seen = set()
     while isinstance(exc, BaseException) and id(exc) not in seen and len(seen) < 8:
         seen.add(id(exc))
