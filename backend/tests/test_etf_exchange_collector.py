@@ -807,3 +807,94 @@ def test_scoped_sse_checks_cancellation_while_streaming():
         with pytest.raises(CollectionCancelled):
             source.sse_scoped_shares('510300.XSHG', DAY)
     assert chunks == [1, 'closed']
+
+
+def szse_dated_payload(rows, *, error=None, **meta):
+    report = {'metadata': {'catalogid': '1815_stock_snapshot', 'tabkey': 'tab2', 'pageno': 1,
+                           'pagecount': len(rows), 'recordcount': len(rows),
+                           'cols': {'ss': '今收', 'qss': '前收'}, **meta}, 'data': rows}
+    if error is not None:
+        report['error'] = error
+    return [report]
+
+
+def szse_dated_row(**fields):
+    return {'jyrq': DAY.isoformat(), 'zqdm': '159919', 'qss': '4.239', 'ss': '4.191', **fields}
+
+
+def test_dated_szse_close_queries_one_code_date_and_uses_just_session_close():
+    requests = []
+
+    def handler(req):
+        requests.append(req)
+        return httpx.Response(200, json=szse_dated_payload([szse_dated_row()]))
+
+    source = client(handler)
+    shares, prices, missing = m.collect(
+        source, DAY, DAY, funds={'159919.XSHE': '深'}, include_shares=False,
+        calendar=fake_calendar(), dated_szse_prices=True)
+
+    assert len(requests) == 1
+    req = requests[0]
+    assert str(req.url.copy_with(query=None)) == m.SZSE_SHARES
+    assert dict(req.url.params) == {
+        'SHOWTYPE': 'JSON', 'CATALOGID': '1815_stock_snapshot', 'TABKEY': 'tab2', 'PAGENO': '1',
+        'txtDMorJC': '159919', 'txtBeginDate': DAY.isoformat(), 'txtEndDate': DAY.isoformat(),
+    }
+    assert req.extensions['timeout']['read'] == 25
+    assert req.headers['referer'] == 'https://www.szse.cn/market/trend/index.html?code=159919'
+    assert not shares and not missing['prices']
+    assert dict(prices[0], updated_at=None) == dict(fund_code='159919.XSHE', trade_date=DAY,
+        close_price=Decimal('4.191'), source='SZSE.DATED_FUND_CLOSE', updated_at=None)
+
+
+@pytest.mark.parametrize('payload', [
+    {'metadata': {}, 'data': []},
+    szse_dated_payload([szse_dated_row(zqdm='159922')]),
+    szse_dated_payload([szse_dated_row(jyrq='2026-11-05')]),
+    szse_dated_payload([szse_dated_row(), szse_dated_row()]),
+    szse_dated_payload([szse_dated_row(ss=None)]),
+    szse_dated_payload([szse_dated_row(ss='--')]),
+    szse_dated_payload([szse_dated_row(ss='0')]),
+    szse_dated_payload([szse_dated_row(ss='4.191000001')]),
+    szse_dated_payload([szse_dated_row(ss='1e999999999999999999')]),
+    szse_dated_payload([szse_dated_row()], cols={'ss': '前收', 'qss': '今收'}),
+    szse_dated_payload([szse_dated_row()], catalogid='other'),
+    szse_dated_payload([szse_dated_row()], tabkey='tab1'),
+    szse_dated_payload([], recordcount=1),
+    szse_dated_payload([], pageno=2),
+    szse_dated_payload([szse_dated_row()], pagecount=2),
+    szse_dated_payload([], error='sensitive source text'),
+    szse_dated_payload([], error='归档平台|2026-11-06 00:00:00.0'),
+    szse_dated_payload([szse_dated_row()], error='归档平台|2026-11-07 00:00:00.0'),
+])
+def test_dated_szse_invalid_response_never_falls_back_to_another_date_or_previous_close(payload):
+    requests = []
+
+    def handler(req):
+        requests.append(req)
+        return httpx.Response(200, json=payload)
+
+    with pytest.raises(m.SourceError) as failure:
+        client(handler).szse_dated_close('159919.XSHE', DAY)
+    assert not isinstance(failure.value, m.SZSEPriceArchiveRequired)
+    assert 'sensitive source text' not in str(failure.value)
+    assert len(requests) == 1
+
+
+def test_dated_szse_distinguishes_public_archive_from_a_successful_empty_report():
+    responses = iter((szse_dated_payload([]), szse_dated_payload([], error='归档平台|2025-11-03 00:00:00.0')))
+    source = client(lambda _: httpx.Response(200, json=next(responses)))
+    assert source.szse_dated_close('159919.XSHE', date(2026, 11, 21)) is None
+    with pytest.raises(m.SZSEPriceArchiveRequired) as failure:
+        source.szse_dated_close('159919.XSHE', date(2025, 6, 30))
+    assert failure.value.available_from == date(2025, 11, 3)
+    assert '2025-11-03' not in str(failure.value)
+
+
+def test_dated_szse_refuses_today_before_contacting_exchange():
+    from zoneinfo import ZoneInfo
+    today = datetime.now(ZoneInfo('Asia/Shanghai')).date()
+    source = client(lambda _: pytest.fail('today must use its existing close verification'))
+    with pytest.raises(m.SourceError, match='earlier trading date'):
+        source.szse_dated_close('159919.XSHE', today)

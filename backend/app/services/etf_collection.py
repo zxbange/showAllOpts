@@ -54,18 +54,42 @@ class CancellableHTTPClient:
         return result
 
 
-class _ScopedSSEGuard:
-    """HTTP 429 pauses only SSE fund-share calls for this run."""
+class _ScopedSourceGuard:
+    """One scoped source's release window and rate limit, confined to this run."""
     def __init__(self):
         self.rate_limited = False
+        self.available_from = None
 
-    def observe(self, error_details):
+    def skip_reason(self, day):
+        if self.rate_limited:
+            return 'rate_limit'
+        if self.available_from is not None and day < self.available_from:
+            return 'archive'
+        return None
+
+    def observe(self, error_details, available_from):
         if error_details.get('http_status') == 429:
             self.rate_limited = True
+        if available_from is not None and (self.available_from is None or available_from > self.available_from):
+            self.available_from = available_from
 
 
-def _scoped_sse_target(kind, code):
-    return kind == 'shares' and code.endswith('.XSHG')
+def _observation_source(kind, code, day, today, guards):
+    if kind == 'shares' and code.endswith('.XSHG'):
+        return 'sse_scoped_shares', {'scoped_sse': True}, guards['sse_scoped_shares']
+    if kind == 'prices' and code.endswith('.XSHE') and day < today:
+        return 'szse_dated_close', {'dated_szse_prices': True}, guards['szse_dated_close']
+    return 'exchanges', {}, None
+
+
+def _observation_error(exc, day, guard):
+    from app.services.etf_exchange import SZSEPriceArchiveRequired
+    available_from = exc.available_from if isinstance(exc, SZSEPriceArchiveRequired) else None
+    code = 'etf_szse_price_archived' if available_from is not None else None
+    details = safe_error(exc, code=code, stage='fetch', trade_date=day)
+    if guard is not None:
+        guard.observe(details, available_from)
+    return details
 
 
 class WriterFailure(RuntimeError):
@@ -827,7 +851,7 @@ class ETFCollection:
                      if observed.get(day, {}).get((kind, code)) != 'complete'}
         return scope, required, unchecked
 
-    def _repair_history(self, db, c, client, config, writer, calendar, end, funds, progress, check_cancelled, sse_guard):
+    def _repair_history(self, db, c, client, config, writer, calendar, end, funds, progress, check_cancelled, today, guards):
         scope, required, unchecked = self._manual_days(db, calendar, end, funds)
         if not required:
             db.execute("DELETE FROM metadata WHERE key='manual_gap_floor' AND value<=?", (end.isoformat(),))
@@ -866,46 +890,50 @@ class ETFCollection:
             day_need = pending_by_day.get(day, ())
             verified = verified_by_day.get(day, set())
             shares, prices = [], []
-            scoped = dict(attempted=0, found=0, failed=0, skipped=0)
+            scoped = {source: dict(attempted=0, found=0, failed=0, rate_limit=0, archive=0)
+                      for source in guards}
             for kind, code in day_need:
                 progress('fetching', completed, total + 2 * len(funds))
-                scoped_sse = _scoped_sse_target(kind, code)
-                if scoped_sse:
-                    if sse_guard.rate_limited:
-                        scoped['skipped'] += 1
+                source, options, guard = _observation_source(kind, code, day, today, guards)
+                if guard is not None:
+                    if reason := guard.skip_reason(day):
+                        scoped[source][reason] += 1
+                        if reason == 'archive' and day not in history_errors:
+                            history_errors[day] = safe_error(code='etf_szse_price_archived', stage='fetch', trade_date=day)
                         completed += 1
                         continue
-                    scoped['attempted'] += 1
+                    scoped[source]['attempted'] += 1
                 try:
                     found_shares, found_prices, _ = c.collect(
                         client, day, day, funds={code: funds[code]}, calendar=calendar,
-                        include_prices=kind == 'prices', include_shares=kind == 'shares',
-                        **({'scoped_sse': True} if scoped_sse else {}))
+                        include_prices=kind == 'prices', include_shares=kind == 'shares', **options)
                     check_cancelled()
                 except CollectionInterrupted:
                     raise
                 except Exception as exc:
-                    details = safe_error(exc, stage='fetch', trade_date=day)
+                    details = _observation_error(exc, day, guard)
                     if day not in history_errors:
                         history_errors[day] = details
                     failures += 1
-                    if scoped_sse:
-                        scoped['failed'] += 1
-                        sse_guard.observe(details)
+                    if guard is not None:
+                        scoped[source]['failed'] += 1
                     if failures <= 5:
                         LOG.warning('ETF historical source observation failed kind=%s code=%s date=%s source=%s %s',
-                                    kind, code, day, 'sse_scoped_shares' if scoped_sse else 'exchanges',
+                                    kind, code, day, source,
                                     diagnostic_details(exc))
                 else:
                     shares.extend(found_shares)
                     prices.extend(found_prices)
-                    if scoped_sse and found_shares:
-                        scoped['found'] += 1
+                    if guard is not None and (found_shares or found_prices):
+                        scoped[source]['found'] += 1
                 completed += 1
-            if scoped['attempted'] or scoped['skipped']:
-                LOG.info('ETF historical SSE shares date=%s attempted=%s found=%s empty=%s failed=%s skipped_rate_limit=%s',
-                         day, scoped['attempted'], scoped['found'],
-                         scoped['attempted'] - scoped['found'] - scoped['failed'], scoped['failed'], scoped['skipped'])
+            for source, counts in scoped.items():
+                if counts['attempted'] or counts['rate_limit'] or counts['archive']:
+                    label = 'SSE shares' if source == 'sse_scoped_shares' else 'SZSE closes'
+                    LOG.info('ETF historical %s date=%s attempted=%s found=%s empty=%s failed=%s '
+                             'skipped_rate_limit=%s skipped_archive=%s', label, day, counts['attempted'], counts['found'],
+                             counts['attempted'] - counts['found'] - counts['failed'], counts['failed'],
+                             counts['rate_limit'], counts['archive'])
             check_cancelled()
             # Preserve the earliest dirty date *before* attempting COMMIT.
             # A stop, ambiguous COMMIT or cache lock cannot lose this intent.
@@ -941,8 +969,9 @@ class ETFCollection:
         funds = c.catalog()
         with self.client_factory() as http, _RunDatabase(self.configuration.engine, config, check_cancelled) as writer:
             client = c.ExchangeClient(CancellableHTTPClient(http, check_cancelled))
-            sse_guard = _ScopedSSEGuard()
+            guards = {source: _ScopedSourceGuard() for source in ('sse_scoped_shares', 'szse_dated_close')}
             calendar = client.calendar()
+            today = (getattr(calendar, 'now', None) or self.clock()).astimezone(CHINA).date()
             check_cancelled()
             if hasattr(client, 'prices'):
                 fetch_prices, price_cache, price_errors = client.prices, {}, {}
@@ -966,7 +995,7 @@ class ETFCollection:
             scope, historical_gaps, repaired, history_total, history_errors = (end,), set(), 0, 0, {}
             if manual:
                 scope, historical_gaps, repaired, history_total, history_errors = self._repair_history(
-                    db, c, client, config, writer, calendar, end, funds, progress, check_cancelled, sse_guard)
+                    db, c, client, config, writer, calendar, end, funds, progress, check_cancelled, today, guards)
                 base_progress = progress
                 progress = lambda phase, completed, total: base_progress(
                     phase, completed + repaired, total + history_total)
@@ -984,7 +1013,8 @@ class ETFCollection:
                        if manual or (kind, code) not in exhausted}
             shares, prices, attempted = [], [], set()
             completed, total = 0, len(targets)
-            failures, skipped_sse = 0, 0
+            failures = 0
+            skipped = {source: dict(rate_limit=0, archive=0) for source in guards}
             LOG.info('ETF source plan source=exchanges date=%s funds=%s targets=%s exhausted=%s',
                      end, len(funds), total, len(exhausted))
             for kind in ('shares', 'prices'):
@@ -992,28 +1022,24 @@ class ETFCollection:
                     if (kind, code) not in targets:
                         continue
                     progress('fetching', completed, total)
-                    scoped_sse = _scoped_sse_target(kind, code)
-                    if scoped_sse and sse_guard.rate_limited:
-                        skipped_sse += 1
+                    source, options, guard = _observation_source(kind, code, end, today, guards)
+                    if guard is not None and (reason := guard.skip_reason(end)):
+                        skipped[source][reason] += 1
                         completed += 1
                         continue
                     attempted.add((kind, code, end.isoformat()))
                     try:
                         s, p, _ = c.collect(client, end, end, funds={code: name}, calendar=calendar,
-                                            include_prices=kind == 'prices', include_shares=kind == 'shares',
-                                            **({'scoped_sse': True} if scoped_sse else {}))
+                                            include_prices=kind == 'prices', include_shares=kind == 'shares', **options)
                         check_cancelled()
                     except CollectionInterrupted:
                         raise
                     except Exception as exc:
-                        self._run_error_details = safe_error(exc, stage='fetch', trade_date=end)
-                        if scoped_sse:
-                            sse_guard.observe(self._run_error_details)
+                        self._run_error_details = _observation_error(exc, end, guard)
                         failures += 1
                         if failures <= 5:
                             LOG.warning('ETF source observation failed kind=%s code=%s date=%s source=%s %s',
-                                        kind, code, end, 'sse_scoped_shares' if scoped_sse else 'exchanges',
-                                        diagnostic_details(exc))
+                                        kind, code, end, source, diagnostic_details(exc))
                     else:
                         shares.extend(s)
                         prices.extend(p)
@@ -1024,9 +1050,11 @@ class ETFCollection:
             missing_shares = set(funds) - verified_shares
             missing_prices = set(funds) - verified_prices
             LOG.info('ETF source finish source=exchanges date=%s attempted=%s failed=%s shares=%s prices=%s '
-                     'suppressed_failures=%s missing_shares=%s missing_prices=%s skipped_sse_rate_limit=%s',
+                     'suppressed_failures=%s missing_shares=%s missing_prices=%s skipped_sse_rate_limit=%s '
+                     'skipped_szse_rate_limit=%s skipped_szse_archive=%s',
                      end, len(attempted), failures, len(shares), len(prices), max(0, failures - 5),
-                     len(missing_shares), len(missing_prices), skipped_sse)
+                     len(missing_shares), len(missing_prices), skipped['sse_scoped_shares']['rate_limit'],
+                     skipped['szse_dated_close']['rate_limit'], skipped['szse_dated_close']['archive'])
             if failures == 0 and (missing_shares or missing_prices):
                 code = ('etf_missing_shares_and_prices' if missing_shares and missing_prices else
                         'etf_missing_shares' if missing_shares else 'etf_missing_prices')

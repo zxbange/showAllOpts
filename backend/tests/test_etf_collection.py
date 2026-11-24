@@ -35,7 +35,8 @@ class Collector:
     def ExchangeClient(self, http):
         return SimpleNamespace(calendar=lambda: Calendar())
 
-    def collect(self, client, start, end, funds, include_prices, include_shares, calendar, *, scoped_sse=False):
+    def collect(self, client, start, end, funds, include_prices, include_shares, calendar, *,
+                scoped_sse=False, dated_szse_prices=False):
         self.calls.append((start, funds, include_prices, include_shares))
         if self.failure:
             raise ValueError('do not expose secret')
@@ -246,7 +247,8 @@ def test_fresh_calendar_failure_no_writer(tmp_path):
 
 def test_latest_gap_exhaustion_does_not_hide_successful_daily_observations(tmp_path):
     w, c, _ = worker(tmp_path)
-    def partial(client, start, end, funds, include_prices, include_shares, calendar, *, scoped_sse=False):
+    def partial(client, start, end, funds, include_prices, include_shares, calendar, *,
+                scoped_sse=False, dated_szse_prices=False):
         if include_shares and '510300.XSHG' in funds:
             return [], [], {}
         rows = [dict(fund_code=code, trade_date=start) for code in funds]

@@ -20,11 +20,11 @@ python collectors/etf_exchange_collector.py --start 2026-11-06 --end 2026-11-06 
 ## 来源、单位和边界
 
 - 上交所份额：`query.sse.com.cn/commonQuery.do`，`sqlId=COMMON_SSE_ZQPZ_ETFZL_XXPL_ETFGM_SEARCH_L`。按 `STAT_DATE` 查询，开启 `isPagination=true`，核对 `pageHelp.pageNo/pageCount/total` 并完整分页；不能用未开启分页时总数0判断无数据。
-- 后台手动补采较早沪市份额使用同一主机的基金规模明细报表 `COMMON_SSE_ZQPZ_ETFZL_ETFJBXX_JJGM_SEARCH_L`，精确限制 `SEC_CODE` 和 `STAT_DATE`，关闭分页，仅接受匹配代码和日期的单条 `result` 或合法空结果。不以 `pageHelp.total` 判断此报表的覆盖，不回退到日报表。CLI、最新日和自动采集仍使用上述原日报表。
+- 后台自动、手动均使用同一主机的基金规模明细报表 `COMMON_SSE_ZQPZ_ETFZL_ETFJBXX_JJGM_SEARCH_L`，精确限制 `SEC_CODE` 和 `STAT_DATE`，关闭分页，仅接受匹配代码和日期的单条 `result` 或合法空结果。不以 `pageHelp.total` 判断此报表的覆盖，不回退到日报表。独立 CLI 仍使用上述原日报表。
 - 深交所份额：`www.szse.cn/api/report/ShowReport/data`，`CATALOGID=scsj_fund_jjgm`、`TABKEY=tab1`、`jjlb=ETF`；每只基金90日窗口，按 `PAGENO` 分页，核对总页数和总记录数。
 - 两所份额原始单位均为万份；通过 Decimal 精确乘10000转换为整数份，拒绝负数、非整数和BIGINT溢出，不以成交量或资产净值替代。
 - 上交所价格：`yunhq.sse.com.cn:32042/v1/sh1/dayk/{code}`，`select=date,close&begin=0&end=-1`，取同日日K close，单位元/份。
-- 深交所价格：`getHistoryData?marketId=1&code={code}&cycleType=32` 实测只返回约201条，额外历史分页参数无效，且历史复权规则尚未证实。为避免污染市值计算，只保存与 `getTimeData` 返回的**同日期、15:00以后**行情 `data.now` 完全一致的日K收盘价，来源标记 `SZSE.CLOSE_VERIFIED`。`data.close` 为昨收，绝不能当当日收盘。其余历史不写可信价格表，报告缺失。深市历史价格回填仍待验证数据源。
+- 深交所价格：`getHistoryData?marketId=1&code={code}&cycleType=32` 实测只返回约201条，额外历史分页参数无效，且历史复权规则尚未证实。独立 CLI 和后台当天行情仅保存与 `getTimeData` 返回的**同日期、15:00以后**行情 `data.now` 一致的日K收盘价，来源 `SZSE.CLOSE_VERIFIED`；`data.close` 是昨收。后台核验早于当天的交易日时使用深交所历史行情基金报表 `CATALOGID=1815_stock_snapshot`、`TABKEY=tab2`，以单代码、单日期请求，只校验并保存「今收」`ss`（不取「前收」`qss`），来源 `SZSE.DATED_FUND_CLOSE`。公开报表不能核验的归档日期不会填价。该后台能力不改变独立 CLI 的保守规则。
 - 深交所明确说明 T日晚更新规模仅供参考，以T+1日早间更新为准，因此日常任务按配置的交易日时点回查最近已收盘日并覆盖其修订；CLI本身不设置自动任务，后台应用按[自动采集计划](etf-collection.md)调用同一实现。
 - 交易日与真实前一交易日使用上交所上证指数000001完整已发生日K日期（`select=date&begin=0&end=-1`）。校验代码、首日1990-12-19、total/实际行数/begin/end、严格递增无重复，以及最新官方指数快照日期一致。不是用ETF自身有缺口的历史推断交易日。
 - 自动读取深交所官方整月开休市日历 `api/report/exchange/onepersistenthour/monthList?month=YYYY-MM` 的当前月和前月；要求 `nowdate` 为北京时间今天、月内每个自然日恰好一行、`jybz` 为明确0/1，并与上交所已发生日期交叉验证。按官方标记判定最新已收市日，发现指数陈旧、日历截断/缺日/未发布立即失败，不能把缺源等于休市。跨年无需代码中追加固定年份，但官方未发布月份不能猜测。

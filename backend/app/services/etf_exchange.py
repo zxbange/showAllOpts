@@ -26,10 +26,11 @@ LOG = logging.getLogger(__name__)
 
 SSE_SHARES = 'https://query.sse.com.cn/commonQuery.do'
 _SSE_SCOPED_SHARE_ID = 'COMMON_SSE_ZQPZ_ETFZL_ETFJBXX_JJGM_SEARCH_L'
-_SSE_SCOPED_IO_SECONDS = 25
-_SSE_SCOPED_ELAPSED_SECONDS = 30
-_SSE_SCOPED_MAX_BYTES = 64 * 1024
+_SCOPED_IO_SECONDS = 25
+_SCOPED_ELAPSED_SECONDS = 30
+_SCOPED_MAX_BYTES = 64 * 1024
 SZSE_SHARES = 'https://www.szse.cn/api/report/ShowReport/data'
+_SZSE_FUND_CLOSE_CATALOG = '1815_stock_snapshot'
 SSE_PRICE = 'https://yunhq.sse.com.cn:32042/v1/sh1/dayk/'
 SZSE_QUOTE = 'https://www.szse.cn/api/market/ssjjhq/getTimeData'
 SZSE_PRICE = 'https://www.szse.cn/api/market/ssjjhq/getHistoryData'
@@ -38,6 +39,13 @@ SZSE_CALENDAR = 'https://www.szse.cn/api/report/exchange/onepersistenthour/month
 
 class SourceError(ValueError):
     """Invalid or incomplete exchange response; no partial transaction is written."""
+
+
+class SZSEPriceArchiveRequired(SourceError):
+    """The exchange explicitly directs this date to its separate archive."""
+    def __init__(self, available_from):
+        super().__init__('SZSE dated fund close is outside the public report window')
+        self.available_from = available_from
 
 
 def parse_date(value):
@@ -280,21 +288,15 @@ class ExchangeClient:
                 raise SourceError('SSE empty intermediate page')
         raise SourceError('SSE pagination limit exceeded')
 
-    def sse_scoped_shares(self, code, day):
-        """One fund and exact date; never fall back to the complete daily report."""
-        if len(code) != 11 or code[6:] != '.XSHG' or not code[:6].isascii() or not code[:6].isdigit():
-            raise SourceError('Invalid scoped SSE fund code')
-        params = {'sqlId': _SSE_SCOPED_SHARE_ID, 'SEC_CODE': code[:6],
-                  'STAT_DATE': day.isoformat(), 'isPagination': 'false'}
-        headers = {'Referer': 'https://www.sse.com.cn/assortment/fund/list/etfinfo/basic/'
-                              f'index.shtml?FUNDID={code[:6]}', 'User-Agent': 'Mozilla/5.0'}
+    def _scoped_json(self, url, params, headers, source):
+        """One bounded request, with cancellation checked between response chunks."""
         check = getattr(self.client, 'check', lambda: None)
-        deadline = time.monotonic() + _SSE_SCOPED_ELAPSED_SECONDS
+        deadline = time.monotonic() + _SCOPED_ELAPSED_SECONDS
 
         def check_budget():
             check()
             if time.monotonic() >= deadline:
-                raise TimeoutError('Scoped SSE share request exceeded elapsed budget')
+                raise TimeoutError(f'{source} request exceeded elapsed budget')
 
         # A single attempt for this fund/day. HTTPX's cap is I/O
         # inactivity; the elapsed budget is checked at cooperative boundaries.
@@ -303,25 +305,35 @@ class ExchangeClient:
         body = bytearray()
         check_budget()
         try:
-            stream = (stream_capped('GET', SSE_SHARES, inactivity_cap_seconds=_SSE_SCOPED_IO_SECONDS, **kwargs)
+            stream = (stream_capped('GET', url, inactivity_cap_seconds=_SCOPED_IO_SECONDS, **kwargs)
                       if stream_capped else self.client.stream(
-                          'GET', SSE_SHARES, timeout=_SSE_SCOPED_IO_SECONDS, **kwargs))
+                          'GET', url, timeout=_SCOPED_IO_SECONDS, **kwargs))
             with stream as response:
                 check_budget()
                 response.raise_for_status()
                 for block in response.iter_bytes():
                     check_budget()
-                    if len(body) + len(block) > _SSE_SCOPED_MAX_BYTES:
-                        raise SourceError('Scoped SSE share response exceeds byte limit')
+                    if len(body) + len(block) > _SCOPED_MAX_BYTES:
+                        raise SourceError(f'{source} response exceeds byte limit')
                     body.extend(block)
                 check_budget()
-            payload = json.loads(body, parse_float=Decimal)
+            return json.loads(body, parse_float=Decimal)
         except httpx.HTTPError as error:
-            raise SourceError('Scoped SSE share request failed') from error
+            raise SourceError(f'{source} request failed') from error
         except (ValueError, ArithmeticError, RecursionError) as error:
             if isinstance(error, SourceError):
                 raise
-            raise SourceError('Invalid scoped SSE JSON response') from error
+            raise SourceError(f'Invalid {source} JSON response') from error
+
+    def sse_scoped_shares(self, code, day):
+        """One fund and exact date; never fall back to the complete daily report."""
+        if len(code) != 11 or code[6:] != '.XSHG' or not code[:6].isascii() or not code[:6].isdigit():
+            raise SourceError('Invalid scoped SSE fund code')
+        params = {'sqlId': _SSE_SCOPED_SHARE_ID, 'SEC_CODE': code[:6],
+                  'STAT_DATE': day.isoformat(), 'isPagination': 'false'}
+        headers = {'Referer': 'https://www.sse.com.cn/assortment/fund/list/etfinfo/basic/'
+                              f'index.shtml?FUNDID={code[:6]}', 'User-Agent': 'Mozilla/5.0'}
+        payload = self._scoped_json(SSE_SHARES, params, headers, 'Scoped SSE share')
         if not isinstance(payload, dict) or any(payload.get(field) for field in (
                 'actionErrors', 'fieldErrors', 'error', 'errors', 'jsonError')):
             raise SourceError('Scoped SSE share response error')
@@ -344,6 +356,50 @@ class ExchangeClient:
             except ArithmeticError as error:
                 raise SourceError('Invalid scoped SSE share quantity') from error
         return rows
+
+    def szse_dated_close(self, code, day):
+        """Fetch the official report's 今收 for one code on one older session."""
+        if len(code) != 11 or code[6:] != '.XSHE' or not code[:6].isascii() or not code[:6].isdigit():
+            raise SourceError('Invalid dated SZSE fund code')
+        day = parse_date(day)
+        today = datetime.now(ZoneInfo('Asia/Shanghai')).date()
+        if day >= today:
+            raise SourceError('Dated SZSE close requires an earlier trading date')
+        date_text = day.isoformat()
+        params = {'SHOWTYPE': 'JSON', 'CATALOGID': _SZSE_FUND_CLOSE_CATALOG, 'TABKEY': 'tab2', 'PAGENO': 1,
+                  'txtDMorJC': code[:6], 'txtBeginDate': date_text, 'txtEndDate': date_text}
+        headers = {'Referer': f'https://www.szse.cn/market/trend/index.html?code={code[:6]}',
+                   'User-Agent': 'Mozilla/5.0'}
+        payload = self._scoped_json(SZSE_SHARES, params, headers, 'Dated SZSE close')
+        if not isinstance(payload, list) or len(payload) != 1 or not isinstance(payload[0], dict):
+            raise SourceError('Invalid dated SZSE report response')
+        report = payload[0]
+        metadata, rows = report.get('metadata'), report.get('data')
+        columns = metadata.get('cols') if isinstance(metadata, dict) else None
+        if (not isinstance(columns, dict) or columns.get('ss') != '今收'
+                or metadata.get('catalogid') != _SZSE_FUND_CLOSE_CATALOG or metadata.get('tabkey') != 'tab2'
+                or not isinstance(rows, list) or len(rows) > 1 or count_value(metadata.get('pageno')) != 1
+                or count_value(metadata.get('pagecount')) != len(rows)
+                or count_value(metadata.get('recordcount')) != len(rows)):
+            raise SourceError('Dated SZSE report schema or pagination mismatch')
+        if (error := report.get('error')):
+            if not rows and isinstance(error, str) and error.startswith('归档平台|'):
+                first = parse_date(error.split('|', 1)[1].split(' ', 1)[0])
+                if day < first <= today:
+                    raise SZSEPriceArchiveRequired(first)
+            raise SourceError('Dated SZSE report reported an error')
+        if not rows:
+            return None
+        row = rows[0]
+        if (not isinstance(row, dict) or str(row.get('zqdm', '')).strip() != code[:6]
+                or parse_date(row.get('jyrq')) != day or 'ss' not in row):
+            raise SourceError('Dated SZSE close code/date/schema mismatch')
+        # qss is 前收 and is never a substitute, even when 今收 is blank.
+        try:
+            close = normalize_close(row['ss'])
+        except ArithmeticError as error:
+            raise SourceError('Invalid dated SZSE close') from error
+        return dict(fund_code=code, trade_date=day, close_price=close, source='SZSE.DATED_FUND_CLOSE')
 
     def szse_shares(self, code, start, end):
         records, expected = [], None
@@ -439,7 +495,8 @@ def count_value(value):
     return number
 
 
-def collect(client, start, end, funds=None, include_prices=True, include_shares=True, calendar=None, *, scoped_sse=False):
+def collect(client, start, end, funds=None, include_prices=True, include_shares=True, calendar=None, *,
+            scoped_sse=False, dated_szse_prices=False):
     funds = catalog() if funds is None else funds
     if parse_date(end) > datetime.now(ZoneInfo('Asia/Shanghai')).date():
         raise SourceError('End date must not be in the future')
@@ -495,6 +552,12 @@ def collect(client, start, end, funds=None, include_prices=True, include_shares=
                 window = last + timedelta(days=1)
     if include_prices:
         for code in funds:
+            if dated_szse_prices and code.endswith('.XSHE'):
+                for day in days:
+                    row = client.szse_dated_close(code, day)
+                    if row is not None:
+                        prices.append(dict(row, updated_at=now))
+                continue
             for row in client.prices(code):
                 if row['trade_date'] in allowed:
                     prices.append(dict(row, updated_at=now))

@@ -25,6 +25,16 @@ FUNDS = {
 }
 SSE_HISTORY = {'510300': '5518488.77', '510050': '2413416.68', '588000': '10362866.82'}
 SSE_TARGET = {'510300': '5558718.77', '510050': '2437896.68', '588000': '10517066.82'}
+SSE_TODAY = {'510300': '5558719.77', '510050': '2437897.68', '588000': '10517067.82'}
+SZSE_CLOSES = {HISTORY: ('4.191', '4.239'), TARGET: ('4.203', '4.191')}
+
+
+def empty_dated_report(error=None):
+    report = {'metadata': {'catalogid': '1815_stock_snapshot', 'tabkey': 'tab2', 'pageno': 1,
+                           'pagecount': 0, 'recordcount': 0, 'cols': {'ss': '今收', 'qss': '前收'}}, 'data': []}
+    if error is not None:
+        report['error'] = error
+    return httpx.Response(200, json=[report])
 
 
 class ReadTimeoutBody(httpx.SyncByteStream):
@@ -41,7 +51,7 @@ class SourceFixture:
         self.now = datetime(2026, 11, 24, 14, 46, tzinfo=CHINA) if manual else datetime(2026, 11, 24, 9, 5, tzinfo=CHINA)
         self.manual = manual
         self.scoped, self.bulk, self.shares_sz, self.quotes, self.price_k, self.refreshes = [], [], [], [], [], []
-        self.overrides = {}
+        self.dated, self.overrides, self.dated_overrides = [], {}, {}
         self.sleeps = []
         owner = self
 
@@ -86,7 +96,8 @@ class SourceFixture:
         u = str(req.url.copy_with(query=None))
         if u == exchange.SSE_PRICE + '000001':
             start = date(2026, 10, 1)
-            days = [start + timedelta(days=offset) for offset in range((TARGET - start).days + 1)]
+            end = TODAY if self.now.hour >= 15 else TARGET
+            days = [start + timedelta(days=offset) for offset in range((end - start).days + 1)]
             rows = [['19901219']] + [[d.strftime('%Y%m%d')] for d in days if self.is_open(d)]
             return httpx.Response(200, json=dict(code='000001', kline=rows, begin=0, end=len(rows), total=len(rows)))
         if u == exchange.SSE_PRICE.replace('/dayk/', '/snap/') + '000001':
@@ -109,10 +120,23 @@ class SourceFixture:
             self.scoped.append((code, day))
             if (code, day) in self.overrides:
                 return self.overrides[(code, day)](req)
-            values = {HISTORY: SSE_HISTORY, TARGET: SSE_TARGET}[day]
+            values = {HISTORY: SSE_HISTORY, TARGET: SSE_TARGET, TODAY: SSE_TODAY}[day]
             return httpx.Response(200, json={'result': [self.sse_row(code, day, values[code])],
                                              'pageHelp': {'total': 0}})
         if u == exchange.SZSE_SHARES:
+            if p['CATALOGID'] == '1815_stock_snapshot':
+                day = date.fromisoformat(p['txtBeginDate'])
+                assert p['txtEndDate'] == day.isoformat() and p['txtDMorJC'] == '159919'
+                assert p['TABKEY'] == 'tab2' and p['PAGENO'] == '1'
+                self.dated.append(day)
+                if day in self.dated_overrides:
+                    return self.dated_overrides[day](req)
+                current, previous = SZSE_CLOSES[day]
+                return httpx.Response(200, json=[{
+                    'metadata': {'catalogid': '1815_stock_snapshot', 'tabkey': 'tab2', 'pageno': 1,
+                                 'pagecount': 1, 'recordcount': 1, 'cols': {'ss': '今收', 'qss': '前收'}},
+                    'data': [{'zqdm': '159919', 'jyrq': day.isoformat(), 'ss': current, 'qss': previous}],
+                }])
             day = date.fromisoformat(p['txtStart'])
             assert p['txtEnd'] == day.isoformat() and p['txtDm'] == '159919'
             self.shares_sz.append(day)
@@ -121,15 +145,22 @@ class SourceFixture:
         if u == exchange.SZSE_PRICE:
             self.price_k.append('159919')
             return httpx.Response(200, json=dict(code='0', data=dict(code='159919',
-                picupdata=[['20261120', '4.197', '4.191'], ['20261123', '4.007', '4.203']])))
+                picupdata=[['20261120', '4.197', '4.191'], ['20261123', '4.007', '4.203'],
+                           ['20261124', '4.210', '4.250']])))
         if u == exchange.SZSE_QUOTE:
             self.quotes.append(p['code'])
-            return httpx.Response(200, json=dict(code='0', datetime=(self.now.isoformat() if self.manual else '2026-11-23 15:15:03'),
-                data=dict(code='159919', now='4.210' if self.manual else '4.203', close='4.203')))
+            if self.now.hour >= 15:
+                tick, close = self.now.isoformat(), '4.250'
+            elif self.manual:
+                tick, close = self.now.isoformat(), '4.210'
+            else:
+                tick, close = '2026-11-23 15:15:03', '4.203'
+            return httpx.Response(200, json=dict(code='0', datetime=tick,
+                data=dict(code='159919', now=close, close='4.203')))
         if u.startswith(exchange.SSE_PRICE):
             code = u.rsplit('/', 1)[1]
             self.price_k.append(code)
-            return httpx.Response(200, json=dict(code=code, kline=[['20261120', '4.018'], ['20261123', '4.023']]))
+            return httpx.Response(200, json=dict(code=code, kline=[['20261120', '4.018'], ['20261123', '4.023'], ['20261124', '4.240']]))
         raise AssertionError(f'Unexpected fixture request {u}')
 
     def seed_ledger(self, day):
@@ -157,19 +188,18 @@ def test_manual_cutoff_fills_history_and_latest_without_the_timing_out_bulk_path
     case.seed_price('159919.XSHE', HISTORY, '4.191')
     case.seed_price('159919.XSHE', TARGET, '4.203')
     case.worker.request_run('sse-scoped-latest-manual')
-    assert not case.worker.tick(case.now)  # At 14:46 today's live SZ quote cannot re-verify yesterday's close.
+    assert case.worker.tick(case.now)  # The latest target is yesterday, not today's live quote.
 
     assert case.bulk == []
     assert case.scoped == [('510300', HISTORY), ('588000', HISTORY)] + [(code[:6], TARGET) for code in FUNDS if code.endswith('.XSHG')]
     assert case.shares_sz == [HISTORY, TARGET]
-    assert case.price_k.count('510300') == case.price_k.count('159919') == 1
-    assert case.quotes == ['159919']
+    assert case.price_k.count('510300') == 1 and '159919' not in case.price_k
+    assert case.dated == [TARGET] and not case.quotes
     assert case.refreshes == [{'repair_start': BASELINE}]
     state = case.worker.status()
     assert state['manual_gap_start'] is None and not state['cache_pending']
     assert state['metadata']['coverage_end'] == TARGET.isoformat()
-    assert state['latest_result']['status'] == 'partial'
-    assert state['latest_result']['error_details']['code'] == 'etf_missing_prices'
+    assert state['latest_result']['status'] == 'complete'
 
     with Session(case.engine) as written, case.cache.session('etf-shares') as local:
         for session in (written, local):
@@ -179,10 +209,89 @@ def test_manual_cutoff_fills_history_and_latest_without_the_timing_out_bulk_path
             assert session.get(ETFShare, ('159919.XSHE', TARGET)).shares == 21_567_816_600
             assert session.get(ETFPrice, ('510300.XSHG', TARGET)).close_price == Decimal('4.023')
             assert session.get(ETFPrice, ('159919.XSHE', TARGET)).close_price == Decimal('4.203')
-            assert session.get(ETFPrice, ('159919.XSHE', TARGET)).source == 'seed'
+            assert session.get(ETFPrice, ('159919.XSHE', TARGET)).source == 'SZSE.DATED_FUND_CLOSE'
+            assert session.get(ETFPrice, ('159919.XSHE', HISTORY)).source == 'seed'
             assert session.get(ETFTradingDay, TARGET).previous_trade_date == HISTORY
             assert session.get(ETFTradingDay, TODAY) is None
     assert 'private response body text' not in caplog.text
+
+
+def test_after_close_fills_only_missing_older_szse_price_and_keeps_live_same_day_check(tmp_path, monkeypatch):
+    case = SourceFixture(tmp_path, monkeypatch, manual=True)
+    case.now = datetime(2026, 11, 24, 15, 32, 55, tzinfo=CHINA)
+    case.seed_ledger(BASELINE)
+    for day in (HISTORY, TARGET):
+        for code in FUNDS:
+            case.seed_share(code, day, 12345)
+            if (code, day) != ('159919.XSHE', HISTORY):
+                case.seed_price(code, day, '4.203')
+    case.worker.request_run('szse-20-historical-price-only')
+    complete = case.worker.tick(case.now)
+    state = case.worker.status()
+    assert complete, state['latest_result']['error_details']
+
+    assert case.dated == [HISTORY]
+    assert case.quotes == ['159919'] and case.price_k.count('159919') == 1
+    assert all(day == TODAY for _, day in case.scoped)
+    assert case.shares_sz == [TODAY]
+    assert state['manual_gap_start'] is None and not state['cache_pending']
+    assert state['latest_result']['status'] == 'complete'
+    assert case.refreshes == [{'repair_start': BASELINE}]
+    with Session(case.engine) as written, case.cache.session('etf-shares') as local:
+        for session in (written, local):
+            missing = session.get(ETFPrice, ('159919.XSHE', HISTORY))
+            unchanged = session.get(ETFPrice, ('159919.XSHE', TARGET))
+            current = session.get(ETFPrice, ('159919.XSHE', TODAY))
+            assert (missing.close_price, missing.source) == (Decimal('4.191'), 'SZSE.DATED_FUND_CLOSE')
+            assert (unchanged.close_price, unchanged.source) == (Decimal('4.203'), 'seed')
+            assert (current.close_price, current.source) == (Decimal('4.250'), 'SZSE.CLOSE_VERIFIED')
+
+
+def test_prior_session_empty_report_keeps_committed_price_and_does_not_use_live_quote(tmp_path, monkeypatch):
+    case = SourceFixture(tmp_path, monkeypatch, manual=True)
+    case.seed_ledger(TARGET)
+    case.seed_price('159919.XSHE', TARGET, '4.203')
+    case.dated_overrides[TARGET] = lambda _: empty_dated_report()
+    case.worker.request_run('szse-no-dated-candidate-to-write')
+    assert not case.worker.tick(case.now)
+    assert case.dated == [TARGET] and not case.quotes and '159919' not in case.price_k
+    assert case.worker.status()['latest_result']['error_details']['code'] == 'etf_missing_prices'
+    with Session(case.engine) as written, case.cache.session('etf-shares') as local:
+        for session in (written, local):
+            closing = session.get(ETFPrice, ('159919.XSHE', TARGET))
+            assert (closing.close_price, closing.source) == (Decimal('4.203'), 'seed')
+
+
+@pytest.mark.parametrize(('stopped_by', 'code'), [('archive', 'etf_szse_price_archived'), ('rate', 'network_error')])
+def test_dated_szse_guard_skips_only_affected_report_requests_not_today_live_price(tmp_path, monkeypatch, stopped_by, code):
+    case = SourceFixture(tmp_path, monkeypatch, manual=True)
+    case.now = datetime(2026, 11, 24, 15, 32, 55, tzinfo=CHINA)
+    case.seed_ledger(BASELINE)
+    for day in (HISTORY, TARGET):
+        for symbol in FUNDS:
+            case.seed_share(symbol, day, 12345)
+            if symbol.endswith('.XSHG'):
+                case.seed_price(symbol, day, '4.203')
+    if stopped_by == 'archive':
+        # A simulated published boundary covers both pending older dates.
+        case.dated_overrides[HISTORY] = lambda _: empty_dated_report('归档平台|2026-11-24 00:00:00.0')
+    else:
+        case.dated_overrides[HISTORY] = lambda _: httpx.Response(429)
+    case.worker.request_run('szse-dated-guard-isolation')
+    assert not case.worker.tick(case.now)
+
+    assert case.dated == [HISTORY] and case.quotes == ['159919']
+    assert case.shares_sz == [TODAY]
+    state = case.worker.status()
+    assert state['manual_gap_start'] == HISTORY.isoformat() and not state['cache_pending']
+    details = state['latest_result']['error_details']
+    assert details['code'] == code and details['trade_date'] == HISTORY.isoformat()
+    assert (details.get('http_status') == 429) == (stopped_by == 'rate')
+    with Session(case.engine) as written, case.cache.session('etf-shares') as local:
+        for session in (written, local):
+            assert session.get(ETFPrice, ('159919.XSHE', HISTORY)) is None
+            assert session.get(ETFPrice, ('159919.XSHE', TARGET)) is None
+            assert session.get(ETFPrice, ('159919.XSHE', TODAY)).close_price == Decimal('4.250')
 
 
 def test_automatic_scope_keeps_same_day_revision_and_does_not_walk_manual_gap(tmp_path, monkeypatch):
@@ -196,7 +305,7 @@ def test_automatic_scope_keeps_same_day_revision_and_does_not_walk_manual_gap(tm
     assert case.bulk == [] and case.sleeps == []
     assert case.scoped == [(code[:6], TARGET) for code in FUNDS if code.endswith('.XSHG')]
     assert case.shares_sz == [TARGET]
-    assert case.quotes == ['159919']
+    assert case.dated == [TARGET] and not case.quotes
     assert case.refreshes == [{}]
     state = case.worker.status()
     assert state['manual_gap_start'] == HISTORY.isoformat()
@@ -205,7 +314,7 @@ def test_automatic_scope_keeps_same_day_revision_and_does_not_walk_manual_gap(tm
     with case.cache.session('etf-shares') as local:
         assert local.get(ETFShare, ('510300.XSHG', TARGET)).shares == 55_587_187_700
         assert local.get(ETFShare, ('159919.XSHE', TARGET)).source == 'SZSE.FUND_SCALE'
-        assert local.get(ETFPrice, ('159919.XSHE', TARGET)).source == 'SZSE.CLOSE_VERIFIED'
+        assert local.get(ETFPrice, ('159919.XSHE', TARGET)).source == 'SZSE.DATED_FUND_CLOSE'
         assert local.get(ETFShare, ('510300.XSHG', HISTORY)) is None
 
 
