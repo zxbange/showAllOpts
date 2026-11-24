@@ -1,7 +1,8 @@
 from app.services.collection_errors import safe_error as public_error
 from app.services.collection_outcomes import record_task
-from app.services.collection_calendar import automatic_collection_allowed, manual_failure_isolated
+from app.services.collection_calendar import automatic_collection_allowed, latest_due_slot, manual_failure_isolated
 from app.services.system_configuration import task_config
+from app.services.holdings_calendar import trading_day
 """CCI has its own model, history and daily 21:00 scheduling ledger."""
 from app.services.system_runtime import source_client
 from app.services.collection_notifications import notify_collection
@@ -65,6 +66,9 @@ class CCICoal(Commodities):
         return dict(instrument='CCI动力煤', grades=GRADES, unit='元/吨', currency='CNY', start=START,
                     sourceUrl=SOURCE_URL, official=False, rows=rows, status=self.status(),
                     missingChanges=sum(r['change'] is None for r in rows))
+
+    def manual_request_time(self):
+        return now()
 
     def refresh(self, *, slot=None):
         if slot is None:
@@ -211,17 +215,18 @@ class CCICoal(Commodities):
         return windows, missing, recovery
 
     @notify_collection('cci')
-    def collect(self, lock, slot=None):
+    def collect(self, lock, slot=None, *, requested_at=None):
         began = monotonic()
-        today = now().astimezone(CHINA).date()
-        target = slot.astimezone(CHINA).date() if slot is not None else today
-        day = target.isoformat()
+        moment = now()
+        today = moment.astimezone(CHINA).date()
+        target = None
+        day = None
         details = []
         count = inserted = changed = target_hits = 0
         outcome = 'failed'
         run_error = None
         trigger = 'scheduled' if slot else 'manual'
-        isolated = slot is None and manual_failure_isolated(now())
+        isolated = slot is None and manual_failure_isolated(moment)
         manual_snapshot = None
         context = dict(targetDate=day, trigger=trigger, slot=slot.isoformat() if slot else None)
         recovery = None
@@ -265,7 +270,7 @@ class CCICoal(Commodities):
                     key = (row['quoteDate'], row['grade'])
                     previous = db.execute('SELECT payload FROM cci_quotes WHERE day=? AND grade=?', key).fetchone()
                     added = previous is None
-                    updated = previous is not None and key[0] == day and json.loads(previous[0]) != row
+                    updated = previous is not None and key[0] == today.isoformat() and json.loads(previous[0]) != row
                     window_inserted += int(added)
                     window_changed += int(updated)
                     g_added, g_changed = changes.get(row['grade'], (0, 0))
@@ -300,6 +305,16 @@ class CCICoal(Commodities):
                        inserted=inserted, changed=changed, grades=details)
 
         try:
+            due = (slot.astimezone(CHINA) if slot else
+                   latest_due_slot(requested_at or moment, task_config(self.settings, self.task_key)['times'], is_open=trading_day))
+            if due is None:
+                outcome = 'skipped'
+                self.state(stage='无法确认最近应采日期，未请求来源', outcome=outcome, **context, error=None,
+                           checkedAt=now().isoformat())
+                return
+            target = due.date()
+            day = target.isoformat()
+            context['targetDate'] = day
             if slot is None:
                 with self.db() as db:
                     manual_snapshot = (db.execute('SELECT * FROM cci_gap_checks').fetchall(),
@@ -323,7 +338,7 @@ class CCICoal(Commodities):
             self.state(stage='正在更新数据并补齐缺失报价', **context, outcome='running', error=None,
                        recovery=recovery)
             with source_client(self.settings, factory=httpx.Client, timeout=httpx.Timeout(25, connect=10), trust_env=False, follow_redirects=False) as client:
-                # Always prioritize today's three grades and preserve the daily
+                # Always prioritize the target day's three grades and preserve the daily
                 # retry semantics. Historical windows have a separate durable ledger.
                 if not should_stop():
                     read_window(client, day, day, GRADES, {key for key in missing if key[0] == day})

@@ -39,7 +39,7 @@ def now():
 
 
 def close_cutoff(moment):
-    """Manual collection/history may include a session once its 15:00 close passed."""
+    """Earliest same-day close bound; collection also requires its configured slot."""
     local=moment.astimezone(CHINA)
     return local.date() if local.hour>=15 else local.date()-timedelta(days=1)
 
@@ -52,6 +52,10 @@ def schedule_cutoff(moment):
 
 def slot_for(day):
     return datetime.combine(day,time(18,30),CHINA).isoformat()
+
+
+class ValuationNotDue(ValueError):
+    """No verified plan date or archived composition can be collected safely."""
 
 
 class CollectionCancelled(Exception):
@@ -302,12 +306,22 @@ class ValuationRuler:
             coverage=dict(requested_start=str(START),first_date=first,last_date=last,missing_count=len(gaps) if complete else None,
                 known_missing_count=len(gaps),calendar_complete=complete),gap_dates=gaps,sources=sorted({r['source'] for r in rows}))
 
-    def start_job(self,kind,runner,*,background=True,moment=None,slot=None):
+    def start_job(self,kind,runner,*,background=True,moment=None,slot=None,admit=None):
         moment=moment or now()
         if slot is not None and not automatic_collection_allowed(moment):return False
         if self.stop_event.is_set():return False
         lock=self.acquire()
         if lock is None:return False
+        # Test public-source eligibility only after winning the same lock used
+        # by data sync/import. A busy request returns without touching run state.
+        try:
+            admitted = admit is None or admit()
+        except BaseException:
+            lock.release()
+            raise
+        if not admitted:
+            lock.release()
+            return False
         state=None
         try:
             with self.db() as db:
@@ -386,9 +400,39 @@ class ValuationRuler:
                 lock.release()
 
     def refresh(self,background=True,*,moment=None,slot=None,cutoff=None):
+        from app.services.collection_calendar import latest_due_slot, trading_day
+        moment = moment or now()
+
+        def admit():
+            nonlocal cutoff
+            local = moment.astimezone(CHINA)
+            times = task_config(self.settings, 'valuation_ruler')['times']
+            # An early configured slot does not make today's close available.
+            due_at = (local if local.hour >= 15 else
+                      local.replace(hour=0, minute=0, second=0, microsecond=0) - timedelta(microseconds=1))
+            due = latest_due_slot(due_at, times, is_open=trading_day)
+            if due is None:
+                if slot is not None:
+                    return False
+                raise ValuationNotDue('暂无已核验到期交易日，未采集当天数据，保留已有结果。')
+            cutoff = min(cutoff, due.date()) if cutoff else due.date()
+            if self.source_factory is EastmoneySource and cutoff < local.date():
+                with self.db() as db:
+                    archived = (db.execute('SELECT 1 FROM index_rosters_v2 WHERE trade_date=?', (str(cutoff),)).fetchone()
+                                if db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='index_rosters_v2'").fetchone()
+                                else None)
+                if not archived:
+                    if slot is not None:
+                        return False
+                    raise ValuationNotDue(
+                        f'计划采集截止：{cutoff}。该日没有已核验的成分存档，'
+                        '不使用最新名单回填历史。本次未采集当天数据，保留已有结果。'
+                    )
+            return True
+
         def runner(monitor,state,check_cancel,moment):
             monitor._collect(state,check_cancel,moment,cutoff=cutoff,automatic=slot is not None)
-        return self.start_job('public',runner,background=background,moment=moment,slot=slot)
+        return self.start_job('public',runner,background=background,moment=moment,slot=slot,admit=admit)
 
     def _collect(self,state,check_cancel,moment,*,cutoff=None,automatic=False):
         cutoff=cutoff or close_cutoff(moment)

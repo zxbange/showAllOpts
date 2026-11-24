@@ -54,17 +54,19 @@ def test_first_backfill_then_incremental_never_redownloads_saved_days(monitor, m
     days = [date(2020, 10, 28), date(2026, 10, 26), date(2026, 10, 27)]
     calls = provider(monkeypatch, days)
     assert monitor.refresh(background=False, moment=MOMENT)
-    assert calls['lists'] == [(date(2020, 10, 28), date(2026, 10, 28))]
+    assert calls['lists'] == [(date(2020, 10, 28), date(2026, 10, 27))]
     assert calls['points'] == sorted(days, reverse=True)
     assert monitor.history(MOMENT)['summary']['observed_days'] == 3
     assert monitor.status(MOMENT)['pending_reports'] == 0
     saved = monitor.history(MOMENT)['points']
     assert monitor.refresh(background=False, moment=MOMENT)
-    assert calls['lists'][-1] == (date(2026, 10, 20), date(2026, 10, 28))
+    assert calls['lists'][-1] == (date(2026, 10, 20), date(2026, 10, 27))
     assert calls['points'] == sorted(days, reverse=True)
     assert monitor.history(MOMENT)['points'] == saved
     days.append(date(2026, 10, 28))
-    assert monitor.refresh(background=False, moment=MOMENT)
+    assert monitor.refresh(background=False, moment=MOMENT + timedelta(hours=12))
+    assert len(calls['points']) == 3  # Today's late disclosure cannot race the scheduled window.
+    assert monitor.refresh(background=False, moment=MOMENT + timedelta(days=1))
     assert calls['points'][-1] == date(2026, 10, 28)
     assert len(calls['points']) == 4
     assert latest_outcomes(monitor.settings)['items']['margin-guarantee']['outcome'] == 'success'
@@ -146,7 +148,7 @@ def test_abandoned_process_state_resumes_committed_checkpoint(monitor, monkeypat
 
 
 def test_repeated_provider_failure_stops_round_without_losing_success(monitor, monkeypatch):
-    days = [date(2026, 10, day) for day in range(23, 29)]
+    days = [date(2026, 10, day) for day in range(22, 28)]
     provider(monkeypatch, days)
     attempts = []
     def point(client, item):
@@ -164,7 +166,7 @@ def test_repeated_provider_failure_stops_round_without_losing_success(monitor, m
 
 @pytest.mark.parametrize('bad_ratio', [None, float('nan'), float('inf'), -1, 0, 10000])
 def test_invalid_daily_value_is_not_published(monitor, monkeypatch, bad_ratio):
-    provider(monkeypatch, [date(2026, 10, 28)])
+    provider(monkeypatch, [date(2026, 10, 27)])
     monkeypatch.setattr(m, 'fetch_point', lambda client, item: {'date': str(item.trade_date), 'ratio': bad_ratio})
     monitor.refresh(background=False, moment=MOMENT)
     assert monitor.history(MOMENT)['latest'] is None
@@ -173,8 +175,8 @@ def test_invalid_daily_value_is_not_published(monitor, monkeypatch, bad_ratio):
 
 
 def test_date_mismatch_does_not_publish_official_value_under_wrong_day(monitor, monkeypatch):
-    provider(monkeypatch, [date(2026, 10, 28)])
-    monkeypatch.setattr(m, 'fetch_point', lambda client, item: {'date': '2026-10-27', 'ratio': 255})
+    provider(monkeypatch, [date(2026, 10, 27)])
+    monkeypatch.setattr(m, 'fetch_point', lambda client, item: {'date': '2026-10-26', 'ratio': 255})
     monitor.refresh(background=False, moment=MOMENT)
     assert monitor.history(MOMENT)['points'] == []
     assert monitor.status(MOMENT)['pending_reports'] == 1
@@ -294,7 +296,7 @@ def test_api_lifespan_is_local_read_only_until_explicit_refresh(engine, tmp_path
 
 def test_diagnostics_keep_three_recent_failures_and_reset_on_new_run(monitor, monkeypatch):
     from app.services.margin_source import MarginSourceError
-    days = [date(2026, 10, day) for day in range(20, 29)]
+    days = [date(2026, 10, day) for day in range(19, 28)]
     calls = provider(monkeypatch, days)
     original = m.fetch_point
     failed_days = {days[0], days[2], days[4], days[6], days[8]}
@@ -324,7 +326,7 @@ def test_diagnostics_keep_three_recent_failures_and_reset_on_new_run(monitor, mo
 
 
 def test_three_failures_show_last_safe_reason_without_exception_secrets(monitor, monkeypatch, caplog):
-    days = [date(2026, 10, day) for day in range(23, 29)]
+    days = [date(2026, 10, day) for day in range(22, 28)]
     provider(monkeypatch, days)
     attempts = []
     secret = 'SECRET_TOKEN=response-body-password'
@@ -362,7 +364,7 @@ def test_unsafe_report_url_is_not_in_diagnostics(monitor, monkeypatch, caplog):
     provider(monkeypatch, [])
     url = 'https://www.csdata.cn/cmsmc/articleFileDir/a.xls?token=SECRET'
     with monitor.db() as db:
-        db.execute('INSERT INTO reports VALUES (?,?)', ('2026-10-28', url))
+        db.execute('INSERT INTO reports VALUES (?,?)', ('2026-10-27', url))
     def bad(*args):
         raise ValueError(url)
     monkeypatch.setattr(m, 'fetch_point', bad)
@@ -435,6 +437,7 @@ def test_correction_cannot_insert_observation_outside_retention_range(monitor, m
     with monitor.db() as db:
         db.execute('INSERT INTO reports VALUES (?,?)', (str(item.trade_date), item.url))
     moment = datetime(2029, 10, 1, 20, tzinfo=m.CHINA)
+    monkeypatch.setattr(m, 'trading_day', lambda day: day.weekday() < 5)
     monitor.refresh(background=False, moment=moment)
     assert monitor.history(moment)['points'] == []
     assert monitor.status(moment)['last_failure']['code'] == 'report_date_range'
@@ -494,7 +497,7 @@ def test_resolution_write_failure_rolls_back_new_observation(monitor, monkeypatc
 def test_outcome_diagnostic_is_current_run_and_never_raw(monitor, monkeypatch):
     records = []
     monkeypatch.setattr(m, 'record_task', lambda *args, **kw: records.append(kw))
-    provider(monkeypatch, [MOMENT.date()])
+    provider(monkeypatch, [MOMENT.date() - timedelta(days=1)])
     def fail(*args):
         raise TimeoutError('password=secret SELECT private FROM credentials')
     monkeypatch.setattr(m, 'fetch_point', fail)
@@ -503,9 +506,66 @@ def test_outcome_diagnostic_is_current_run_and_never_raw(monitor, monkeypatch):
     assert records[-1]['outcome'] == 'partial'
     assert error['code'] == 'timeout'
     assert error['stage'] == 'fetch'
-    assert error['trade_date'] == str(MOMENT.date())
+    assert error['trade_date'] == str(MOMENT.date() - timedelta(days=1))
     assert 'secret' not in str(error) and 'SELECT' not in str(error)
-    provider(monkeypatch, [MOMENT.date()])
+    provider(monkeypatch, [MOMENT.date() - timedelta(days=1)])
     monitor.refresh(background=False, moment=MOMENT)
     assert records[-1]['outcome'] == 'success'
     assert records[-1]['error_details'] is None
+
+
+@pytest.mark.parametrize('moment,limit', [
+    (datetime(2026, 10, 28, 7, 59, tzinfo=m.CHINA), date(2026, 10, 26)),
+    (datetime(2026, 10, 28, 8, tzinfo=m.CHINA), date(2026, 10, 27)),
+    (datetime(2026, 10, 28, 20, tzinfo=m.CHINA), date(2026, 10, 27)),
+    (datetime(2026, 10, 6, 20, tzinfo=m.CHINA), date(2026, 9, 29)),
+])
+def test_manual_statistics_limit_follows_verified_schedule_and_keeps_later_data(monitor, monkeypatch, moment, limit):
+    older = limit - timedelta(days=7)
+    later = limit + timedelta(days=1)
+    calls = provider(monkeypatch, [older, limit, later])
+    save_points(monitor, [(later, 246.25)])
+    with monitor.db() as db:
+        # A report beyond the eligible range can be from a different nominal
+        # schedule and must not shift the backfill start or be consumed.
+        db.execute('INSERT INTO reports VALUES (?,?)',
+                   (str(later + timedelta(days=1)), report(later + timedelta(days=1)).url))
+    assert monitor.refresh(background=False, moment=moment)
+    assert calls['lists'][0][1] == limit
+    assert calls['points'] == [limit, older]
+    with monitor.db() as db:
+        assert db.execute('SELECT ratio FROM points WHERE trade_date=?', (str(later),)).fetchone()[0] == 246.25
+    assert monitor.read_state()['target_date'] == limit.isoformat()
+    assert monitor.status(moment)['error'] is None
+
+
+def test_manual_custom_evening_schedule_does_not_admit_same_statistics_day(monitor, monkeypatch):
+    monkeypatch.setattr(m, 'task_config', lambda *_: {'enabled': False, 'times': ['20:00']})
+    calls = provider(monkeypatch, [date(2026, 10, 26), date(2026, 10, 27), date(2026, 10, 28)])
+    before = MOMENT.replace(hour=19, minute=59)
+    assert monitor.refresh(background=False, moment=before)
+    assert calls['lists'][-1][1] == date(2026, 10, 26)
+    assert monitor.refresh(background=False, moment=MOMENT.replace(hour=20))
+    assert calls['lists'][-1][1] == date(2026, 10, 27)
+    assert date(2026, 10, 28) not in calls['points']
+
+
+def test_manual_unknown_calendar_does_not_connect_or_change_existing_data(monitor, monkeypatch):
+    later = datetime(2027, 1, 4, 14, tzinfo=m.CHINA)
+    day = date(2026, 12, 31)
+    save_points(monitor, [(day, 250)])
+    calls = provider(monkeypatch, [day])
+    monitor.client_factory = lambda: pytest.fail('Unknown eligibility must not request the provider')
+    assert monitor.refresh(background=False, moment=later)
+    assert calls == {'lists': [], 'points': []}
+    assert monitor.history(later)['latest']['date'] == day.isoformat()
+    assert monitor.read_state()['target_date'] is None
+    assert '无法核验' in monitor.status(later)['error']
+
+
+def test_automatic_query_date_mapping_is_not_changed(monitor, monkeypatch):
+    today = MOMENT.date()
+    calls = provider(monkeypatch, [today])
+    assert monitor.refresh(background=False, moment=MOMENT, slot=MOMENT.isoformat())
+    assert calls['lists'][-1][1] == today
+    assert calls['points'] == [today]

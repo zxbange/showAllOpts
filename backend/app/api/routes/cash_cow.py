@@ -21,7 +21,11 @@ def status(screen=Depends(service)):
 
 @router.post('/refresh', status_code=202)
 def refresh(screen=Depends(service)):
-    return {'started': screen.refresh()}
+    from app.services.earnings_schedule import EarningsNotDue
+    try:
+        return {'started': screen.refresh()}
+    except EarningsNotDue as exc:
+        raise HTTPException(409, str(exc)) from None
 
 
 @router.post('/cancel', status_code=202)

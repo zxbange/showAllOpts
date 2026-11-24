@@ -85,7 +85,7 @@ def test_reported_november_holes_recover_before_newer_floor(setup, monkeypatch, 
         with store.db() as db:
             db.executemany('INSERT INTO cci_recovery VALUES(?,?,?)',
                            [(g, '2026-11-09', 'latest_quote') for g in GRADES])
-    clock[0] = datetime(2026, 11, 10, 1, tzinfo=timezone.utc)
+    clock[0] = datetime(2026, 11, 10, 13, tzinfo=timezone.utc)
     available = {(d, g) for d in ('2026-11-03', '2026-11-05', '2026-11-06',
                                   '2026-11-07', '2026-11-08', '2026-11-09', '2026-11-10')
                  for g in GRADES}
@@ -118,7 +118,7 @@ def test_reported_holes_retry_empty_and_failed_windows_without_overwriting_histo
     seed(store, *[(d, g) for d in ('2026-11-04', '2026-11-09') for g in GRADES],
          ('2026-11-05', 'CCI5000'))
     original = store.history()['rows']
-    clock[0] = datetime(2026, 11, 10, 1, tzinfo=timezone.utc)
+    clock[0] = datetime(2026, 11, 10, 13, tzinfo=timezone.utc)
     available = {(d, g) for d in ('2026-11-05', '2026-11-06', '2026-11-10') for g in GRADES}
     available.remove(('2026-11-06', 'CCI5500'))
     fail = [True]
@@ -146,7 +146,7 @@ def test_reported_holes_retry_empty_and_failed_windows_without_overwriting_histo
 
 def test_reported_holes_do_not_expand_fresh_installation_or_future_targets(setup):
     _, clock, _, store = setup
-    clock[0] = datetime(2026, 11, 10, 1, tzinfo=timezone.utc)
+    clock[0] = datetime(2026, 11, 10, 13, tzinfo=timezone.utc)
     with store.db() as db:
         db.execute('UPDATE schedule_meta SET initialized_at=?', (clock[0].isoformat(),))
     windows, missing, state = store.recovery_plan('2026-11-10')
@@ -247,9 +247,9 @@ def test_no_success_uses_installation_day_not_arbitrary_full_history(setup, monk
     store.collect(store.lock())
     assert pairs(store) == set()
     state = store.status()
-    assert state['targetDate'] == '2026-11-05'
+    assert state['targetDate'] == '2026-11-04'
     assert state['recovery']['dateFrom'] == '2026-11-02'
-    assert state['recovery']['pendingCount'] == state['recovery']['unavailableCount'] == 12
+    assert state['recovery']['pendingCount'] == state['recovery']['unavailableCount'] == 9
     assert all(row['origin'] == 'installation_date' for row in state['recovery']['initializedFrom'])
     assert min(start for start, _, _ in calls) == '2026-11-02'
     assert CCICoal(settings).recovery_plan('2026-11-06')[2]['dateFrom'] == '2026-11-02'
@@ -396,3 +396,56 @@ def test_manual_snapshot_database_failure_releases_lock(setup, monkeypatch):
     lock = store.lock()
     assert lock is not None
     lock.release()
+
+
+@pytest.mark.parametrize(('moment', 'target'), [
+    ('2026-11-24T12:59:59+00:00', '2026-11-23'),
+    ('2026-11-24T13:00:00+00:00', '2026-11-24'),
+    ('2026-10-06T13:00:00+00:00', '2026-09-30'),
+])
+def test_manual_cci_requests_only_due_target_and_preserves_schedule(setup, monkeypatch, moment, target):
+    module, clock, _, store = setup
+    clock[0] = datetime.fromisoformat(moment)
+    available = {(d, grade) for d in ('2026-11-23', '2026-11-24', '2026-09-30') for grade in GRADES}
+    calls = install_source(monkeypatch, module, available)
+    assert store.refresh()
+    store.thread.join(5)
+    assert not store.thread.is_alive()
+    assert (store.status()['targetDate'], store.status()['trigger']) == (target, 'manual')
+    assert (target, target, GRADES[0]) in calls
+    assert all(end <= target for _, end, _ in calls)
+    assert all(day <= target for day, _ in pairs(store))
+    with store.db() as db:
+        assert db.execute('SELECT count(*) FROM schedule_runs').fetchone() == (0,)
+
+
+@pytest.mark.parametrize(('click', 'run', 'target', 'isolated'), [
+    ('2026-11-24T12:59:59+00:00', '2026-11-24T13:00:01+00:00', '2026-11-23', False),
+    ('2026-11-06T15:59:59+00:00', '2026-11-06T16:00:01+00:00', '2026-11-06', True),
+])
+def test_cci_delayed_worker_freezes_target_but_uses_execution_calendar(setup, monkeypatch, click, run, target, isolated):
+    from threading import Event
+
+    module, clock, _, store = setup
+    clock[0] = datetime.fromisoformat(click)
+    run_worker = Event()
+    original_collect = store.collect
+
+    def delayed(*args, **kwargs):
+        assert run_worker.wait(3)
+        return original_collect(*args, **kwargs)
+
+    monkeypatch.setattr(store, 'collect', delayed)
+    calls = install_source(monkeypatch, module, set())
+    assert store.refresh()
+    clock[0] = datetime.fromisoformat(run)
+    run_worker.set()
+    store.thread.join(5)
+    assert not store.thread.is_alive()
+    assert store.status()['targetDate'] == target
+    assert (target, target, GRADES[0]) in calls
+    assert all(end <= target for _, end, _ in calls)
+    with store.db() as db:
+        assert db.execute('SELECT count(*) FROM schedule_runs').fetchone() == (0,)
+        assert bool(db.execute('SELECT * FROM cci_gap_checks').fetchall()) is not isolated
+        assert bool(db.execute('SELECT * FROM cci_recovery').fetchall()) is not isolated

@@ -1,7 +1,7 @@
 from app.services.collection_outcomes import latest_outcomes, outcome_history
 from contextlib import contextmanager, nullcontext
 from copy import deepcopy
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, datetime, time, timedelta, timezone
 from decimal import Decimal
 import hashlib
 import json
@@ -171,7 +171,7 @@ class Writer:
         return result
 
 
-def worker(tmp_path, *, moment=EVENING, edge_cases=False, refresh=None):
+def worker(tmp_path, *, moment=EVENING, edge_cases=False, refresh=None, schedule=time(0, 1)):
     clock = Clock(moment)
     provider = Provider(clock, edge_cases=edge_cases)
     writer = Writer()
@@ -183,9 +183,8 @@ def worker(tmp_path, *, moment=EVENING, edge_cases=False, refresh=None):
                                   client_factory=lambda: nullcontext(object()),
                                   calendar_loader=lambda client: list(CALENDAR),
                                   source_dates_loader=lambda owner: writer.dates)
-    # Source/retry fixtures intentionally retain an explicit midnight schedule.
-    from datetime import time
-    collection._auto_time = lambda: time(0, 1)
+    # Source/retry fixtures default to midnight; intraday cases name their slot.
+    collection._auto_time = lambda: schedule
     collection.start = lambda: None
     return collection, provider, writer, clock
 
@@ -407,7 +406,7 @@ def test_empty_database_failed_bootstrap_remains_a_tracked_gap(tmp_path):
 
 def test_weekend_calendar_check_is_cached_and_not_a_synthetic_trading_day(tmp_path):
     saturday = datetime(2026, 11, 14, 0, 1, tzinfo=CHINA)
-    collection, provider, writer, clock = worker(tmp_path, moment=saturday)
+    collection, provider, writer, clock = worker(tmp_path, moment=saturday, schedule=time(18, 30))
     assert not collection.tick()
     assert not provider.universe_calls
     collection.request_run('weekend-manual')
@@ -419,7 +418,7 @@ def test_weekend_calendar_check_is_cached_and_not_a_synthetic_trading_day(tmp_pa
 
 
 def test_new_year_calendar_not_treated_as_known_holiday(tmp_path):
-    collection, provider, writer, clock = worker(tmp_path, moment=datetime(2027, 1, 5, 0, 1, tzinfo=CHINA))
+    collection, provider, writer, clock = worker(tmp_path, moment=datetime(2027, 1, 5, 0, 1, tzinfo=CHINA), schedule=time(18, 30))
     assert not collection.tick()
     assert collection.status()['error'] is None
     collection.request_run('unknown-calendar-manual')
@@ -433,7 +432,7 @@ def test_new_year_calendar_not_treated_as_known_holiday(tmp_path):
 
 
 def test_incomplete_new_year_calendar_does_not_discard_saved_previous_day_repair(tmp_path):
-    collection, provider, writer, clock = worker(tmp_path, moment=datetime(2026, 12, 31, 18, 30, tzinfo=CHINA))
+    collection, provider, writer, clock = worker(tmp_path, moment=datetime(2026, 12, 31, 18, 30, tzinfo=CHINA), schedule=time(18, 30))
     collection.request_run('year-end-manual')
     provider.failures = {'sh600003'}
     assert not collection.tick()
@@ -850,7 +849,7 @@ def test_background_start_checks_today_immediately_and_stop_releases_lock(tmp_pa
 
 
 def test_unverified_heat_collects_dated_hq_only_and_never_runs_legacy_ma(tmp_path):
-    collection, provider, writer, clock = worker(tmp_path, moment=HQ_EVENING, edge_cases=True)
+    collection, provider, writer, clock = worker(tmp_path, moment=HQ_EVENING, schedule=time(18, 30), edge_cases=True)
     collection.request_run('manual-same-day-hq')
     provider.heat_verified = False
     assert not collection.tick()
@@ -878,7 +877,7 @@ def test_unverified_heat_collects_dated_hq_only_and_never_runs_legacy_ma(tmp_pat
 
 
 def test_hq_batch_checkpoint_resumes_after_restart_without_repeating_successes(tmp_path):
-    first, provider, writer, clock = worker(tmp_path,moment=HQ_EVENING)
+    first, provider, writer, clock = worker(tmp_path,moment=HQ_EVENING, schedule=time(18, 30))
     first.request_run('manual-same-day-hq')
     provider.heat_verified = False
     provider.hq_exception_at = 2
@@ -890,7 +889,7 @@ def test_hq_batch_checkpoint_resumes_after_restart_without_repeating_successes(t
     assert not writer.calls and not provider.quote_calls
     with first.connect() as db:
         saved = {row[0] for row in db.execute('SELECT symbol FROM hq_checkpoints')}
-    second, resumed, committed, later = worker(tmp_path, moment=HQ_EVENING + timedelta(minutes=1))
+    second, resumed, committed, later = worker(tmp_path, moment=HQ_EVENING + timedelta(minutes=1), schedule=time(18, 30))
     resumed.heat_verified = False
     second.request_run('resume-hq-checkpoints')
     assert not second.tick()
@@ -904,7 +903,7 @@ def test_hq_batch_checkpoint_resumes_after_restart_without_repeating_successes(t
 
 @pytest.mark.parametrize('http_status', [403, 429])
 def test_hq_access_limit_preserves_previous_batches_and_pauses_round(tmp_path, http_status):
-    collection, provider, writer, clock = worker(tmp_path,moment=HQ_EVENING)
+    collection, provider, writer, clock = worker(tmp_path,moment=HQ_EVENING, schedule=time(18, 30))
     collection.request_run('manual-same-day-hq')
     provider.heat_verified = False
     provider.hq_exception_at = 2
@@ -925,7 +924,7 @@ def test_hq_access_limit_preserves_previous_batches_and_pauses_round(tmp_path, h
 
 
 def test_hq_cache_is_bound_to_node_snapshot_hash(tmp_path):
-    collection, provider, writer, clock = worker(tmp_path,moment=HQ_EVENING)
+    collection, provider, writer, clock = worker(tmp_path,moment=HQ_EVENING, schedule=time(18, 30))
     collection.request_run('manual-same-day-hq')
     provider.heat_verified = False
     provider.hq_exception_at = 2
@@ -960,7 +959,7 @@ def test_historical_undated_snapshot_cannot_be_upgraded_with_todays_hq(tmp_path)
 
 
 def test_dated_snapshot_writer_retry_after_midnight_needs_no_source_requests(tmp_path):
-    collection, provider, writer, clock = worker(tmp_path,moment=HQ_EVENING)
+    collection, provider, writer, clock = worker(tmp_path,moment=HQ_EVENING, schedule=time(18, 30))
     collection.request_run('manual-same-day-hq')
     provider.heat_verified = False
     writer.error = WriterFailure('writer_permission_denied')
@@ -978,7 +977,7 @@ def test_dated_snapshot_writer_retry_after_midnight_needs_no_source_requests(tmp
 
 
 def test_last_hq_batch_checkpoint_can_be_reassembled_offline_after_midnight(tmp_path):
-    first, provider, writer, clock = worker(tmp_path,moment=HQ_EVENING)
+    first, provider, writer, clock = worker(tmp_path,moment=HQ_EVENING, schedule=time(18, 30))
     first.request_run('manual-same-day-hq')
     provider.heat_verified = False
     fetch = provider.fetch_dated_snapshot
@@ -1003,7 +1002,7 @@ def test_last_hq_batch_checkpoint_can_be_reassembled_offline_after_midnight(tmp_
 
 
 def test_dated_snapshot_rejects_one_wrong_day_without_partial_crowding_write(tmp_path):
-    collection, provider, writer, clock = worker(tmp_path,moment=HQ_EVENING)
+    collection, provider, writer, clock = worker(tmp_path,moment=HQ_EVENING, schedule=time(18, 30))
     collection.request_run('manual-same-day-hq')
     provider.heat_verified = False
     provider.hq_override = lambda row: {'date': '2026-11-09'} if row['symbol'] == 'bj600087' else {}
@@ -1074,7 +1073,7 @@ def test_writer_gate_rejects_wrong_method_even_with_publishable_flag(tmp_path):
 
 
 def test_same_day_node_hq_mismatch_refreshes_pool_only_on_bounded_next_retry(tmp_path):
-    collection, provider, writer, clock = worker(tmp_path,moment=HQ_EVENING)
+    collection, provider, writer, clock = worker(tmp_path,moment=HQ_EVENING, schedule=time(18, 30))
     collection.request_run('manual-same-day-hq')
     provider.heat_verified = False
     provider.hq_exception_at = 2
@@ -1105,7 +1104,7 @@ def test_same_day_node_hq_mismatch_refreshes_pool_only_on_bounded_next_retry(tmp
 
 
 def test_transport_failure_does_not_refresh_saved_node_snapshot(tmp_path):
-    collection, provider, writer, clock = worker(tmp_path,moment=HQ_EVENING)
+    collection, provider, writer, clock = worker(tmp_path,moment=HQ_EVENING, schedule=time(18, 30))
     collection.request_run('manual-same-day-hq')
     provider.heat_verified = False
     provider.hq_exception_at = 2
@@ -1169,7 +1168,7 @@ def test_manual_before_schedule_uses_latest_closed_session(tmp_path):
 
 
 def test_unavailable_history_keeps_existing_metric_and_partial_run(tmp_path):
-    collection, provider, writer, clock = worker(tmp_path, moment=HQ_EVENING)
+    collection, provider, writer, clock = worker(tmp_path, moment=HQ_EVENING, schedule=time(18, 30))
     provider.historical_capability = lambda: {'verified': False}
     collection.request_run('manual-with-unavailable-history')
     writer.dates = {'heat': {'2026-11-06', '2026-11-09'}, 'crowding': {'2026-11-06'}}
@@ -1500,7 +1499,7 @@ def test_older_tracked_failures_do_not_expand_source_boundaries(tmp_path, stale_
 @pytest.mark.parametrize(('moment', 'expected_days'), [
     (EVENING.replace(day=13, minute=29), (10, 11, 12)),
     (EVENING.replace(day=16), (10, 11, 12, 13)),
-    (EVENING.replace(day=15, hour=10), (10, 11, 12, 13)),
+    (EVENING.replace(day=15, hour=10), (10, 11, 12)),
 ])
 def test_manual_closed_session_boundary_with_weekends(tmp_path, moment, expected_days):
     collection, provider, writer, clock = worker(tmp_path, moment=moment)
@@ -1570,7 +1569,7 @@ def test_unresolved_quote_log_only_uses_known_error_codes(tmp_path, caplog, unsa
 
 
 def test_automatic_upgrade_replaces_blocked_legacy_snapshot_with_current_method_marker(tmp_path):
-    collection, legacy, writer, clock = worker(tmp_path,moment=HQ_EVENING)
+    collection, legacy, writer, clock = worker(tmp_path,moment=HQ_EVENING, schedule=time(18, 30))
     collection.request_run('manual-same-day-hq')
     legacy.heat_verified = False
     writer.dates['heat'] = {'2026-11-09'}
@@ -1581,6 +1580,8 @@ def test_automatic_upgrade_replaces_blocked_legacy_snapshot_with_current_method_
     old_crowding_hash = collection._day(DAY)['crowding_hash']
     writer.dates['crowding'].add('2026-11-13')
     writer.calls.clear()
+    # This part exercises the following Monday's early automated slot.
+    collection._auto_time = lambda: time(0, 1)
     clock.value = EVENING.replace(day=16)
     provider = Provider(clock)
     provider.source_id = 'public_market'
@@ -1668,8 +1669,40 @@ def test_manual_collection_notifications_obey_switch_and_no_change(tmp_path, mon
         assert db.execute('SELECT count(*) FROM outbox').fetchone()[0] == int(notify_enabled)
     collection.request_run('manual-notify')
     collection.tick(clock.advance(minutes=1))
+    collection.request_run('manual-noop')
+    collection.tick(clock.advance(minutes=1))
+    collection.request_run('manual-cancel')
+    assert collection.request_cancel('manual-cancel')['status'] == 'paused'
+    assert collection.request_cancel('manual-cancel')['status'] == 'paused'
     with notifications._database(collection.settings) as db:
-        assert db.execute('SELECT count(*) FROM outbox').fetchone()[0] == int(notify_enabled)
+        reports = {row['run']: row['message'] for row in db.execute('SELECT run,message FROM outbox')}
+    if notify_enabled:
+        manual = {key: message for key, message in reports.items() if '触发方式：手动采集' in message}
+        assert set(manual) == {'manual-notify', 'manual-noop', 'manual-cancel'}
+        assert '更新记录：0' in reports['manual-noop']
+        assert '采集结果：已取消' in reports['manual-cancel']
+    else:
+        assert not reports
+
+
+def test_market_recovery_and_cooldown_report_distinct_terminal_manual_runs(tmp_path, monkeypatch):
+    from app.services import collection_notifications as notifications
+    monkeypatch.setattr(notifications, 'enabled', lambda *_: True)
+    monkeypatch.setattr(notifications, 'start_notifications', lambda *_: None)
+    collection, _, _, clock = worker(tmp_path)
+    collection.request_run('manual-lost')
+    with collection.connect() as db:
+        db.execute("UPDATE manual_runs SET status='running' WHERE id='manual-lost'")
+    collection._recover()
+    collection._recover()
+    collection.request_run('manual-cooldown')
+    collection._put_meta(source_paused_until=(clock() + timedelta(hours=1)).isoformat(), last_error='source_rate_limited')
+    assert not collection.tick(clock())
+    with notifications._database(collection.settings) as db:
+        reports = {row['run']: row['message'] for row in db.execute('SELECT run,message FROM outbox')}
+    assert set(reports) == {'manual-lost', 'manual-cooldown'}
+    assert '采集结果：已中断' in reports['manual-lost']
+    assert '采集结果：已暂停' in reports['manual-cooldown']
 
 
 def test_module_outcomes_require_completed_cache_publication_and_keep_failures(tmp_path):

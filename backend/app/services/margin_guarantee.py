@@ -1,7 +1,10 @@
 from app.services.collection_outcomes import record_task
 from app.services.collection_errors import safe_error
-from app.services.collection_calendar import next_automatic_collection, automatic_collection_allowed, manual_failure_isolated
+from app.services.collection_calendar import (
+    automatic_collection_allowed, latest_due_slot, manual_failure_isolated, next_automatic_collection,
+)
 from app.services.system_configuration import task_config, latest_task_slot
+from app.services.holdings_calendar import trading_day
 """两融担保比例：东方财富接口、独立本地存储、北京时间08点调度。"""
 from app.services.system_runtime import source_client
 from app.services.collection_notifications import notify_collection
@@ -48,6 +51,18 @@ def latest_slot(moment):
     moment = moment.astimezone(CHINA)
     slot = moment.replace(hour=8, minute=0, second=0, microsecond=0)
     return slot if moment >= slot else slot - timedelta(days=1)
+
+
+def _manual_statistics_limit(settings, moment):
+    times = task_config(settings, 'margin')['times']
+    slot = latest_due_slot(moment, times, is_open=trading_day)
+    if slot is None:
+        return None
+    # Eastmoney exposes a statistics date, not a verifiable publication
+    # timestamp. Do not admit same-session observations at any clock time.
+    before_day = slot.replace(hour=0, minute=0, second=0, microsecond=0) - timedelta(microseconds=1)
+    previous = latest_due_slot(before_day, times, is_open=trading_day)
+    return previous.date() if previous else None
 
 
 class CollectionCancelled(Exception):
@@ -161,7 +176,7 @@ class MarginGuarantee:
                                     (self.root / ('cancel-' + state['run_id'])).exists()),
                     last_attempt_at=state.get('last_attempt_at'), last_success_at=state.get('last_success_at'),
                     error=state.get('error'), pending_reports=pending,
-                    source_corrections=corrections,
+                    target_date=state.get('target_date'), source_corrections=corrections,
                     recent_failures=state.get('recent_failures', []), last_failure=state.get('last_failure'),
                     daily_time=task_config(self.settings, 'margin')['times'][0], timezone='Asia/Shanghai',
                     next_run_at=next_run.isoformat() if next_run and task_config(self.settings, 'margin')['enabled'] else None)
@@ -211,7 +226,10 @@ class MarginGuarantee:
             if slot and state.get('scheduled_slot') == slot:
                 lock.release()
                 return False
+            data_end = (moment.astimezone(CHINA).date() if slot is not None
+                        else _manual_statistics_limit(self.settings, moment))
             state.update(run_id=uuid.uuid4().hex, active=True, error=None, stage='读取东方财富两融数据',
+                         target_date=data_end.isoformat() if data_end is not None else None,
                          processed=0, total=None, percent=None, last_attempt_at=moment.isoformat(),
                          recent_failures=[], last_failure=None, current_scheduled_slot=slot)
             if slot:
@@ -247,33 +265,39 @@ class MarginGuarantee:
                 raise CollectionCancelled()
         today = moment.astimezone(CHINA).date()
         cutoff = six_years_ago(today)
+        target = date.fromisoformat(state['target_date']) if state.get('target_date') else None
         failures = consecutive_failures = 0
         isolate = state.get('current_scheduled_slot') is None and manual_failure_isolated(moment)
         existing_reports = None
         scope = 'catalog'
         stopped_after_failures = False
-        LOG.info('Margin guarantee collection started date=%s', today)
+        LOG.info('Margin guarantee collection started date=%s target=%s', today, target or '-')
         try:
+            if target is None or target < cutoff:
+                state.update(stage='更新暂停，已保存的数据保留', error='无法核验有效采集时点及其前一交易日，本次未请求数据。')
+                run_error = safe_error(stage='validate', code='invalid_data')
+                return
             with self.db() as db:
                 existing_reports = {row[0] for row in db.execute('SELECT trade_date FROM reports')}
             with self.db() as db:
-                latest_report = db.execute('SELECT max(trade_date) FROM reports').fetchone()[0]
+                latest_report = db.execute('SELECT max(trade_date) FROM reports WHERE trade_date<=?',
+                                           (target.isoformat(),)).fetchone()[0]
                 pending_api = db.execute(
                     'SELECT min(r.trade_date) FROM reports r LEFT JOIN points p '
-                    'ON p.trade_date=r.trade_date WHERE p.trade_date IS NULL AND r.source_url LIKE ?',
-                    (API_URL + '?%',)).fetchone()[0]
+                    'ON p.trade_date=r.trade_date WHERE p.trade_date IS NULL AND r.source_url LIKE ? AND r.trade_date<=?',
+                    (API_URL + '?%', target.isoformat())).fetchone()[0]
             start = (max(cutoff, date.fromisoformat(latest_report)-timedelta(days=7))
                      if state.get('eastmoney_ready') and latest_report else cutoff)
             if pending_api:
                 start = max(cutoff, min(start, date.fromisoformat(pending_api)))
             with self.client_factory() as client:
                 check_cancel()
-                reports = list_reports(client, start, today, check_cancel=check_cancel)
+                reports = list_reports(client, start, target, check_cancel=check_cancel)
                 fetched = {(str(report.trade_date), report.url): report for report in reports}
                 check_cancel()
                 with self.db() as db:
                     for report in reports:
-                        if not start <= report.trade_date <= today:
+                        if not start <= report.trade_date <= target:
                             raise MarginSourceError('中证日报日期超出请求范围。')
                         db.execute('INSERT INTO reports(trade_date,source_url) VALUES (?,?) '
                                    'ON CONFLICT(trade_date) DO UPDATE SET source_url=excluded.source_url',
@@ -284,7 +308,7 @@ class MarginGuarantee:
                     pending = db.execute('SELECT r.trade_date,r.source_url FROM reports r LEFT JOIN points p '
                                          'ON p.trade_date=r.trade_date WHERE p.trade_date IS NULL AND r.trade_date<=? '
                                          + self.unresolved_sql() +
-                                         'ORDER BY r.trade_date DESC', (today.isoformat(),)).fetchall()
+                                         'ORDER BY r.trade_date DESC', (target.isoformat(),)).fetchall()
                 LOG.info('Margin catalog complete reports=%s pending=%s', len(reports), len(pending))
                 scope = 'collection'
                 # If a correctly titled report also exists, verify it first so
@@ -317,7 +341,7 @@ class MarginGuarantee:
                                 or (str(point['date']) != row['trade_date'] and not corrected)):
                             raise MarginSourceError('中证日报日期与待采日期不一致。')
                         observation_date = date.fromisoformat(str(point['date']))
-                        if not cutoff <= observation_date <= today:
+                        if not cutoff <= observation_date <= target:
                             raise MarginSourceError('中证日报日期超出请求范围。')
                         try:
                             ratio = float(point['ratio'])

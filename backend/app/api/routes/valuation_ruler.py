@@ -24,7 +24,12 @@ def status(response: Response,monitor=Depends(service)):
 
 @router.post('/refresh',status_code=202)
 def refresh(monitor=Depends(service)):
-    return {'started':monitor.refresh()}
+    from app.services.valuation_ruler import ValuationNotDue
+    try:
+        return {'started': monitor.refresh()}
+    except ValuationNotDue as exc:
+        # Definite no-start, not an ambiguous failed mutation response.
+        return {'started': False, 'detail': str(exc)}
 
 
 @router.post('/cancel',status_code=202)

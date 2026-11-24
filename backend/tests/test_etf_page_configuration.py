@@ -371,7 +371,7 @@ def test_cancel_route_is_run_specific_and_requires_admin_and_csrf(page_client):
     assert c.post(path, json={'request_id': request_id}).status_code == 403
 
 
-def test_page_retry_exhausted_is_explicit_preserves_completed_and_blocked(tmp_path):
+def test_page_retry_exhausted_does_not_reset_the_old_target_on_enqueue(tmp_path):
     w, _, _ = worker(tmp_path); save(w)
     with w.connect() as db:
         db.execute("INSERT INTO metadata VALUES ('coverage_end','2026-11-01')")
@@ -382,7 +382,9 @@ def test_page_retry_exhausted_is_explicit_preserves_completed_and_blocked(tmp_pa
     w.request_run('manual-retry-exhausted', retry_exhausted=True)
     with w.connect() as db:
         rows = [tuple(row) for row in db.execute('SELECT code,status,attempts FROM observations ORDER BY code')]
-    assert rows == [('a','pending',0), ('b','complete',6), ('c','blocked_unverified_history',6), ('historical','retry_exhausted',6)]
+        option = db.execute("SELECT retry_exhausted FROM manual_run_scope WHERE id='manual-retry-exhausted'").fetchone()
+    assert option[0] == 1
+    assert rows == [('a','retry_exhausted',6), ('b','complete',6), ('c','blocked_unverified_history',6), ('historical','retry_exhausted',6)]
     # Repeating an already accepted request must not reset attempts again.
     with w.connect() as db:
         db.execute("UPDATE observations SET status='retry_exhausted',attempts=6 WHERE code='a'")

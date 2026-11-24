@@ -14,11 +14,19 @@ EVENING = datetime(2026, 11, 6, 18, 30, tzinfo=CHINA)
 
 
 class Calendar:
+    official_days = {date(2026, 11, n): date(2026, 11, n).weekday() < 5 for n in range(1, 31)}
+
     def default_range(self, count):
         return DAY - timedelta(days=1), DAY
 
     def range(self, start, end):
         return [start, end]
+
+    def previous(self, day):
+        day -= timedelta(days=1)
+        while not self.official_days[day]:
+            day -= timedelta(days=1)
+        return day
 
 
 class Collector:
@@ -46,7 +54,8 @@ class Collector:
     def existing_observations(self, engine, targets):
         return set()
 
-    def write_records(self, engine, shares, prices, calendar, *, calendar_target, insert_only=False):
+    def write_records(self, engine, shares, prices, calendar, *, calendar_target, insert_only=False,
+                      share_comparison=None):
         self.calendar_targets.append(calendar_target)
         if self.write_failure:
             raise RuntimeError('secret writer DSN')
@@ -366,7 +375,8 @@ def test_status_reports_target_not_completed_coverage(tmp_path):
 def test_daily_scope_ignores_legacy_history_target_and_respects_confirmed_close(tmp_path, hour, expected_day):
     from test_etf_page_configuration import save
     w, collector, _ = worker(tmp_path)
-    save(w, {'lookback_days': 1500, 'batch_days': 20, 'enabled': False})
+    w.clock = lambda: EVENING.replace(hour=hour)
+    save(w, {'lookback_days': 1500, 'batch_days': 20, 'enabled': False, 'schedule': [f'{hour:02d}:00']})
     calls = []
     class DailyCalendar(Calendar):
         def default_range(self, count):
@@ -382,6 +392,39 @@ def test_daily_scope_ignores_legacy_history_target_and_respects_confirmed_close(
     with w.connect() as db:
         assert [row[0] for row in db.execute('SELECT DISTINCT day FROM observations')] == [expected_day.isoformat()]
     assert w.status()['target_sessions'] == 1 and w.status()['manual']['status'] == 'complete'
+
+
+def test_legacy_already_queued_manual_uses_persisted_request_without_retry_reset(tmp_path):
+    w, collector, _ = worker(tmp_path)
+    w.start = lambda: None
+    with w.connect() as db:
+        db.execute('DROP TABLE manual_run_scope')  # State from the previous version.
+        db.execute("INSERT INTO manual_runs(id,status,requested_at,phase) VALUES ('legacy','queued',?,'queued')",
+                   (EVENING.isoformat(),))
+        db.execute("INSERT INTO observations VALUES ('prices','510300.XSHG',?,'retry_exhausted',6)", (DAY.isoformat(),))
+    assert w.tick(EVENING)
+    assert {day for day, *_ in collector.calls} == {DAY}
+    with w.connect() as db:
+        assert db.execute('SELECT COUNT(*) FROM manual_run_scope').fetchone()[0] == 0
+        assert db.execute("SELECT attempts FROM observations WHERE kind='prices' AND code='510300.XSHG'").fetchone()[0] == 7
+
+
+@pytest.mark.parametrize(('times', 'verified_days', 'error'), [
+    ([], Calendar.official_days, 'etf_manual_schedule_invalid'),
+    (['18:30'], {}, 'etf_manual_slot_unverified'),
+])
+def test_manual_fails_closed_without_valid_schedule_and_verified_due_day(tmp_path, times, verified_days, error):
+    w, collector, _ = worker(tmp_path)
+    w.start = lambda: None
+    calendar = Calendar()
+    calendar.official_days = verified_days
+    collector.ExchangeClient = lambda _: SimpleNamespace(calendar=lambda: calendar)
+    load = w.configuration.load
+    w.configuration.load = lambda: load() | {'schedule': times}
+    w.request_run('manual-fails-closed')
+    assert not w.tick(EVENING)
+    assert not collector.calls and not collector.writes
+    assert w.status()['latest_result']['error_details']['code'] == error
 
 
 def test_latest_prices_require_fresh_verification_even_when_prior_values_exist(tmp_path):
@@ -587,7 +630,7 @@ def test_collection_logs_unexpected_calendar_failure(tmp_path, caplog):
     assert 'private-url-and-token' not in caplog.text
 
 
-def test_manual_etf_notification_uses_shared_change_gate(tmp_path, monkeypatch):
+def test_manual_etf_notification_dedup_and_cancel_use_stable_run_ids(tmp_path, monkeypatch):
     from app.services import collection_notifications as notifications
     monkeypatch.setattr(notifications, 'enabled', lambda *_: True)
     monkeypatch.setattr(notifications, 'start_notifications', lambda *_: None)
@@ -605,8 +648,50 @@ def test_manual_etf_notification_uses_shared_change_gate(tmp_path, monkeypatch):
         assert db.execute('SELECT count(*) FROM outbox').fetchone()[0] == 1
     w.request_run('manual-etf-notify')
     w.tick(EVENING)
+    assert w.request_run('manual-etf-cancel')['status'] == 'queued'
+    assert w.request_cancel('manual-etf-cancel')['status'] == 'cancelled'
+    assert w.request_cancel('manual-etf-cancel')['status'] == 'cancelled'
     with notifications._database(w.settings) as db:
-        assert db.execute('SELECT count(*) FROM outbox').fetchone()[0] == 1
+        first, second = db.execute('SELECT run,message FROM outbox ORDER BY rowid').fetchall()
+    assert first['run'] == 'manual:manual-etf-notify'
+    assert second['run'] == 'manual:manual-etf-cancel' and '采集结果：已取消' in second['message']
+
+
+def test_manual_etf_reports_cache_partial_without_second_alert_on_publish_retry(tmp_path, monkeypatch):
+    from app.services import collection_notifications as notifications
+    from test_etf_page_configuration import save
+    monkeypatch.setattr(notifications, 'enabled', lambda *_: True)
+    monkeypatch.setattr(notifications, 'start_notifications', lambda *_: None)
+    w, _, _ = worker(tmp_path, refresh=lambda **_: False)
+    w.start = lambda: None
+    save(w, {'enabled': False})
+    w.request_run('pending-cache')
+    assert w.tick(EVENING)
+    assert w.status()['latest_result']['status'] == 'partial'
+    w.clock = lambda: EVENING + timedelta(minutes=6)
+    w.refresh = lambda **_: True
+    assert not w.tick(w.clock())
+    with notifications._database(w.settings) as db:
+        event, = db.execute('SELECT run,message FROM outbox').fetchall()
+    assert event['run'] == 'manual:pending-cache'
+    assert '采集结果：部分完成' in event['message']
+
+
+def test_recovered_interruptions_notify_only_transitions_not_old_etf_history(tmp_path, monkeypatch):
+    from app.services import collection_notifications as notifications
+    monkeypatch.setattr(notifications, 'enabled', lambda *_: True)
+    monkeypatch.setattr(notifications, 'start_notifications', lambda *_: None)
+    w, _, _ = worker(tmp_path)
+    w.start = lambda: None
+    w.request_run('abandoned')
+    with w.connect() as db:
+        db.execute("UPDATE manual_runs SET status='running' WHERE id='abandoned'")
+        for _ in range(2):
+            w._recover_manual_runs(db)
+    with notifications._database(w.settings) as db:
+        event, = db.execute('SELECT run,message FROM outbox').fetchall()
+    assert event['run'] == 'manual:abandoned'
+    assert '采集结果：已中断' in event['message']
 
 
 def test_run_history_keeps_automatic_failure_when_manual_collection_succeeds(tmp_path):

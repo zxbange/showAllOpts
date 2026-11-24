@@ -30,6 +30,25 @@ def daily_next_run(moment=None, at='23:00'):
     return next_automatic_collection(result if result > moment else result + timedelta(days=1))
 
 
+class EarningsNotDue(ValueError):
+    """The current-only source cannot safely supply the requested older day."""
+
+
+def earnings_due_day(settings, moment):
+    from app.services.collection_calendar import latest_due_slot, trading_day
+    # The current-day sources are only eligible at/after 16:00; an
+    # earlier custom clock still cannot advance the effective target day.
+    clocks = [max(value, '16:00') for value in task_config(settings, 'earnings_selection')['times']]
+    due = latest_due_slot(moment, clocks, is_open=trading_day)
+    return due.date() if due else None
+
+
+def earnings_not_due_message(day):
+    target = day.isoformat() if day else '暂无已核验交易日'
+    return (f'计划采集截止：{target}。当前接口不能重建历史快照，'
+            '本次未请求当天数据，保留已有结果。请在下一次计划到期后重试。')
+
+
 class ExecutionLease:
     def __init__(self, group, task):
         self.group, self.task = group, task
@@ -150,6 +169,13 @@ class EarningsScheduler:
                     self.update(job, 'interrupted', job['run_id'], 'No matching collection state; not replayed')
                     continue
                 if busy:
+                    return None
+                if job['slot'] != moment.date().isoformat():
+                    # Current-only sources cannot replay unstarted older slots.
+                    # A prior validated payload can still be resumed by a new run.
+                    self.update(job, 'skipped', detail='Current-only source; past slot cannot be fetched')
+                    continue
+                if moment.strftime('%H:%M') < config['times'][0] or moment.hour < 16:
                     return None
                 self.update(job, 'launching')
                 try:

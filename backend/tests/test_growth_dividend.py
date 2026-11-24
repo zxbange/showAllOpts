@@ -361,22 +361,28 @@ def test_automatic_startup_notifies_once_across_workers_and_later_daily_slot(mon
     with notifications._database(monitor.settings) as db:
         rows = db.execute('SELECT * FROM outbox').fetchall()
     assert len(rows) == 1
-    assert '创红比：0.500000' in rows[0]['message']
+    assert '创红比：0.5' in rows[0]['message']
     # Another worker sees the same published data and consumed daily slot.
     replacement = m.GrowthDividend(monitor.settings, client_factory=lambda: nullcontext(object()))
     try:
         replacement.tick(MOMENT)
         monitor.tick(MOMENT.replace(hour=19))
-        # A later manual refresh with unchanged business values does not send.
-        monitor.refresh(background=False, moment=MOMENT)
         with notifications._database(monitor.settings) as db:
             assert db.execute('SELECT count(*) FROM outbox').fetchone()[0] == 1
+        # An accepted manual refresh sends its outcome, even without changes.
+        monitor.refresh(background=False, moment=MOMENT)
+        with notifications._database(monitor.settings) as db:
+            messages = [row['message'] for row in db.execute('SELECT message FROM outbox ORDER BY rowid')]
+        assert len(messages) == 2
+        assert '触发方式：手动采集' not in messages[0]
+        assert '触发方式：手动采集' in messages[1]
+        assert '采集结果：成功（无新增或变更）' in messages[1]
     finally:
         replacement.stop()
 
 
 @pytest.mark.parametrize('notify_enabled,preload', [(False, False), (True, True)])
-def test_startup_no_notification_when_disabled_or_no_business_changes(monitor, monkeypatch, notify_enabled, preload):
+def test_startup_respects_switch_even_if_no_business_changes(monitor, monkeypatch, notify_enabled, preload):
     from app.services import collection_notifications as notifications
     monkeypatch.setattr(notifications, 'enabled', lambda *_: notify_enabled)
     monkeypatch.setattr(notifications, 'start_notifications', lambda *_: None)
@@ -392,7 +398,11 @@ def test_startup_no_notification_when_disabled_or_no_business_changes(monitor, m
     monitor.tick(MOMENT)
     assert monitor.read_state()['trigger'] == 'startup'
     with notifications._database(monitor.settings) as db:
-        assert db.execute('SELECT count(*) FROM outbox').fetchone()[0] == 0
+        messages = [row['message'] for row in db.execute('SELECT message FROM outbox')]
+    assert len(messages) == int(notify_enabled)
+    if notify_enabled:
+        assert '触发方式：自动采集' in messages[0]
+        assert '成功（无新增或变更）' in messages[0]
 
 
 @pytest.mark.parametrize('failure_type', ['connection', 'schema', 'local'])
@@ -460,3 +470,32 @@ def test_outcome_window_diagnostic_clears_after_success(monitor, monkeypatch):
     monitor.refresh(background=False, moment=MOMENT)
     assert records[-1]['outcome'] == 'success'
     assert records[-1]['error_details'] is None
+
+
+def test_manual_respects_configured_due_slot_even_after_old_fixed_close(monitor, monkeypatch):
+    calls = provider(monkeypatch)
+    monkeypatch.setattr(m, 'task_config', lambda settings, key: {'enabled': True, 'times': ['20:00']})
+
+    assert monitor.refresh(background=False, moment=MOMENT.replace(hour=19, minute=59))
+    assert calls and all(MOMENT.date() not in days for _, _, _, days in calls)
+    assert monitor.history(MOMENT)['latest']['date'] == '2026-11-09'
+
+    calls.clear()
+    assert monitor.refresh(background=False, moment=MOMENT.replace(hour=20, minute=0))
+    assert len(calls) == 3 and all(days == {MOMENT.date()} for _, _, _, days in calls)
+    assert monitor.history(MOMENT)['latest']['date'] == '2026-11-10'
+
+    # Existing persisted business history is not hidden by the capture policy.
+    calls.clear()
+    assert monitor.refresh(background=False, moment=MOMENT.replace(hour=19, minute=59))
+    assert not calls
+    assert monitor.history(MOMENT)['latest']['date'] == '2026-11-10'
+
+
+def test_invalid_internal_slot_does_not_leak_lock_or_leave_running_state(monitor, monkeypatch):
+    provider(monkeypatch)
+    assert monitor.refresh(background=False, moment=MOMENT, slot='invalid-internal-slot')
+    assert not monitor.status(MOMENT)['running']
+    assert latest_outcomes(monitor.settings)['items']['growth-dividend']['outcome'] == 'failed'
+    assert monitor.refresh(background=False, moment=MOMENT)
+    assert monitor.history(MOMENT)['latest']['date'] == '2026-11-10'

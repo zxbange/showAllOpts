@@ -251,7 +251,7 @@ def test_stopped_worker_and_start_failure_release_lock(monitor,monkeypatch):
     monitor.stop_event.set();assert not monitor.refresh()
     monitor.stop_event.clear()
     monkeypatch.setattr(threading.Thread,'start',lambda *args:(_ for _ in ()).throw(RuntimeError('thread failed')))
-    with pytest.raises(RuntimeError):monitor.refresh()
+    with pytest.raises(RuntimeError):monitor.refresh(moment=MOMENT)
     assert not monitor.running() and monitor.status()['status']=='failed'
 
 
@@ -292,14 +292,14 @@ def test_production_scheduler_flag_start_stop_without_network(monitor,monkeypatc
     monitor.stop();assert not monitor.scheduler.is_alive() and not monitor.refresh()
 
 
-def test_manual15_vs_schedule1829_and1830(monitor):
+def test_manual_and_automatic_use_same_due_date_at_1830(monitor):
     monitor.settings.valuation_ruler_worker_enabled = True
     calls=provider(monitor)
     monitor.tick(MOMENT.replace(hour=18,minute=29),background=False)
     assert calls==[date(2026,11,9)]
     calls.clear();monitor.refresh(background=False,moment=MOMENT.replace(hour=15,minute=0))
-    assert calls==[date(2026,11,10)]
-    assert monitor.history(MOMENT.replace(hour=15,minute=0))['latest']['date']=='2026-11-10'
+    assert all(day <= date(2026,11,9) for day in calls)
+    assert monitor.history(MOMENT.replace(hour=15,minute=0))['latest']['date']=='2026-11-09'
     with monitor.db() as db:assert db.execute('SELECT 1 FROM slots WHERE slot=?',(m.slot_for(date(2026,11,10)),)).fetchone() is None
     monitor.tick(MOMENT.replace(hour=18,minute=30),background=False)
     with monitor.db() as db:assert db.execute('SELECT outcome FROM slots WHERE slot=?',(m.slot_for(date(2026,11,10)),)).fetchone()[0]=='complete'

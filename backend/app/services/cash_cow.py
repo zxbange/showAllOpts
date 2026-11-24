@@ -197,8 +197,13 @@ class CashCowScreen:
             return True
 
     def refresh(self, background=True, *, moment=None, slot=None):
-        from app.services.earnings_schedule import acquire_execution
+        from app.services.earnings_schedule import (
+            EarningsNotDue, acquire_execution, earnings_due_day, earnings_not_due_message,
+        )
         moment = moment or now()
+        if moment.tzinfo is None:
+            raise ValueError('Collection requires a timezone-aware datetime')
+        moment = moment.astimezone(CHINA)
         if slot is not None and not automatic_collection_allowed(moment):
             return False
         if self.stop_event.is_set():
@@ -208,16 +213,29 @@ class CashCowScreen:
             return False
         state = None
         try:
-            moment = moment or now()
-            if moment.tzinfo is None:
-                raise ValueError('Collection requires a timezone-aware datetime')
+            # The application uses a current-only universe. Dated standalone
+            # adapters may be injected explicitly by callers.
+            current_only = self.source_factory is None
+            due_day = earnings_due_day(self.settings, moment) if current_only else moment.date()
             state = self.read_state()
             if state.get('run_isolated'):
                 quarantine_publication(self, 'public_publication', state)
             state['run_isolated'] = slot is None and manual_failure_isolated(moment)
-            if slot is None:
-                restore_manual_publication(self, 'public_publication', state)
+            restored = slot is None and restore_manual_publication(self, 'public_publication', state)
+            with self.db() as db:
+                pending = (db.execute(
+                    "SELECT json_extract(payload, '$.\"3\".snapshot.as_of') FROM public_publication WHERE id=1"
+                ).fetchone() if db.execute(
+                    "SELECT 1 FROM sqlite_master WHERE type='table' AND name='public_publication'"
+                ).fetchone() else None)
+            if current_only and (due_day is None or (pending and (not isinstance(pending[0], str)
+                                                                or pending[0] > due_day.isoformat()))
+                                 or (not pending and due_day != moment.date())):
+                if restored:
+                    quarantine_publication(self, 'public_publication', state)
+                raise EarningsNotDue(earnings_not_due_message(due_day))
             state.update(run_id=uuid.uuid4().hex, active=True, stage='读取全A股股票池（统一更新3/5/10年）',
+                         due_day=due_day.isoformat(),
                          phase='读取全A股股票池', processed=0, total=None, error=None,
                          last_attempt_at=moment.isoformat(), current_scheduled_slot=slot)
             if slot:
@@ -229,6 +247,9 @@ class CashCowScreen:
                 self.worker.start()
             else:
                 self._collect(lock, state, moment)
+        except EarningsNotDue:
+            lock.release()
+            raise
         except BaseException as exc:
             LOG.error('Cash cow launch or cleanup failed details=%s', diagnostic_details(exc))
             try:
@@ -296,7 +317,8 @@ class CashCowScreen:
             if publication.resume(write_public, apply, check_cancel, prepare):
                 with self.db() as db:
                     restored = json.loads(db.execute('SELECT payload FROM snapshots WHERE years=3').fetchone()[0])
-                if restored['snapshot']['as_of'] >= moment.astimezone(CHINA).date().isoformat():
+                if (restored['snapshot']['as_of'] >= moment.date().isoformat()
+                        or state.get('due_day', moment.date().isoformat()) != moment.date().isoformat()):
                     published, run_outcome = True, 'success'
                     return
                 state.update(active=True, processed=0, total=None, stage='读取本期公开数据')

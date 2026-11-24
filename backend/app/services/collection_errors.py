@@ -13,6 +13,8 @@ MESSAGES = {
     'etf_missing_prices': '目标交易日的 ETF 收盘价未全部返回。',
     'etf_missing_shares_and_prices': '目标交易日的 ETF 份额和收盘价均未全部返回。',
     'etf_szse_price_archived': '深交所已归档该交易日的基金行情，公开历史报表无法核验当日收盘价。',
+    'etf_manual_schedule_invalid': '未能读取有效的 ETF 自动采集时间，手动采集未开始。',
+    'etf_manual_slot_unverified': '交易日历未能核验最近已到的 ETF 自动采集时点，手动采集未开始。',
     'cancelled': '采集已取消。',
     'interrupted': '采集被中断，尚未确认完整完成。',
     'market_history_unverified': '未能核验该交易日的历史行情快照。',

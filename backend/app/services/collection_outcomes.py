@@ -160,6 +160,8 @@ TASK_MODULES = {
 
 def record_task(settings, task, *, outcome, scheduled, run_key=None, error_details=None):
     from uuid import uuid4
+    from app.services.collection_notifications import capture_task_outcome
+    capture_task_outcome(task, outcome, error_details)
     run_key = run_key or uuid4().hex
     for module in TASK_MODULES.get(task, ()):
         record_outcome(settings, module, run_key=run_key, outcome=outcome,

@@ -141,7 +141,10 @@ export function ValuationRulerPage() {
     statusEpoch.current++
     statusRequest.current?.abort()
     try {
-      await updateValuation(action)
+      const result = await updateValuation(action)
+      if (mounted.current && result.started === false && result.detail) {
+        setActionError(result.detail)
+      }
     } catch (reason) {
       mutation.uncertain = true
       if (mounted.current) {

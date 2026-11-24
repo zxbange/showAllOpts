@@ -54,14 +54,16 @@ def test_failed_source_does_not_block_cash_cow(queue):
     assert q.jobs()[0]['status'] == 'failed'
 
 
-def test_interrupted_run_retains_job_and_continues(queue):
+def test_interrupted_run_retained_but_unstarted_past_slot_cannot_use_current_snapshot(queue):
     q, a, b = queue
     q.tick(at())
     a.busy = False  # Process died, active flag survived.
     restarted = EarningsScheduler(q.settings, a, b)
-    assert restarted.tick(at(day=17, hour=1)) == 'cash_cow'
-    assert restarted.jobs()[0]['status'] == 'interrupted'
-    assert len(a.calls) == 1
+    assert restarted.tick(at(day=17, hour=1)) is None
+    assert [job['status'] for job in restarted.jobs()] == ['interrupted', 'skipped']
+    assert not b.calls
+    assert restarted.tick(at(day=17)) == 'dividend_selection'
+    assert [call['slot'] for call in a.calls] == ['2026-11-16', '2026-11-17']
 
 
 def test_manual_conflict_waits_without_losing_slot(queue):

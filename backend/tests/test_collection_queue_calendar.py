@@ -1,5 +1,5 @@
 """Real exchange-calendar boundaries around otherwise synthetic collector sources."""
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from zoneinfo import ZoneInfo
 from types import SimpleNamespace
 
@@ -8,8 +8,11 @@ import pytest
 CHINA = ZoneInfo('Asia/Shanghai')
 
 
-@pytest.mark.parametrize('day', ['2026-11-07', '2026-10-01', '2027-01-04'])
-def test_etf_auto_closed_but_manual_failure_not_enrolled(tmp_path, day):
+@pytest.mark.parametrize(('day', 'verified_target'), [
+    ('2026-11-07', '2026-11-06'), ('2026-10-01', '2026-09-30'),
+    ('2027-01-04', '2027-01-04'),  # Official dynamic calendar can cover outside the static scheduler year.
+])
+def test_etf_auto_closed_but_manual_failure_not_enrolled(tmp_path, day, verified_target):
     from test_etf_collection import worker
     w, source, _ = worker(tmp_path)
     moment = datetime.fromisoformat(day + 'T19:00:00').replace(tzinfo=CHINA)
@@ -17,16 +20,17 @@ def test_etf_auto_closed_but_manual_failure_not_enrolled(tmp_path, day):
     w.start = lambda: None
     assert not w.tick(moment)
     assert not source.calls
-    calendar = SimpleNamespace(default_range=lambda n: (
-        moment.date() - timedelta(days=2), moment.date() - timedelta(days=1)))
+    target = date.fromisoformat(verified_target)
+    calendar = SimpleNamespace(default_range=lambda n: (target, target),
+                               official_days={moment.date(): target == moment.date(), target: True})
     source.ExchangeClient = lambda client: SimpleNamespace(calendar=lambda: calendar)
     source.collect = lambda *a, **k: ([], [], {})
     w.request_run('manual-closed')
     assert not w.tick(moment)
     with w.connect() as db:
         assert not db.execute('SELECT 1 FROM slots').fetchone()
-        rows = db.execute('SELECT status, attempts FROM observations').fetchall()
-    assert rows and all(row['status'] == 'manual_only' and row['attempts'] == 0 for row in rows)
+        rows = db.execute('SELECT day, status, attempts FROM observations').fetchall()
+    assert rows and all(tuple(row) == (verified_target, 'manual_only', 0) for row in rows)
 
 
 @pytest.mark.parametrize('day', ['2026-11-14', '2026-10-01', '2027-01-04'])

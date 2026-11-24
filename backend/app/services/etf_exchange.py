@@ -683,7 +683,8 @@ def _write_transaction(connection):
         raise
 
 
-def write_records(engine, shares, prices, calendar=None, *, calendar_target=None, insert_only=False):
+def write_records(engine, shares, prices, calendar=None, *, calendar_target=None, insert_only=False,
+                  share_comparison=None):
     from app.models.etf import ETFPrice, ETFShare, ETFTradingDay
     from app.services.etf_diagnostics import database_phase
 
@@ -724,6 +725,14 @@ def write_records(engine, shares, prices, calendar=None, *, calendar_target=None
                         _flush_records(connection, table, inserts, updates)
             with database_phase('commit'):
                 transaction.commit()
+        if share_comparison is not None:
+            # Optional notification data cannot roll back this already
+            # committed write or consume a connection-retry budget. Reuse the
+            # checked-out connection, without another checkout or HTTP call.
+            try:
+                share_comparison.capture_committed(connection, batches[0][1])
+            except Exception as exc:
+                LOG.warning('ETF notification comparison unavailable error_type=%s', type(exc).__name__)
     finally:
         # close() may try to rollback a broken socket. Preserve an original
         # failure or a known successful business commit, rather than treating

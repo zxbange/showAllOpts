@@ -45,10 +45,14 @@ def test_summary_only_sync_and_static_ttm_are_separate(synced, monkeypatch):
     assert service.source_factory is EastmoneySource
     before = service.history()
     # Public collection remains available after JQ sync; a failed source keeps all history.
-    def unavailable(*args):
+    provider_calls = []
+    def unavailable(_source, cutoff, _moment):
+        provider_calls.append(cutoff)
         raise ValueError('synthetic unavailable')
     monkeypatch.setattr(EastmoneySource, 'collect_latest', unavailable)
-    assert service.refresh(background=False) is True
+    moment = dt.datetime(2026, 1, 7, 22, tzinfo=dt.timezone(dt.timedelta(hours=8)))
+    assert service.refresh(background=False, moment=moment) is True
+    assert provider_calls == [moment.date()]
     assert service.status()['status'] == 'failed' and service.history() == before
     cache.refresh('valuation-ruler', background=False)
     assert len(service.history()['points']) == 3

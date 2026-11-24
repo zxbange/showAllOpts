@@ -1,5 +1,6 @@
 """Opt-in collection-result Telegram outbox; never a dependency of collection success."""
-from datetime import datetime
+from contextvars import ContextVar
+from datetime import date, datetime
 from decimal import Decimal, InvalidOperation
 from functools import wraps
 import inspect
@@ -12,12 +13,29 @@ import uuid
 from zoneinfo import ZoneInfo
 import portalocker
 
+from app.services.collection_errors import safe_error, sanitize_error
+
 LOG = logging.getLogger(__name__)
 LABELS = {'etf': '国家队动态', 'margin': '两融担保比例', 'commodities': 'A00 铝',
           'growth_dividend': '创红比和科创红利比', 'market': '市场热度和抱团拥挤度',
           'valuation_ruler': '估值标尺', 'cci': 'CCI 动力煤', 'cash_cow': '奶牛股', 'dividend_selection': '高股息（银行 / 非银行）'}
 _WORKERS = {}
 _WORKERS_LOCK = threading.Lock()
+_CAPTURE = ContextVar('collection_notification_outcome', default=None)
+_RESULT_LABELS = {
+    'success': '成功', 'complete': '成功', 'completed': '成功',
+    'partial': '部分完成', 'publication_pending': '部分完成（数据发布待确认）',
+    'failed': '失败', 'error': '失败', 'cancelled': '已取消', 'interrupted': '已中断',
+    'skipped': '未采集', 'blocked': '未采集', 'paused': '已暂停',
+    'no_quote': '部分完成（来源尚无目标日报价）',
+}
+
+
+def capture_task_outcome(task, outcome, error_details=None):
+    """Share the exact terminal decision with the active decorator, not an emitter."""
+    active = _CAPTURE.get()
+    if active is not None and active[0] == task:
+        active[1].update(outcome=outcome, error_details=error_details)
 
 
 def enabled(settings, task_id):
@@ -37,24 +55,94 @@ def _database(settings):
     return db
 
 
-def format_result(task_id, outcome, changed_count, summary, collected_at=None):
-    stamp = collected_at or datetime.now(ZoneInfo('Asia/Shanghai')).isoformat(timespec='seconds')
-    status = '成功' if outcome in {'complete', 'completed', 'success'} else '失败（部分数据已更新）'
-    lines = [LABELS[task_id], '采集时间：' + str(stamp), '采集结果：' + status,
-             '更新记录：' + str(changed_count), *[str(line)[:400] for line in summary[:12]]]
-    return '\n'.join(lines)[:1800]
+MAX_TELEGRAM_UNITS = 3900
+_CHINA = ZoneInfo('Asia/Shanghai')
+_ERROR_STAGES = {'fetch': '数据读取', 'validate': '数据核验', 'database_write': '数据库写入',
+                 'cache_publish': '缓存发布', 'collection': '采集', 'database_sync': '数据库同步'}
+
+
+def _data_day(value):
+    if type(value) is date:
+        return value.isoformat()
+    if isinstance(value, str) and len(value) == 10:
+        try:
+            parsed = date.fromisoformat(value)
+            if value == parsed.isoformat():
+                return value
+        except ValueError:
+            pass
+    return None
+
+
+def _format_slice(lines, units=MAX_TELEGRAM_UNITS):
+    # The outbox sends one plain text message; keep it within the Telegram
+    # UTF-16 limit even for non-BMP characters, without silently cutting a row.
+    rendered = []
+    marker = '其余项目请在页面查看。'
+    remaining = units - len(marker) - 1
+    for line in lines:
+        for raw in str(line).splitlines() or ['']:
+            clean = ''.join(c for c in raw[:550] if not 0xD800 <= ord(c) <= 0xDFFF)
+            length = sum(2 if ord(c) > 0xFFFF else 1 for c in clean) + 1
+            if length > remaining:
+                return '\n'.join([*rendered, marker])
+            rendered.append(clean)
+            remaining -= length
+    return '\n'.join(rendered)
+
+
+def format_result(task_id, outcome, changed_count, summary, collected_at=None, *, manual=False,
+                  error_details=None, data_date=None, retrying=False):
+    try:
+        moment = datetime.fromisoformat(collected_at) if isinstance(collected_at, str) else collected_at
+        if moment is None or moment.utcoffset() is None:
+            raise ValueError
+        stamp = moment.astimezone(_CHINA).isoformat(timespec='seconds')
+    except (ValueError, TypeError, AttributeError):
+        stamp = datetime.now(_CHINA).isoformat(timespec='seconds')
+    status = _RESULT_LABELS.get(outcome, '结果未核实')
+    if status == '成功' and changed_count == 0:
+        status += '（无新增或变更）'
+    error = sanitize_error(error_details) if outcome not in ('success', 'complete', 'completed') else None
+    if error is None and outcome in ('cancelled', 'interrupted', 'failed', 'error', 'partial', 'publication_pending'):
+        error = safe_error(code=outcome if outcome in ('cancelled', 'interrupted', 'publication_pending') else 'unknown')
+    lines = [LABELS[task_id], '触发方式：' + ('手动采集' if manual else '自动采集'),
+             '采集时间：' + stamp, '采集结果：' + status,
+             '目标数据日期：' + (_data_day(data_date) or '未核实'),
+             '更新记录：' + (str(changed_count) if type(changed_count) is int and changed_count >= 0 else '未核实')]
+    if error:
+        tokens = []
+        if error.get('stage') in _ERROR_STAGES:
+            tokens.append(_ERROR_STAGES[error['stage']])
+        if error.get('trade_date'):
+            tokens.append(error['trade_date'])
+        elif error.get('start_date') and error.get('end_date'):
+            tokens.append(error['start_date'] + ' 至 ' + error['end_date'])
+        for field, label in (('mysql_errno', 'MySQL'), ('sqlite_errno', 'SQLite'), ('http_status', 'HTTP')):
+            if field in error:
+                tokens.append(f'{label} {error[field]}')
+        lines.append('原因：' + error['message'] + ('（' + '，'.join(tokens) + '）' if tokens else ''))
+    if retrying:
+        lines.append('此结果仅对应本次采集尝试。')
+    lines.extend(summary or ['已发布数据：暂无可核实明细'])
+    return _format_slice(lines)
 
 
 def emit_collection_result(settings, task_id, *, scheduled, run_key, outcome,
-                           changed_count, summary, collected_at=None):
-    """Persist a deduplicated event describing committed business changes."""
+                           changed_count, summary, collected_at=None, manual_result=None,
+                           error_details=None, data_date=None, retrying=False):
+    """Enqueue an actual terminal event; same policy/schema for both triggers."""
     try:
-        reason = ('no_business_change' if changed_count <= 0
-                  else 'disabled' if not enabled(settings, task_id) else None)
-        if reason:
-            LOG.info('Collection notification skipped task=%s reason=%s', task_id, reason)
+        if outcome in ('running', 'queued', 'publishing') or (scheduled and outcome in ('skipped', 'blocked')):
             return False
-        message = format_result(task_id, outcome, changed_count, summary, collected_at)
+        if not scheduled and manual_result is False and not changed_count:  # Legacy explicit import.
+            return False
+        if not enabled(settings, task_id):
+            LOG.info('Collection notification skipped task=%s reason=disabled', task_id)
+            return False
+        message = format_result(task_id, outcome, changed_count, summary, collected_at,
+                                manual=not scheduled, error_details=error_details,
+                                data_date=data_date, retrying=retrying)
         db = _database(settings)
         try:
             with db:
@@ -264,27 +352,42 @@ def notify_collection(task):
             bound = call.arguments
             state = bound.get('state') or {}
             slot = bound.get('slot') or state.get('current_scheduled_slot')
-            # Preserve trigger classification for logs; both triggers notify on changes.
             scheduled = slot is not None or (task == 'growth_dividend' and state.get('trigger') == 'startup')
-            before = None
+            # Explicit historical import is not a website collection. Preserve
+            # its existing change-only eligibility.
+            regular_collection = not (task == 'valuation_ruler' and state.get('phase') == 'joinquant')
+            before = report_before = None
+            opted_in = False
             try:
-                reason = 'disabled' if not enabled(self.settings, task) else None
-                if reason:
-                    LOG.info('Collection notification skipped task=%s reason=%s', task, reason)
-                else:
+                opted_in = enabled(self.settings, task)
+                if opted_in:
                     before = published_values(self, task)
+                    if task == 'cash_cow':
+                        with self.db() as db:
+                            report_before = {r[0]: json.loads(r[1]) for r in db.execute(
+                                'SELECT years,payload FROM snapshots')}
+                else:
+                    LOG.info('Collection notification skipped task=%s reason=disabled', task)
             except Exception as exc:
                 LOG.warning('Collection notification snapshot failed task=%s error_type=%s', task, type(exc).__name__)
             run = state.get('run_id') or uuid.uuid4().hex
             captured = {}
+
             def capture():
                 try:
                     captured['after'] = published_values(self, task)
-                    with self.db() as db:
-                        captured['state'] = json.loads(db.execute('SELECT payload FROM state WHERE id=1').fetchone()[0])
                 except Exception as exc:
                     LOG.warning('Collection notification final snapshot failed task=%s error_type=%s', task, type(exc).__name__)
-            if before is not None and bound.get('lock') is not None:
+                try:
+                    with self.db() as db:
+                        captured['state'] = json.loads(db.execute('SELECT payload FROM state WHERE id=1').fetchone()[0])
+                        if task == 'cash_cow':
+                            captured['report_values'] = {r[0]: json.loads(r[1]) for r in db.execute(
+                                'SELECT years,payload FROM snapshots')}
+                except Exception as exc:
+                    LOG.warning('Collection notification final state unavailable task=%s error_type=%s', task, type(exc).__name__)
+
+            if opted_in and bound.get('lock') is not None:
                 original_lock = bound['lock']
                 class CaptureLock:
                     def release(lock_self):
@@ -293,26 +396,47 @@ def notify_collection(task):
                     def __getattr__(lock_self, name):
                         return getattr(original_lock, name)
                 call.arguments['lock'] = CaptureLock()
+            token = _CAPTURE.set((task, captured)) if opted_in else None
             raised = False
             try:
                 return function(*call.args, **call.kwargs)
-            except BaseException:
-                raised = True
+            except BaseException as exc:
+                raised = safe_error(exc, stage='collection')
                 raise
             finally:
-                if before is not None and 'after' in captured and 'state' in captured:
+                if token is not None:
+                    _CAPTURE.reset(token)
+                if opted_in:
                     try:
-                        after = captured['after']
-                        changes = {key: value for key,value in after.items() if key not in before or before[key] != value}
-                        latest = captured['state']
-                        failed = raised or latest.get('error') or latest.get('phase') in {'failed','cancelled','interrupted'}
-                        failed = failed or any(word in latest.get('stage', '') for word in ('已停止','采集中断'))
-                        outcome = latest.get('outcome') or ('failed' if failed else 'completed')
-                        if changes:
-                            emit_collection_result(self.settings,task,scheduled=scheduled,run_key=run,outcome=outcome,
-                                                   changed_count=len(changes),summary=summarize_changes(task,changes,after))
-                        else:
-                            LOG.info('Collection notification skipped task=%s reason=no_business_change', task)
+                        after = captured.get('after')
+                        changes = ({key: value for key, value in after.items() if key not in before or before[key] != value}
+                                   if before is not None and after is not None else None)
+                        latest = captured.get('state') or {}
+                        outcome = (('failed' if raised else None) or captured.get('outcome') or latest.get('outcome')
+                                   or (latest.get('phase') if latest.get('phase') in _RESULT_LABELS else None)
+                                   or ('failed' if latest.get('error') else 'completed' if 'state' in captured else 'unknown'))
+                        if outcome == 'partial' and latest.get('outcome') == 'no_quote':
+                            outcome = 'no_quote'
+                        if regular_collection or changes:
+                            data_date = next((_data_day(latest.get(key)) for key in ('targetDate', 'target_date', 'due_day')
+                                              if _data_day(latest.get(key))), None)
+                            try:
+                                from app.services.collection_summary import summarize_published
+                                values = captured.get('report_values', after) or {}
+                                if data_date and task != 'cash_cow':
+                                    # Do not present previously published newer dates
+                                    # as part of a bounded/manual recovery.
+                                    values = {key: value for key, value in values.items()
+                                              if (day := _data_day(key[0] if isinstance(key, tuple) else key))
+                                              and day <= data_date}
+                                summary = summarize_published(task, values, previous=report_before)
+                            except Exception as exc:
+                                summary = []
+                                LOG.warning('Collection notification summary unavailable task=%s error_type=%s', task, type(exc).__name__)
+                            emit_collection_result(self.settings, task, scheduled=scheduled, run_key=run, outcome=outcome,
+                                                   changed_count=len(changes) if changes is not None else None,
+                                                   summary=summary, manual_result=regular_collection,
+                                                   error_details=raised or captured.get('error_details'), data_date=data_date)
                     except Exception as exc:
                         LOG.warning('Collection notification result failed task=%s error_type=%s', task, type(exc).__name__)
         return wrapped

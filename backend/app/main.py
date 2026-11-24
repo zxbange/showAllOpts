@@ -122,7 +122,7 @@ def create_app(settings: Settings | None = None, engine: Engine | None = None) -
             cleanup.push_async_callback(stop_worker, 'etf_collection', etf_collection)
             application.state.etf_collection = etf_collection
             start_worker('etf_collection', etf_collection)
-            market_collection = MarketCollection(settings, refresh=cache.refresh_market_collection)
+            market_collection = MarketCollection(settings, refresh=cache.refresh_market_collection, cache=cache)
             market_collection.shared_configuration = etf_collection.configuration
             cleanup.push_async_callback(stop_worker, 'market_collection', market_collection)
             application.state.market_collection = market_collection

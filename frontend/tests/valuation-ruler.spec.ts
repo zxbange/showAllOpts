@@ -171,6 +171,28 @@ test('running prevents duplicate submissions and allows cancellation', async ({ 
   await expect(page.getByRole('button', { name: '更新数据', exact: true })).toBeEnabled()
 })
 
+test('a verified no-start explains the due date without hiding saved data or locking retry', async ({
+  page,
+}) => {
+  const detail = '计划采集截止：2026-11-09。该日没有已核验的成分存档。'
+  let starts = 0
+  await page.route('**/api/v1/valuation-ruler/**', (route) => {
+    const path = new URL(route.request().url()).pathname.split('/').at(-1)
+    if (path === 'refresh') {
+      starts++
+      return route.fulfill({ status: 202, json: { started: false, detail } })
+    }
+    return route.fulfill({ json: path === 'status' ? idle : history })
+  })
+  await page.goto('/valuation-ruler')
+  const update = page.getByRole('button', { name: '更新数据', exact: true })
+  await update.click()
+  await expect(page.getByText(detail, { exact: true })).toBeVisible()
+  await expect(statisticValue(page, '沪深300指数')).toHaveText('4,100.00')
+  await expect(update).toBeEnabled()
+  expect(starts).toBe(1)
+})
+
 test('uncertain start stays locked across navigation until automatic polling sees running then terminal', async ({
   page,
 }) => {

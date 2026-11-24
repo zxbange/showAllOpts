@@ -225,3 +225,82 @@ def test_interval_recovery_keeps_unverified_dates_pending(tmp_path,monkeypatch,m
     job.collect(job.lock())
     assert job.history()['rows']==before
     assert job.status()['recovery']['pendingCount']==(1 if mode=='explicit' else 2)
+
+
+@pytest.mark.parametrize(('clock', 'target', 'mode'), [
+    ('2026-11-03T02:59:59+00:00', '2026-11-02', 'complete_spot'),
+    ('2026-11-03T03:00:00+00:00', '2026-11-03', 'current_spot'),
+    ('2026-11-03T09:59:59+00:00', '2026-11-03', 'current_spot'),
+    ('2026-11-03T10:00:00+00:00', '2026-11-03', 'complete_spot'),
+])
+def test_manual_collect_enforces_due_date_and_morning_evening_modes(tmp_path, monkeypatch, clock, target, mode):
+    job = service(tmp_path, monkeypatch)
+    monkeypatch.setattr(commodities, 'now', lambda: datetime.fromisoformat(clock))
+    assert job.refresh()
+    job.thread.join(5)
+    assert not job.thread.is_alive()
+    state = job.status()
+    assert (state['targetDate'], state['targetMode'], state['trigger']) == (target, mode, 'manual')
+    assert state['currentVerified'] and state['outcome'] == 'completed'
+    assert not any(row['quoteDate'] > target for row in job.history()['rows'])
+    with job.db() as db:
+        assert db.execute('SELECT count(*) FROM schedule_runs').fetchone() == (0,)
+
+
+@pytest.mark.parametrize('archive_available', [False, True])
+def test_manual_historical_target_uses_dated_archive_never_later_home(tmp_path, monkeypatch, archive_available):
+    job = service(tmp_path, monkeypatch)
+    monkeypatch.setattr(commodities, 'now', lambda: datetime(2026, 11, 3, 2, tzinfo=timezone.utc))
+    with job.db() as db:
+        db.execute("DELETE FROM quotes WHERE day='2026-11-02'")
+    review = 'https://m.ccmn.cn/mnewsinfo/d5484f3e27d4438699d0972335e1403e.html'
+    original_fetch = commodities.fetch
+
+    def fetch(client, url, catalog=False):
+        if url == CATALOG and archive_available:
+            return f'<a href="{review}">2026-11-03 现铝早评</a>'
+        if url == review:
+            return ('<p>2026-11-03</p><h2>五、长江市场行情</h2>'
+                    '11月02日长江现货A00铝均价23780元/吨，涨40元/吨，价格区间23760-23800元/吨'
+                    '<h2>六、预测</h2>明日25000')
+        return original_fetch(client, url, catalog)
+
+    monkeypatch.setattr(commodities, 'fetch', fetch)
+    assert job.refresh()
+    job.thread.join(5)
+    state = job.status()
+    assert state['targetDate'] == '2026-11-02'
+    assert state['sourceQuoteDate'] == '2026-11-03'
+    assert state['currentVerified'] is archive_available
+    assert state['outcome'] == ('completed' if archive_available else 'no_quote')
+    prices = {row['quoteDate']: row['mean'] for row in job.history()['rows']}
+    assert '2026-11-03' not in prices
+    assert prices.get('2026-11-02') == (23780 if archive_available else None)
+
+
+@pytest.mark.parametrize(('before', 'after', 'target', 'mode'), [
+    ('02:59:59', '03:00:01', '2026-11-02', 'complete_spot'),
+    ('09:59:59', '10:00:01', '2026-11-03', 'current_spot'),
+])
+def test_a00_delayed_worker_uses_request_cutoff(tmp_path, monkeypatch, before, after, target, mode):
+    from threading import Event
+
+    job = service(tmp_path, monkeypatch)
+    clock = [datetime.fromisoformat(f'2026-11-03T{before}+00:00')]
+    monkeypatch.setattr(commodities, 'now', lambda: clock[0])
+    run_worker = Event()
+    original_collect = job.collect
+
+    def delayed(*args, **kwargs):
+        assert run_worker.wait(3)
+        return original_collect(*args, **kwargs)
+
+    monkeypatch.setattr(job, 'collect', delayed)
+    assert job.refresh()
+    clock[0] = datetime.fromisoformat(f'2026-11-03T{after}+00:00')
+    run_worker.set()
+    job.thread.join(5)
+    assert not job.thread.is_alive()
+    state = job.status()
+    assert (state['targetDate'], state['targetMode']) == (target, mode)
+    assert all(row['quoteDate'] <= target for row in job.history()['rows'])

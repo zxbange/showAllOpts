@@ -1,6 +1,6 @@
 from app.services.collection_errors import safe_error as public_error
 from app.services.collection_outcomes import record_task
-from app.services.collection_calendar import automatic_collection_allowed, manual_failure_isolated
+from app.services.collection_calendar import automatic_collection_allowed, latest_due_slot, manual_failure_isolated
 from app.services.holdings_calendar import trading_day
 from app.services.system_configuration import task_config, latest_task_slot, pin_configuration
 from contextvars import copy_context
@@ -121,7 +121,13 @@ class Commodities:
                 LOG.error('Commodity scheduler failed %s', diagnostic_details(exc))
             self.stopping.wait(5)
 
+    def manual_request_time(self):
+        return now()
+
     def refresh(self, *, slot=None):
+        # A queued worker may start on the other side of a configured slot.
+        # Fix the manual cutoff at request entry, not at worker execution.
+        requested_at = self.manual_request_time() if slot is None else None
         if self.stopping.is_set():return False
         lock=self.lock()
         if not lock:return False
@@ -150,9 +156,11 @@ class Commodities:
             LOG.info('Commodity collection start trigger=%s slot=%s', 'scheduled' if slot else 'manual', slot.isoformat() if slot else '-')
             with pin_configuration(self.settings):
                 context = copy_context()
-            def pinned_collect(lock, slot):
+            def pinned_collect(lock, slot, requested_at):
+                if requested_at is not None:
+                    return context.run(self.collect, lock, slot, requested_at=requested_at)
                 return context.run(self.collect, lock, slot)
-            self.thread=threading.Thread(target=pinned_collect,args=(lock,slot),daemon=True,name='commodities')
+            self.thread=threading.Thread(target=pinned_collect,args=(lock,slot,requested_at),daemon=True,name='commodities')
             self.thread.start()
         except BaseException:lock.release();raise
         return True
@@ -205,7 +213,7 @@ class Commodities:
                              sourceLimited=True)
 
     @notify_collection('commodities')
-    def collect(self,lock,slot=None):
+    def collect(self,lock,slot=None,*,requested_at=None):
         # Also guard direct calls, not only the scheduler/manual entry point.
         try:
             skipped = self.automatic_closed(slot)
@@ -222,15 +230,29 @@ class Commodities:
         limited = False
         current_verified = False
         target_result = 'pending'
-        home_quote = None
+        source_quote_date = None
         recovery = None
         finished = False
         failure_snapshot = None
-        started = now().isoformat()
-        today = now().astimezone(CHINA).date()
+        moment = now()
+        started = moment.isoformat()
+        today = moment.astimezone(CHINA).date()
         isolated = slot is None and manual_failure_isolated(today)
-        target_day = slot.astimezone(CHINA).date() if slot else today
-        target_mode = 'complete_spot' if slot is not None and slot.astimezone(CHINA).strftime('%H:%M') == task_config(self.settings, 'commodities')['times'][-1] else 'current_spot'
+        due = None
+        try:
+            times = task_config(self.settings, self.task_key)['times']
+            due = slot.astimezone(CHINA) if slot else latest_due_slot(requested_at or moment, times, is_open=trading_day)
+            if due is None:
+                self.state(stage='无法确认最近应采日期，未请求来源', outcome='skipped',
+                           trigger='manual', targetDate=None, checkedAt=started, error=None)
+                return
+        finally:
+            if due is None:
+                lock.release()
+        target_day = due.date()
+        target = target_day.isoformat()
+        historical_target = slot is None and target_day < today
+        target_mode = 'complete_spot' if due.strftime('%H:%M') == times[-1] else 'current_spot'
 
         def should_stop():
             return self.stopping.is_set() or self.automatic_closed(slot) or requests >= self.max_requests or monotonic() - began >= self.max_collection_seconds
@@ -247,8 +269,8 @@ class Commodities:
                        inserted=inserted, changed=changed, failures=failures,
                        latestQuoteDate=latest, currentVerified=current_verified,
                        targetDate=target_day.isoformat(), targetMode=target_mode, targetResult=target_result,
-                       sourceQuoteDate=home_quote['quoteDate'] if home_quote else None,
-                       stale=latest is None or latest < today.isoformat(),
+                       sourceQuoteDate=source_quote_date.isoformat() if source_quote_date else None,
+                       stale=latest is None or latest < (today.isoformat() if slot else target),
                        noNew=inserted == 0 and changed == 0, error=error)
 
         def read(client, url, catalog=False):
@@ -264,7 +286,7 @@ class Commodities:
         def save(row):
             nonlocal parsed, inserted, changed
             with self.db() as db:
-                if self.stopping.is_set():
+                if self.stopping.is_set() or row['quoteDate'] > target:
                     return
                 previous = db.execute('SELECT payload FROM quotes WHERE day=?', (row['quoteDate'],)).fetchone()
                 # Re-fetching unchanged prices is not a new or modified quote.
@@ -289,8 +311,10 @@ class Commodities:
                 with self.db() as db:
                     failure_snapshot = {table: db.execute(f'SELECT * FROM {table}').fetchall()
                                         for table in ('failed_targets', 'recovery_attempts', 'a00_source_checks')}
-            missing, recovery = self.recovery_plan(today, persist=not isolated)
+            missing, recovery = self.recovery_plan(target_day, persist=not isolated)
             with self.db() as db:
+                if historical_target and not db.execute('SELECT 1 FROM quotes WHERE day=?', (target,)).fetchone():
+                    missing.add(target)
                 if not isolated:
                     db.execute('INSERT INTO failed_targets VALUES(?,?,?) ON CONFLICT(day) DO UPDATE SET reason=excluded.reason, attempted_at=excluded.attempted_at',
                            (target_day.isoformat(), 'interrupted_or_pending', started))
@@ -304,15 +328,16 @@ class Commodities:
                     if quote_date is None:
                         date_url = home_date_reference(home)
                         quote_date = public_report_date(read(client, date_url))
-                    home_quote = parse_home(home, today=today, report_date=quote_date, report_url=date_url)
-                    save(home_quote)
-                    current_verified = not self.stopping.is_set() and quote_date == target_day
-                    target_result = ('current' if quote_date == target_day else
+                    source_quote_date = quote_date
+                    if quote_date <= target_day:
+                        home_quote = parse_home(home, today=today, report_date=quote_date, report_url=date_url)
+                        if save(home_quote) and quote_date == target_day:
+                            current_verified = True
+                    target_result = ('current' if current_verified else
                                      'sourceNotPublished' if quote_date < target_day else 'targetDateUnavailable')
                     status('最新现货报价已读取，检查缺失日期')
-                    LOG.info('Commodity current quote target=%s source_date=%s result=%s low=%s high=%s mean=%s inserted=%s changed=%s',
-                             target_day, quote_date, target_result, home_quote['low'], home_quote['high'],
-                             home_quote['mean'], inserted, changed)
+                    LOG.info('Commodity current quote target=%s source_date=%s result=%s inserted=%s changed=%s',
+                             target_day, quote_date, target_result, inserted, changed)
                 except Exception as exc:
                     run_error = public_error(exc, stage='fetch')
                     target_result = ('partial' if isinstance(exc, QuoteIncomplete) else
@@ -321,8 +346,10 @@ class Commodities:
                     LOG.warning('Commodity current quote failed %s', diagnostic_details(exc))
                 # Only eligible missing dates enter recovery. The run calendar
                 # does not assert that this source published a quote that day.
-                historical = {day for day in missing if day < today.isoformat()}
+                historical = {day for day in missing if day < today.isoformat() and day <= target}
                 if historical and not should_stop():
+                    # A later-published review may name the prior quote day.
+                    # Bound quote saves by the target, not article publication by it.
                     candidates = recovery_links(home or '', start=recovery['dateFrom'],
                                                 end=today.isoformat(), base=HOME)
                     try:
@@ -360,6 +387,9 @@ class Commodities:
                                     recovery['recoveredCount'] += 1
                                     historical.discard(row['quoteDate'])
                                     result = 'recovered'
+                                    if historical_target and row['quoteDate'] == target:
+                                        current_verified = True
+                                        target_result = 'current'
                             # Out-of-window, existing and future rows cannot change
                             # the historical data or the recovery floor.
                         except Exception as exc:
@@ -386,6 +416,13 @@ class Commodities:
                              recovery['dateFrom'], recovery['dateTo'], recovery['articlesChecked'],
                              recovery['recoveredCount'], len(missing), limited,
                              ','.join(sorted(missing)[:31]) or '-')
+            if historical_target and not current_verified:
+                with self.db() as db:
+                    stored = db.execute('SELECT payload FROM quotes WHERE day=?', (target,)).fetchone()
+                row = json.loads(stored[0]) if stored else {}
+                if row.get('rangeEvidence') == 'page' and all(row.get(k) is not None for k in ('low', 'high', 'mean')):
+                    current_verified = True
+                    target_result = 'current'
             finished = True
         except Exception as exc:
             run_error = public_error(exc, stage='collection')
@@ -396,7 +433,9 @@ class Commodities:
                 if self.stopping.is_set() or self.automatic_closed(slot):
                     target_result = 'interrupted'
                     outcome, stage, error = 'interrupted', '采集中断', '历史保留，尚未完成采集'
-                elif not finished or not parsed:
+                elif finished and target_result == 'targetDateUnavailable':
+                    outcome, stage, error = 'no_quote', '来源尚无目标日报价', None
+                elif not finished or (not parsed and not current_verified):
                     outcome, stage, error = 'failed', '采集失败', '公开来源读取或核验失败，历史保留'
                 elif target_result in ('sourceNotPublished', 'targetDateUnavailable'):
                     outcome, stage, error = 'no_quote', '来源尚无目标日报价', None

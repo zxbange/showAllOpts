@@ -2,10 +2,10 @@
 
 ETF collection and display reads can share a page-configured database account.
 """
-from app.services.collection_calendar import automatic_collection_allowed, manual_failure_isolated
+from app.services.collection_calendar import automatic_collection_allowed, latest_due_slot, manual_failure_isolated
 from app.services.system_runtime import source_client
 from app.services.system_configuration import pin_configuration
-from app.services.collection_notifications import emit_collection_result
+from app.services import collection_notifications
 from datetime import date, datetime, timedelta
 from contextlib import contextmanager
 from zoneinfo import ZoneInfo
@@ -22,6 +22,7 @@ from app.services.collection_errors import safe_error, sanitize_error
 
 from app.services.etf_configuration import ETFConfiguration, ConfigurationFailure, DEFAULT_COLLECTION_TIME, target_key, reconcile_system_ledger
 from app.services.etf_diagnostics import database_diagnostic, database_write_run, log_database_failure, log_database_retry
+from app.services.etf_notifications import ETFRunSummary
 
 import httpx
 import portalocker
@@ -30,6 +31,7 @@ from sqlalchemy import create_engine
 LOG = logging.getLogger(__name__)
 CHINA = ZoneInfo('Asia/Shanghai')
 TIMES = (tuple(map(int, DEFAULT_COLLECTION_TIME.split(':'))),)
+_MANUAL_GAP_KEYS = "(key='manual_gap_floor' OR key GLOB 'manual_gap_floor_deferred:*')"
 
 
 class CollectionInterrupted(RuntimeError):
@@ -264,6 +266,8 @@ class ETFCollection:
             CREATE TABLE IF NOT EXISTS manual_runs (id TEXT PRIMARY KEY, status TEXT NOT NULL,
               requested_at TEXT NOT NULL, error TEXT, phase TEXT, completed INTEGER DEFAULT 0,
               total INTEGER DEFAULT 0);
+            CREATE TABLE IF NOT EXISTS manual_run_scope (
+              id TEXT PRIMARY KEY, schedule TEXT NOT NULL, retry_exhausted INTEGER NOT NULL);
             CREATE TABLE IF NOT EXISTS slots (slot TEXT PRIMARY KEY, status TEXT NOT NULL,
               attempts INTEGER NOT NULL, attempted_at TEXT NOT NULL, error TEXT);
             CREATE TABLE IF NOT EXISTS run_history (
@@ -330,8 +334,19 @@ class ETFCollection:
             with portalocker.Lock(str(self.root / 'collection.lock'), timeout=0):
                 with self.connect() as db:
                     self._recover_manual_runs(db, reason='configuration_changed')
-                    db.execute("UPDATE manual_runs SET status='interrupted',phase='interrupted',error='configuration_changed' WHERE status IN ('queued','running')")
+                    stamp = self.clock().isoformat()
+                    interrupted = db.execute("UPDATE manual_runs SET status='interrupted',phase='interrupted',"
+                                             "error='configuration_changed' WHERE status='queued' RETURNING id,requested_at").fetchall()
+                    for row in interrupted:
+                        self._write_history(db, 'INSERT OR IGNORE INTO run_history VALUES (?,?,?,?,?,?,?,?,?)',
+                            ('manual:' + row['id'], 'manual', 'interrupted', 'configuration_changed',
+                             row['requested_at'], stamp, None, None, 'recovered_at'))
+                        db.execute('DELETE FROM manual_run_scope WHERE id=?', (row['id'],))
                     db.execute("DELETE FROM metadata WHERE key='progress'")
+                    db.commit()
+                    for row in interrupted:
+                        self._notify_terminal('manual:' + row['id'], 'interrupted', stamp,
+                                              error_details=safe_error(code='interrupted', stage='collection'))
         except portalocker.exceptions.LockException:
             pass  # An existing collector still owns this run; never steal it.
 
@@ -360,8 +375,10 @@ class ETFCollection:
                 item['error_details'] = json.loads(detail[0]) if detail else None
             state['latest_result'] = next(iter(state['recent_runs']), None)
             state['metadata'] = dict(db.execute('SELECT key,value FROM metadata').fetchall())
-            state['manual_gap_start'] = state['metadata'].get('manual_gap_floor')
             latest = state['metadata'].get('coverage_end')
+            gap = db.execute(f"SELECT min(value) FROM metadata WHERE {_MANUAL_GAP_KEYS} "
+                             "AND (? IS NULL OR value<?)", (latest, latest)).fetchone()
+            state['manual_gap_start'] = gap[0]
             where, values = ('day=?', (latest,)) if latest else ('0=1', ())
             counts = dict(db.execute(f'SELECT status,COUNT(*) FROM observations WHERE {where} GROUP BY status', values))
             state['pending_count'] = counts.get('pending', 0)
@@ -408,6 +425,7 @@ class ETFCollection:
             raise ConfigurationFailure('采集正在运行，请稍后测试连接') from None
 
     def request_run(self, request_id, retry_exhausted=False):
+        requested_at = self.clock().isoformat()
         if self.configuration_issue:
             raise ConfigurationFailure('采集配置尚未就绪，请先在页面保存数据库连接')
         with self.connect() as db:
@@ -427,10 +445,11 @@ class ETFCollection:
                         if row['id'] == request_id:
                             return dict(row)
                         raise ConfigurationFailure('已有采集任务排队，请勿重复触发')
-                    if retry_exhausted and not manual_failure_isolated(self.clock()):
-                        db.execute("UPDATE observations SET status='pending',attempts=0 WHERE status='retry_exhausted' AND day=(SELECT value FROM metadata WHERE key='coverage_end')")
+                    schedule = self.configuration.load().get('schedule')
                     db.execute('INSERT INTO manual_runs(id,status,requested_at,phase) VALUES (?,?,?,?)',
-                               (request_id, 'queued', self.clock().isoformat(), 'queued'))
+                               (request_id, 'queued', requested_at, 'queued'))
+                    db.execute('INSERT INTO manual_run_scope VALUES (?,?,?)', (
+                        request_id, json.dumps(schedule), int(retry_exhausted)))
                     result = dict(db.execute('SELECT * FROM manual_runs WHERE id=?', (request_id,)).fetchone())
         except portalocker.exceptions.LockException:
             raise ConfigurationFailure('采集正在运行，请等待本轮完成') from None
@@ -438,10 +457,23 @@ class ETFCollection:
         self.wake_event.set()
         return result
 
+    def _notify_terminal(self, run_key, outcome, stamp, *, scheduled=False, changed=None,
+                         summary=(), data_date=None, error_details=None):
+        try:
+            collection_notifications.emit_collection_result(
+                self.settings, 'etf', scheduled=scheduled, run_key=run_key, outcome=outcome,
+                changed_count=changed, summary=summary, collected_at=stamp, data_date=data_date,
+                error_details=error_details)
+        except Exception as exc:
+            LOG.warning('ETF notification result unavailable error_type=%s', type(exc).__name__)
+
     def _recover_manual_runs(self, db, reason='service_interrupted'):
         # Call only while owning collection.lock: no other worker can still run.
         stamp = self.clock().isoformat()
+        restarting = {r['id']: r['trigger'] for r in db.execute(
+            "SELECT id,trigger FROM run_history WHERE status IN ('running','publishing')")}
         for row in db.execute("SELECT * FROM manual_runs WHERE status IN ('running','cancelling')").fetchall():
+            restarting['manual:' + row['id']] = 'manual'
             outcome = 'cancelled' if row['status'] == 'cancelling' else 'interrupted'
             db.execute('INSERT OR IGNORE INTO run_history VALUES (?,?,?,?,?,?,?,?,?)',
                        ('manual:' + row['id'], 'manual', 'running', None, row['requested_at'], None,
@@ -453,13 +485,16 @@ class ETFCollection:
         for row in db.execute("SELECT * FROM slots WHERE status='running'").fetchall():
             if not db.execute('SELECT 1 FROM run_history WHERE slot=? AND attempt=?',
                               (row['slot'], row['attempts'])).fetchone():
+                run_key = 'recovered-slot:' + row['slot'] + ':' + str(row['attempts'])
+                restarting[run_key] = 'scheduled'
                 db.execute('INSERT INTO run_history VALUES (?,?,?,?,?,?,?,?,?)',
-                           ('recovered-slot:' + row['slot'] + ':' + str(row['attempts']), 'scheduled',
+                           (run_key, 'scheduled',
                             'running', None, row['attempted_at'], None, row['slot'], row['attempts'], 'started_at'))
         db.execute("UPDATE run_history SET status='interrupted',error=?,finished_at=?,time_basis='recovered_at' "
                    "WHERE status IN ('running','publishing')", (reason, stamp))
         db.execute("UPDATE manual_runs SET status='cancelled',phase='cancelled',error=NULL WHERE status='cancelling'")
         db.execute("UPDATE manual_runs SET status='interrupted',phase='interrupted',error=? WHERE status='running'", (reason,))
+        db.execute("DELETE FROM manual_run_scope WHERE id NOT IN (SELECT id FROM manual_runs WHERE status='queued')")
         db.commit()
         from app.services.collection_outcomes import record_outcome
         # Repair the observation gap if a process exited after committing its
@@ -478,6 +513,12 @@ class ETFCollection:
                 db.commit()
             record_outcome(self.settings, 'etf-shares', run_key=latest['id'], outcome=latest['status'],
                            trigger=latest['trigger'], finished_at=latest['finished_at'], error_details=error_details)
+        for run_key, trigger in sorted(restarting.items()):
+            result = db.execute('SELECT status,finished_at FROM run_history WHERE id=?', (run_key,)).fetchone()
+            if result and result['status'] in ('interrupted', 'cancelled'):
+                self._notify_terminal(run_key, result['status'], result['finished_at'],
+                    scheduled=trigger == 'scheduled',
+                    error_details=safe_error(code=result['status'], stage='collection'))
         self._retain_history()
 
     def _retain_history(self):
@@ -517,6 +558,7 @@ class ETFCollection:
         with self.connect() as db:
             result = dict(db.execute('SELECT * FROM manual_runs WHERE id=?', (request_id,)).fetchone())
             if result['status'] == 'cancelled':
+                db.execute('DELETE FROM manual_run_scope WHERE id=?', (request_id,))
                 # Repeating a cancellation from before history tracking began
                 # cannot establish its unknown original completion time.
                 current = db.execute('SELECT 1 FROM run_history WHERE id=?', ('manual:' + request_id,)).fetchone()
@@ -535,6 +577,9 @@ class ETFCollection:
             from app.services.collection_outcomes import record_outcome
             record_outcome(self.settings, 'etf-shares', run_key='manual:' + request_id,
                            outcome='cancelled', trigger='manual', finished_at=cancel_stamp)
+            if transitioned:
+                self._notify_terminal('manual:' + request_id, 'cancelled', cancel_stamp,
+                                      changed=0 if row['status'] == 'cancelled' else None)
             self._retain_history()
         return result
 
@@ -642,14 +687,22 @@ class ETFCollection:
 
     def _run(self, db, slot, config, *, key=None, manual_id=None):
         self._run_error_details = None
-        self._notification_changes = 0
-        self._notification_summary = []
+        try:
+            notification_enabled = collection_notifications.enabled(self.settings, 'etf')
+        except Exception as exc:
+            LOG.warning('ETF notification configuration unavailable error_type=%s', type(exc).__name__)
+            notification_enabled = False
+        self._notification_report = ETFRunSummary(notification_enabled)
         started = time.monotonic()
         run = uuid.uuid4().hex[:12]
         history_id = 'manual:' + manual_id if manual_id else run
+        manual_scope = None
         if manual_id:
             request = db.execute('SELECT requested_at FROM manual_runs WHERE id=?', (manual_id,)).fetchone()
             requested_at, attempt = request['requested_at'], None
+            manual_scope = db.execute('SELECT schedule,retry_exhausted FROM manual_run_scope WHERE id=?',
+                                      (manual_id,)).fetchone()
+            db.execute('DELETE FROM manual_run_scope WHERE id=?', (manual_id,))
         else:
             request = db.execute('SELECT attempted_at,attempts FROM slots WHERE slot=?', (key,)).fetchone()
             requested_at, attempt = request['attempted_at'], request['attempts']
@@ -687,8 +740,13 @@ class ETFCollection:
         try:
             progress('calendar')
             with database_write_run(run):
-                complete = self._collect(db, slot, config=config, progress=progress,
-                                         check_cancelled=check_cancelled, manual=manual_id is not None)
+                reference = datetime.fromisoformat(requested_at) if manual_id else slot
+                # A queued legacy row has no scope record and uses the trusted
+                # current configuration; new requests pin only the schedule.
+                collect_config = config | {'schedule': json.loads(manual_scope['schedule'])} if manual_scope else config
+                complete = self._collect(db, reference, config=collect_config, progress=progress,
+                                         check_cancelled=check_cancelled, manual=manual_id is not None,
+                                         retry_exhausted=bool(manual_scope and manual_scope['retry_exhausted']))
             check_cancelled()
             state, error = ('complete' if complete else 'partial'), None
         except CollectionCancelled:
@@ -752,11 +810,27 @@ class ETFCollection:
              requested_at, finished_at, key, attempt, 'completed_at'))
         db.commit()
         from app.services.collection_outcomes import record_outcome
-        record_outcome(self.settings, 'etf-shares', run_key=history_id, outcome=history_status if history_recorded else 'partial',
+        outcome = history_status if history_recorded else 'partial'
+        record_outcome(self.settings, 'etf-shares', run_key=history_id, outcome=outcome,
                        trigger='manual' if manual_id else 'scheduled', finished_at=finished_at, error_details=self._run_error_details)
         self._retain_history()
-        emit_collection_result(self.settings, 'etf', scheduled=manual_id is None, run_key=run,
-            outcome=state, changed_count=self._notification_changes, summary=self._notification_summary)
+        report = self._notification_report
+        summary = ()
+        if report.enabled:
+            try:
+                oldest = None
+                if report.target is not None and report.historical_gaps is None:
+                    gap = db.execute(f"SELECT min(value) FROM metadata WHERE {_MANUAL_GAP_KEYS} AND value<?",
+                                     (report.target.isoformat(),)).fetchone()[0]
+                    if gap:
+                        oldest = date.fromisoformat(gap)
+                summary = report.lines(known_history=oldest)
+            except Exception as exc:
+                LOG.warning('ETF notification summary unavailable error_type=%s', type(exc).__name__)
+                summary = ('本轮份额对比未核验',)
+        self._notify_terminal(history_id, outcome, finished_at, scheduled=manual_id is None,
+            changed=None if report.commit_unconfirmed else report.committed_changes, summary=summary,
+            data_date=report.target, error_details=self._run_error_details)
         return complete
 
     def _refresh(self, db):
@@ -780,15 +854,17 @@ class ETFCollection:
             LOG.warning('ETF cache publish failed %s', diagnostic_details(exc))
 
     def _write_day(self, c, config, writer, calendar, end, shares, prices, *, historical=False):
+        report = getattr(self, '_notification_report', None)
         try:
             options = dict(calendar=calendar, calendar_target=end)
             if historical:
                 options['insert_only'] = True
+            elif report is not None and report.comparison is not None:
+                options['share_comparison'] = report.comparison
             changed = writer.execute(lambda engine: c.write_records(engine, shares, prices, **options),
                                      stage='write_records')
-            if type(changed) is int and changed > 0:
-                self._notification_changes = getattr(self, '_notification_changes', 0) + changed
-                self._notification_summary = getattr(self, '_notification_summary', []) + [f'{end}: shares={len(shares)}, prices={len(prices)}']
+            if report is not None and type(changed) is int and changed > 0:
+                report.committed_changes += changed
         except CollectionInterrupted:
             raise
         except Exception as exc:
@@ -801,6 +877,8 @@ class ETFCollection:
                 # An absent COMMIT reply is neither a successful publication
                 # nor proof of rollback. Do not automatically replay this slot.
                 code = 'writer_commit_unconfirmed'
+                if report is not None:
+                    report.commit_unconfirmed = True
                 self._run_error_details = sanitize_error(
                     {**self._run_error_details, 'code': 'etf_commit_unconfirmed'})
             log_database_failure(exc, operation='collection-write', stage=writer.stage,
@@ -822,7 +900,8 @@ class ETFCollection:
                 observed.setdefault(day, {})[key] = row['status']
         completed = sorted(day for day, rows in observed.items()
                            if all(rows.get(key) == 'complete' for key in expected))
-        has_floor = db.execute("SELECT value FROM metadata WHERE key='manual_gap_floor'").fetchone()
+        has_floor = db.execute(f"SELECT value FROM metadata WHERE {_MANUAL_GAP_KEYS} AND value<=? "
+                               "ORDER BY value LIMIT 1", (end.isoformat(),)).fetchone()
         candidates = [completed[-1] if completed else end]
         if completed:
             # A later fully covered scheduled date does not erase a known
@@ -854,9 +933,14 @@ class ETFCollection:
     def _repair_history(self, db, c, client, config, writer, calendar, end, funds, progress, check_cancelled, today, guards):
         scope, required, unchecked = self._manual_days(db, calendar, end, funds)
         if not required:
-            db.execute("DELETE FROM metadata WHERE key='manual_gap_floor' AND value<=?", (end.isoformat(),))
+            db.execute(f"DELETE FROM metadata WHERE {_MANUAL_GAP_KEYS} AND value<=?", (end.isoformat(),))
             return scope, set(), 0, 0, {}
         floor = min(day for _, _, day in required)
+        # A configuration cutoff can move backwards. Preserve an already
+        # known but not-yet-due gap while persisting this run's repair intent.
+        db.execute("INSERT OR IGNORE INTO metadata "
+                   "SELECT 'manual_gap_floor_deferred:'||value,value FROM metadata "
+                   "WHERE key='manual_gap_floor' AND value>?", (end.isoformat(),))
         db.execute("INSERT OR REPLACE INTO metadata VALUES ('manual_gap_floor',?)", (floor.isoformat(),))
         db.executemany("INSERT OR IGNORE INTO observations(kind,code,day,status) VALUES (?,?,?,'manual_only')",
                        ((kind, code, day.isoformat()) for kind, code, day in sorted(unchecked)))
@@ -952,14 +1036,13 @@ class ETFCollection:
                            ((kind, code, target.isoformat()) for kind, code, target in done))
             unresolved -= done
             db.commit()
+        db.execute(f"DELETE FROM metadata WHERE {_MANUAL_GAP_KEYS} AND value<=?", (end.isoformat(),))
         if unresolved:
             db.execute("INSERT OR REPLACE INTO metadata VALUES ('manual_gap_floor',?)",
                        (min(day for _, _, day in unresolved).isoformat(),))
-        else:
-            db.execute("DELETE FROM metadata WHERE key='manual_gap_floor'")
         return scope, unresolved, completed, total, history_errors
 
-    def _collect(self, db, slot, config=None, progress=None, check_cancelled=None, manual=False):
+    def _collect(self, db, slot, config=None, progress=None, check_cancelled=None, manual=False, retry_exhausted=False):
         config = config or self.configuration.load()
         progress = progress or (lambda *args: None)
         check_cancelled = check_cancelled or (lambda: None)
@@ -986,16 +1069,35 @@ class ETFCollection:
                             raise
                     return price_cache[code]
                 client.prices = cached_prices
-            # Automatic jobs remain latest-only; the manual repair plan
-            # uses official sessions and does not extend the automatic budget.
+            # Manual uses the latest matured configured slot at the original
+            # request time, even if it was actually queued across a cutoff.
+            # This does not claim/run that automatic slot.
+            data_slot = slot
+            if manual:
+                try:
+                    data_slot = latest_due_slot(slot, config.get('schedule'), is_open=calendar.official_days.get)
+                except ValueError:
+                    self._run_error_details = safe_error(code='etf_manual_schedule_invalid', stage='validate')
+                    raise ValueError('Invalid configured ETF manual cutoff') from None
+                if data_slot is None:
+                    self._run_error_details = safe_error(code='etf_manual_slot_unverified', stage='validate')
+                    raise ValueError('No verified due ETF collection slot')
+            # Automatic jobs remain latest-only and retain their existing rule.
             _, end = calendar.default_range(1)
-            cutoff = slot.date() if slot.hour >= 15 else slot.date() - timedelta(days=1)
+            cutoff = data_slot.date() if data_slot.hour >= 15 else data_slot.date() - timedelta(days=1)
             while end > cutoff:
                 end = calendar.previous(end)
+            report = getattr(self, '_notification_report', None)
+            if report is not None:
+                report.set_target(end, calendar)
             scope, historical_gaps, repaired, history_total, history_errors = (end,), set(), 0, 0, {}
             if manual:
+                LOG.info('ETF manual collection cutoff requested_at=%s due_slot=%s date=%s',
+                         slot.isoformat(), data_slot.isoformat(), end)
                 scope, historical_gaps, repaired, history_total, history_errors = self._repair_history(
                     db, c, client, config, writer, calendar, end, funds, progress, check_cancelled, today, guards)
+                if report is not None:
+                    report.historical_gaps = historical_gaps
                 base_progress = progress
                 progress = lambda phase, completed, total: base_progress(
                     phase, completed + repaired, total + history_total)
@@ -1049,6 +1151,8 @@ class ETFCollection:
             verified_prices = {r['fund_code'] for r in prices if r['trade_date'] == end}
             missing_shares = set(funds) - verified_shares
             missing_prices = set(funds) - verified_prices
+            if report is not None:
+                report.coverage = (len(funds) - len(missing_shares), len(funds) - len(missing_prices), len(funds))
             LOG.info('ETF source finish source=exchanges date=%s attempted=%s failed=%s shares=%s prices=%s '
                      'suppressed_failures=%s missing_shares=%s missing_prices=%s skipped_sse_rate_limit=%s '
                      'skipped_szse_rate_limit=%s skipped_szse_archive=%s',
@@ -1072,6 +1176,11 @@ class ETFCollection:
             # source response, but do not mistake them for fresh verification.
             isolated = isolated or (manual and manual_failure_isolated(self.clock()))
             if not isolated:
+                if manual and retry_exhausted:
+                    # Apply the requested reset only to the verified, written
+                    # target; the previous coverage_end can now be in the future.
+                    db.execute("UPDATE observations SET status='pending',attempts=0 "
+                               "WHERE day=? AND status='retry_exhausted'", (end.isoformat(),))
                 for kind, code, day in attempted:
                     db.execute('UPDATE observations SET attempts=attempts+1 WHERE kind=? AND code=? AND day=?',
                                (kind, code, day))

@@ -1,4 +1,4 @@
-"""Collection notifications follow committed business changes only."""
+"""Both collection triggers share terminal reporting and an idempotent outbox."""
 from contextlib import contextmanager
 import json
 import sqlite3
@@ -22,11 +22,14 @@ def emit(settings,**overrides):
     arguments.update(overrides)
     return n.emit_collection_result(settings,'cci',**arguments)
 
-def test_no_change_and_disabled_are_silent(settings,monkeypatch):
-    assert not emit(settings,changed_count=0,outcome='failed')
+def test_automatic_failure_no_change_enqueues_but_inactive_and_disabled_are_silent(settings,monkeypatch):
+    assert emit(settings,changed_count=0,outcome='failed')
+    assert not emit(settings,run_key='skipped',outcome='skipped')
+    assert not emit(settings,run_key='running',outcome='running')
     monkeypatch.setattr(n,'enabled',lambda *_:False)
-    assert not emit(settings)
-    assert rows(settings)==[]
+    assert not emit(settings,run_key='disabled')
+    assert len(rows(settings)) == 1
+    assert '采集结果：失败' in rows(settings)[0]['message']
 
 def test_persistent_dedup_partial_update_and_formatted_content(settings):
     assert emit(settings,outcome='partial')
@@ -34,7 +37,7 @@ def test_persistent_dedup_partial_update_and_formatted_content(settings):
     row,=rows(settings)
     assert row['status']=='pending'
     assert 'CCI 动力煤' in row['message']
-    assert '失败（部分数据已更新）' in row['message']
+    assert '采集结果：部分完成' in row['message']
     assert '采集时间：' in row['message'] and '更新记录：1' in row['message']
 
 def fake_social(monkeypatch,settings,*,fail=False):
@@ -99,11 +102,12 @@ def test_hooks_snapshot_before_release_and_ignore_timestamp_only(settings):
     m=Monitor(settings)
     m.collect(Lock(),{'run_id':'1','current_scheduled_slot':'2026-11-12'})
     m.collect(Lock(),{'run_id':'2','current_scheduled_slot':'2026-11-12'})
-    assert len(rows(settings))==1
+    assert len(rows(settings)) == 2
+    assert '更新记录：0' in rows(settings)[1]['message']
     m.collect(Lock(),{'run_id':'3','current_scheduled_slot':None},value=130)
-    assert len(rows(settings))==2
+    assert len(rows(settings)) == 3
     m.collect(Lock(),{'run_id':'4','current_scheduled_slot':'2026-11-12'},value=140,fail=True)
-    assert '失败' in rows(settings)[2]['message']
+    assert '失败' in rows(settings)[3]['message']
 
 def test_all_templates(settings):
     assert '—' in n.summarize_changes('commodities',{'2026-11-11':1},{'2026-11-11':dict(low=None,high=None,mean=21000)})[2]
@@ -115,7 +119,7 @@ def test_snapshot_is_taken_before_business_lock_release(settings):
     def competing_writer():
         with monitor.db() as db:db.execute('UPDATE points SET ratio=999')
     monitor.collect(Lock(competing_writer),{'run_id':'race','current_scheduled_slot':'2026-11-12'},value=120)
-    assert '最新担保比例：120.0%' in rows(settings)[0]['message']
+    assert '两融担保比例：120%' in rows(settings)[0]['message']
     assert '999' not in rows(settings)[0]['message']
 
 def test_notification_failure_cannot_fail_collection(settings,monkeypatch):
@@ -163,8 +167,7 @@ def test_skip_and_queue_reasons_are_observable_without_payload(settings, monkeyp
     monkeypatch.setattr(n, 'enabled', lambda *_: True)
     emit(settings, summary=['DO_NOT_LOG_PAYLOAD'])
     emit(settings)
-    for reason in ('no_business_change', 'disabled'):
-        assert 'reason='+reason in caplog.text
+    assert 'reason=disabled' in caplog.text
     assert 'notification enqueued task=cci changed_count=1' in caplog.text
     assert 'notification duplicate task=cci' in caplog.text
     assert 'DO_NOT_LOG_PAYLOAD' not in caplog.text
@@ -205,7 +208,8 @@ def test_valuation_current_hook_emits_after_current_store_publish(settings):
         lock.release()
     collect(monitor, Lock(), {'run_id': 'v2'}, 'scheduled-slot')
     row, = rows(settings)
-    assert '上证50：3000；等权平均 PE(TTM)：15' in row['message']
+    assert '上证50：2026-11-16' in row['message']
+    assert '指数 3000' in row['message'] and '滚动等权PE 15' in row['message']
 
 @pytest.mark.parametrize('task', list(n.LABELS))
 @pytest.mark.parametrize('scheduled', [True, False])
@@ -214,10 +218,10 @@ def test_every_collection_trigger_obeys_switch_change_and_dedup(settings, monkey
     monkeypatch.setattr(n, 'enabled', lambda *_: False)
     assert not n.emit_collection_result(settings, task, **args)
     monkeypatch.setattr(n, 'enabled', lambda *_: True)
-    assert not n.emit_collection_result(settings, task, **dict(args, changed_count=0, outcome='failed'))
+    assert n.emit_collection_result(settings, task, **dict(args, run_key='no-change', changed_count=0, outcome='failed'))
     assert n.emit_collection_result(settings, task, **args)
     assert not n.emit_collection_result(settings, task, **args)
-    assert len(rows(settings)) == 1
+    assert len(rows(settings)) == 2
 
 
 def test_a00_quote_delta_uses_each_previous_valid_field_not_source_change():
@@ -260,15 +264,15 @@ def test_same_batch_previous_quote_used_for_latest_change():
     assert 'CCI5500：795(-5) 元/吨（2026-11-10）' in n.summarize_changes('cci', after, after)
 
 
-def test_manual_same_day_new_values_notify_but_repeated_values_do_not(settings):
+def test_manual_same_day_values_notify_for_each_distinct_run(settings):
     monitor = Monitor(settings)
     for run, value in [('manual-1', 120), ('manual-2', 120), ('manual-3', 130)]:
         monitor.collect(Lock(), {'run_id': run}, value=value)
     messages = rows(settings)
-    assert len(messages) == 2
-    assert [row['run'] for row in messages] == ['manual-1', 'manual-3']
-    assert '120.0%' in messages[0]['message']
-    assert '130.0%' in messages[1]['message']
+    assert [row['run'] for row in messages] == ['manual-1', 'manual-2', 'manual-3']
+    assert '120%' in messages[0]['message']
+    assert '成功（无新增或变更）' in messages[1]['message']
+    assert '130%' in messages[2]['message']
 
 
 def test_competing_workers_enqueue_same_manual_run_once(settings):
@@ -278,3 +282,82 @@ def test_competing_workers_enqueue_same_manual_run_once(settings):
         results = list(pool.map(lambda _: emit(settings, scheduled=False), range(4)))
     assert sum(results) == 1
     assert len(rows(settings)) == 1
+
+
+
+@pytest.mark.parametrize('outcome,label', [
+    ('completed', '成功（无新增或变更）'), ('partial', '部分完成'), ('failed', '失败'),
+    ('cancelled', '已取消'), ('interrupted', '已中断'), ('skipped', '未采集'),
+])
+def test_opted_in_manual_terminal_delivery_uses_exact_outcome_and_is_deduped(settings, monkeypatch, outcome, label):
+    sent = fake_social(monkeypatch, settings)
+    for _ in range(2):
+        emit(settings, scheduled=False, outcome=outcome, changed_count=0, summary=[])
+        n.deliver_pending(settings)
+    assert len(sent) == 1
+    assert sent[0].splitlines()[1] == '触发方式：手动采集'
+    assert '采集结果：' + label in sent[0].splitlines()
+    assert '更新记录：0' in sent[0].splitlines()
+
+
+def test_authoritative_partial_result_even_when_change_snapshot_cannot_be_read(settings, monkeypatch):
+    from app.services.collection_outcomes import record_task
+    monitor = Monitor(settings)
+
+    @n.notify_collection('margin')
+    def collect(self, lock, state):
+        record_task(self.settings, 'margin', outcome='partial', scheduled=False, run_key=state['run_id'])
+        lock.release()
+
+    def unavailable(*_):
+        raise RuntimeError('PRIVATE_SOURCE_EXCEPTION')
+    monkeypatch.setattr(n, 'published_values', unavailable)
+    collect(monitor, Lock(), {'run_id': 'partial'})
+    row, = rows(settings)
+    assert '采集结果：部分完成' in row['message']
+    assert '更新记录：未核实' in row['message']
+    assert 'PRIVATE_SOURCE_EXCEPTION' not in row['message']
+
+
+def test_valuation_history_import_is_not_manual_page_collection(settings):
+    monitor = Monitor(settings)
+    with monitor.db() as db:
+        db.execute('DROP TABLE points')
+        db.execute('CREATE TABLE points(trade_date TEXT,payload TEXT)')
+
+    @n.notify_collection('valuation_ruler')
+    def collect(self, lock, state, slot=None):
+        lock.release()
+
+    collect(monitor, Lock(), {'run_id': 'joinquant', 'phase': 'joinquant'})
+    assert rows(settings) == []
+
+
+
+def test_automatic_and_manual_content_match_except_trigger_and_bound_utf16():
+    args = dict(task_id='etf', outcome='partial', changed_count=0,
+                summary=['沪深300：100份 / +10份', '中证500：无法核实'] + ['📈' * 500] * 15,
+                data_date='2026-11-23', collected_at='2026-11-24T01:00:00+00:00',
+                error_details={'code':'timeout', 'stage':'fetch', 'trade_date':'2026-11-23',
+                               'mysql_errno':2013, 'message':'SECRET-RAW-TEXT'})
+    auto = n.format_result(**args, manual=False).splitlines()
+    manual = n.format_result(**args, manual=True).splitlines()
+    assert auto[1] == '触发方式：自动采集' and manual[1] == '触发方式：手动采集'
+    assert auto[:1] + auto[2:] == manual[:1] + manual[2:]
+    assert '采集时间：2026-11-24T09:00:00+08:00' in auto
+    assert '目标数据日期：2026-11-23' in auto
+    assert any('操作超时' in item and 'MySQL 2013' in item for item in auto)
+    assert any('沪深300' in item for item in auto)
+    assert all('SECRET-RAW-TEXT' not in item for item in auto)
+    assert auto[-1] == '其余项目请在页面查看。'
+    assert len('\n'.join(auto).encode('utf-16-le')) // 2 <= n.MAX_TELEGRAM_UNITS
+
+
+def test_scheduled_delivery_zero_change_and_dedup(settings, monkeypatch):
+    sent = fake_social(monkeypatch, settings)
+    assert emit(settings, outcome='completed', changed_count=0)
+    n.deliver_pending(settings)
+    assert not emit(settings, outcome='completed', changed_count=0)
+    n.deliver_pending(settings)
+    assert len(sent) == 1
+    assert '触发方式：自动采集' in sent[0] and '成功（无新增或变更）' in sent[0]

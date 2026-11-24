@@ -182,7 +182,7 @@ def publication_service(tmp_path, monkeypatch):
 
 def test_local_failure_is_durable_pending_and_replay_does_not_refetch(tmp_path, monkeypatch):
     service, remote, local, cache, calls = publication_service(tmp_path, monkeypatch)
-    moment = datetime(2026, 11, 16, 21, tzinfo=CHINA)
+    moment = datetime(2026, 11, 16, 23, tzinfo=CHINA)
     service.refresh(background=False, moment=moment)
     assert service.status()['stage'] == 'publication_pending'
     assert service.status()['publication_pending'] is True
@@ -298,7 +298,7 @@ def test_verified_source_enabled_by_default_without_starting_network(tmp_path):
     assert service.read_state() == {}
 
 
-def test_manual_dividend_notifies_only_changed_publication(tmp_path, monkeypatch):
+def test_manual_dividend_notifies_changed_noop_and_failed_publication(tmp_path, monkeypatch):
     from app.services import collection_notifications as notifications
     import app.services.dividend_collection as module
     monkeypatch.setattr(notifications, 'enabled', lambda *_: True)
@@ -315,8 +315,15 @@ def test_manual_dividend_notifies_only_changed_publication(tmp_path, monkeypatch
     for _ in range(2):
         assert service.refresh(background=False, moment=moment)
         assert service.status()['stage'] == 'complete'
+    def fail_source(self):
+        raise RuntimeError('SECRET-DIVIDEND-SOURCE')
+    monkeypatch.setattr(Source, 'collect', fail_source)
+    assert service.refresh(background=False, moment=moment)
     with notifications._database(service.settings) as db:
-        assert db.execute('SELECT count(*) FROM outbox').fetchone()[0] == 1
+        first, second, third = [r['message'] for r in db.execute('SELECT message FROM outbox ORDER BY rowid')]
+    assert '采集结果：成功' in first
+    assert '采集结果：成功（无新增或变更）' in second
+    assert '采集结果：失败' in third and 'SECRET-DIVIDEND-SOURCE' not in third
 
 
 def test_rule_version_fits_declared_snapshot_column():

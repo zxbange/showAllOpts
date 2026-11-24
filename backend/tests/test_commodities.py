@@ -118,7 +118,7 @@ def test_manual_and_two_schedulers_share_lock(tmp_path,monkeypatch):
  import threading
  service=scheduled_service(tmp_path,monkeypatch)
  second=Commodities(Settings(_env_file=None,log_dir=tmp_path));gate=threading.Event()
- def hold(lock,slot=None):
+ def hold(lock,slot=None,*,requested_at=None):
   try:gate.wait(5)
   finally:lock.release()
  monkeypatch.setattr(service,'collect',hold)

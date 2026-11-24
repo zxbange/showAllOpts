@@ -1,6 +1,6 @@
 """Collection diagnostics describe actual outcomes without upstream secrets."""
 import logging
-from datetime import date
+from datetime import date, timedelta
 
 import pytest
 
@@ -58,7 +58,7 @@ def test_growth_outcome(growth_monitor, monkeypatch, caplog, outcome):
 @pytest.mark.parametrize('outcome', ['success', 'partial', 'failed', 'cancelled'])
 def test_margin_outcome(margin_monitor, monkeypatch, caplog, outcome):
     caplog.set_level(logging.INFO)
-    margin_provider(monkeypatch, [MARGIN_MOMENT.date()])
+    margin_provider(monkeypatch, [MARGIN_MOMENT.date() - timedelta(days=1)])
     if outcome != 'success':
         def fail(*args, **kwargs):
             if outcome == 'cancelled':
@@ -72,7 +72,9 @@ def test_margin_outcome(margin_monitor, monkeypatch, caplog, outcome):
 def test_growth_empty_calendar_coverage_is_not_success(growth_monitor, monkeypatch, caplog):
     caplog.set_level(logging.INFO)
     growth_provider(monkeypatch, days=[])
-    growth_monitor.refresh(background=False, moment=GROWTH_MOMENT, slot='test-closed')
+    growth_monitor.refresh(
+        background=False, moment=GROWTH_MOMENT, slot=growth_dividend.slot_for(GROWTH_MOMENT.date(), growth_monitor.settings),
+    )
     assert_finished(caplog, 'Growth/dividend', 'partial')
     state = growth_monitor.read_state()
     assert state['calendar_checked_at'] == GROWTH_MOMENT.isoformat()

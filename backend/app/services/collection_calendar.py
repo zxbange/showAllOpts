@@ -4,11 +4,13 @@ Manual collection remains available on closed/unknown dates. Its failed work
 must not be enrolled in automatic retries; normal later schedules are separate.
 """
 from datetime import date, datetime, timedelta
+import re
 from zoneinfo import ZoneInfo
 
 from app.services.holdings_calendar import trading_day
 
 CHINA = ZoneInfo('Asia/Shanghai')
+_SCHEDULE_TIME = re.compile(r'(?:[01][0-9]|2[0-3]):[0-5][0-9]')
 
 
 def collection_day(moment: datetime | date) -> date:
@@ -21,6 +23,39 @@ def automatic_collection_allowed(moment: datetime | date) -> bool:
 
 def manual_failure_isolated(moment: datetime | date) -> bool:
     return not automatic_collection_allowed(moment)
+
+
+def latest_due_slot(moment: datetime, times, *, is_open=None) -> datetime | None:
+    """Latest configured slot at/before a frozen request, in Beijing time.
+
+    With no calendar predicate, schedule days are civil dates. Otherwise only
+    True qualifies, False skips a known closed day, and None (or any unknown
+    value) stops the search rather than guessing an older eligible slot.
+    This is a data cutoff, not a trigger: it ignores an automatic enable
+    switch, a worker's restart floor, missed runs, and past outcomes.
+    """
+    if moment.tzinfo is None or moment.utcoffset() is None:
+        raise ValueError('Timezone-aware schedule time required')
+    if (not isinstance(times, (list, tuple)) or not times or
+            any(not isinstance(value, str) or not _SCHEDULE_TIME.fullmatch(value) for value in times)):
+        raise ValueError('Configured collection times must use HH:MM')
+    clocks = sorted({tuple(map(int, value.split(':'))) for value in times}, reverse=True)
+    local = moment.astimezone(CHINA)
+    day = local
+    for _ in range(370):
+        for hour, minute in clocks:
+            slot = day.replace(hour=hour, minute=minute, second=0, microsecond=0)
+            if slot <= local:
+                eligible = True if is_open is None else is_open(slot.date())
+                if eligible is True:
+                    return slot
+                if eligible is not False:
+                    return None
+                break  # All remaining slots are on the same closed day.
+        if day.date() == date.min:
+            break
+        day -= timedelta(days=1)
+    return None
 
 
 def next_automatic_collection(moment: datetime) -> datetime | None:

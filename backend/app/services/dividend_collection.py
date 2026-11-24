@@ -285,9 +285,11 @@ class DividendCollection:
         moment = moment.astimezone(CHINA)
         if slot is not None and not automatic_collection_allowed(moment):
             return False
-        if moment.hour < 16 and self.pending() is None:
-            raise DividendCollectionError('当日数据须在16:00后采集；不使用实时状态回填历史。')
-        from app.services.earnings_schedule import acquire_execution
+        from app.services.earnings_schedule import acquire_execution, earnings_due_day, earnings_not_due_message
+        # The application-wired public source can only observe today's
+        # universe. Explicit adapter injection also supports historical fixtures.
+        current_only = self.source_factory is None
+        due_day = earnings_due_day(self.settings, moment) if current_only else None
         lock = acquire_execution(self.settings, self.acquire)
         if lock is None:
             return False
@@ -296,8 +298,15 @@ class DividendCollection:
             if state.get('run_isolated'):
                 quarantine_publication(self, 'pending', state)
             state['run_isolated'] = slot is None and manual_failure_isolated(moment)
-            if slot is None:
-                restore_manual_publication(self, 'pending', state)
+            restored = slot is None and restore_manual_publication(self, 'pending', state)
+            pending = self.pending()
+            if current_only and (due_day is None or (pending and pending[1]['meta']['trade_date'] > due_day)
+                                 or (not pending and due_day != moment.date())):
+                if restored:
+                    quarantine_publication(self, 'pending', state)
+                raise DividendCollectionError(earnings_not_due_message(due_day))
+            if not pending and moment.hour < 16:
+                raise DividendCollectionError('当日数据须在16:00后采集；不使用实时状态回填历史。')
             recovered_older = (state.get('stage') == 'complete' and
                                isinstance(state.get('result_date'), str) and
                                slot is not None and state['result_date'] < slot)
@@ -325,16 +334,35 @@ class DividendCollection:
             return True
         return False
 
+    @staticmethod
+    def _notification_facts(meta, records):
+        facts = {key: meta[key] for key in ('universe_count', 'eligible_count', 'value_candidates')}
+        groups = {}
+        for group in ('value', 'bank'):
+            rows = [row for row in records if row['method'] == group]
+            best = max(rows, key=lambda row: Decimal(str(row['dividend_yield_1y'])), default=None)
+            items = ([{'dividend_yield_1y': str(best['dividend_yield_1y']),
+                       'pe_ttm': str(best['pe_ttm'])}] if best else [])
+            groups[group] = {'count': len(rows), 'items': items}
+        return facts | {'trade_date': meta['trade_date'].isoformat(), 'groups': groups}
+
     def _collect(self, lock, state, moment):
         marker = self.root / ('cancel-' + state['run_id'])
         run_error = None
         engine = None
+        written = 0
+        facts = previous_facts = None
+        target_date = None
+        interruption = None
+        scheduled = state.get('current_slot') is not None
         started = monotonic()
         def check():
+            nonlocal interruption
             if state.get('current_slot') is None and not state.get('run_isolated') and manual_failure_isolated(moment + timedelta(seconds=monotonic()-started)):
                 state['run_isolated'] = True
                 self.save_state(state)
-            if (state.get('current_slot') is not None and not automatic_collection_allowed(moment + timedelta(seconds=monotonic()-started))) or self.stopped.is_set() or marker.exists():
+            if (scheduled and not automatic_collection_allowed(moment + timedelta(seconds=monotonic()-started))) or self.stopped.is_set() or marker.exists():
+                interruption = 'cancelled' if marker.exists() else 'interrupted'
                 raise DividendCollectionError('采集已取消；未提交的结果不发布。')
         def progress(stage, processed=None, total=None):
             check()
@@ -345,12 +373,18 @@ class DividendCollection:
         try:
             config = database_config(self.settings)
             target = database_identity(config)
+            saved_facts = state.get('notification_facts') or {}
+            if saved_facts.get('target') != target:
+                saved_facts = {'target': target}
+            facts, previous_facts = saved_facts.get('current'), saved_facts.get('previous')
             pending = self.pending()
             if pending is not None:
                 if pending[0] != target:
                     raise DividendCollectionError('待发布结果属于其他数据库，请恢复原配置后重试。')
                 meta, records = pending[1]['meta'], pending[1]['records']
+                target_date = meta['trade_date']
             else:
+                target_date = moment.date()
                 with self.client_factory() as client:
                     from app.services.dividend_public_source import DividendPublicSource
                     source = (self.source_factory or DividendPublicSource)(client, settings=self.settings,
@@ -387,17 +421,27 @@ class DividendCollection:
             commit_check()
             state.update(stage='complete', processed=None, total=None, last_success_at=datetime.now(CHINA).isoformat(),
                          written=written, result_date=meta['trade_date'].isoformat(), error=None, publication_pending=False, cache_refresh_pending=False)
+            # This is compact metadata from the verified publication, not a
+            # second stock snapshot or a candidate/failed result.
+            try:
+                verified = self._notification_facts(meta, records)
+                latest = saved_facts.get('current')
+                prior = saved_facts.get('previous')
+                if latest is None or latest['trade_date'] <= verified['trade_date']:
+                    older = latest if latest and latest['trade_date'] < verified['trade_date'] else prior
+                    state['notification_facts'] = {'target': target, 'current': verified, 'previous': older}
+                elif prior is None or prior['trade_date'] <= verified['trade_date']:
+                    state['notification_facts'] = {'target': target, 'current': latest, 'previous': verified}
+                facts = verified
+                previous_facts = next((item for item in (latest, prior)
+                                       if item and item['trade_date'] < verified['trade_date']), None)
+            except Exception as exc:
+                LOG.warning('Dividend notification metrics unavailable error_type=%s', type(exc).__name__)
             # Clearing the durable payload and recording local verification happen
             # together. A crash earlier replays the same idempotent database write.
             with self.db() as db:
                 db.execute('UPDATE state SET payload=? WHERE id=1', (json.dumps(state),))
                 db.execute('DELETE FROM pending WHERE id=1')
-            from app.services.collection_notifications import emit_collection_result
-            emit_collection_result(self.settings, 'dividend_selection', scheduled=bool(state.get('current_slot')),
-                run_key=state['run_id'], outcome='success', changed_count=max(written, 0),
-                summary=['选股日期：' + meta['trade_date'].isoformat(),
-                         '非银行：' + str(sum(row['method'] == 'value' for row in records)),
-                         '银行：' + str(sum(row['method'] == 'bank' for row in records))])
             LOG.info('Dividend collection complete date=%s rows=%s run=%s', meta['trade_date'], written, state['run_id'])
         except Exception as exc:
             run_error = public_error(exc, stage='database_write' if state.get('stage') == 'publishing' else 'cache_publish' if state.get('stage') == 'syncing_local' else 'collection')
@@ -416,7 +460,22 @@ class DividendCollection:
                     state.update(manual_failure_isolated=True, publication_pending=False, stage='failed',
                                  error='休市日手动采集失败，已隔离，不会自动重试；已有结果保留，可手动重试。')
                 self.save_state(state)
-                record_task(self.settings, 'dividend_selection', outcome=state['stage'], scheduled=state.get('current_slot') is not None, run_key=state['run_id'], error_details=run_error if state['stage'] != 'complete' else None)
+                outcome = state['stage']
+                if outcome != 'complete':
+                    if interruption:
+                        outcome = interruption
+                    elif state.get('database_committed'):
+                        outcome = 'publication_pending'
+                record_task(self.settings, 'dividend_selection', outcome=outcome, scheduled=scheduled, run_key=state['run_id'], error_details=run_error if state['stage'] != 'complete' else None)
+                try:
+                    from app.services.collection_notifications import emit_collection_result
+                    from app.services.collection_summary import summarize_dividend
+                    emit_collection_result(self.settings, 'dividend_selection', scheduled=scheduled,
+                        run_key=state['run_id'], outcome=outcome, changed_count=max(written, 0),
+                        summary=summarize_dividend(facts, previous_facts),
+                        data_date=target_date, error_details=run_error)
+                except Exception as exc:
+                    LOG.warning('Dividend notification result unavailable error_type=%s', type(exc).__name__)
             finally:
                 try:
                     marker.unlink(missing_ok=True)

@@ -9,6 +9,7 @@ import json
 import logging
 import time
 from urllib.parse import urlsplit
+from zoneinfo import ZoneInfo
 import httpx
 
 from app.core.diagnostics import diagnostic_details
@@ -22,6 +23,7 @@ DATA_URL = 'https://datacenter-web.eastmoney.com/api/data/v1/get'
 PRICE_URL = 'https://push2his.eastmoney.com/api/qt/stock/kline/get'
 TENCENT_URL = 'https://proxy.finance.qq.com/ifzqgtimg/appstock/app/newfqkline/get'
 TYPES = dict(zip(INDEXES, ('1', '2', '7')))
+CHINA = ZoneInfo('Asia/Shanghai')
 
 
 def source_date(value):
@@ -221,15 +223,23 @@ class EastmoneySource:
         # Holidays may retry harmlessly; no weekday is invented as a trading day.
         if cutoff.weekday() < 5 and day != cutoff:
             raise ValuationError('目标日收盘行情尚未发布，稍后自动重试。')
-        rosters = {code: self.snapshot(code, day) for code in INDEXES}
+        # The roster endpoint returns only the latest membership. For an
+        # earlier date require its archived roster instead of querying current
+        # constituents and risking a mislabeled historical valuation.
+        historical = day < moment.astimezone(CHINA).date()
+        rosters = None if historical else {code: self.snapshot(code, day) for code in INDEXES}
         with self.monitor.db() as db:
             db.execute('CREATE TABLE IF NOT EXISTS index_rosters_v2 '
                        '(trade_date TEXT PRIMARY KEY,payload TEXT NOT NULL)')
-            payload = json.dumps(rosters, sort_keys=True)
             old = db.execute('SELECT payload FROM index_rosters_v2 WHERE trade_date=?', (str(day),)).fetchone()
-            if old and old[0] != payload:
-                raise ValuationError('同日成分名单变化，已保留首次快照；请核实后补采。')
-            db.execute('INSERT OR IGNORE INTO index_rosters_v2 VALUES (?,?)', (str(day), payload))
+            if historical:
+                if not old:
+                    raise ValuationError('目标交易日没有已核验的成分存档；不使用当前名单回填。')
+            else:
+                payload = json.dumps(rosters, sort_keys=True)
+                if old and old[0] != payload:
+                    raise ValuationError('同日成分名单变化，已保留首次快照；请核实后补采。')
+                db.execute('INSERT OR IGNORE INTO index_rosters_v2 VALUES (?,?)', (str(day), payload))
             pending = [(date.fromisoformat(r[0]), json.loads(r[1])) for r in db.execute(
                 'SELECT trade_date,payload FROM index_rosters_v2 WHERE trade_date<=? ORDER BY trade_date', (str(day),))]
         result = []

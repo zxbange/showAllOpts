@@ -31,4 +31,4 @@ export const getValuationStatus = (signal?: AbortSignal) =>
   request<ValuationStatus>('status', 'GET', signal)
 // Never retry mutations automatically: a lost response may still have started a job.
 export const updateValuation = (action: ValuationAction) =>
-  request<{ started?: boolean; cancelled?: boolean }>(action, 'POST')
+  request<{ started?: boolean; cancelled?: boolean; detail?: string }>(action, 'POST')

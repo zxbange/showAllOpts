@@ -211,12 +211,12 @@ def test_recovery_log_identifies_unverified_dates(setup, monkeypatch, caplog):
     assert 'pending=0 limited=False pending_dates=-' in caplog.text
     assert not {'2026-11-07', '2026-11-08'} & days(job)
 
-@pytest.mark.parametrize('instant', [
-    datetime(2026,11,7,3,tzinfo=timezone.utc),
-    datetime(2026,11,8,3,tzinfo=timezone.utc),
-    datetime(2026,10,1,3,tzinfo=timezone.utc),
-    datetime(2027,1,4,3,tzinfo=timezone.utc)])
-def test_closed_automatic_skips_but_manual_failure_is_isolated(setup, monkeypatch, instant):
+@pytest.mark.parametrize(('instant', 'manual_target'), [
+    (datetime(2026,11,7,3,tzinfo=timezone.utc), '2026-11-06'),
+    (datetime(2026,11,8,3,tzinfo=timezone.utc), '2026-11-06'),
+    (datetime(2026,10,1,3,tzinfo=timezone.utc), '2026-09-30'),
+    (datetime(2027,1,4,3,tzinfo=timezone.utc), None)])
+def test_closed_automatic_skips_but_manual_failure_is_isolated(setup, monkeypatch, instant, manual_target):
     clock, _, job = setup
     clock[0] = instant
     calls = []
@@ -232,7 +232,10 @@ def test_closed_automatic_skips_but_manual_failure_is_isolated(setup, monkeypatc
     assert not calls
     assert job.refresh()
     job.thread.join(5)
-    assert calls
+    assert bool(calls) is (manual_target is not None)
+    assert job.status()['targetDate'] == manual_target
+    if manual_target is None:
+        assert job.status()['outcome'] == 'skipped'
     assert job.history()['rows'] == before
     with job.db() as db:
         for table in ('failed_targets','recovery_attempts','a00_source_checks','a00_recovery'):

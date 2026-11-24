@@ -94,7 +94,7 @@ def test_no_redirect_or_access_bypass(status):
 
 def test_failed_empty_and_repeated_collection_preserve_history(tmp_path,monkeypatch):
     import app.services.cci_coal as module
-    monkeypatch.setattr(module,'now',lambda:datetime(2026,11,3,12,tzinfo=timezone.utc))
+    monkeypatch.setattr(module,'now',lambda:datetime(2026,11,3,13,tzinfo=timezone.utc))
     store=CCICoal(Settings(_env_file=None,log_dir=tmp_path));old=store.history()['rows']
     monkeypatch.setattr(module,'fetch_rows',lambda *a,**k:[])
     store.collect(store.lock());assert store.history()['rows']==old
@@ -159,8 +159,8 @@ def test_api_read_auth_and_admin_write(tmp_path):
 def test_today_results_history_and_diagnostics(tmp_path, monkeypatch, caplog, mode, expected, hits):
     import app.services.cci_coal as module
     real_client = httpx.Client
-    # UTC is still Nov 2; Shanghai's target must already be Nov 3.
-    monkeypatch.setattr(module, 'now', lambda: datetime(2026,11,2,16,1,tzinfo=timezone.utc))
+    # At the 21:00 Shanghai cutoff, today's results become eligible.
+    monkeypatch.setattr(module, 'now', lambda: datetime(2026,11,3,13,tzinfo=timezone.utc))
     calls=[]
     def handle(request):
         p=request.url.params; calls.append(p)
@@ -195,7 +195,7 @@ def test_reject_oversized_history_window():
 def test_partial_network_failure_and_changed_counts(tmp_path, monkeypatch):
     import app.services.cci_coal as module
     real_client=httpx.Client
-    monkeypatch.setattr(module,'now',lambda:datetime(2026,11,3,12,tzinfo=timezone.utc))
+    monkeypatch.setattr(module,'now',lambda:datetime(2026,11,3,13,tzinfo=timezone.utc))
     value=[1015]
     def handle(request):
         grade=request.url.params['index_name']
@@ -595,7 +595,9 @@ def test_21_schedule_rejects_ahead_scheduler_clock_but_keeps_manual_refresh(tmp_
     assert calls == []
     assert store.refresh()
     store.thread.join(5)
-    assert calls == [('2026-11-04', '2026-11-04')]
+    assert calls == [('2026-11-03', '2026-11-03')]
+    with store.db() as db:
+        assert db.execute('SELECT count(*) FROM schedule_runs').fetchone() == (0,)
     current[0] = datetime(2026, 11, 4, 13, tzinfo=timezone.utc)
     run_scheduled(store, current[0])
     assert len(calls) == 2

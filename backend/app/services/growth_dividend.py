@@ -1,9 +1,10 @@
 from app.services.collection_outcomes import record_task
 from app.services.collection_errors import safe_error
 from app.services.collection_failure_isolation import quarantine_publication, restore_manual_publication
-from app.services.collection_calendar import next_automatic_collection, automatic_collection_allowed, manual_failure_isolated
+from app.services.collection_calendar import next_automatic_collection, automatic_collection_allowed, latest_due_slot, manual_failure_isolated
 from app.core.history_sync import mark_sync_owner, clear_sync_owner, database_syncing, SYNC_MESSAGE
 """Restartable public index history, with Shanghai 18:00 trading-day updates."""
+from app.services.holdings_calendar import trading_day
 from app.services.system_runtime import source_client
 from app.services.system_configuration import task_config
 from app.services.collection_notifications import notify_collection
@@ -273,7 +274,7 @@ class GrowthDividend:
             state.update(run_id=uuid.uuid4().hex, active=True, stage='核对交易日历',
                          error=None, calendar_error=None, processed=0, total=None, percent=None,
                          last_attempt_at=moment.isoformat(), trigger=trigger, recent_failures=[],
-                         conflict_points=0)
+                         conflict_points=0, target_date=None)
             if slot:
                 state['scheduled_slot'] = slot
             self.write_state(state)
@@ -297,7 +298,6 @@ class GrowthDividend:
     @notify_collection('growth_dividend')
     def collect(self, lock, state, moment, slot=None):
         marker = self.root / ('cancel-' + state['run_id'])
-        cutoff = close_cutoff(moment)
         local = moment.astimezone(CHINA)
         started = monotonic()
         outcome = 'failed'
@@ -305,7 +305,6 @@ class GrowthDividend:
         error_stage = 'database_write'
         failed_windows = 0
         publication = None
-        LOG.info('Growth/dividend collection started source=public_index trigger=%s cutoff=%s', state.get('trigger', '-'), cutoff)
 
         def check_cancel():
             if slot is None and state.get('trigger') == 'manual' and not state.get('run_isolated') and manual_failure_isolated(moment + timedelta(seconds=monotonic()-started)):
@@ -321,6 +320,15 @@ class GrowthDividend:
             self.write_state(state, db)
 
         try:
+            error_stage = 'validate'
+            # moment is captured on admission, not when the worker thread begins.
+            times = task_config(self.settings, 'growth_dividend')['times']
+            due = (datetime.fromisoformat(slot) if slot else latest_due_slot(moment, times, is_open=trading_day))
+            # If the packaged calendar is unknown, use only the verified sessions
+            # from the source calendar below; this bound is not a due trading slot.
+            cutoff = close_cutoff(due or latest_due_slot(moment, times))
+            LOG.info('Growth/dividend collection started source=public_index trigger=%s cutoff=%s', state.get('trigger', '-'), cutoff)
+            error_stage = 'database_write'
             publication = PublicPublication(self)
             publication.resume(write_public, apply, check_cancel)
             # Mirror pre-upgrade public history once for each configured target.
@@ -365,6 +373,13 @@ class GrowthDividend:
                     # A first/extended calendar can still provide useful known
                     # sessions at the turn of a year. Save that forward progress,
                     # but never claim coverage or success for unknown dates.
+                    if due is None:
+                        known = set(days)
+                        due = latest_due_slot(moment, times, is_open=lambda day: (
+                            day in known if days[0] <= day <= days[-1] else None))
+                        if due is None:
+                            raise IndexSourceError('公开交易日历尚未覆盖本次截止日，先补齐已知历史并等待重试。')
+                        cutoff = close_cutoff(due)
                     if through < str(cutoff):
                         raise IndexSourceError('公开交易日历尚未覆盖本次截止日，先补齐已知历史并等待重试。')
                     calendar_ok = True
@@ -380,21 +395,21 @@ class GrowthDividend:
                     today_trades = db.execute('SELECT 1 FROM calendar WHERE trade_date=?',
                                               (str(local.date()),)).fetchone() is not None
                     missing = self.pending(db, cutoff)
-                if state['trigger'] == 'startup' and local.hour >= 18 and today_trades:
-                    state['scheduled_slot'] = slot_for(local.date(), self.settings)
+                if state['trigger'] == 'startup' and due is not None and due.date() == local.date() and today_trades:
+                    state['scheduled_slot'] = due.isoformat()
                 needed = {index.code: set() for index in INDEXES}
                 for row in missing:
                     needed[row['code']].add(date.fromisoformat(row['trade_date']))
                 # Recheck today's close on explicit refresh; completed historical
                 # dates are never downloaded merely because a newer date exists.
-                if today_trades and local.hour >= 18:
+                if due is not None and today_trades and local.date() <= cutoff:
                     for index in INDEXES:
                         if local.date() >= index.first_date:
                             needed[index.code].add(local.date())
                 work = [(index, group) for index in INDEXES for group in windows(needed[index.code])]
                 work.sort(key=lambda item: (item[1][-1], item[0].code), reverse=True)
                 state.update(processed=0, total=sum(len(group) for _, group in work), percent=0 if work else 100,
-                             stage='补齐指数历史数据')
+                             stage='补齐指数历史数据', target_date=expected_days[-1].isoformat() if expected_days else None)
                 self.write_state(state)
                 LOG.info('Growth/dividend plan ready calendar_ok=%s windows=%s points=%s',
                          calendar_ok, len(work), state['total'])
