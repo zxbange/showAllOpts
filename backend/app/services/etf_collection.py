@@ -54,6 +54,20 @@ class CancellableHTTPClient:
         return result
 
 
+class _ScopedSSEGuard:
+    """HTTP 429 pauses only SSE fund-share calls for this run."""
+    def __init__(self):
+        self.rate_limited = False
+
+    def observe(self, error_details):
+        if error_details.get('http_status') == 429:
+            self.rate_limited = True
+
+
+def _scoped_sse_target(kind, code):
+    return kind == 'shares' and code.endswith('.XSHG')
+
+
 class WriterFailure(RuntimeError):
     """Safe public classification only; original driver message is never retained."""
     def __init__(self, code):
@@ -564,9 +578,13 @@ class ETFCollection:
                         if not claimed:
                             return False  # Cancellation won the queue-claim race.
                         return self._run(db, moment.astimezone(CHINA), config, manual_id=manual['id'])
+                    # Republish already committed database rows independently
+                    # of the exchange schedule, after reconciling the target
+                    # and while still holding the collector lock. No ETF slot
+                    # or exchange request is created by this refresh.
+                    self._refresh(db)
                     if not config['enabled'] or not automatic_collection_allowed(moment):
                         return False
-                    self._refresh(db)
                     today = moment.astimezone(CHINA).date().isoformat()
                     db.execute("UPDATE slots SET status='abandoned' WHERE substr(slot,1,10)<? AND status IN ('running','failed','partial')", (today,))
                     db.commit()
@@ -809,7 +827,7 @@ class ETFCollection:
                      if observed.get(day, {}).get((kind, code)) != 'complete'}
         return scope, required, unchecked
 
-    def _repair_history(self, db, c, client, config, writer, calendar, end, funds, progress, check_cancelled):
+    def _repair_history(self, db, c, client, config, writer, calendar, end, funds, progress, check_cancelled, sse_guard):
         scope, required, unchecked = self._manual_days(db, calendar, end, funds)
         if not required:
             db.execute("DELETE FROM metadata WHERE key='manual_gap_floor' AND value<=?", (end.isoformat(),))
@@ -848,26 +866,32 @@ class ETFCollection:
             day_need = pending_by_day.get(day, ())
             verified = verified_by_day.get(day, set())
             shares, prices = [], []
-            scoped = dict(attempted=0, found=0, failed=0)
+            scoped = dict(attempted=0, found=0, failed=0, skipped=0)
             for kind, code in day_need:
                 progress('fetching', completed, total + 2 * len(funds))
-                scoped_sse = kind == 'shares' and code.endswith('.XSHG')
+                scoped_sse = _scoped_sse_target(kind, code)
                 if scoped_sse:
+                    if sse_guard.rate_limited:
+                        scoped['skipped'] += 1
+                        completed += 1
+                        continue
                     scoped['attempted'] += 1
                 try:
                     found_shares, found_prices, _ = c.collect(
                         client, day, day, funds={code: funds[code]}, calendar=calendar,
                         include_prices=kind == 'prices', include_shares=kind == 'shares',
-                        **({'scoped_sse_history': True} if scoped_sse else {}))
+                        **({'scoped_sse': True} if scoped_sse else {}))
                     check_cancelled()
                 except CollectionInterrupted:
                     raise
                 except Exception as exc:
+                    details = safe_error(exc, stage='fetch', trade_date=day)
                     if day not in history_errors:
-                        history_errors[day] = safe_error(exc, stage='fetch', trade_date=day)
+                        history_errors[day] = details
                     failures += 1
                     if scoped_sse:
                         scoped['failed'] += 1
+                        sse_guard.observe(details)
                     if failures <= 5:
                         LOG.warning('ETF historical source observation failed kind=%s code=%s date=%s source=%s %s',
                                     kind, code, day, 'sse_scoped_shares' if scoped_sse else 'exchanges',
@@ -878,10 +902,10 @@ class ETFCollection:
                     if scoped_sse and found_shares:
                         scoped['found'] += 1
                 completed += 1
-            if scoped['attempted']:
-                LOG.info('ETF historical SSE shares date=%s attempted=%s found=%s empty=%s failed=%s',
+            if scoped['attempted'] or scoped['skipped']:
+                LOG.info('ETF historical SSE shares date=%s attempted=%s found=%s empty=%s failed=%s skipped_rate_limit=%s',
                          day, scoped['attempted'], scoped['found'],
-                         scoped['attempted'] - scoped['found'] - scoped['failed'], scoped['failed'])
+                         scoped['attempted'] - scoped['found'] - scoped['failed'], scoped['failed'], scoped['skipped'])
             check_cancelled()
             # Preserve the earliest dirty date *before* attempting COMMIT.
             # A stop, ambiguous COMMIT or cache lock cannot lose this intent.
@@ -917,6 +941,7 @@ class ETFCollection:
         funds = c.catalog()
         with self.client_factory() as http, _RunDatabase(self.configuration.engine, config, check_cancelled) as writer:
             client = c.ExchangeClient(CancellableHTTPClient(http, check_cancelled))
+            sse_guard = _ScopedSSEGuard()
             calendar = client.calendar()
             check_cancelled()
             if hasattr(client, 'prices'):
@@ -932,19 +957,6 @@ class ETFCollection:
                             raise
                     return price_cache[code]
                 client.prices = cached_prices
-            if hasattr(client, 'sse_shares'):
-                fetch_shares, share_cache, share_errors = client.sse_shares, {}, {}
-                def cached_shares(day):
-                    if day in share_errors:
-                        raise share_errors[day]
-                    if day not in share_cache:
-                        try:
-                            share_cache[day] = fetch_shares(day)
-                        except Exception as exc:
-                            share_errors[day] = exc
-                            raise
-                    return share_cache[day]
-                client.sse_shares = cached_shares
             # Automatic jobs remain latest-only; the manual repair plan
             # uses official sessions and does not extend the automatic budget.
             _, end = calendar.default_range(1)
@@ -954,7 +966,7 @@ class ETFCollection:
             scope, historical_gaps, repaired, history_total, history_errors = (end,), set(), 0, 0, {}
             if manual:
                 scope, historical_gaps, repaired, history_total, history_errors = self._repair_history(
-                    db, c, client, config, writer, calendar, end, funds, progress, check_cancelled)
+                    db, c, client, config, writer, calendar, end, funds, progress, check_cancelled, sse_guard)
                 base_progress = progress
                 progress = lambda phase, completed, total: base_progress(
                     phase, completed + repaired, total + history_total)
@@ -972,7 +984,7 @@ class ETFCollection:
                        if manual or (kind, code) not in exhausted}
             shares, prices, attempted = [], [], set()
             completed, total = 0, len(targets)
-            failures = 0
+            failures, skipped_sse = 0, 0
             LOG.info('ETF source plan source=exchanges date=%s funds=%s targets=%s exhausted=%s',
                      end, len(funds), total, len(exhausted))
             for kind in ('shares', 'prices'):
@@ -980,19 +992,28 @@ class ETFCollection:
                     if (kind, code) not in targets:
                         continue
                     progress('fetching', completed, total)
+                    scoped_sse = _scoped_sse_target(kind, code)
+                    if scoped_sse and sse_guard.rate_limited:
+                        skipped_sse += 1
+                        completed += 1
+                        continue
                     attempted.add((kind, code, end.isoformat()))
                     try:
                         s, p, _ = c.collect(client, end, end, funds={code: name}, calendar=calendar,
-                                            include_prices=kind == 'prices', include_shares=kind == 'shares')
+                                            include_prices=kind == 'prices', include_shares=kind == 'shares',
+                                            **({'scoped_sse': True} if scoped_sse else {}))
                         check_cancelled()
                     except CollectionInterrupted:
                         raise
                     except Exception as exc:
-                        self._run_error_details = safe_error(exc, stage='fetch')
+                        self._run_error_details = safe_error(exc, stage='fetch', trade_date=end)
+                        if scoped_sse:
+                            sse_guard.observe(self._run_error_details)
                         failures += 1
                         if failures <= 5:
-                            LOG.warning('ETF source observation failed kind=%s code=%s date=%s %s',
-                                        kind, code, end, diagnostic_details(exc))
+                            LOG.warning('ETF source observation failed kind=%s code=%s date=%s source=%s %s',
+                                        kind, code, end, 'sse_scoped_shares' if scoped_sse else 'exchanges',
+                                        diagnostic_details(exc))
                     else:
                         shares.extend(s)
                         prices.extend(p)
@@ -1003,9 +1024,9 @@ class ETFCollection:
             missing_shares = set(funds) - verified_shares
             missing_prices = set(funds) - verified_prices
             LOG.info('ETF source finish source=exchanges date=%s attempted=%s failed=%s shares=%s prices=%s '
-                     'suppressed_failures=%s missing_shares=%s missing_prices=%s',
-                     end, completed, failures, len(shares), len(prices), max(0, failures - 5),
-                     len(missing_shares), len(missing_prices))
+                     'suppressed_failures=%s missing_shares=%s missing_prices=%s skipped_sse_rate_limit=%s',
+                     end, len(attempted), failures, len(shares), len(prices), max(0, failures - 5),
+                     len(missing_shares), len(missing_prices), skipped_sse)
             if failures == 0 and (missing_shares or missing_prices):
                 code = ('etf_missing_shares_and_prices' if missing_shares and missing_prices else
                         'etf_missing_shares' if missing_shares else 'etf_missing_prices')

@@ -35,7 +35,7 @@ class Collector:
     def ExchangeClient(self, http):
         return SimpleNamespace(calendar=lambda: Calendar())
 
-    def collect(self, client, start, end, funds, include_prices, include_shares, calendar, *, scoped_sse_history=False):
+    def collect(self, client, start, end, funds, include_prices, include_shares, calendar, *, scoped_sse=False):
         self.calls.append((start, funds, include_prices, include_shares))
         if self.failure:
             raise ValueError('do not expose secret')
@@ -171,6 +171,70 @@ def test_cache_pending_retries_without_network(tmp_path):
     assert w.status()['metadata']['cache_pending'] == '0'
 
 
+@pytest.mark.parametrize('enabled,day_offset', [(False, 0), (True, 1)])
+def test_manual_cache_publication_retry_is_independent_of_collection_schedule(tmp_path, enabled, day_offset):
+    from test_etf_page_configuration import save
+
+    later = EVENING + timedelta(days=day_offset)
+    attempts = []
+    w, collector, _ = worker(tmp_path, refresh=lambda: attempts.append('busy') or False)
+    w.start = lambda: None
+    w.clock = lambda: later
+    save(w, {'enabled': enabled})
+    w.request_run('cache-pending-manual-123')
+    assert w.tick(later)
+    assert len(collector.writes) == 1 and attempts == ['busy']
+    assert w.status()['cache_pending']
+
+    # A pending publication is a different job from another exchange fetch.
+    collector.ExchangeClient = lambda *_: pytest.fail('cache-only retry must not contact exchanges')
+    w.refresh = lambda: attempts.append('published') or True
+    w.clock = lambda: later + timedelta(minutes=4)
+    assert not w.tick(w.clock())
+    assert attempts == ['busy']  # Keep the same five-minute backoff.
+    w.clock = lambda: later + timedelta(minutes=5)
+    with portalocker.Lock(str(w.root / 'collection.lock'), timeout=0):
+        assert not w.tick(w.clock())
+    assert attempts == ['busy']  # A different worker owns the collector lock.
+    assert not w.tick(w.clock())
+    assert attempts == ['busy', 'published']
+    assert not w.status()['cache_pending']
+    assert not w.status()['runs']  # No automatic slot was claimed.
+    assert w.status()['manual']['id'] == 'cache-pending-manual-123'
+    w.clock = lambda: later + timedelta(minutes=11)
+    assert not w.tick(w.clock())
+    assert attempts == ['busy', 'published']
+
+
+def test_disabled_cache_retry_does_not_publish_pending_window_from_previous_target(tmp_path):
+    import json
+    from test_etf_page_configuration import save
+    from app.services.etf_configuration import target_key
+    from app.services.system_configuration import SystemConfiguration
+
+    attempts = []
+    w, collector, _ = worker(tmp_path, refresh=lambda **options: attempts.append(options) or True)
+    w.start = lambda: None
+    save(w, {'enabled': False})
+    previous = target_key(w.configuration.load())
+    with w.connect() as db:
+        db.executemany('INSERT INTO metadata(key,value) VALUES (?,?)', [
+            ('system_database_target', previous), ('cache_pending', '1'),
+            ('cache_repair_start', '2026-11-04')])
+    save(w, {'enabled': False, 'host': 'new-etf.example', 'password': 'test only',
+             'revision': SystemConfiguration(w.settings).load()['revision']})
+    assert not w.tick(EVENING)
+    assert not collector.calls and not attempts
+    assert not w.status()['cache_pending']
+    with w.connect() as db:
+        archived = {item['key']: item['value'] for (payload,) in db.execute(
+            "SELECT payload FROM system_target_archive WHERE target=? AND table_name='metadata'",
+            (previous,)) if (item := json.loads(payload))}
+        assert archived['cache_pending'] == '1'
+        assert archived['cache_repair_start'] == '2026-11-04'
+        assert db.execute("SELECT value FROM metadata WHERE key='system_database_target'").fetchone()[0] != previous
+
+
 def test_fresh_calendar_failure_no_writer(tmp_path):
     w, c, disposed = worker(tmp_path)
     def fail():
@@ -182,7 +246,7 @@ def test_fresh_calendar_failure_no_writer(tmp_path):
 
 def test_latest_gap_exhaustion_does_not_hide_successful_daily_observations(tmp_path):
     w, c, _ = worker(tmp_path)
-    def partial(client, start, end, funds, include_prices, include_shares, calendar):
+    def partial(client, start, end, funds, include_prices, include_shares, calendar, *, scoped_sse=False):
         if include_shares and '510300.XSHG' in funds:
             return [], [], {}
         rows = [dict(fund_code=code, trade_date=start) for code in funds]
@@ -424,20 +488,18 @@ def test_six_writer_failures_do_not_consume_gap_budget(tmp_path):
     assert c.writes
 
 
-def test_sse_share_fetch_memoized_per_date_for_multiple_funds(tmp_path):
+def test_sse_latest_share_fetch_scopes_each_tracked_fund(tmp_path):
     w, c, _ = worker(tmp_path)
     c.catalog = lambda: {'510300.XSHG': '沪1', '510310.XSHG': '沪2'}
     calls = []
-    c.ExchangeClient = lambda http: SimpleNamespace(calendar=lambda: Calendar(),
-        sse_shares=lambda day: calls.append(day) or [])
     real = c.collect
     def collect(client, start, end, **kwargs):
-        if kwargs['include_shares']:
-            client.sse_shares(start)
+        code = next(iter(kwargs['funds']))
+        calls.append((start, code, kwargs['include_shares'], kwargs.get('scoped_sse', False)))
         return real(client, start, end, **kwargs)
     c.collect = collect
     assert w.tick(EVENING)
-    assert calls == [DAY]
+    assert calls == [(DAY, code, shares, shares) for shares in (True, False) for code in c.catalog()]
 
 
 
@@ -1184,7 +1246,7 @@ def test_manual_checks_mysql_for_previously_complete_inside_known_gap_scope(tmp_
     assert [funds for day, funds, *_ in c.calls if day == formerly_complete] == [{'510300.XSHG': '沪'}]
 
 
-def test_manual_only_scopes_older_sse_shares_and_preserves_oldest_timeout(tmp_path, caplog):
+def test_manual_scopes_history_and_latest_sse_shares_and_preserves_oldest_timeout(tmp_path, caplog):
     import httpx
     import logging
 
@@ -1197,9 +1259,9 @@ def test_manual_only_scopes_older_sse_shares_and_preserves_oldest_timeout(tmp_pa
 
     def record(client, start, end, **kwargs):
         code = next(iter(kwargs['funds']))
-        scoped = kwargs.get('scoped_sse_history', False)
+        scoped = kwargs.get('scoped_sse', False)
         calls.append((start, code, kwargs['include_shares'], scoped))
-        if scoped:
+        if scoped and start == history:
             raise httpx.ReadTimeout('private upstream text')
         if start == newest:
             return [], [], {}
@@ -1209,8 +1271,8 @@ def test_manual_only_scopes_older_sse_shares_and_preserves_oldest_timeout(tmp_pa
     w.request_run('scoped-sse-history-only')
     with caplog.at_level(logging.INFO):
         assert not w.tick(moment)
-    assert [value for value in calls if value[-1]] == [(history, '510300.XSHG', True, True)]
-    assert all(not scoped for day, _, _, scoped in calls if day == newest)
+    assert [value for value in calls if value[-1]] == [
+        (history, '510300.XSHG', True, True), (newest, '510300.XSHG', True, True)]
     assert all(not scoped for _, code, _, scoped in calls if code.endswith('.XSHE'))
     details = w.status()['latest_result']['error_details']
     assert (details['code'], details['stage'], details['trade_date']) == (

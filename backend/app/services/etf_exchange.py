@@ -280,7 +280,7 @@ class ExchangeClient:
                 raise SourceError('SSE empty intermediate page')
         raise SourceError('SSE pagination limit exceeded')
 
-    def sse_historical_shares(self, code, day):
+    def sse_scoped_shares(self, code, day):
         """One fund and exact date; never fall back to the complete daily report."""
         if len(code) != 11 or code[6:] != '.XSHG' or not code[:6].isascii() or not code[:6].isdigit():
             raise SourceError('Invalid scoped SSE fund code')
@@ -296,7 +296,7 @@ class ExchangeClient:
             if time.monotonic() >= deadline:
                 raise TimeoutError('Scoped SSE share request exceeded elapsed budget')
 
-        # A single attempt per key in this manual run. HTTPX's cap is I/O
+        # A single attempt for this fund/day. HTTPX's cap is I/O
         # inactivity; the elapsed budget is checked at cooperative boundaries.
         stream_capped = getattr(self.client, 'stream_capped', None)
         kwargs = dict(params=params, headers=headers, follow_redirects=False)
@@ -439,7 +439,7 @@ def count_value(value):
     return number
 
 
-def collect(client, start, end, funds=None, include_prices=True, include_shares=True, calendar=None, *, scoped_sse_history=False):
+def collect(client, start, end, funds=None, include_prices=True, include_shares=True, calendar=None, *, scoped_sse=False):
     funds = catalog() if funds is None else funds
     if parse_date(end) > datetime.now(ZoneInfo('Asia/Shanghai')).date():
         raise SourceError('End date must not be in the future')
@@ -469,10 +469,10 @@ def collect(client, start, end, funds=None, include_prices=True, include_shares=
 
     if include_shares:
         sse_codes = [code for code in funds if code.endswith('.XSHG')]
-        if scoped_sse_history:
+        if scoped_sse:
             for day in days:
                 for code in sse_codes:
-                    for raw in client.sse_historical_shares(code, day):
+                    for raw in client.sse_scoped_shares(code, day):
                         add_share(raw, '.XSHG', day)
         elif sse_codes:
             for day in days:

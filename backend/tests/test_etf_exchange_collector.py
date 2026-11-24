@@ -695,7 +695,7 @@ def test_scoped_sse_historical_share_uses_exact_filters_and_accepts_result_with_
     source = client(handler)
     shares, prices, missing = m.collect(
         source, DAY, DAY, funds={'510300.XSHG': '沪'}, include_prices=False,
-        calendar=fake_calendar(), scoped_sse_history=True)
+        calendar=fake_calendar(), scoped_sse=True)
     assert len(requests) == 1
     req = requests[0]
     assert str(req.url.copy_with(query=None)) == m.SSE_SHARES
@@ -740,7 +740,7 @@ def test_scoped_sse_rejects_bad_response_without_retry_or_bulk_fallback(payload)
         return httpx.Response(200, json=payload)
 
     with pytest.raises(m.SourceError):
-        client(handler).sse_historical_shares('510300.XSHG', DAY)
+        client(handler).sse_scoped_shares('510300.XSHG', DAY)
     assert len(requests) == 1
     assert requests[0].url.params['isPagination'] == 'false'
 
@@ -759,7 +759,7 @@ def test_scoped_sse_rejects_invalid_or_oversized_body(content):
         return httpx.Response(200, content=content)
 
     with pytest.raises(m.SourceError):
-        client(handler).sse_historical_shares('510300.XSHG', DAY)
+        client(handler).sse_scoped_shares('510300.XSHG', DAY)
     assert len(requests) == 1
 
 
@@ -775,10 +775,10 @@ def test_scoped_sse_empty_and_zero_are_different_and_timeout_does_not_retry():
         raise httpx.ReadTimeout('private response text', request=req)
 
     source = client(handler)
-    assert source.sse_historical_shares('510300.XSHG', DAY) == []
-    assert source.sse_historical_shares('510300.XSHG', DAY) == [row(shares='0')]
+    assert source.sse_scoped_shares('510300.XSHG', DAY) == []
+    assert source.sse_scoped_shares('510300.XSHG', DAY) == [row(shares='0')]
     with pytest.raises(m.SourceError) as error:
-        source.sse_historical_shares('510300.XSHG', DAY)
+        source.sse_scoped_shares('510300.XSHG', DAY)
     assert isinstance(error.value.__cause__, httpx.ReadTimeout)
     assert 'private' not in str(error.value)
     assert len(requests) == 3
@@ -805,5 +805,5 @@ def test_scoped_sse_checks_cancellation_while_streaming():
             lambda _: httpx.Response(200, stream=Stream()))) as http:
         source = m.ExchangeClient(CancellableHTTPClient(http, check))
         with pytest.raises(CollectionCancelled):
-            source.sse_historical_shares('510300.XSHG', DAY)
+            source.sse_scoped_shares('510300.XSHG', DAY)
     assert chunks == [1, 'closed']
