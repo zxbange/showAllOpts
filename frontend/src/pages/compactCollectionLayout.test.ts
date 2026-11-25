@@ -36,7 +36,7 @@ describe('compact collection controls replace obsolete footer cards', () => {
     const valuation = source('pages/ValuationRulerPage')
     expect(valuation).not.toContain('重新读取采集状态')
     expect(valuation).not.toContain('onClick={() => void readStatus()}')
-    expect(valuation).toContain('if (!mutation.pending) await readStatus()')
+    expect(valuation).toContain('useCollectionTask(valuationCollectionTask, session, admin)')
     expect(valuation).toContain('disabled={disabled || running}')
     expect(valuation).toContain('采集中…')
     expect(valuation).not.toContain('取消采集')

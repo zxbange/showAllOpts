@@ -1,35 +1,50 @@
-from app.services.collection_outcomes import record_task
-from app.services.collection_errors import safe_error
-from app.services.collection_calendar import (
-    automatic_collection_allowed, latest_due_slot, manual_failure_isolated, next_automatic_collection,
-)
-from app.services.system_configuration import task_config, latest_task_slot
-from app.services.holdings_calendar import trading_day
 """两融担保比例：东方财富接口、独立本地存储、北京时间08点调度。"""
-from app.services.system_runtime import source_client
-from app.services.collection_notifications import notify_collection
-from contextlib import contextmanager
-from datetime import date, datetime, timedelta, timezone
+
 import json
 import logging
-from time import monotonic
-
 import math
 import sqlite3
 import ssl
 import threading
 import uuid
+from contextlib import contextmanager
+from datetime import date, datetime, timedelta, timezone
+from functools import partial
+from time import monotonic
 
 import httpx
 import portalocker
 
 from app.core.diagnostics import diagnostic_details
-
-from app.services.margin_source import (
-    MarginReport, MarginSourceError, safe_error_details, safe_report_url,
-    TITLE_DATE_CORRECTION,
+from app.services.collection_calendar import (
+    automatic_collection_allowed,
+    latest_due_slot,
+    manual_failure_isolated,
+    next_automatic_collection,
 )
+from app.services.collection_errors import safe_error
+from app.services.collection_lifecycle import (
+    RunContext,
+    RunRequest,
+    cancellation_marker,
+    is_running,
+    request_cancel,
+    start_worker,
+    try_lease,
+)
+from app.services.collection_notifications import notify_collection
+from app.services.collection_outcomes import record_task
+from app.services.holdings_calendar import trading_day
 from app.services.margin_eastmoney import API_URL, RatioReport, fetch_point, list_reports
+from app.services.margin_source import (
+    TITLE_DATE_CORRECTION,
+    MarginReport,
+    MarginSourceError,
+    safe_error_details,
+    safe_report_url,
+)
+from app.services.system_configuration import latest_task_slot, task_config
+from app.services.system_runtime import source_client
 
 LOG = logging.getLogger(__name__)
 CHINA = timezone(timedelta(hours=8))
@@ -131,27 +146,15 @@ class MarginGuarantee:
     def acquire(self):
         lock = portalocker.Lock(str(self.root / 'collection.lock'), timeout=0,
                                 flags=portalocker.LOCK_EX | portalocker.LOCK_NB)
-        try:
-            lock.acquire()
-            return lock
-        except portalocker.exceptions.LockException:
-            return None
+        return try_lease(lock, portalocker.exceptions.LockException)
 
     def running(self):
-        lock = self.acquire()
-        if lock is None:
-            return True
-        lock.release()
-        return False
+        return is_running(self.acquire)
 
     def cancel(self):
         if not self.running():
             return False
-        identifier = self.read_state().get('run_id', '')
-        if len(identifier) != 32 or any(c not in '0123456789abcdef' for c in identifier):
-            return False
-        (self.root / ('cancel-' + identifier)).touch()
-        return True
+        return request_cancel(self.root, self.read_state().get('run_id'))
 
     def status(self, moment=None):
         moment = moment or now()
@@ -240,15 +243,16 @@ class MarginGuarantee:
             lock.release()
             raise
         if background:
-            self.worker = threading.Thread(target=self._collect, args=(lock, state, moment),
-                                           name='margin-guarantee-collector', daemon=True)
             try:
-                self.worker.start()
+                start_worker(partial(self._collect, lock, state, moment), name='margin-guarantee-collector',
+                             assign=lambda worker: setattr(self, 'worker', worker), factory=threading.Thread)
             except BaseException as exc:
                 LOG.error('Margin collection launch failed details=%s', diagnostic_details(exc))
                 state.update(active=False, error='未能启动采集任务，请重试。', stage='启动失败')
-                self.write_state(state)
-                lock.release()
+                try:
+                    self.write_state(state)
+                finally:
+                    lock.release()
                 raise
         else:
             self._collect(lock, state, moment)
@@ -256,13 +260,17 @@ class MarginGuarantee:
 
     @notify_collection('margin')
     def _collect(self, lock, state, moment):
-        started = monotonic()
         outcome = 'failed'
         run_error = None
-        marker = self.root / ('cancel-' + state['run_id'])
-        def check_cancel():
-            if (state.get('current_scheduled_slot') is not None and not automatic_collection_allowed(moment + timedelta(seconds=monotonic()-started))) or self.stop_event.is_set() or marker.exists():
-                raise CollectionCancelled()
+        marker = cancellation_marker(self.root, state['run_id'])
+        assert marker is not None
+        slot = state.get('current_scheduled_slot')
+        context = RunContext(
+            RunRequest(moment, slot, 'scheduled' if slot is not None else 'manual'), marker,
+            self.stop_event, automatic_collection_allowed, manual_failure_isolated,
+            CollectionCancelled, monotonic,
+        )
+        check_cancel = context.check_cancel
         today = moment.astimezone(CHINA).date()
         cutoff = six_years_ago(today)
         target = date.fromisoformat(state['target_date']) if state.get('target_date') else None
@@ -410,7 +418,7 @@ class MarginGuarantee:
             LOG.error('Margin guarantee collection failed scope=%s stopped_after_failures=%s reason=%s details=%s',
                       scope, stopped_after_failures, safe_error_details(exc), diagnostic_details(exc))
         finally:
-            isolate = isolate or (state.get('current_scheduled_slot') is None and manual_failure_isolated(moment + timedelta(seconds=monotonic()-started)))
+            isolate = isolate or (context.isolate_manual_failure(include_requested=False))
             state['active'] = False
             try:
                 if isolate and existing_reports is not None:
@@ -428,15 +436,17 @@ class MarginGuarantee:
                 raise
             finally:
                 try:
-                    record_task(self.settings, 'margin', outcome=outcome, scheduled=state.get('current_scheduled_slot') is not None, run_key=state['run_id'], error_details=run_error if outcome in ('failed', 'partial') else None)
-                    lock.release()
+                    try:
+                        record_task(self.settings, 'margin', outcome=outcome, scheduled=state.get('current_scheduled_slot') is not None, run_key=state['run_id'], error_details=run_error if outcome in ('failed', 'partial') else None)
+                    finally:
+                        lock.release()
                 except BaseException as exc:
                     outcome = 'failed'
                     LOG.error('Collection lock release failed details=%s', diagnostic_details(exc))
                     raise
                 finally:
                     LOG.info('Margin guarantee collection finished outcome=%s processed=%s total=%s failed=%s duration_seconds=%.3f',
-                             outcome, state.get('processed', 0), state.get('total'), failures, monotonic() - started)
+                             outcome, state.get('processed', 0), state.get('total'), failures, context.elapsed)
 
     def tick(self, moment=None):
         moment = moment or now()

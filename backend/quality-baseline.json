@@ -524,29 +524,7 @@
       "I001:3331577e9c0d62d1cf6a": 1
     },
     "backend/app/services/growth_dividend.py": {
-      "E402:037c7cb7404a4f905f09": 1,
-      "E402:11bb2de7457de0181f76": 1,
-      "E402:273308c9408d73d2fcd7": 1,
-      "E402:2be0f5e7bb134759e94d": 1,
-      "E402:36aa21ec1bd68ad280e8": 1,
-      "E402:436d4d25bee5cb002a49": 1,
-      "E402:87e5110435406a61309d": 1,
-      "E402:93fe87373ee09f89a9b9": 1,
-      "E402:9781718638dff9308fce": 1,
-      "E402:9b77a18be6bdffa40dab": 1,
-      "E402:9b99b749c642ce381370": 1,
-      "E402:a096e09cc4901c919c36": 1,
-      "E402:a86fa6465822150a8242": 1,
-      "E402:b91204fbb27179650166": 1,
-      "E402:bc1253878f46e464f6f2": 1,
-      "E402:d3be11ffd0db067cb1ff": 1,
-      "E402:dcfeb942bb07abc7dd56": 1,
-      "E402:e2e9e2993ce3068a8052": 1,
-      "E402:e2f175d2429ccba765eb": 1,
-      "E402:e377baff56d0ad635e94": 1,
-      "F841:3ab402a5963b0bd73d8d": 1,
-      "I001:023583bc2f7a004b29cc": 1,
-      "I001:0fbad4ce2d7b41acc045": 1
+      "F841:3ab402a5963b0bd73d8d": 1
     },
     "backend/app/services/growth_dividend_import.py": {
       "B007:24b70392a1240af45d71": 1,
@@ -587,27 +565,6 @@
     },
     "backend/app/services/margin_eastmoney.py": {
       "I001:3331577e9c0d62d1cf6a": 1
-    },
-    "backend/app/services/margin_guarantee.py": {
-      "E402:037c7cb7404a4f905f09": 1,
-      "E402:273308c9408d73d2fcd7": 1,
-      "E402:2be0f5e7bb134759e94d": 1,
-      "E402:36aa21ec1bd68ad280e8": 1,
-      "E402:436d4d25bee5cb002a49": 1,
-      "E402:892d59ec6cc9d1200a41": 1,
-      "E402:9781718638dff9308fce": 1,
-      "E402:9b77a18be6bdffa40dab": 1,
-      "E402:9b99b749c642ce381370": 1,
-      "E402:a86fa6465822150a8242": 1,
-      "E402:b91204fbb27179650166": 1,
-      "E402:bc1253878f46e464f6f2": 1,
-      "E402:c6afb5c8327a1d27d50e": 1,
-      "E402:d3be11ffd0db067cb1ff": 1,
-      "E402:dcfeb942bb07abc7dd56": 1,
-      "E402:efb245a2847f632e7c43": 1,
-      "E402:eff4e440c6ea408d8949": 1,
-      "I001:0fbad4ce2d7b41acc045": 1,
-      "I001:f7dee3b14d3d48a61e82": 1
     },
     "backend/app/services/margin_source.py": {
       "I001:3331577e9c0d62d1cf6a": 1

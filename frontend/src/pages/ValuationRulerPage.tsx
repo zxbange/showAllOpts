@@ -1,23 +1,17 @@
 import { PageHeaderActions } from '../components/PageHeaderActions'
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { RefreshCw, Gauge, Layers3 } from 'lucide-react'
 import { useAuth } from '../components/AccountAccess'
 import { PageHeader } from '../components/PageHeader'
 import { StatCard } from '../components/StatCard'
 import { ValuationRulerChart } from '../components/ValuationRulerChart'
-import { getValuationHistory, getValuationStatus, updateValuation } from '../api/valuationRuler'
-import type { ValuationHistory, ValuationStatus } from '../types/valuationRuler'
+import { getValuationHistory } from '../api/valuationRuler'
+import type { ValuationHistory } from '../types/valuationRuler'
+import { useCollectionTask } from '../hooks/useCollectionTask'
+import { valuationCollectionTask, valuationErrorText } from '../lib/valuationCollectionTask'
 import { valuationNumber, valuationSource } from '../lib/valuationRuler'
 import '../styles/valuation-ruler.css'
 
-// Survives route changes. A failed POST response does not prove the server rejected it.
-const mutation = {
-  pending: false,
-  uncertain: false,
-  observedRunning: false,
-  accepted: false,
-  runId: null as string | null,
-}
 const phaseLabels: Record<string, string> = {
   collecting: '采集中',
   saving: '保存数据库与本地',
@@ -29,37 +23,27 @@ const phaseLabels: Record<string, string> = {
   failed: '未完成',
   interrupted: '任务中断',
 }
-const errorText = (reason: unknown) =>
-  reason instanceof Error ? reason.message : '暂时无法连接数据服务'
-
 export function ValuationRulerPage() {
-  const admin = useAuth().session?.user?.role === 'admin'
+  const { session } = useAuth()
+  const admin = session?.user?.role === 'admin'
+  const {
+    status,
+    statusError,
+    actionError,
+    pending: busy,
+    uncertain,
+    accepted,
+    historyRevision,
+    act,
+  } = useCollectionTask(valuationCollectionTask, session, admin)
   const [data, setData] = useState<ValuationHistory | null>(null)
-  const [status, setStatus] = useState<ValuationStatus | null>(null)
   const [error, setError] = useState('')
-  const [statusError, setStatusError] = useState('')
-  const [actionError, setActionError] = useState('')
   const [loading, setLoading] = useState(true)
-  const [busy, setBusy] = useState(mutation.pending)
-  const [uncertain, setUncertain] = useState(mutation.uncertain)
-  const [accepted, setAccepted] = useState(mutation.accepted)
   const [days, setDays] = useState(0)
   const [indexCode, setIndexCode] = useState('000300.XSHG')
   const [basis, setBasis] = useState<'ttm' | 'lyr'>('ttm')
   const [revision, setRevision] = useState(0)
-  const mounted = useRef(false)
-  const statusEpoch = useRef(0)
-  const current = useRef<ValuationStatus | null>(null)
-  const statusRequest = useRef<AbortController | null>(null)
   const reload = useCallback(() => setRevision((n) => n + 1), [])
-  useEffect(() => {
-    mounted.current = true
-    return () => {
-      mounted.current = false
-      statusEpoch.current++
-      statusRequest.current?.abort()
-    }
-  }, [])
   useEffect(() => {
     const controller = new AbortController()
     setLoading(true)
@@ -71,123 +55,13 @@ export function ValuationRulerPage() {
         }
       })
       .catch((reason) => {
-        if (!controller.signal.aborted) setError(errorText(reason))
+        if (!controller.signal.aborted) setError(valuationErrorText(reason))
       })
       .finally(() => {
         if (!controller.signal.aborted) setLoading(false)
       })
     return () => controller.abort()
-  }, [revision, indexCode, basis])
-  const readStatus = useCallback(async () => {
-    statusRequest.current?.abort()
-    const controller = new AbortController()
-    statusRequest.current = controller
-    const epoch = ++statusEpoch.current
-    try {
-      const next = await getValuationStatus(controller.signal)
-      if (!mounted.current || controller.signal.aborted || epoch !== statusEpoch.current) return
-      const previous = current.current
-      current.current = next
-      setStatus(next)
-      setStatusError('')
-      if (next.status === 'running' && (!mutation.runId || next.run_id === mutation.runId))
-        mutation.observedRunning = true
-      if (
-        mutation.accepted &&
-        !mutation.pending &&
-        !next.database_syncing &&
-        next.status !== 'running' &&
-        (mutation.runId ? next.run_id === mutation.runId : mutation.observedRunning)
-      ) {
-        mutation.accepted = false
-        mutation.runId = null
-      }
-      setAccepted(mutation.accepted)
-      if (mutation.observedRunning && next.status !== 'running' && !mutation.pending) {
-        mutation.uncertain = false
-        mutation.observedRunning = false
-      }
-      setUncertain(mutation.uncertain)
-      setBusy(mutation.pending)
-      if (
-        previous &&
-        (previous.last_success_at !== next.last_success_at ||
-          previous.completed_days !== next.completed_days ||
-          (previous.status === 'running' && next.status !== 'running') ||
-          (previous.database_syncing && !next.database_syncing))
-      )
-        reload()
-    } catch (reason) {
-      if (mounted.current && !controller.signal.aborted && epoch === statusEpoch.current)
-        setStatusError(errorText(reason))
-    }
-  }, [reload])
-  useEffect(() => {
-    let stopped = false
-    let timer: ReturnType<typeof setTimeout>
-    const poll = async () => {
-      if (!mutation.pending) await readStatus()
-      if (!stopped)
-        timer = setTimeout(
-          poll,
-          current.current?.status === 'running' ||
-            current.current?.database_syncing ||
-            mutation.accepted ||
-            mutation.uncertain ||
-            mutation.pending
-            ? 2000
-            : 15000,
-        )
-    }
-    void poll()
-    return () => {
-      stopped = true
-      clearTimeout(timer)
-      statusRequest.current?.abort()
-      statusEpoch.current++
-    }
-  }, [readStatus, accepted])
-  async function act() {
-    if (
-      !admin ||
-      mutation.pending ||
-      mutation.accepted ||
-      mutation.uncertain ||
-      !current.current ||
-      statusError
-    )
-      return
-    if (current.current.database_syncing || current.current.status === 'running') return
-    mutation.pending = true
-    mutation.observedRunning = false
-    setBusy(true)
-    setActionError('')
-    statusEpoch.current++
-    statusRequest.current?.abort()
-    try {
-      const result = await updateValuation('refresh')
-      if (result.started === true) {
-        mutation.accepted = true
-        mutation.runId = result.run_id ?? null
-        if (mounted.current) setAccepted(true)
-      } else if (mounted.current) {
-        setActionError(result.detail ?? '本次未启动采集，请核对采集状态。')
-      }
-    } catch (reason) {
-      mutation.uncertain = true
-      if (mounted.current) {
-        setUncertain(true)
-        setActionError(errorText(reason))
-      }
-    } finally {
-      mutation.pending = false
-      if (mounted.current) {
-        setBusy(false)
-        await readStatus()
-        if (mounted.current) reload()
-      }
-    }
-  }
+  }, [revision, historyRevision, indexCode, basis])
   const databaseSyncing = status?.database_syncing ?? false
   const running = !databaseSyncing && (accepted || status?.status === 'running')
   const disabled = databaseSyncing || !admin || busy || uncertain || !status || !!statusError
