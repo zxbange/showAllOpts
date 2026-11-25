@@ -7,6 +7,7 @@ credentials. A configured but unreachable/incorrect/nonempty service is a
 test failure, not a skip.
 """
 
+import json
 import math
 import os
 from contextlib import nullcontext
@@ -296,3 +297,68 @@ def test_mysql_acknowledgement_loss_reconciles_without_rewriting(
         head, rows = snapshot(session)
     assert head == first[0][0]
     assert records_match(rows, first[0][1])
+
+
+def test_mysql_legacy_schema_revisions_keep_business_rows_without_dml(mysql_engine):
+    from sqlalchemy import event
+
+    from app.services.dividend_collection import prepare_dividend_schema
+
+    engine = mysql_engine
+    meta, rows = synthetic_snapshot()
+    write_result(engine, meta, rows)
+    with engine.begin() as connection:
+        connection.execute(HEAD.update().values(rule_version='legacy-v8'))
+        connection.execute(STOCK.update().values(dividend_cash_1y=Decimal('123.456789')))
+        connection.execute(
+            text(
+                'ALTER TABLE dividend_selection_snapshot MODIFY COLUMN rule_version VARCHAR(32) NOT NULL'
+            )
+        )
+        connection.execute(
+            text('ALTER TABLE dividend_selection_stock DROP COLUMN dividend_per_share')
+        )
+        connection.execute(
+            text('ALTER TABLE dividend_selection_stock DROP COLUMN dividend_fiscal_year')
+        )
+        connection.execute(
+            text(
+                'ALTER TABLE dividend_selection_stock MODIFY COLUMN dividend_cash_1y NUMERIC(28,6) NOT NULL'
+            )
+        )
+    with engine.connect() as connection:
+        original_header = dict(connection.execute(select(HEAD)).mappings().one())
+        original_rows = [
+            dict(row)
+            for row in connection.execute(
+                text('SELECT * FROM dividend_selection_stock ORDER BY method,code')
+            ).mappings()
+        ]
+
+    statements = []
+
+    def observe(conn, cursor, statement, *_args):
+        statements.append(statement.strip().split()[0].upper())
+
+    event.listen(engine, 'before_cursor_execute', observe)
+    try:
+        prepare_dividend_schema(engine)
+        assert statements.count('ALTER') == 4
+        assert not set(statements) & {'INSERT', 'UPDATE', 'DELETE', 'REPLACE', 'DROP'}
+        statements.clear()
+        prepare_dividend_schema(engine)
+        assert 'ALTER' not in statements
+        assert not set(statements) & {'INSERT', 'UPDATE', 'DELETE', 'REPLACE', 'DROP'}
+    finally:
+        event.remove(engine, 'before_cursor_execute', observe)
+    head, after = remote_snapshot(engine)
+    assert head == original_header
+    assert len(after) == len(original_rows)
+    for original, migrated in zip(original_rows, after, strict=True):
+        assert migrated['dividend_per_share'] is None
+        assert migrated['dividend_fiscal_year'] is None
+        # Raw SQL returns JSON as text on MySQL; compare typed columns directly.
+        assert {k: migrated[k] for k in original if k != 'dividend_yield_history'} == {
+            k: value for k, value in original.items() if k != 'dividend_yield_history'
+        }
+        assert migrated['dividend_yield_history'] == json.loads(original['dividend_yield_history'])
