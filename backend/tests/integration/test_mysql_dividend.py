@@ -16,11 +16,13 @@ from decimal import Decimal
 
 import pytest
 from pymysql.err import OperationalError
-from sqlalchemy import create_engine, inspect, select, text
+from sqlalchemy import create_engine, event, inspect, select, text
 from sqlalchemy.engine import URL
+from test_cash_cow_snapshot_repository import exercise_publication_contract
 
 from app.core.cache import SnapshotCache
 from app.core.config import Settings
+from app.models.cash_cow import CashCowSnapshot
 from app.models.dividend import DividendSnapshot, DividendStock
 from app.services import collection_notifications, dividend_collection
 from app.services.dividend_collection import (
@@ -82,6 +84,7 @@ def mysql_engine():
         finally:
             STOCK.drop(engine, checkfirst=True)
             HEAD.drop(engine, checkfirst=True)
+            CashCowSnapshot.__table__.drop(engine, checkfirst=True)
     finally:
         engine.dispose()
 
@@ -300,7 +303,6 @@ def test_mysql_acknowledgement_loss_reconciles_without_rewriting(
 
 
 def test_mysql_legacy_schema_revisions_keep_business_rows_without_dml(mysql_engine):
-    from sqlalchemy import event
 
     from app.services.dividend_collection import prepare_dividend_schema
 
@@ -362,3 +364,18 @@ def test_mysql_legacy_schema_revisions_keep_business_rows_without_dml(mysql_engi
             k: value for k, value in original.items() if k != 'dividend_yield_history'
         }
         assert migrated['dividend_yield_history'] == json.loads(original['dividend_yield_history'])
+
+
+def test_mysql_cash_cow_transaction_replays_json_and_preserves_newer_snapshot(mysql_engine):
+    writes = []
+
+    def observe(conn, cursor, statement, *_args):
+        if statement.startswith(('INSERT INTO cash_cow_snapshot', 'UPDATE cash_cow_snapshot')):
+            writes.append(statement.split()[0])
+
+    event.listen(mysql_engine, 'before_cursor_execute', observe)
+    try:
+        exercise_publication_contract(mysql_engine)
+        assert writes == ['INSERT', 'UPDATE']  # Only initial insert and rolled-back update.
+    finally:
+        event.remove(mysql_engine, 'before_cursor_execute', observe)
