@@ -175,21 +175,25 @@ test('navigation prioritizes market views and removes workspace label', async ({
   )
   await page.goto('/')
   const navigation = page.getByRole('navigation', { name: '主导航' })
-  const names = await navigation
-    .getByRole('link')
-    .evaluateAll((links) => links.map((link) => link.getAttribute('aria-label')))
-  expect(names).toEqual([
-    '总览',
-    '市场情绪',
-    '动量观察',
-    '微盘观察',
-    '大宗商品',
-    '个股机构持仓',
-    '业绩选股',
-    '博主动态监控',
-    '个人持仓',
-    '系统配置',
-  ])
+  // Auth session loading can outlive page.goto(); evaluateAll alone does not wait for nav links.
+  await expect
+    .poll(() =>
+      navigation
+        .getByRole('link')
+        .evaluateAll((links) => links.map((link) => link.getAttribute('aria-label'))),
+    )
+    .toEqual([
+      '总览',
+      '市场情绪',
+      '动量观察',
+      '微盘观察',
+      '大宗商品',
+      '个股机构持仓',
+      '业绩选股',
+      '博主动态监控',
+      '个人持仓',
+      '系统配置',
+    ])
   await expect(page.getByText('工作空间', { exact: true })).toHaveCount(0)
   if (testInfo.project.name === 'desktop') {
     const brand = page.getByRole('link', { name: '发奋墙 首页' })

@@ -205,8 +205,12 @@ def test_login_temporarily_defers_monitor_requests(browser_client):
     service.monitor.add_author('weibo', '123', '测试')
     service.monitor.update_config({'enabled': True, 'token': 'test-token', 'chat_id': '123'})
     put_state(service)
-    with patch('app.services.social.night_time', return_value=False), patch('app.services.social.fetch_posts') as fetch:
+    # Exercise browser-login deferral, not the unrelated overnight guard.
+    with patch.object(service.monitor, 'night_time', return_value=False), \
+            patch.object(service, 'active', wraps=service.active) as active, \
+            patch('app.services.social.fetch_posts') as fetch:
         service.monitor.cycle()
+    active.assert_any_call('weibo')
     fetch.assert_not_called()
 
 
@@ -393,11 +397,14 @@ def test_monitor_cycle_updates_login_without_treating_network_as_expiry(browser_
     author = monitor.overview()['authors'][0]
     error = (httpx.ReadTimeout('network') if outcome == 'network' else
              PlatformIntervention('过期', 'login_expired') if outcome == 'expired' else None)
-    with patch('app.services.social.night_time', return_value=False), \
+    # The configured window is checked on this monitor instance, not the
+    # legacy module-level helper. These cases must run at any wall-clock hour.
+    with patch.object(monitor, 'night_time', return_value=False), \
             patch.object(monitor, 'scheduled_author', side_effect=[(author, 'queue'), None]), \
-            patch.object(monitor, 'check_author', side_effect=error), \
+            patch.object(monitor, 'check_author', side_effect=error) as check_author, \
             patch.object(monitor, 'deliver_notifications'), patch.object(monitor, 'send_alerts'):
         monitor.cycle()
+    check_author.assert_called_once()
     assert monitor.platform_login('weibo')['state'] == expected
 
 
