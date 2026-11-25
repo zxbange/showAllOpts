@@ -6,7 +6,17 @@ from app.services.holdings_valuation import quote_symbol, value_positions
 
 
 @pytest.mark.parametrize(('raw', 'expected'), [
-    ('600000.XSHG', '600000.SH'), ('000001.XSHE', '000001.SZ'),
+    ('600000.XSHG', '600000.SH'), ('600001.SS', '600001.SH'),
+    ('605001.ss', '605001.SH'), ('000001.SS', None), ('510300.SS', None),
+    ('sh.600000', '600000.SH'), ('sz.000001', '000001.SZ'),
+    ('SHSE.600000', '600000.SH'), ('SZSE.000001', '000001.SZ'),
+    ('600000.SSE', '600000.SH'), ('600000.SHSE', '600000.SH'),
+    ('000001.SZSE', '000001.SZ'), ('920001.BSE', '920001.BJ'),
+    ('BSE.920001', '920001.BJ'), ('bj.830001', '830001.BJ'),
+    ('XSHG.600000', '600000.SH'), ('XSHE.000001', '000001.SZ'),
+    ('SHSE.000001', None), ('SZSE.600000', None), ('BSE.600000', None),
+    ('sh.510300', None), ('sz.159919', None), ('600000.HK', None),
+    ('SH.600000.SS', None), ('600000..SH', None), ('1', None), ('000001.XSHE', '000001.SZ'),
     (' 001001.sz ', '001001.SZ'), ('SH688001', '688001.SH'),
     ('920001.BJ', '920001.BJ'), ('920001', '920001.BJ'),
     ('301001', '301001.SZ'), ('605001.SH', '605001.SH'),
@@ -57,3 +67,10 @@ def test_beijing_legacy_requires_explicit_identity_and_matching_close():
     assert value_positions(positions, {'920001.BJ': '3.42'}) == (
         {}, {'explicit': None, 'bare': None}
     )
+
+
+def test_shanghai_ss_alias_uses_existing_same_date_market_quotes():
+    positions = [row('x', '600001.SS', '2'), row('x', '605001.ss', '3')]
+    prices, totals = value_positions(positions, {'600001.SH': '12.50', '605001.SH': '4.20'})
+    assert prices == {'600001.SS': '12.5', '605001.ss': '4.2'}
+    assert totals == {'x': '37.60'}

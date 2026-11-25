@@ -5,8 +5,17 @@ import re
 
 from app.services.holdings_snapshot import HoldingsError, number, quantity
 
-_SUFFIXES = {'SH': 'SH', 'XSHG': 'SH', 'SZ': 'SZ', 'XSHE': 'SZ', 'BJ': 'BJ'}
-_SYMBOL = re.compile(r'(?:(SH|SZ|BJ)([0-9]{6})|([0-9]{6})(?:\.(SH|XSHG|SZ|XSHE|BJ))?)')
+# Tushare/QMT, Yahoo, JoinQuant/Ricequant, BaoStock and MyQuant use
+# different exchange labels. Accept explicit aliases without changing the six
+# digits or the original position identity; never infer a mismatched market.
+_EXCHANGE_ALIASES = {
+    'SH': 'SH', 'SS': 'SH', 'XSHG': 'SH', 'SSE': 'SH', 'SHSE': 'SH',
+    'SZ': 'SZ', 'XSHE': 'SZ', 'SZSE': 'SZ',
+    'BJ': 'BJ', 'BSE': 'BJ',
+}
+_LABELS = '|'.join(sorted(_EXCHANGE_ALIASES, key=len, reverse=True))
+_SYMBOL = re.compile(rf'(?:(?P<prefix>{_LABELS})\.?(?P<prefixed>[0-9]{{6}})|'
+                     rf'(?P<digits>[0-9]{{6}})(?:\.(?P<suffix>{_LABELS}))?)')
 _CENT = Decimal('0.01')
 _PRICE_LIMIT = Decimal('1000000000000')
 
@@ -26,7 +35,7 @@ def quote_symbol(code: str) -> str | None:
         return None
     prefix, prefixed, suffixed, suffix = match.groups()
     digits = prefixed or suffixed
-    explicit = prefix if prefix else _SUFFIXES.get(suffix)
+    explicit = _EXCHANGE_ALIASES.get(prefix or suffix)
     if digits.startswith(('600', '601', '603', '605', '688', '689')):
         expected = 'SH'
     elif digits.startswith(('000', '001', '002', '003', '300', '301')):
