@@ -1,32 +1,46 @@
-from app.services.collection_errors import safe_error as public_error
-from app.services.collection_outcomes import record_task
-from app.services.collection_failure_isolation import quarantine_publication, restore_manual_publication
-from time import monotonic
-from app.services.collection_calendar import automatic_collection_allowed, manual_failure_isolated
 """One public collection and atomic publication for both dividend strategies.
 
 The public source validates coverage before each publication. Existing JoinQuant
 snapshots and the unified database-sync pipeline remain available.
 """
-from contextlib import contextmanager
-from datetime import date, datetime, timedelta, timezone
-from decimal import Decimal, ROUND_HALF_UP
+
 import json
 import logging
 import math
 import sqlite3
 import threading
 import uuid
+from contextlib import contextmanager
+from datetime import date, datetime, timedelta, timezone
+from decimal import ROUND_HALF_UP, Decimal
+from time import monotonic
 
 import httpx
 import portalocker
-from sqlalchemy import delete, select, inspect, text
+from sqlalchemy import delete, inspect, select, text
+
 from app.core.database import build_engine, database_identity
 from app.core.diagnostics import diagnostic_details
-from app.services.dividend_limits import DIVIDEND_GROUP_LIMITS
-from app.services.database_retry import retry_database
-from app.services.dividend_notification_facts import dividend_facts, published_dividend_facts
 from app.models.dividend import DividendSnapshot, DividendStock
+from app.services.collection_calendar import automatic_collection_allowed, manual_failure_isolated
+from app.services.collection_errors import safe_error as public_error
+from app.services.collection_failure_isolation import (
+    quarantine_publication,
+    restore_manual_publication,
+)
+from app.services.collection_lifecycle import (
+    RunContext,
+    RunRequest,
+    cancellation_marker,
+    is_running,
+    request_cancel,
+    start_worker,
+    try_lease,
+)
+from app.services.collection_outcomes import record_task
+from app.services.database_retry import retry_database
+from app.services.dividend_limits import DIVIDEND_GROUP_LIMITS
+from app.services.dividend_notification_facts import dividend_facts, published_dividend_facts
 from app.services.system_configuration import database_config
 from app.services.system_runtime import source_client
 
@@ -314,18 +328,10 @@ class DividendCollection:
 
     def acquire(self):
         lock = portalocker.Lock(str(self.root / 'collection.lock'), timeout=0, flags=portalocker.LOCK_EX | portalocker.LOCK_NB)
-        try:
-            lock.acquire()
-            return lock
-        except portalocker.exceptions.LockException:
-            return None
+        return try_lease(lock, portalocker.exceptions.LockException)
 
     def running(self):
-        lock = self.acquire()
-        if lock is None:
-            return True
-        lock.release()
-        return False
+        return is_running(self.acquire)
 
     def status(self):
         state = self.read_state()
@@ -347,7 +353,11 @@ class DividendCollection:
         moment = moment.astimezone(CHINA)
         if slot is not None and not automatic_collection_allowed(moment):
             return False
-        from app.services.earnings_schedule import acquire_execution, earnings_due_day, earnings_not_due_message
+        from app.services.earnings_schedule import (
+            acquire_execution,
+            earnings_due_day,
+            earnings_not_due_message,
+        )
         # The application-wired public source can only observe today's
         # universe. Explicit adapter injection also supports historical fixtures.
         current_only = self.source_factory is None
@@ -381,8 +391,8 @@ class DividendCollection:
                          written=0, database_attempt=1, current_slot=slot, scheduled_slot=slot or state.get('scheduled_slot'))
             self.save_state(state)
             if background:
-                self.collection_thread = threading.Thread(target=self._collect, args=(lock, state, moment), daemon=True, name='dividend-collection')
-                self.collection_thread.start()
+                start_worker(self._collect, args=(lock, state, moment), name='dividend-collection',
+                             assign=lambda worker: setattr(self, 'collection_thread', worker), factory=threading.Thread)
             else:
                 self._collect(lock, state, moment)
             return True
@@ -393,8 +403,7 @@ class DividendCollection:
     def cancel(self):
         state = self.read_state()
         if self.running() and state.get('active'):
-            (self.root / ('cancel-' + state['run_id'])).touch()
-            return True
+            return request_cancel(self.root, state.get('run_id'))
         return False
 
     @staticmethod
@@ -402,7 +411,8 @@ class DividendCollection:
         return dividend_facts(meta, records)
 
     def _collect(self, lock, state, moment):
-        marker = self.root / ('cancel-' + state['run_id'])
+        marker = cancellation_marker(self.root, state['run_id'])
+        assert marker is not None
         run_error = None
         engine = None
         written = 0
@@ -413,15 +423,21 @@ class DividendCollection:
         commit_started = False
         changed_count_unknown = False
         scheduled = state.get('current_slot') is not None
-        started = monotonic()
+        context = RunContext(
+            RunRequest(moment, state.get('current_slot'), 'scheduled' if scheduled else 'manual'),
+            marker, self.stopped, automatic_collection_allowed, manual_failure_isolated,
+            lambda: DividendCollectionError('采集已取消；未提交的结果不发布。'), monotonic,
+        )
         def check():
             nonlocal interruption
-            if state.get('current_slot') is None and not state.get('run_isolated') and manual_failure_isolated(moment + timedelta(seconds=monotonic()-started)):
+            if not state.get('run_isolated') and context.isolate_manual_failure(include_requested=False):
                 state['run_isolated'] = True
                 self.save_state(state)
-            if (scheduled and not automatic_collection_allowed(moment + timedelta(seconds=monotonic()-started))) or self.stopped.is_set() or marker.exists():
+            try:
+                context.check_cancel()
+            except DividendCollectionError:
                 interruption = 'cancelled' if marker.exists() else 'interrupted'
-                raise DividendCollectionError('采集已取消；未提交的结果不发布。')
+                raise
         def progress(stage, processed=None, total=None):
             nonlocal commit_started
             check()
@@ -578,7 +594,7 @@ class DividendCollection:
         finally:
             state['active'] = False
             try:
-                if state.get('stage') != 'complete' and state.get('current_slot') is None and (manual_failure_isolated(moment) or manual_failure_isolated(moment + timedelta(seconds=monotonic()-started))):
+                if state.get('stage') != 'complete' and context.isolate_manual_failure():
                     state['run_isolated'] = True
                     self.save_state(state)
                     quarantine_publication(self, 'pending', state)

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import {
   cashCowPeriod,
@@ -10,7 +10,10 @@ import { RefreshCw, Square } from 'lucide-react'
 import { useAuth } from '../components/AccountAccess'
 import { PageHeaderActions } from '../components/PageHeaderActions'
 import { PageHeader } from '../components/PageHeader'
-import { getCashCowLatest, getCashCowStatus, updateCashCow } from '../api/cashCow'
+import { getCashCowLatest, getCashCowStatus } from '../api/cashCow'
+import { useCollectionTask } from '../hooks/useCollectionTask'
+import { cashCowCollectionTask } from '../lib/cashCowCollectionTask'
+import type { CollectionTaskReader } from '../lib/collectionTask'
 import type { CashCowOverview, CashCowStatus } from '../types/cashCow'
 import { DividendYieldHistory } from '../components/DividendYieldHistory'
 import '../styles/cash-cow.css'
@@ -58,90 +61,88 @@ function CashCowPeriodPage({
   years: CashCowPeriod
   onPeriodChange: (years: CashCowPeriod) => void
 }) {
-  const admin = useAuth().session?.user?.role === 'admin'
-  const [data, setData] = useState<CashCowOverview | null>(null)
-  const [status, setStatus] = useState<CashCowStatus | null>(null)
+  const { session } = useAuth()
+  const admin = session?.user?.role === 'admin'
+  const [loaded, setLoaded] = useState<{ years: CashCowPeriod; value: CashCowOverview } | null>(
+    null,
+  )
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
-  const [busy, setBusy] = useState(false)
-  const [revision, setRevision] = useState(0)
   const [query, setQuery] = useState('')
-  const command = useRef<AbortController | null>(null)
-  const loadedPeriod = useRef(years)
-  const running = status?.running ?? false
+  const data = loaded?.years === years ? loaded.value : null
 
-  useEffect(() => () => command.current?.abort(), [])
-  useEffect(() => {
-    const controller = new AbortController()
-    let timer: number | undefined
-    async function latest() {
+  const readLatest = useCallback(
+    async (signal: AbortSignal) => {
+      setLoading(true)
       try {
-        const next = await getCashCowLatest(controller.signal, years)
-        if (controller.signal.aborted) return
-        setData(next)
-        setStatus(next.status)
-        setError(null)
-        if (next.status.running) timer = window.setTimeout(poll, 2000)
-      } catch (e) {
-        if (!controller.signal.aborted) setError(errorMessage(e))
-      } finally {
-        if (!controller.signal.aborted) setLoading(false)
-      }
-    }
-    async function poll() {
-      try {
-        const next = await getCashCowStatus(controller.signal, years)
-        if (controller.signal.aborted) return
-        setStatus(next)
-        setError(null)
-        if (!next.running) {
-          await latest()
-          return
+        const next = await getCashCowLatest(signal, years)
+        if (!signal.aborted) {
+          setLoaded({ years, value: next })
+          setError(null)
         }
-      } catch (e) {
-        if (!controller.signal.aborted) setError(`状态更新失败：${errorMessage(e)}`)
+        return next
+      } catch (reason) {
+        if (!signal.aborted) setError(errorMessage(reason))
+        throw reason
+      } finally {
+        if (!signal.aborted) setLoading(false)
       }
-      if (!controller.signal.aborted) timer = window.setTimeout(poll, 2000)
-    }
-    setLoading(true)
-    if (loadedPeriod.current !== years) {
-      setData(null)
-      loadedPeriod.current = years
-    }
-    void latest()
-    return () => {
-      controller.abort()
-      window.clearTimeout(timer)
-    }
-  }, [revision, years])
+    },
+    [years],
+  )
 
-  async function act(action: 'refresh' | 'cancel') {
-    if (command.current || loading || !status || status.cancelling || !admin) return
+  const readStatus = useCallback<CollectionTaskReader<CashCowStatus>>(
+    async (signal, context) => {
+      if (!context.previous || context.refreshHistory) return (await readLatest(signal)).status
+      let next: CashCowStatus
+      try {
+        next = await getCashCowStatus(signal, years)
+      } catch (reason) {
+        throw new Error(`状态更新失败：${errorMessage(reason)}`)
+      }
+      if (!next.running && !signal.aborted) {
+        // Reload selected results but keep the dedicated status response authoritative.
+        await readLatest(signal).catch(() => {})
+      }
+      return next
+    },
+    [readLatest, years],
+  )
+
+  const {
+    status,
+    statusError,
+    actionError,
+    pending,
+    accepted,
+    uncertain,
+    stopping,
+    act: startCollection,
+    cancel,
+    recheck,
+  } = useCollectionTask(cashCowCollectionTask, session, admin, readStatus)
+  const running = status?.running ?? false
+  const busy = pending || (accepted && !running)
+  const cancelling = stopping || status?.cancelling
+
+  // Switching periods while a mutation is in flight loads only the new view.
+  // The shared actor owns the command and will verify its status when it settles.
+  useEffect(() => {
+    if (!pending || loaded?.years === years) return
     const controller = new AbortController()
-    command.current = controller
-    setBusy(true)
-    setError(null)
-    try {
-      await updateCashCow(action, controller.signal)
-      if (!controller.signal.aborted) {
-        setLoading(true)
-        setRevision((v) => v + 1)
-      }
-    } catch (e) {
-      if (!controller.signal.aborted) setError(errorMessage(e))
-    } finally {
-      if (!controller.signal.aborted) {
-        command.current = null
-        setBusy(false)
-      }
-    }
+    void readLatest(controller.signal).catch(() => {})
+    return () => controller.abort()
+  }, [pending, loaded?.years, years, readLatest])
+
+  function act(action: 'refresh' | 'cancel') {
+    return action === 'refresh' ? startCollection() : cancel()
   }
 
   const snapshot = data?.snapshot
   const items = (data?.items ?? []).filter((item) =>
     `${item.code} ${item.name}`.toLowerCase().includes(query.trim().toLowerCase()),
   )
-  const shownError = error || (!running ? status?.error : null)
+  const shownError = actionError || error || statusError || (!running ? status?.error : null)
   return (
     <div className="page-enter cash-cow-page">
       <PageHeader dataUpdatedAt={snapshot?.updated_at}>
@@ -167,17 +168,13 @@ function CashCowPeriodPage({
           <PageHeaderActions>
             <button
               className="button button-primary"
-              disabled={busy || loading || !status || !admin || status.cancelling}
+              disabled={
+                busy || loading || !status || !admin || cancelling || uncertain || !!statusError
+              }
               onClick={() => void act(running ? 'cancel' : 'refresh')}
             >
               {running ? <Square size={16} /> : <RefreshCw size={16} />}
-              {busy
-                ? '正在提交…'
-                : status?.cancelling
-                  ? '正在停止…'
-                  : running
-                    ? '取消采集'
-                    : '更新数据'}
+              {busy ? '正在提交…' : cancelling ? '正在停止…' : running ? '取消采集' : '更新数据'}
             </button>
           </PageHeaderActions>
         </div>
@@ -240,11 +237,11 @@ function CashCowPeriodPage({
             {snapshot ? ' 已保留上次成功结果。' : ''}
           </div>
         )}
-        {error && (
+        {(error || actionError || statusError) && (
           <button
             className="button button-quiet"
-            disabled={loading || busy}
-            onClick={() => setRevision((v) => v + 1)}
+            disabled={loading || pending}
+            onClick={() => void recheck()}
           >
             重新读取
           </button>

@@ -2,6 +2,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   createCollectionTask,
   type CollectionTaskActivity,
+  type CollectionTaskAdapter,
+  type CollectionTaskReader,
   type CollectionTaskStartResult,
 } from './collectionTask'
 
@@ -19,7 +21,8 @@ function deferred<T>() {
   return { promise, resolve, reject }
 }
 
-function setup(options: { cancellable?: boolean; manualReconcile?: boolean } = {}) {
+function setup(options: { cancellable?: boolean } & Partial<CollectionTaskAdapter<Status>> = {}) {
+  const { cancellable, ...policy } = options
   const readStatus = vi.fn<(signal: AbortSignal) => Promise<Status>>().mockResolvedValue(idle)
   const start = vi
     .fn<() => Promise<CollectionTaskStartResult>>()
@@ -30,14 +33,14 @@ function setup(options: { cancellable?: boolean; manualReconcile?: boolean } = {
   const task = createCollectionTask({
     readStatus,
     start,
-    ...(options.cancellable ? { cancel } : {}),
-    manualReconcile: options.manualReconcile,
+    ...(cancellable ? { cancel } : {}),
     activity: (status) => status,
     needsHistoryReload: (old, next) => old.revision !== next.revision,
     errorText: (error) => String(error),
     noStartMessage: '未启动',
     activePollMs: 2000,
     idlePollMs: 15000,
+    ...policy,
   })
   const session = {}
   const controller = task(session)
@@ -365,5 +368,141 @@ describe('collection command and status lifecycle', () => {
     await controller.cancel(true)
     expect(cancel).not.toHaveBeenCalled()
     stop()
+  })
+  it('lets a combined commodity lock read confirm a quick finish without idle history polling', async () => {
+    const { controller, readStatus, start } = setup({
+      confirmFreshIdle: true,
+      reconcileUnknownFreshIdle: true,
+      idlePollMs: null,
+    })
+    const stop = controller.subscribe(() => {})
+    await flush()
+    await vi.advanceTimersByTimeAsync(60000)
+    expect(readStatus).toHaveBeenCalledTimes(1)
+    start.mockResolvedValueOnce({ started: true })
+    await controller.start(true)
+    expect(controller.getSnapshot().accepted).toBe(false)
+    expect(readStatus).toHaveBeenCalledTimes(2)
+    start.mockRejectedValueOnce(new Error('CCI更新未启动'))
+    await controller.start(true)
+    expect(controller.getSnapshot()).toMatchObject({
+      uncertain: false,
+      actionError: 'Error: CCI更新未启动',
+    })
+    await vi.advanceTimersByTimeAsync(60000)
+    expect(readStatus).toHaveBeenCalledTimes(3)
+    expect(start).toHaveBeenCalledTimes(2)
+    stop()
+  })
+
+  it('keeps dividend waiting for a new run ID and reloads only verified terminal results', async () => {
+    const { controller, readStatus, start } = setup({
+      confirmByNewRunId: true,
+      refreshAfterCommand: false,
+      reloadOnConfirmation: true,
+    })
+    const stop = controller.subscribe(() => {})
+    await flush()
+    start.mockResolvedValueOnce({ started: true })
+    await controller.start(true)
+    expect(controller.getSnapshot()).toMatchObject({ accepted: true, historyRevision: 0 })
+    await vi.advanceTimersByTimeAsync(2000)
+    expect(controller.getSnapshot().accepted).toBe(true)
+    readStatus.mockResolvedValue({ ...idle, runId: 'new' })
+    await vi.advanceTimersByTimeAsync(2000)
+    expect(controller.getSnapshot()).toMatchObject({ accepted: false, historyRevision: 1 })
+    stop()
+  })
+
+  it('distinguishes a shared-busy notice, definite rejection and unavailable source', async () => {
+    const definitive = new Error('not due')
+    const { controller, readStatus, start } = setup({
+      startAllowed: (status) => status.revision === 0,
+      definiteRejection: (error) => error === definitive,
+      noStartMessage: '',
+      noStartNotice: '其他任务进行中',
+      refreshAfterCommand: false,
+    })
+    const stop = controller.subscribe(() => {})
+    await flush()
+    start.mockResolvedValueOnce({ started: false })
+    await controller.start(true)
+    expect(controller.getSnapshot()).toMatchObject({ notice: '其他任务进行中', actionError: '' })
+    start.mockRejectedValueOnce(definitive)
+    await controller.start(true)
+    expect(controller.getSnapshot()).toMatchObject({
+      notice: '',
+      uncertain: false,
+      actionError: 'Error: not due',
+    })
+    readStatus.mockResolvedValue({ ...idle, revision: 1 })
+    await vi.advanceTimersByTimeAsync(15000)
+    await controller.start(true)
+    expect(start).toHaveBeenCalledTimes(2)
+    stop()
+  })
+
+  it('switches the period reader without discarding a pending shared cash-cow command', async () => {
+    const { controller, start } = setup({ confirmByNewRunId: true })
+    const ten = vi.fn<CollectionTaskReader<Status>>().mockResolvedValue(idle)
+    const five = vi.fn<CollectionTaskReader<Status>>().mockResolvedValue(active())
+    let stop = controller.subscribe(() => {}, ten)
+    await flush()
+    const post = deferred<CollectionTaskStartResult>()
+    start.mockReturnValueOnce(post.promise)
+    const command = controller.start(true)
+    stop()
+    stop = controller.subscribe(() => {}, five)
+    expect(controller.getSnapshot().pending).toBe(true)
+    expect(five).not.toHaveBeenCalled()
+    await controller.start(true)
+    expect(start).toHaveBeenCalledTimes(1)
+    post.resolve({ started: true })
+    await command
+    expect(five).toHaveBeenCalledTimes(1)
+    expect(five.mock.calls[0][1]).toMatchObject({ previous: null, refreshHistory: true })
+    expect(controller.getSnapshot().status).toEqual(active())
+    expect(ten).toHaveBeenCalledTimes(1)
+    stop()
+  })
+
+  it('discards a late period reader response after switching views', async () => {
+    const { controller } = setup()
+    const slow = deferred<Status>()
+    const ten = vi.fn<CollectionTaskReader<Status>>().mockReturnValue(slow.promise)
+    const five = vi.fn<CollectionTaskReader<Status>>().mockResolvedValue(active())
+    const stop = controller.subscribe(() => {}, ten)
+    const oldSignal = ten.mock.calls[0][0]
+    stop()
+    const stopFive = controller.subscribe(() => {}, five)
+    await flush()
+    expect(oldSignal.aborted).toBe(true)
+    slow.resolve(idle)
+    await flush()
+    expect(controller.getSnapshot().status).toEqual(active())
+    stopFive()
+  })
+  it('cash-cow read retry rechecks the selected view without submitting another command', async () => {
+    const { controller, start, readStatus } = setup({ manualReconcile: true, idlePollMs: null })
+    const reader = vi.fn<CollectionTaskReader<Status>>().mockResolvedValue(idle)
+    const detach = controller.subscribe(() => {}, reader)
+    await flush()
+    start.mockRejectedValueOnce(new Error('启动失败'))
+    await controller.start(true)
+    expect(controller.getSnapshot()).toMatchObject({
+      actionError: 'Error: 启动失败',
+      uncertain: true,
+    })
+    const reload = deferred<Status>()
+    reader.mockReturnValueOnce(reload.promise)
+    const retry = controller.recheck()
+    expect(reader.mock.calls.at(-1)?.[1].refreshHistory).toBe(true)
+    expect(controller.getSnapshot().uncertain).toBe(true)
+    reload.resolve(idle)
+    await retry
+    expect(controller.getSnapshot()).toMatchObject({ actionError: '', uncertain: false })
+    expect(start).toHaveBeenCalledTimes(1)
+    expect(readStatus).not.toHaveBeenCalled()
+    detach()
   })
 })

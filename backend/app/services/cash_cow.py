@@ -1,31 +1,43 @@
-from app.services.collection_outcomes import record_task
-from app.services.collection_errors import safe_error
-from app.services.collection_failure_isolation import quarantine_publication, restore_manual_publication
-from app.services.collection_calendar import automatic_collection_allowed, manual_failure_isolated
 """Shared external 3/5/10-year screen, published to MySQL and local SQLite.
 
 Only complete, validated observations can qualify. Interrupted refreshes never
 replace a published snapshot. All currency amounts are CNY; rates use percent.
 """
-from app.services.system_runtime import source_client
-from app.services.collection_notifications import notify_collection
-from app.services.cash_cow_rules import PERIODS, evaluate_year, finish_stock, screen_cash_cows
-from app.services.cash_cow_import import latest_cached, write_public, PUBLIC_SOURCE
-from app.services.public_publication import PublicPublication
-from contextlib import contextmanager
-from datetime import datetime, timedelta, timezone
+
 import json
 import logging
-from time import monotonic
-
 import sqlite3
 import threading
 import uuid
+from contextlib import contextmanager
+from datetime import datetime, timedelta, timezone
+from time import monotonic
 
 import httpx
 import portalocker
 
 from app.core.diagnostics import diagnostic_details
+from app.services.cash_cow_import import PUBLIC_SOURCE, latest_cached, write_public
+from app.services.cash_cow_rules import PERIODS, evaluate_year, finish_stock, screen_cash_cows
+from app.services.collection_calendar import automatic_collection_allowed, manual_failure_isolated
+from app.services.collection_errors import safe_error
+from app.services.collection_failure_isolation import (
+    quarantine_publication,
+    restore_manual_publication,
+)
+from app.services.collection_lifecycle import (
+    RunContext,
+    RunRequest,
+    cancellation_marker,
+    is_running,
+    request_cancel,
+    start_worker,
+    try_lease,
+)
+from app.services.collection_notifications import notify_collection
+from app.services.collection_outcomes import record_task
+from app.services.public_publication import PublicPublication
+from app.services.system_runtime import source_client
 
 LOG = logging.getLogger(__name__)
 CHINA = timezone(timedelta(hours=8))
@@ -110,24 +122,13 @@ class CashCowScreen:
     def acquire(self):
         lock = portalocker.Lock(str(self.root / 'collection.lock'), timeout=0,
                                 flags=portalocker.LOCK_EX | portalocker.LOCK_NB)
-        try:
-            lock.acquire()
-            return lock
-        except portalocker.exceptions.LockException:
-            return None
+        return try_lease(lock, portalocker.exceptions.LockException)
 
     def running(self):
-        lock = self.acquire()
-        if lock is None:
-            return True
-        lock.release()
-        return False
+        return is_running(self.acquire)
 
     def cancel_path(self, state):
-        identifier = state.get('run_id', '')
-        if len(identifier) == 32 and all(c in '0123456789abcdef' for c in identifier):
-            return self.root / ('cancel-' + identifier)
-        return None
+        return cancellation_marker(self.root, state.get('run_id'))
 
     def _status(self, state, result):
         from app.services.earnings_schedule import daily_next_run
@@ -190,15 +191,14 @@ class CashCowScreen:
             state = self.read_state()
             if not self.running() or not state.get('active'):
                 return False
-            marker = self.cancel_path(state)
-            if marker is None:
-                return False
-            marker.touch()
-            return True
+            return request_cancel(self.root, state.get('run_id'))
 
     def refresh(self, background=True, *, moment=None, slot=None):
         from app.services.earnings_schedule import (
-            EarningsNotDue, acquire_execution, earnings_due_day, earnings_not_due_message,
+            EarningsNotDue,
+            acquire_execution,
+            earnings_due_day,
+            earnings_not_due_message,
         )
         moment = moment or now()
         if moment.tzinfo is None:
@@ -212,6 +212,7 @@ class CashCowScreen:
         if lock is None:
             return False
         state = None
+        initialized = False
         try:
             # The application uses a current-only universe. Dated standalone
             # adapters may be injected explicitly by callers.
@@ -248,45 +249,53 @@ class CashCowScreen:
             if slot:
                 state.update(scheduled_slot=slot, scheduled_attempt_at=moment.isoformat())
             self.write_state(state)
+            initialized = True
             if background:
-                self.worker = threading.Thread(target=self._collect, args=(lock, state, moment),
-                                               name='cash-cow-screen', daemon=True)
-                self.worker.start()
-            else:
-                self._collect(lock, state, moment)
+                start_worker(self._collect, args=(lock, state, moment), name='cash-cow-screen',
+                             assign=lambda worker: setattr(self, 'worker', worker), factory=threading.Thread)
         except EarningsNotDue:
             lock.release()
             raise
         except BaseException as exc:
             LOG.error('Cash cow launch or cleanup failed details=%s', diagnostic_details(exc))
             try:
-                if state is not None:
+                if initialized:
                     state.update(active=False, stage='启动失败', error='未能启动筛选，请重试。')
                     self.write_state(state)
             finally:
                 lock.release()
             raise
+        if not background:
+            try:
+                self._collect(lock, state, moment)
+            finally:
+                lock.release()
         return True
 
     @notify_collection('cash_cow')
     def _collect(self, lock, state, moment):
-        from app.services.cash_cow_source import CashCowSourceError
         from app.services.cash_cow_combined import CombinedCashCowSource
+        from app.services.cash_cow_source import CashCowSourceError
         marker = self.cancel_path(state)
+        assert marker is not None
+        slot = state.get('current_scheduled_slot')
+        context = RunContext(
+            RunRequest(moment, slot, 'scheduled' if slot is not None else 'manual'), marker,
+            self.stop_event, automatic_collection_allowed, manual_failure_isolated,
+            CollectionCancelled, monotonic,
+        )
         published = False
         publication = None
-        started = monotonic()
         run_outcome = 'failed'
         run_error = None
         error_stage = 'database_write'
         LOG.info('Cash cow collection started source=asharehub+eastmoney+tushare periods=3,5,10')
 
         def check_cancel():
-            if state.get('current_scheduled_slot') is None and not state.get('run_isolated') and manual_failure_isolated(moment + timedelta(seconds=monotonic()-started)):
+            if not state.get('run_isolated') and context.isolate_manual_failure(include_requested=False):
                 state['run_isolated'] = True
                 self.write_state(state)
-            if (state.get('current_scheduled_slot') is not None and not automatic_collection_allowed(moment + timedelta(seconds=monotonic()-started))) or self.stop_event.is_set() or marker.exists():
-                raise CollectionCancelled()
+            context.check_cancel()
 
         def progress(stage, processed=None, total=None):
             check_cancel()
@@ -458,7 +467,7 @@ class CashCowScreen:
         finally:
             state['active'] = False
             try:
-                if not published and state.get('current_scheduled_slot') is None and (manual_failure_isolated(moment) or manual_failure_isolated(moment + timedelta(seconds=monotonic()-started))):
+                if not published and context.isolate_manual_failure():
                     state['run_isolated'] = True
                     self.write_state(state)
                     quarantine_publication(self, 'public_publication', state)
@@ -483,15 +492,17 @@ class CashCowScreen:
                     raise
                 finally:
                     try:
-                        record_task(self.settings, 'cash_cow', outcome=run_outcome, scheduled=state.get('current_scheduled_slot') is not None, run_key=state['run_id'], error_details=run_error if run_outcome != 'success' else None)
-                        lock.release()
+                        try:
+                            record_task(self.settings, 'cash_cow', outcome=run_outcome, scheduled=state.get('current_scheduled_slot') is not None, run_key=state['run_id'], error_details=run_error if run_outcome != 'success' else None)
+                        finally:
+                            lock.release()
                     except BaseException as exc:
                         run_outcome = 'failed'
                         LOG.error('Collection lock release failed details=%s', diagnostic_details(exc))
                         raise
                     finally:
                         LOG.info('Cash cow collection finished outcome=%s processed=%s total=%s published=%s duration_seconds=%.3f',
-                                 run_outcome, state.get('processed', 0), state.get('total'), published, monotonic() - started)
+                                 run_outcome, state.get('processed', 0), state.get('total'), published, context.elapsed)
 
     def stop(self):
         self.stop_event.set()

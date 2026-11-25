@@ -12,23 +12,37 @@ export interface CollectionTaskStartResult {
   detail?: string
 }
 
+export type CollectionTaskReader<Status> = (
+  signal: AbortSignal,
+  context: { previous: Status | null; refreshHistory: boolean },
+) => Promise<Status>
+
 export interface CollectionTaskAdapter<Status> {
-  readStatus: (signal: AbortSignal) => Promise<Status>
+  readStatus: CollectionTaskReader<Status>
   start: () => Promise<CollectionTaskStartResult>
   cancel?: () => Promise<{ cancelled?: boolean }>
   manualReconcile?: boolean
+  startAllowed?: (status: Status) => boolean
+  definiteRejection?: (reason: unknown) => boolean
+  confirmByNewRunId?: boolean
+  confirmFreshIdle?: boolean
+  reconcileUnknownFreshIdle?: boolean
+  refreshAfterCommand?: boolean
+  reloadOnConfirmation?: boolean
+  noStartNotice?: string
   activity: (status: Status) => CollectionTaskActivity
   needsHistoryReload: (previous: Status, next: Status) => boolean
   errorText: (reason: unknown) => string
   noStartMessage: string
   activePollMs: number
-  idlePollMs: number
+  idlePollMs: number | null
 }
 
 export interface CollectionTaskSnapshot<Status> {
   status: Status | null
   statusError: string
   actionError: string
+  notice: string
   pending: boolean
   accepted: boolean
   uncertain: boolean
@@ -53,6 +67,7 @@ function createController<Status>(adapter: CollectionTaskAdapter<Status>) {
     status: null,
     statusError: '',
     actionError: '',
+    notice: '',
     pending: false,
     accepted: false,
     uncertain: false,
@@ -61,6 +76,7 @@ function createController<Status>(adapter: CollectionTaskAdapter<Status>) {
   }
   let runId: string | null = null
   let observedRunning = false
+  let baselineRunId: string | null | undefined
   let baselineAttempt: string | null | undefined
   let latestAttemptAt: string | undefined
   let cancelTarget: CollectionTaskActivity | null = null
@@ -68,6 +84,7 @@ function createController<Status>(adapter: CollectionTaskAdapter<Status>) {
   let timer: ReturnType<typeof setTimeout> | undefined
   let epoch = 0
   const listeners = new Set<() => void>()
+  let reader = adapter.readStatus
 
   function publish(patch: Partial<CollectionTaskSnapshot<Status>>) {
     snapshot = { ...snapshot, ...patch }
@@ -91,7 +108,12 @@ function createController<Status>(adapter: CollectionTaskAdapter<Status>) {
       snapshot.accepted ||
       snapshot.uncertain ||
       snapshot.stopping
-    timer = setTimeout(() => void readStatus(), active ? adapter.activePollMs : adapter.idlePollMs)
+    const delay = active
+      ? adapter.activePollMs
+      : snapshot.statusError
+        ? (adapter.idlePollMs ?? 15000)
+        : adapter.idlePollMs
+    if (delay != null) timer = setTimeout(() => void readStatus(), delay)
   }
 
   async function readStatus(manuallyReconcile = false, refreshHistory = false) {
@@ -101,7 +123,7 @@ function createController<Status>(adapter: CollectionTaskAdapter<Status>) {
     request = controller
     const version = epoch
     try {
-      const next = await adapter.readStatus(controller.signal)
+      const next = await reader(controller.signal, { previous: snapshot.status, refreshHistory })
       if (controller.signal.aborted || !listeners.size || version !== epoch) return
       const previous = snapshot.status
       const activity = adapter.activity(next)
@@ -124,15 +146,22 @@ function createController<Status>(adapter: CollectionTaskAdapter<Status>) {
       if (activity.running && matchingRun) observedRunning = true
       const terminal = !activity.running && !activity.databaseSyncing
       const changedAttempt = attemptAdvanced(baselineAttempt, activity.attemptAt)
+      const changedRun =
+        adapter.confirmByNewRunId && !!activity.runId && activity.runId !== baselineRunId
+      const confirmation = observedRunning || changedAttempt || changedRun
       let { accepted, uncertain, stopping } = snapshot
-      if (accepted && terminal && (runId ? matchingRun : observedRunning || changedAttempt)) {
+      if (
+        accepted &&
+        terminal &&
+        (runId ? matchingRun : confirmation || adapter.confirmFreshIdle)
+      ) {
         accepted = false
         runId = null
       }
       if (
         terminal &&
         (observedRunning ||
-          (uncertain && changedAttempt) ||
+          (uncertain && (changedAttempt || changedRun || adapter.reconcileUnknownFreshIdle)) ||
           (uncertain && manuallyReconcile && adapter.manualReconcile))
       ) {
         uncertain = false
@@ -147,6 +176,7 @@ function createController<Status>(adapter: CollectionTaskAdapter<Status>) {
           cancelTarget = null
         }
       }
+      const confirmed = (snapshot.accepted && !accepted) || (snapshot.uncertain && !uncertain)
       publish({
         status: next,
         statusError: '',
@@ -154,7 +184,9 @@ function createController<Status>(adapter: CollectionTaskAdapter<Status>) {
         uncertain,
         stopping,
         historyRevision:
-          refreshHistory || (previous != null && adapter.needsHistoryReload(previous, next))
+          refreshHistory ||
+          (adapter.reloadOnConfirmation && confirmed) ||
+          (previous != null && adapter.needsHistoryReload(previous, next))
             ? snapshot.historyRevision + 1
             : snapshot.historyRevision,
       })
@@ -185,27 +217,39 @@ function createController<Status>(adapter: CollectionTaskAdapter<Status>) {
     )
       return
     const activity = adapter.activity(snapshot.status)
-    if (activity.running || activity.databaseSyncing) return
+    if (
+      activity.running ||
+      activity.databaseSyncing ||
+      (adapter.startAllowed && !adapter.startAllowed(snapshot.status))
+    )
+      return
     // Synchronous lock, before React rendering or any async work.
     stopReading()
     observedRunning = false
+    baselineRunId = activity.runId
     baselineAttempt = activity.attemptAt
     runId = null
-    publish({ pending: true, actionError: '' })
+    publish({ pending: true, actionError: '', notice: '' })
     try {
       const result = await adapter.start()
       if (result.started === true) {
         runId = result.run_id ?? null
         publish({ accepted: true })
       } else {
-        publish({ actionError: result.detail ?? adapter.noStartMessage })
+        publish({
+          actionError: result.detail ?? adapter.noStartMessage,
+          notice: result.detail == null ? (adapter.noStartNotice ?? '') : '',
+        })
       }
     } catch (reason) {
       // A lost response is not proof of rejection. Never retry the mutation.
-      publish({ uncertain: true, actionError: adapter.errorText(reason) })
+      publish({
+        uncertain: !adapter.definiteRejection?.(reason),
+        actionError: adapter.errorText(reason),
+      })
     } finally {
       publish({ pending: false })
-      if (listeners.size) await readStatus(false, true)
+      if (listeners.size) await readStatus(false, adapter.refreshAfterCommand !== false)
     }
   }
 
@@ -226,7 +270,7 @@ function createController<Status>(adapter: CollectionTaskAdapter<Status>) {
     stopReading()
     cancelTarget = activity
     observedRunning = true
-    publish({ pending: true, actionError: '' })
+    publish({ pending: true, actionError: '', notice: '' })
     try {
       const result = await adapter.cancel()
       if (result.cancelled === true) publish({ stopping: true })
@@ -235,7 +279,7 @@ function createController<Status>(adapter: CollectionTaskAdapter<Status>) {
       publish({ uncertain: true, actionError: adapter.errorText(reason) })
     } finally {
       publish({ pending: false })
-      if (listeners.size) await readStatus(false, true)
+      if (listeners.size) await readStatus(false, adapter.refreshAfterCommand !== false)
     }
   }
 
@@ -246,24 +290,34 @@ function createController<Status>(adapter: CollectionTaskAdapter<Status>) {
     if (adapter.manualReconcile && snapshot.uncertain && !snapshot.pending) await readStatus(true)
   }
 
+  async function recheck() {
+    if (!listeners.size || snapshot.pending) return
+    publish({ actionError: '', notice: '' })
+    await readStatus(true, true)
+  }
+
   return {
     getSnapshot: () => snapshot,
-    subscribe(listener: () => void) {
+    subscribe(listener: () => void, viewReader = adapter.readStatus) {
       listeners.add(listener)
-      if (listeners.size === 1 && !snapshot.pending) void readStatus()
+      if (listeners.size === 1) {
+        reader = viewReader
+        if (!snapshot.pending) void readStatus()
+      }
       return () => {
         listeners.delete(listener)
         if (!listeners.size) {
           stopReading()
           // No stale status from a prior page visit may authorize a new command.
           // Command confirmation, unlike view data, survives the route departure.
-          publish({ status: null, statusError: '', actionError: '' })
+          publish({ status: null, statusError: '', actionError: '', notice: '' })
         }
       }
     },
     start,
     cancel,
     reconcile,
+    recheck,
   }
 }
 
