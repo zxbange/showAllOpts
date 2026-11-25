@@ -1,35 +1,57 @@
-from app.services.collection_outcomes import record_task
-from app.services.collection_errors import safe_error
-from app.services.collection_failure_isolation import quarantine_publication, restore_manual_publication
-from app.services.collection_calendar import next_automatic_collection, automatic_collection_allowed, latest_due_slot, manual_failure_isolated
-from app.core.history_sync import mark_sync_owner, clear_sync_owner, database_syncing, SYNC_MESSAGE
 """Restartable public index history, with Shanghai 18:00 trading-day updates."""
-from app.services.holdings_calendar import trading_day
-from app.services.system_runtime import source_client
-from app.services.system_configuration import task_config
-from app.services.collection_notifications import notify_collection
-from app.services.public_publication import PublicPublication
-from app.services.growth_dividend_import import SOURCES, apply_points, write_public
-from contextlib import contextmanager
-from datetime import date, datetime, time, timedelta, timezone
+
 import json
 import logging
-from time import monotonic
-
 import math
 import sqlite3
 import threading
 import uuid
+from contextlib import contextmanager
+from datetime import date, datetime, time, timedelta, timezone
+from functools import partial
+from time import monotonic
 from zoneinfo import ZoneInfo
 
 import httpx
 import portalocker
 
 from app.core.diagnostics import diagnostic_details
-
-from app.services.growth_dividend_source import (
-    CALENDAR_URL, INDEXES, START, IndexSourceError, fetch_calendar, fetch_prices,
+from app.core.history_sync import SYNC_MESSAGE, clear_sync_owner, database_syncing, mark_sync_owner
+from app.services.collection_calendar import (
+    automatic_collection_allowed,
+    latest_due_slot,
+    manual_failure_isolated,
+    next_automatic_collection,
 )
+from app.services.collection_errors import safe_error
+from app.services.collection_failure_isolation import (
+    quarantine_publication,
+    restore_manual_publication,
+)
+from app.services.collection_lifecycle import (
+    RunContext,
+    RunRequest,
+    cancellation_marker,
+    is_running,
+    request_cancel,
+    start_worker,
+    try_lease,
+)
+from app.services.collection_notifications import notify_collection
+from app.services.collection_outcomes import record_task
+from app.services.growth_dividend_import import SOURCES, apply_points, write_public
+from app.services.growth_dividend_source import (
+    CALENDAR_URL,
+    INDEXES,
+    START,
+    IndexSourceError,
+    fetch_calendar,
+    fetch_prices,
+)
+from app.services.holdings_calendar import trading_day
+from app.services.public_publication import PublicPublication
+from app.services.system_configuration import task_config
+from app.services.system_runtime import source_client
 
 LOG = logging.getLogger(__name__)
 CHINA = ZoneInfo('Asia/Shanghai')
@@ -128,23 +150,11 @@ class GrowthDividend:
     def acquire(self, *, for_history=False):
         lock = portalocker.Lock(str(self.root / 'collection.lock'), timeout=0,
                                 flags=portalocker.LOCK_EX | portalocker.LOCK_NB)
-        try:
-            lock.acquire()
-        except portalocker.exceptions.LockException:
-            return None
-        try:
-            (mark_sync_owner if for_history else clear_sync_owner)(self)
-        except BaseException:
-            lock.release()
-            raise
-        return lock
+        return try_lease(lock, portalocker.exceptions.LockException,
+                         on_acquired=lambda: (mark_sync_owner if for_history else clear_sync_owner)(self))
 
     def running(self):
-        lock = self.acquire()
-        if lock is None:
-            return True
-        lock.release()
-        return False
+        return is_running(self.acquire)
 
     def cancel(self):
         busy = self.running()
@@ -153,11 +163,7 @@ class GrowthDividend:
         state = self.read_state()
         if not state.get('active'):
             return False
-        identifier = state.get('run_id', '')
-        if len(identifier) != 32 or any(c not in '0123456789abcdef' for c in identifier):
-            return False
-        (self.root / ('cancel-' + identifier)).touch()
-        return True
+        return request_cancel(self.root, state.get('run_id'))
 
     @staticmethod
     def pending(db, cutoff):
@@ -279,9 +285,8 @@ class GrowthDividend:
                 state['scheduled_slot'] = slot
             self.write_state(state)
             if background:
-                self.worker = threading.Thread(target=self.collect, args=(lock, state, moment, slot),
-                                               name='growth-dividend-collector', daemon=True)
-                self.worker.start()
+                start_worker(partial(self.collect, lock, state, moment, slot), name='growth-dividend-collector',
+                             assign=lambda worker: setattr(self, 'worker', worker), factory=threading.Thread)
             else:
                 self.collect(lock, state, moment, slot)
         except BaseException as exc:
@@ -297,9 +302,13 @@ class GrowthDividend:
 
     @notify_collection('growth_dividend')
     def collect(self, lock, state, moment, slot=None):
-        marker = self.root / ('cancel-' + state['run_id'])
+        marker = cancellation_marker(self.root, state['run_id'])
+        assert marker is not None
         local = moment.astimezone(CHINA)
-        started = monotonic()
+        context = RunContext(
+            RunRequest(moment, slot, state.get('trigger', 'manual')), marker, self.stop_event,
+            automatic_collection_allowed, manual_failure_isolated, CollectionCancelled, monotonic,
+        )
         outcome = 'failed'
         run_error = None
         error_stage = 'database_write'
@@ -307,11 +316,10 @@ class GrowthDividend:
         publication = None
 
         def check_cancel():
-            if slot is None and state.get('trigger') == 'manual' and not state.get('run_isolated') and manual_failure_isolated(moment + timedelta(seconds=monotonic()-started)):
+            if not state.get('run_isolated') and context.isolate_manual_failure(include_requested=False):
                 state['run_isolated'] = True
                 self.write_state(state)
-            if ((slot is not None or state.get('trigger') != 'manual') and not automatic_collection_allowed(moment + timedelta(seconds=monotonic()-started))) or self.stop_event.is_set() or marker.exists():
-                raise CollectionCancelled()
+            context.check_cancel()
 
         def apply(payload, db):
             apply_points(db, payload['points'], check_cancel)
@@ -487,7 +495,7 @@ class GrowthDividend:
         finally:
             state['active'] = False
             try:
-                if outcome != 'success' and slot is None and state.get('trigger') == 'manual' and (manual_failure_isolated(moment) or manual_failure_isolated(moment + timedelta(seconds=monotonic()-started))):
+                if outcome != 'success' and context.isolate_manual_failure():
                     state['run_isolated'] = True
                     self.write_state(state)
                     quarantine_publication(self, 'public_publication', state)
@@ -505,15 +513,17 @@ class GrowthDividend:
                 raise
             finally:
                 try:
-                    record_task(self.settings, 'growth_dividend', outcome=outcome, scheduled=slot is not None or state.get('trigger') == 'startup', run_key=state['run_id'], error_details=(run_error or safe_error(stage='validate', code='invalid_data')) if outcome in ('failed', 'partial') else None)
-                    lock.release()
+                    try:
+                        record_task(self.settings, 'growth_dividend', outcome=outcome, scheduled=slot is not None or state.get('trigger') == 'startup', run_key=state['run_id'], error_details=(run_error or safe_error(stage='validate', code='invalid_data')) if outcome in ('failed', 'partial') else None)
+                    finally:
+                        lock.release()
                 except BaseException as exc:
                     outcome = 'failed'
                     LOG.error('Collection lock release failed details=%s', diagnostic_details(exc))
                     raise
                 finally:
                     LOG.info('Growth/dividend collection finished outcome=%s processed=%s total=%s failed_windows=%s duration_seconds=%.3f',
-                             outcome, state.get('processed', 0), state.get('total'), failed_windows, monotonic() - started)
+                             outcome, state.get('processed', 0), state.get('total'), failed_windows, context.elapsed)
 
     def tick(self, moment=None):
         from app.services.system_configuration import task_config
