@@ -182,7 +182,7 @@ class PersonalHoldings:
             if not db.execute('SELECT 1 FROM holdings_manual_requests WHERE id=?', (request_id,)).fetchone():
                 db.execute('INSERT INTO holdings_manual_requests VALUES(?)', (request_id,))
                 if (state.get('manual') or {}).get('status') != 'pending':
-                    state['manual'] = dict(id=request_id, status='pending', error=None)
+                    state['manual'] = dict(id=request_id, status='pending', error=None, requested_at=clock().isoformat())
                     self.write(db, state)
         return self.status()
 
@@ -204,6 +204,7 @@ class PersonalHoldings:
             scoped_ref = ref if state['source'] == ref else None
             state['close_valuation'] = holdings_close.close_valuation(
                 db, scoped_ref, clock().astimezone(SHANGHAI).date(), state['rows'])
+            state['close_check'] = holdings_close.latest_check(db, scoped_ref, state['epoch'])
         state.pop('source')
         state.pop('epoch')
         state['window_open'] = in_window(clock(), self.settings)
@@ -344,9 +345,29 @@ class PersonalHoldings:
                                    observed_at=observed.isoformat(), checked_at=observed.isoformat(), error=None,
                                    next_poll=current['next_poll'] if manual else max(current['next_poll'], observed.timestamp()))
                     if manual:
-                        current['manual'] = dict(current['manual'], status='completed', error=None)
+                        current['manual'] = dict(current['manual'], phase='close', error=None)
                     self.write(db, current)
-            record_outcome(self.settings, 'personal-holdings', run_key=outcome_run, outcome='success', trigger='manual' if manual else 'scheduled')
+            if manual:
+                request = state['manual']
+                requested_at = datetime.fromisoformat(request['requested_at']) if request.get('requested_at') else moment
+                try:
+                    close_result = self.close_prices.collect_manual(requested_at, expected_ref=expected_ref,
+                        expected_epoch=state['epoch'], request_id=request['id'])
+                except Exception as error:
+                    LOG.warning('Personal holdings manual close failed type=%s', type(error).__name__)
+                    close_result = dict(status='unavailable', reason='收盘价采集暂时失败，保留已有估值', trade_date=None)
+                with self.db() as db:
+                    db.execute('BEGIN IMMEDIATE')
+                    current = self.state(db)
+                    if (current['epoch'] != state['epoch'] or
+                            (current.get('manual') or {}).get('id') != request['id'] or
+                            (current.get('manual') or {}).get('status') != 'pending'):
+                        return False
+                    current['manual'] = dict(current['manual'], status='completed', phase='complete',
+                        error=None, close_result=close_result)
+                    self.write(db, current)
+            record_outcome(self.settings, 'personal-holdings', run_key=outcome_run, outcome='partial' if manual and close_result['status'] != 'complete' else 'success', trigger='manual' if manual else 'scheduled',
+                error_details=public_error(stage='fetch', code='market_source_not_ready', trade_date=close_result.get('trade_date')) if manual and close_result['status'] != 'complete' else None)
             return True
         except Exception as error:
             # Record the original failure before cleanup; never log SQL/messages.

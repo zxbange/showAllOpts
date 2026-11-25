@@ -203,3 +203,23 @@ def test_partial_market_never_replaces_same_day_covered_prices(fixture, monkeypa
         'trade_date': MONDAY, 'prices': {'000001': '10', '600000': '4', '920001': '2'},
         'strategy_totals': {'A': '37.00', 'B': '2.00'},
     }
+
+
+def test_automatic_close_check_reports_no_token_and_partial(fixture, monkeypatch):
+    monitor, current = fixture
+    from app.services.system_configuration import SystemConfiguration
+    service = SystemConfiguration(monitor.settings)
+    config = service.load()
+    config['integrations']['tushare']['token'] = ''
+    service.save(config)
+    assert not collect(monitor, current, MONDAY, '15:30')
+    status = monitor.status()['close_check']
+    assert status['trade_date'] == MONDAY and status['status'] == 'unavailable'
+    assert 'Token' in status['reason']
+    config = service.load()
+    config['integrations']['tushare']['token'] = TOKEN
+    service.save(config)
+    put_rows(monitor, row(), row('600000'))
+    monkeypatch.setattr(holdings_close, 'fetch_daily_closes', lambda day, token: {'000001.SZ': '12'})
+    assert collect(monitor, current, MONDAY, '15:31')
+    assert monitor.status()['close_check']['status'] == 'partial'

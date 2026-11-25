@@ -613,3 +613,59 @@ def test_closed_day_manual_failure_is_terminal_and_next_workday_is_normal(monito
     monkeypatch.setattr(job, 'read', original)
     now[0] = datetime(2026, 11, 9, 2, tzinfo=timezone.utc)
     assert job.poll()
+
+
+@pytest.mark.parametrize('stamp,expected', [
+    ('2026-11-25T15:29:59+08:00', '2026-11-24'),
+    ('2026-11-25T15:30:00+08:00', '2026-11-25'),
+    ('2026-11-28T16:00:00+08:00', '2026-11-27'),
+])
+def test_manual_sync_reads_holdings_and_updates_closes_without_enabling_monitor(monitor, monkeypatch, stamp, expected):
+    job, source, now, *_ = monitor
+    service = module.SystemConfiguration(job.settings)
+    config = service.load()
+    config['integrations']['tushare']['token'] = 'test-only'
+    service.save(config)
+    now[0] = datetime.fromisoformat(stamp)
+    replace(source,[row(amt='200')])
+    calls=[]
+    def fetch(day, token):
+        assert job.state()['manual']['status']=='pending'
+        assert job.state()['manual']['phase']=='close'
+        assert job.state()['rows'][0]['amt']=='200'
+        calls.append(day.isoformat())
+        return {'000001.SZ':'12.50'}
+    monkeypatch.setattr(module.holdings_close,'fetch_daily_closes',fetch)
+    job.request_sync('x'*32)
+    assert job.poll()
+    status=job.status()
+    assert status['manual']['status']=='completed'
+    assert status['manual']['close_result']['status']=='complete'
+    assert status['close_valuation']['trade_date']==expected
+    assert status['close_valuation']['strategy_totals']=={'策略一':'2500.00'}
+    assert calls==[expected] and not status['enabled']
+    with job.db() as db:
+        assert db.execute('SELECT count(*) FROM holdings_close_attempts').fetchone()[0]==0
+    job.request_sync('x'*32)
+    assert not job.poll() and calls==[expected]
+
+
+def test_manual_close_unavailable_preserves_holdings_and_reports_partial(monitor, monkeypatch):
+    job, source, now, *_ = monitor
+    service = module.SystemConfiguration(job.settings)
+    config = service.load()
+    config['integrations']['tushare']['token'] = 'test-only'
+    service.save(config)
+    now[0] = datetime.fromisoformat('2026-11-25T15:30:00+08:00')
+    replace(source,[row(amt='200')])
+    def fetch(*_):
+        raise module.holdings_close.HoldingsCloseUnavailable()
+    monkeypatch.setattr(module.holdings_close,'fetch_daily_closes',fetch)
+    job.request_sync('x'*32)
+    assert job.poll()
+    status=job.status()
+    assert status['manual']['status']=='completed'
+    assert status['manual']['close_result']['status']=='unavailable'
+    assert status['rows'][0]['amt']=='200'
+    assert status['close_valuation']['strategy_totals']=={'策略一':None}
+    assert latest_outcomes(job.settings)['items']['personal-holdings']['outcome']=='partial'

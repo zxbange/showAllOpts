@@ -246,6 +246,7 @@ test('manual sync outside trading window keeps monitoring off and survives navig
   let manual: any = null
   let calls = 0
   let version = 0
+  let closeValuation: any = undefined
   const config = {
     host: 'mock.db.test',
     port: 3306,
@@ -280,6 +281,7 @@ test('manual sync outside trading window keeps monitoring off and survives navig
         error: null,
         observed_at: null,
         manual,
+        close_valuation: closeValuation,
       },
     })
   })
@@ -289,11 +291,20 @@ test('manual sync outside trading window keeps monitoring off and survives navig
   expect(calls).toBe(1)
   await page.reload()
   await expect(page.getByRole('button', { name: '采集中…' })).toBeDisabled()
-  manual.status = 'completed'
+  manual.phase = 'close'
   version = 1
   await expect(page.getByRole('cell', { name: '000001', exact: true })).toBeVisible({
     timeout: 10000,
   })
+  await expect(page.getByRole('button', { name: '采集中…' })).toBeDisabled()
+  closeValuation = {
+    trade_date: '2026-11-24',
+    prices: { '000001': '12.50' },
+    strategy_totals: { 模拟策略: '1250.00' },
+  }
+  manual.close_result = { status: 'complete', reason: null, trade_date: '2026-11-24' }
+  manual.status = 'completed'
+  await expect(page.getByText('收盘价日期：2026-11-24', { exact: true })).toBeVisible()
   await expect(page.getByRole('button', { name: '开始监控', exact: true })).toBeEnabled()
   await expect(page.getByRole('status')).toContainText('采集完成')
   expect(calls).toBe(1)
@@ -301,7 +312,13 @@ test('manual sync outside trading window keeps monitoring off and survives navig
   await page.locator('.page-header').getByRole('button', { name: '更新数据', exact: true }).click()
   await expect(page.getByRole('button', { name: '采集中…' })).toBeDisabled()
   expect(calls).toBe(2)
+  manual.close_result = {
+    status: 'unavailable',
+    reason: '目标日行情未完整返回或接口不可用',
+    trade_date: '2026-11-25',
+  }
   manual.status = 'completed'
+  await expect(page.getByRole('status')).toContainText('目标日行情未完整返回或接口不可用')
   await expect(page.getByRole('button', { name: '更新数据', exact: true })).toBeEnabled({
     timeout: 10000,
   })

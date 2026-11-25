@@ -25,7 +25,19 @@ type CloseValuation = {
 }
 type Status = {
   close_valuation?: CloseValuation
-  manual?: { id: string; status: string; error: string | null }
+  close_check?: {
+    status: string
+    reason: string | null
+    trade_date: string
+    checked_at: string
+  } | null
+  manual?: {
+    id: string
+    status: string
+    error: string | null
+    phase?: string
+    close_result?: { status: string; reason: string | null; trade_date: string | null }
+  }
   enabled: boolean
   configured: boolean
   baseline: boolean
@@ -367,6 +379,14 @@ function Holdings() {
       <section className="holdings-toolbar">
         <div>
           <small>最近成功读取：{stamp(status?.observed_at ?? null)}</small>
+          {status?.close_check?.trade_date === today() &&
+            ['unavailable', 'skipped', 'partial', 'cancelled'].includes(
+              status.close_check.status,
+            ) && (
+              <small>
+                收盘价：{status.close_check.reason ?? '等待更新'}（{status.close_check.trade_date}）
+              </small>
+            )}
         </div>
         <div className="holdings-actions">
           <PageHeaderActions>
@@ -388,7 +408,9 @@ function Holdings() {
         </div>
         <span role="status">
           {status?.manual?.status === 'completed'
-            ? '采集完成'
+            ? status.manual.close_result && status.manual.close_result.status !== 'complete'
+              ? '持仓已更新；收盘价：' + (status.manual.close_result.reason ?? '尚未完整更新')
+              : '采集完成'
             : status?.manual?.status === 'cancelled'
               ? status.manual.error
               : ''}
