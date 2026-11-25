@@ -59,8 +59,9 @@ def test_workflow_waits_for_every_shard_and_keeps_failure_evidence_separate():
     workflow = (Path(__file__).resolve().parents[2] / '.github/workflows/deploy.yml').read_text()
     assert 'shard: [1, 2, 3]' in workflow
     assert 'shard: [1, 2]' in workflow
-    assert workflow.count('fail-fast: false') == 2
+    assert workflow.count('fail-fast: false') == 3
     assert '--ci-shard=${{ matrix.shard }}/3 --durations=20' in workflow
     assert '--shard=${{ matrix.shard }}/2' in workflow
-    assert 'needs: [backend, frontend]' in workflow
+    assert 'needs: [backend, frontend, backend-quality, mysql-integration]' in workflow
+    assert 'needs: [ci-gate]' in workflow
     assert 'frontend-e2e-failure-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.shard }}' in workflow

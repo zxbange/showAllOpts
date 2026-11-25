@@ -58,6 +58,14 @@ def create_app(settings: Settings | None = None, engine: Engine | None = None) -
     @asynccontextmanager
     async def lifespan(application: FastAPI):
         ensure_logging(settings)
+        from datetime import datetime, timezone
+
+        from app.services.collection_calendar import collection_day
+        from app.services.holdings_calendar import first_uncovered_day
+
+        uncovered = first_uncovered_day(collection_day(datetime.now(timezone.utc)))
+        if uncovered is not None:
+            logger.warning('Exchange calendar coverage ending; first unknown date=%s', uncovered)
         def start_worker(name, worker):
             started = time.monotonic()
             try:

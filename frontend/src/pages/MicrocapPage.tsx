@@ -1,12 +1,6 @@
 import { PageHeader } from '../components/PageHeader'
 import { useCallback, useState } from 'react'
-import {
-  ChartNoAxesCombined,
-  Layers3,
-  RefreshCw,
-  Thermometer,
-  TrendingUp,
-} from 'lucide-react'
+import { ChartNoAxesCombined, Layers3, RefreshCw, Thermometer, TrendingUp } from 'lucide-react'
 import { getMicrocapHistory } from '../api/client'
 import { useResource } from '../hooks/useResource'
 import { formatDate, formatScore, signedScore } from '../lib/format'

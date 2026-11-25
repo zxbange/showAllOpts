@@ -4,7 +4,7 @@
   "version": "1.0.0",
   "type": "module",
   "engines": {
-    "node": ">=22.12.0"
+    "node": "^22.13.0 || >=24"
   },
   "scripts": {
     "dev": "vite",
@@ -13,7 +13,11 @@
     "test": "vitest run",
     "test:e2e": "playwright test",
     "format": "prettier --write .",
-    "format:check": "prettier --check ."
+    "format:check": "prettier --check .",
+    "lint": "eslint src --max-warnings 0",
+    "type:check": "tsc -b --pretty false",
+    "quality:check": "npm run quality:format && npm run lint && npm run type:check",
+    "quality:format": "prettier --check src eslint.config.mjs eslint-suppressions.json package.json"
   },
   "dependencies": {
     "echarts": "^6.0.0",
@@ -28,8 +32,11 @@
     "@types/react": "^19.1.0",
     "@types/react-dom": "^19.1.0",
     "@vitejs/plugin-react": "^4.7.0",
+    "eslint": "10.15.0",
+    "eslint-plugin-react-hooks": "7.1.1",
     "prettier": "^3.9.10",
     "typescript": "~5.9.2",
+    "typescript-eslint": "8.74.0",
     "vite": "^7.0.0",
     "vitest": "^3.2.0"
   }
