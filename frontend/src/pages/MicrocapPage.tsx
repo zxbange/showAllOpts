@@ -1,6 +1,9 @@
+import { TrendPanelHeading } from '../components/TrendPanelHeading'
+import { HistoryRangeSwitch, standardHistoryRanges } from '../components/HistoryRangeSwitch'
+import { DisplayRefreshButton } from '../components/PageActionButton'
 import { PageHeader } from '../components/PageHeader'
 import { useCallback, useState } from 'react'
-import { ChartNoAxesCombined, Layers3, RefreshCw, Thermometer, TrendingUp } from 'lucide-react'
+import { ChartNoAxesCombined, Layers3, Thermometer, TrendingUp } from 'lucide-react'
 import { getMicrocapHistory } from '../api/client'
 import { useResource } from '../hooks/useResource'
 import { formatDate, formatScore, signedScore } from '../lib/format'
@@ -29,14 +32,7 @@ export function MicrocapPage() {
           <p>市值最小 1000 只股票的估值与交易拥挤度，每个交易日采集。</p>
         </div>
         <div className="heading-actions">
-          <button
-            className="button button-quiet icon-button"
-            onClick={reload}
-            disabled={loading}
-            aria-label="刷新微盘温度数据"
-          >
-            <RefreshCw size={16} className={loading ? 'spin' : ''} />
-          </button>
+          <DisplayRefreshButton ariaLabel="刷新微盘温度数据" onClick={reload} loading={loading} />
         </div>
       </PageHeader>
       {loading ? (
@@ -143,37 +139,22 @@ export function MicrocapPage() {
         )
       )}
       <section className="panel trend-panel">
-        <div className="panel-heading">
-          <div>
-            <div className="panel-title">
-              <span className="status-dot" />
-              <h2>微盘历史观察</h2>
-            </div>
-            <p>
-              {data?.start_date
-                ? `${formatDate(data.start_date)} — ${formatDate(data.end_date)}`
-                : '自 2021 年起 · 每个交易日采集'}
-            </p>
-          </div>
-          <div className="range-switch" aria-label="微盘温度历史范围">
-            {[
-              { days: 30, label: '近 1 月' },
-              { days: 90, label: '近 3 月' },
-              { days: 180, label: '近半年' },
-              { days: 365, label: '近 1 年' },
-              { days: 0, label: '全部' },
-            ].map((range) => (
-              <button
-                key={range.days}
-                aria-pressed={days === range.days}
-                className={days === range.days ? 'active' : ''}
-                onClick={() => setDays(range.days)}
-              >
-                {range.label}
-              </button>
-            ))}
-          </div>
-        </div>
+        <TrendPanelHeading
+          title="微盘历史观察"
+          description={
+            data?.start_date
+              ? `${formatDate(data.start_date)} — ${formatDate(data.end_date)}`
+              : '自 2021 年起 · 每个交易日采集'
+          }
+          actions={
+            <HistoryRangeSwitch
+              label="微盘温度历史范围"
+              options={standardHistoryRanges}
+              value={days}
+              onChange={setDays}
+            />
+          }
+        />
         <div className="microcap-view-switch" aria-label="微盘指标切换">
           {temperatureViews.map((item) => (
             <button

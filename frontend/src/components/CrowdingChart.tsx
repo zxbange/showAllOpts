@@ -1,7 +1,7 @@
+import { useEChart } from '../hooks/useEChart'
 import { chartColors } from '../lib/chartTheme'
-import { useEffect, useRef } from 'react'
-import { init, use as registerChartComponents } from 'echarts/core'
-import type { EChartsType } from 'echarts/core'
+import { useEffect } from 'react'
+import { use as registerChartComponents } from 'echarts/core'
 import { LineChart } from 'echarts/charts'
 import {
   GridComponent,
@@ -35,19 +35,7 @@ export function CrowdingChart({
   data: CrowdingHistory
   showSmooth: boolean
 }) {
-  const element = useRef<HTMLDivElement>(null)
-  const chart = useRef<EChartsType | null>(null)
-  useEffect(() => {
-    if (!element.current) return
-    chart.current = init(element.current)
-    const observer = new ResizeObserver(() => chart.current?.resize())
-    observer.observe(element.current)
-    return () => {
-      observer.disconnect()
-      chart.current?.dispose()
-      chart.current = null
-    }
-  }, [])
+  const { element, chart } = useEChart()
   useEffect(() => {
     const points = data.points
     const segments = marketSourceSegments(points, 'crowding')
@@ -182,7 +170,7 @@ export function CrowdingChart({
       },
       { notMerge: true },
     )
-  }, [data, showSmooth])
+  }, [data, showSmooth, chart])
   return (
     <div
       ref={element}

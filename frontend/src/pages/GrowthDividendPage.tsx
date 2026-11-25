@@ -1,6 +1,9 @@
+import { HistoryRangeSwitch } from '../components/HistoryRangeSwitch'
+import { TrendPanelHeading } from '../components/TrendPanelHeading'
+import { DisplayRefreshButton, PageActionButton } from '../components/PageActionButton'
 import { PageHeaderActions } from '../components/PageHeaderActions'
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { Download, RefreshCw, Square, TrendingUp } from 'lucide-react'
+import { Download, Square, TrendingUp } from 'lucide-react'
 import { getGrowthDividendHistory } from '../api/growthDividend'
 import { useAuth } from '../components/AccountAccess'
 import { GrowthDividendChart } from '../components/GrowthDividendChart'
@@ -146,14 +149,11 @@ export function GrowthDividendPage() {
           </h1>
         </div>
         <div className="heading-actions">
-          <button
-            className="button button-quiet icon-button"
-            aria-label="刷新创红比展示数据"
+          <DisplayRefreshButton
+            ariaLabel="刷新创红比展示数据"
             onClick={reloadDisplay}
-            disabled={loading}
-          >
-            <RefreshCw size={16} className={loading ? 'spin' : ''} />
-          </button>
+            loading={loading}
+          />
         </div>
       </PageHeader>
 
@@ -178,41 +178,29 @@ export function GrowthDividendPage() {
       </div>
 
       <section className="panel trend-panel growth-dividend-trend" aria-busy={loading}>
-        <div className="panel-heading">
-          <div>
-            <div className="panel-title">
-              <span className="status-dot" />
-              <h2>指数点位与成长红利比</h2>
-            </div>
-            <p>实线为指数点位（左轴），虚线为比值（右轴）。点击图例显示或隐藏曲线。</p>
-          </div>
-        </div>
+        <TrendPanelHeading
+          title="指数点位与成长红利比"
+          description="实线为指数点位（左轴），虚线为比值（右轴）。点击图例显示或隐藏曲线。"
+        />
         <div className="growth-dividend-toolbar">
-          <div className="range-switch" aria-label="创红比历史范围">
-            {(
+          <HistoryRangeSwitch
+            label="创红比历史范围"
+            options={
               [
-                [1, '近1年'],
-                [3, '近3年'],
-                [5, '近5年'],
-                [0, '全部'],
+                { value: 1, label: '近1年' },
+                { value: 3, label: '近3年' },
+                { value: 5, label: '近5年' },
+                { value: 0, label: '全部' },
               ] as const
-            ).map(([years, label]) => (
-              <button
-                type="button"
-                key={years}
-                className={activeYears === years ? 'active' : ''}
-                aria-pressed={activeYears === years}
-                onClick={() => {
-                  editingDates.current = false
-                  setActiveYears(years)
-                  setSelection((current) => ({ years, revision: current.revision + 1 }))
-                  setRangeError(null)
-                }}
-              >
-                {label}
-              </button>
-            ))}
-          </div>
+            }
+            value={activeYears}
+            onChange={(years) => {
+              editingDates.current = false
+              setActiveYears(years)
+              setSelection((current) => ({ years, revision: current.revision + 1 }))
+              setRangeError(null)
+            }}
+          />
           <form
             className="growth-dividend-dates"
             onSubmit={(event) => {
@@ -303,25 +291,25 @@ export function GrowthDividendPage() {
 
       <PageHeaderActions>
         {running ? (
-          <button
-            className="button button-quiet"
+          <PageActionButton
+            icon={Square}
+            iconSize={15}
+            tone="quiet"
             onClick={() => void act('cancel')}
             disabled={busy || stopping || status?.cancelling || !admin || uncertain || !!pollError}
           >
-            <Square size={15} />
             {stopping || status?.cancelling ? '正在停止…' : '取消采集'}
-          </button>
+          </PageActionButton>
         ) : (
-          <button
-            className="button button-primary"
+          <PageActionButton
+            icon={Download}
             onClick={() => void act('refresh')}
             disabled={
               databaseSyncing || busy || loading || !admin || uncertain || !status || !!pollError
             }
           >
-            <Download size={16} />
             {databaseSyncing ? '数据库同步中' : busy ? '正在启动…' : '更新数据'}
-          </button>
+          </PageActionButton>
         )}
       </PageHeaderActions>
       {running && (

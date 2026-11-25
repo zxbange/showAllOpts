@@ -1,6 +1,7 @@
+import { useEChart } from '../hooks/useEChart'
 import { chartColors } from '../lib/chartTheme'
-import { useEffect, useRef } from 'react'
-import { init, use as registerChartComponents } from 'echarts/core'
+import { useEffect } from 'react'
+import { use as registerChartComponents } from 'echarts/core'
 import { LineChart } from 'echarts/charts'
 import {
   GridComponent,
@@ -10,7 +11,6 @@ import {
   AriaComponent,
 } from 'echarts/components'
 import { CanvasRenderer } from 'echarts/renderers'
-import type { EChartsType } from 'echarts/core'
 import type { HistoryPoint } from '../types/momentum'
 
 registerChartComponents([
@@ -36,19 +36,7 @@ export function TrendChart({
   precision?: number
   seriesLabel?: string
 }) {
-  const element = useRef<HTMLDivElement>(null)
-  const chart = useRef<EChartsType | null>(null)
-  useEffect(() => {
-    if (!element.current) return
-    chart.current = init(element.current, undefined, { renderer: 'canvas' })
-    const resize = new ResizeObserver(() => chart.current?.resize())
-    resize.observe(element.current)
-    return () => {
-      resize.disconnect()
-      chart.current?.dispose()
-      chart.current = null
-    }
-  }, [])
+  const { element, chart } = useEChart('canvas')
   useEffect(() => {
     chart.current?.setOption(
       {
@@ -145,7 +133,7 @@ export function TrendChart({
       },
       { notMerge: true },
     )
-  }, [points, name, allowNegative, precision, seriesLabel])
+  }, [points, name, allowNegative, precision, seriesLabel, chart])
   return (
     <div
       ref={element}

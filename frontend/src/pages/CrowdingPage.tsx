@@ -1,6 +1,9 @@
+import { TrendPanelHeading } from '../components/TrendPanelHeading'
+import { HistoryRangeSwitch, standardHistoryRanges } from '../components/HistoryRangeSwitch'
+import { DisplayRefreshButton } from '../components/PageActionButton'
 import { PageHeader } from '../components/PageHeader'
 import { useCallback, useState } from 'react'
-import { ChartNoAxesCombined, RefreshCw, TrendingUp, Trophy } from 'lucide-react'
+import { ChartNoAxesCombined, TrendingUp, Trophy } from 'lucide-react'
 import { getCrowdingHistory } from '../api/client'
 import { useResource } from '../hooks/useResource'
 import { formatDate } from '../lib/format'
@@ -30,14 +33,7 @@ export function CrowdingPage() {
           <p>成交额前 5% 股票占全市场成交额的比例。</p>
         </div>
         <div className="heading-actions">
-          <button
-            className="button button-quiet icon-button"
-            onClick={reload}
-            disabled={loading}
-            aria-label="刷新拥挤度数据"
-          >
-            <RefreshCw size={16} className={loading ? 'spin' : ''} />
-          </button>
+          <DisplayRefreshButton ariaLabel="刷新拥挤度数据" onClick={reload} loading={loading} />
         </div>
       </PageHeader>
       {loading ? (
@@ -111,37 +107,22 @@ export function CrowdingPage() {
         </p>
       )}
       <section className="panel trend-panel">
-        <div className="panel-heading">
-          <div>
-            <div className="panel-title">
-              <span className="status-dot" />
-              <h2>成交额集中度走势</h2>
-            </div>
-            <p>
-              {data?.start_date
-                ? `${formatDate(data.start_date)} — ${formatDate(data.end_date)}`
-                : '按交易日记录 · 已有历史保留'}
-            </p>
-          </div>
-          <div className="range-switch" aria-label="拥挤度历史范围">
-            {[
-              { days: 30, label: '近 1 月' },
-              { days: 90, label: '近 3 月' },
-              { days: 180, label: '近半年' },
-              { days: 365, label: '近 1 年' },
-              { days: 0, label: '全部' },
-            ].map((range) => (
-              <button
-                key={range.days}
-                aria-pressed={days === range.days}
-                className={days === range.days ? 'active' : ''}
-                onClick={() => setDays(range.days)}
-              >
-                {range.label}
-              </button>
-            ))}
-          </div>
-        </div>
+        <TrendPanelHeading
+          title="成交额集中度走势"
+          description={
+            data?.start_date
+              ? `${formatDate(data.start_date)} — ${formatDate(data.end_date)}`
+              : '按交易日记录 · 已有历史保留'
+          }
+          actions={
+            <HistoryRangeSwitch
+              label="拥挤度历史范围"
+              options={standardHistoryRanges}
+              value={days}
+              onChange={setDays}
+            />
+          }
+        />
         {loading ? (
           <div className="skeleton chart-skeleton" />
         ) : !error && data && latest ? (

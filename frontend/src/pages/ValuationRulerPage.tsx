@@ -1,3 +1,5 @@
+import { HistoryRangeSwitch } from '../components/HistoryRangeSwitch'
+import { DisplayRefreshButton, PageActionButton } from '../components/PageActionButton'
 import { PageHeaderActions } from '../components/PageHeaderActions'
 import { useCallback, useEffect, useState } from 'react'
 import { RefreshCw, Gauge, Layers3 } from 'lucide-react'
@@ -81,14 +83,12 @@ export function ValuationRulerPage() {
           <p>指数走势与成分股估值。</p>
         </div>
         <div className="heading-actions">
-          <button
-            className="button button-quiet"
-            aria-label="刷新估值展示数据"
-            disabled={loading}
+          <DisplayRefreshButton
+            ariaLabel="刷新估值展示数据"
             onClick={reload}
-          >
-            <RefreshCw size={16} className={loading ? 'spin' : ''} />
-          </button>
+            loading={loading}
+            iconButton={false}
+          />
         </div>
       </PageHeader>
       {actionError && <p role="alert">{actionError}</p>}
@@ -159,22 +159,16 @@ export function ValuationRulerPage() {
             <h2>指数与估值 · 自{data?.coverage.requested_start.slice(0, 4) ?? '2010'}年起</h2>
             <p>左轴指数 · 右轴PE倍数</p>
           </div>
-          <div className="range-switch" aria-label="估值历史范围">
-            {[
-              [365, '近1年'],
-              [1095, '近3年'],
-              [0, '全部'],
-            ].map(([value, label]) => (
-              <button
-                key={value}
-                aria-pressed={days === value}
-                className={days === value ? 'active' : ''}
-                onClick={() => setDays(Number(value))}
-              >
-                {label}
-              </button>
-            ))}
-          </div>
+          <HistoryRangeSwitch
+            label="估值历史范围"
+            options={[
+              { value: 365, label: '近1年' },
+              { value: 1095, label: '近3年' },
+              { value: 0, label: '全部' },
+            ]}
+            value={days}
+            onChange={setDays}
+          />
         </div>
         {data?.points.length ? (
           <ValuationRulerChart data={data} days={days} />
@@ -233,12 +227,13 @@ export function ValuationRulerPage() {
       </details>
       <>
         <PageHeaderActions>
-          <button
-            className="button button-primary"
+          <PageActionButton
+            icon={RefreshCw}
+            iconSize={15}
+            spin={busy || running}
             disabled={disabled || running}
             onClick={() => void act()}
           >
-            <RefreshCw size={15} className={busy || running ? 'spin' : ''} />
             {databaseSyncing
               ? '数据库同步中'
               : running
@@ -246,7 +241,7 @@ export function ValuationRulerPage() {
                 : busy
                   ? '正在提交…'
                   : '更新数据'}
-          </button>
+          </PageActionButton>
         </PageHeaderActions>
         {(running || databaseSyncing) && (
           <p role="status">

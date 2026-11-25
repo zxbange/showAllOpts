@@ -1,6 +1,6 @@
-import { useEffect, useRef } from 'react'
-import { init, use as registerChartComponents } from 'echarts/core'
-import type { EChartsType } from 'echarts/core'
+import { useEChart } from '../hooks/useEChart'
+import { useEffect } from 'react'
+import { use as registerChartComponents } from 'echarts/core'
 import { LineChart } from 'echarts/charts'
 import {
   GridComponent,
@@ -22,22 +22,10 @@ registerChartComponents([
   CanvasRenderer,
 ])
 export function ValuationRulerChart({ data, days }: { data: ValuationHistory; days: number }) {
-  const root = useRef<HTMLDivElement>(null)
-  const chart = useRef<EChartsType | null>(null)
-  useEffect(() => {
-    if (!root.current) return
-    chart.current = init(root.current)
-    const observer = new ResizeObserver(() => chart.current?.resize())
-    observer.observe(root.current)
-    return () => {
-      observer.disconnect()
-      chart.current?.dispose()
-      chart.current = null
-    }
-  }, [])
+  const { element: root, chart } = useEChart()
   useEffect(() => {
     chart.current?.setOption(valuationChartOption(data, days), { notMerge: true })
-  }, [data, days])
+  }, [data, days, chart])
   return (
     <div
       ref={root}

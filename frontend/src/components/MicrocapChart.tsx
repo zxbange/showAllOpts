@@ -1,7 +1,7 @@
+import { useEChart } from '../hooks/useEChart'
 import { chartColors } from '../lib/chartTheme'
-import { useEffect, useRef } from 'react'
-import { init, use as registerChartComponents } from 'echarts/core'
-import type { EChartsType } from 'echarts/core'
+import { useEffect } from 'react'
+import { use as registerChartComponents } from 'echarts/core'
 import { LineChart } from 'echarts/charts'
 import {
   GridComponent,
@@ -46,25 +46,13 @@ export function MicrocapChart({
   view: ChartView
   overlayIndex?: boolean
 }) {
-  const element = useRef<HTMLDivElement>(null)
-  const chart = useRef<EChartsType | null>(null)
+  const { element, chart } = useEChart()
   const title =
     view === 'valuation'
       ? 'PE / PB 中位数'
       : view === 'profit'
         ? '归母净利润增速中位数'
         : temperatureViews.find((item) => item.key === view)!.label
-  useEffect(() => {
-    if (!element.current) return
-    chart.current = init(element.current)
-    const observer = new ResizeObserver(() => chart.current?.resize())
-    observer.observe(element.current)
-    return () => {
-      observer.disconnect()
-      chart.current?.dispose()
-      chart.current = null
-    }
-  }, [])
   useEffect(() => {
     const isTemperature = view !== 'valuation' && view !== 'profit'
     const secondAxis = view === 'valuation' || (isTemperature && overlayIndex)
@@ -182,7 +170,7 @@ export function MicrocapChart({
       },
       { notMerge: true },
     )
-  }, [points, view, overlayIndex, title])
+  }, [points, view, overlayIndex, title, chart])
   return (
     <div ref={element} className="trend-chart" role="img" aria-label={`微盘${title}历史曲线`} />
   )

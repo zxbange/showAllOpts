@@ -1,5 +1,6 @@
+import { createChartInstance } from '../lib/chartLifecycle'
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
-import { graphic, init, use as registerChartComponents } from 'echarts/core'
+import { graphic, use as registerChartComponents } from 'echarts/core'
 import type { EChartsType } from 'echarts/core'
 import { LineChart } from 'echarts/charts'
 import {
@@ -73,13 +74,10 @@ export function GrowthDividendChart({
 
   useEffect(() => {
     if (!element.current) return
-    const instance = init(element.current)
+    const mounted = createChartInstance(element.current)
+    const instance = mounted.chart
     chart.current = instance
-    const observer = new ResizeObserver(() => {
-      instance.resize()
-      refreshAnnotation.current()
-    })
-    observer.observe(element.current)
+    mounted.observe(() => refreshAnnotation.current())
     const handleZoom = () => {
       refreshAnnotation.current()
       const zoom = (
@@ -99,9 +97,7 @@ export function GrowthDividendChart({
     }
     instance.on('datazoom', handleZoom)
     return () => {
-      observer.disconnect()
-      instance.off('datazoom', handleZoom)
-      instance.dispose()
+      mounted.dispose(() => instance.off('datazoom', handleZoom))
       chart.current = null
       annotation.current = null
     }

@@ -1,3 +1,4 @@
+import { ScrollableTableRegion } from './ScrollableTableRegion'
 import type { CSSProperties } from 'react'
 import type { ETFHistory } from '../types/etf'
 import { billionShares, etfColors, recentShareRows } from '../lib/etf'
@@ -18,7 +19,7 @@ export function ETFShareTable({
         <h2 id="etf-recent-shares-heading">{data.group_name} · 近5日份额</h2>
         <span>单位：亿份</span>
       </div>
-      <div className="etf-table-scroll" tabIndex={0} role="region" aria-label="ETF近5个交易日份额">
+      <ScrollableTableRegion className="etf-table-scroll" label="ETF近5个交易日份额">
         <table className="etf-share-table">
           <thead>
             <tr>
@@ -76,7 +77,7 @@ export function ETFShareTable({
             ))}
           </tbody>
         </table>
-      </div>
+      </ScrollableTableRegion>
     </section>
   )
 }

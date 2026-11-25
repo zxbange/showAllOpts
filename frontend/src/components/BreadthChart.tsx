@@ -1,6 +1,6 @@
-import { useEffect, useRef } from 'react'
-import { init, use as registerChartComponents } from 'echarts/core'
-import type { EChartsType } from 'echarts/core'
+import { useEChart } from '../hooks/useEChart'
+import { useEffect } from 'react'
+import { use as registerChartComponents } from 'echarts/core'
 import { LineChart, BarChart } from 'echarts/charts'
 import {
   GridComponent,
@@ -36,19 +36,7 @@ export function BreadthChart({
   period: number
   view: BreadthView
 }) {
-  const ref = useRef<HTMLDivElement>(null)
-  const chart = useRef<EChartsType | null>(null)
-  useEffect(() => {
-    if (!ref.current) return
-    chart.current = init(ref.current)
-    const observer = new ResizeObserver(() => chart.current?.resize())
-    observer.observe(ref.current)
-    return () => {
-      observer.disconnect()
-      chart.current?.dispose()
-      chart.current = null
-    }
-  }, [])
+  const { element: ref, chart } = useEChart()
   useEffect(() => {
     const metrics = points.map((p) => p.periods.find((m) => m.period === period))
     const unit = view === 'counts' ? '只' : view === 'ratios' ? '%' : '点'
@@ -142,7 +130,7 @@ export function BreadthChart({
       },
       true,
     )
-  }, [points, period, view])
+  }, [points, period, view, chart])
   return (
     <div
       className="breadth-chart"

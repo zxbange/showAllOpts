@@ -1,3 +1,6 @@
+import { ScrollableTableRegion } from '../components/ScrollableTableRegion'
+import { createChartInstance } from '../lib/chartLifecycle'
+import { PageActionButton } from '../components/PageActionButton'
 import { PageHeaderActions } from '../components/PageHeaderActions'
 import { PageHeader } from '../components/PageHeader'
 import { ModuleSwitch } from '../components/ModuleSwitch'
@@ -5,7 +8,7 @@ import { Coins } from 'lucide-react'
 import { useSearchParams } from 'react-router-dom'
 import { CCICoalPage } from './CCICoalPage'
 import { useEffect, useRef } from 'react'
-import { init, use as registerChartComponents } from 'echarts/core'
+import { use as registerChartComponents } from 'echarts/core'
 import { LineChart, CustomChart } from 'echarts/charts'
 import {
   GridComponent,
@@ -67,7 +70,8 @@ function QuoteChart({ rows }: { rows: Quote[] }) {
   const root = useRef<HTMLDivElement>(null)
   useEffect(() => {
     if (!root.current) return
-    const chart = init(root.current)
+    const mounted = createChartInstance(root.current)
+    const chart = mounted.chart
     chart.setOption({
       animation: false,
       aria: {
@@ -150,12 +154,8 @@ function QuoteChart({ rows }: { rows: Quote[] }) {
         },
       ],
     })
-    const observer = new ResizeObserver(() => chart.resize())
-    observer.observe(root.current)
-    return () => {
-      observer.disconnect()
-      chart.dispose()
-    }
+    mounted.observe()
+    return () => mounted.dispose()
   }, [rows])
   return (
     <div ref={root} className="commodity-chart" role="img" aria-label="A00铝每日报价区间与均价图" />
@@ -206,13 +206,12 @@ function A00Page() {
           <h2>价格走势</h2>
           {admin && (
             <PageHeaderActions>
-              <button
-                className="button button-primary"
+              <PageActionButton
                 disabled={busy || data?.status.running || !data || !!statusError}
                 onClick={() => void refresh()}
               >
                 {busy || data?.status.running ? '采集中' : '更新数据'}
-              </button>
+              </PageActionButton>
             </PageHeaderActions>
           )}
         </div>
@@ -274,12 +273,7 @@ function A00Page() {
       </section>
       <section className="commodity-panel">
         <h2>每日报价</h2>
-        <div
-          className="commodity-table"
-          tabIndex={0}
-          role="region"
-          aria-label="每日报价，可滚动查看"
-        >
+        <ScrollableTableRegion className="commodity-table" label="每日报价，可滚动查看">
           <table>
             <thead>
               <tr>
@@ -311,7 +305,7 @@ function A00Page() {
                 ))}
             </tbody>
           </table>
-        </div>
+        </ScrollableTableRegion>
       </section>
     </div>
   )

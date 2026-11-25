@@ -1,3 +1,4 @@
+import { PageActionButton } from './PageActionButton'
 import { useEffect, useRef } from 'react'
 import { PageHeaderActions } from './PageHeaderActions'
 import { RefreshCw } from 'lucide-react'
@@ -57,14 +58,14 @@ export function DividendCollectionControls({ onComplete }: { onComplete: () => v
           <p>一次更新银行与非银行选股结果</p>
         </div>
         <PageHeaderActions>
-          <button
-            className="button button-primary"
+          <PageActionButton
+            icon={RefreshCw}
+            spin={busy || running}
             disabled={busy || !status || running || !!pollError || !status.available}
             onClick={() => void act()}
           >
-            <RefreshCw size={16} className={busy || running ? 'spin' : ''} />
             {running ? '采集中…' : busy ? '提交中…' : '更新数据'}
-          </button>
+          </PageActionButton>
         </PageHeaderActions>
       </div>
       {status && (

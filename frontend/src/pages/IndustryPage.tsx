@@ -1,13 +1,8 @@
+import { HistoryRangeSwitch, standardHistoryRanges } from '../components/HistoryRangeSwitch'
+import { DisplayRefreshButton } from '../components/PageActionButton'
 import { PageHeader } from '../components/PageHeader'
 import { useCallback, useState } from 'react'
-import {
-  ArrowLeft,
-  ChartNoAxesCombined,
-  CircleDot,
-  RefreshCw,
-  Trophy,
-  TrendingUp,
-} from 'lucide-react'
+import { ArrowLeft, ChartNoAxesCombined, CircleDot, Trophy, TrendingUp } from 'lucide-react'
 import { Link, useParams, useSearchParams } from 'react-router-dom'
 import { getHistory } from '../api/client'
 import { useResource } from '../hooks/useResource'
@@ -43,14 +38,7 @@ export function IndustryPage() {
           <p>查看行业动量、排名及强势股数量的历史变化。</p>
         </div>
         <div className="heading-actions">
-          <button
-            className="button button-quiet icon-button"
-            onClick={reload}
-            disabled={loading}
-            aria-label="刷新趋势数据"
-          >
-            <RefreshCw size={16} className={loading ? 'spin' : ''} />
-          </button>
+          <DisplayRefreshButton ariaLabel="刷新趋势数据" onClick={reload} loading={loading} />
         </div>
       </PageHeader>
       {loading ? (
@@ -104,23 +92,12 @@ export function IndustryPage() {
               <span className="chart-subtitle">日度数据</span>
             </p>
           </div>
-          <div className="range-switch" aria-label="历史数据范围">
-            {[
-              { days: 30, label: '近 1 月' },
-              { days: 90, label: '近 3 月' },
-              { days: 180, label: '近半年' },
-              { days: 365, label: '近 1 年' },
-            ].map((range) => (
-              <button
-                key={range.days}
-                aria-pressed={days === range.days}
-                onClick={() => setDays(range.days)}
-                className={days === range.days ? 'active' : ''}
-              >
-                {range.label}
-              </button>
-            ))}
-          </div>
+          <HistoryRangeSwitch
+            label="历史数据范围"
+            options={standardHistoryRanges.slice(0, 4)}
+            value={days}
+            onChange={setDays}
+          />
         </div>
         {loading ? (
           <div className="skeleton chart-skeleton" />

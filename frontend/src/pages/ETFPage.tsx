@@ -1,7 +1,9 @@
+import { HistoryRangeSwitch, compactHistoryRanges } from '../components/HistoryRangeSwitch'
+import { DisplayRefreshButton } from '../components/PageActionButton'
 import { PageHeader } from '../components/PageHeader'
 import { useCallback, useEffect, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
-import { Info, RefreshCw } from 'lucide-react'
+import { Info } from 'lucide-react'
 import { getETFHistory } from '../api/client'
 import { useResource } from '../hooks/useResource'
 import { ETFCollectionPanel } from '../components/ETFCollectionPanel'
@@ -46,16 +48,7 @@ export function ETFPage() {
           </h1>
         </div>
         <div className="heading-actions">
-          <button
-            className="button button-quiet icon-button"
-            aria-label="刷新ETF数据"
-            disabled={loading}
-            onClick={() => {
-              reload()
-            }}
-          >
-            <RefreshCw size={16} className={loading ? 'spin' : ''} />
-          </button>
+          <DisplayRefreshButton ariaLabel="刷新ETF数据" onClick={reload} loading={loading} />
         </div>
       </PageHeader>
       <div className="etf-chart-toolbar etf-controls">
@@ -92,24 +85,12 @@ export function ETFPage() {
             流通市值
           </button>
         </div>
-        <div className="range-switch" aria-label="ETF历史范围">
-          {[
-            [30, '近1月'],
-            [90, '近3月'],
-            [180, '近半年'],
-            [365, '近1年'],
-            [0, '全部'],
-          ].map(([value, label]) => (
-            <button
-              key={value}
-              aria-pressed={days === value}
-              className={days === value ? 'active' : ''}
-              onClick={() => setDays(Number(value))}
-            >
-              {label}
-            </button>
-          ))}
-        </div>
+        <HistoryRangeSwitch
+          label="ETF历史范围"
+          options={compactHistoryRanges}
+          value={days}
+          onChange={setDays}
+        />
       </div>
       {loading ? (
         <LoadingState />

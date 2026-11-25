@@ -1,6 +1,6 @@
+import { useEChart } from '../hooks/useEChart'
 import { useEffect, useRef } from 'react'
-import { init, use as registerChartComponents } from 'echarts/core'
-import type { EChartsType } from 'echarts/core'
+import { use as registerChartComponents } from 'echarts/core'
 import { LineChart } from 'echarts/charts'
 import {
   GridComponent,
@@ -36,20 +36,8 @@ export function MarginChart({
   days?: number
   resetKey?: number
 }) {
-  const element = useRef<HTMLDivElement>(null)
-  const chart = useRef<EChartsType | null>(null)
+  const { element, chart } = useEChart()
   const previousRange = useRef<string | null>(null)
-  useEffect(() => {
-    if (!element.current) return
-    chart.current = init(element.current)
-    const observer = new ResizeObserver(() => chart.current?.resize())
-    observer.observe(element.current)
-    return () => {
-      observer.disconnect()
-      chart.current?.dispose()
-      chart.current = null
-    }
-  }, [])
   useEffect(() => {
     const latest = points.at(-1)
     const rangeKey = `${days}:${resetKey}`
@@ -175,7 +163,7 @@ export function MarginChart({
       },
       { notMerge: false },
     )
-  }, [points, days, resetKey])
+  }, [points, days, resetKey, chart])
   return (
     <div
       ref={element}
