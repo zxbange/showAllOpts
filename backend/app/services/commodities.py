@@ -21,7 +21,8 @@ import httpx
 import portalocker
 from app.services.commodity_source import (HOME, CATALOG, START, fetch, home_date_reference,
     public_report_date, parse_home, QuoteError, QuoteIncomplete, explicit_home_date,
-    recovery_links, parse_recovery, diagnostic_reason, ArticleNotApplicable)
+    recovery_links, parse_recovery, diagnostic_reason, ArticleNotApplicable,
+    ALU_HOME, CNMN_CATALOG, cnmn_daily_links, parse_cnmn_daily)
 
 LOG = logging.getLogger(__name__)
 CHINA = ZoneInfo('Asia/Shanghai')
@@ -326,8 +327,15 @@ class Commodities:
                     quote_date = explicit_home_date(home)
                     date_url = HOME
                     if quote_date is None:
-                        date_url = home_date_reference(home)
-                        quote_date = public_report_date(read(client, date_url))
+                        try:
+                            date_url = home_date_reference(home)
+                            quote_date = public_report_date(read(client, date_url))
+                        except (QuoteError, ValueError):
+                            # The homepage's generic news feed can rotate the
+                            # same-day report out; use the same publisher's public
+                            # aluminum catalog and verify the report date itself.
+                            date_url = home_date_reference(home, references=read(client, ALU_HOME, True), base=ALU_HOME)
+                            quote_date = public_report_date(read(client, date_url))
                     source_quote_date = quote_date
                     if quote_date <= target_day:
                         home_quote = parse_home(home, today=today, report_date=quote_date, report_url=date_url)
@@ -343,7 +351,7 @@ class Commodities:
                     target_result = ('partial' if isinstance(exc, QuoteIncomplete) else
                                      'unverified' if isinstance(exc, (QuoteError, ValueError)) else 'sourceReadFailed')
                     failures += 1
-                    LOG.warning('Commodity current quote failed %s', diagnostic_details(exc))
+                    LOG.warning('Commodity current quote failed reason=%s %s', diagnostic_reason(exc), diagnostic_details(exc))
                 # Only eligible missing dates enter recovery. The run calendar
                 # does not assert that this source published a quote that day.
                 historical = {day for day in missing if day < today.isoformat() and day <= target}
@@ -352,12 +360,41 @@ class Commodities:
                     # Bound quote saves by the target, not article publication by it.
                     candidates = recovery_links(home or '', start=recovery['dateFrom'],
                                                 end=today.isoformat(), base=HOME)
+                    catalog_failed = False
                     try:
                         catalog = read(client, CATALOG, True)
                         candidates += recovery_links(catalog, start=recovery['dateFrom'], end=today.isoformat())
                     except Exception as exc:
-                        failures += 1
+                        catalog_failed = True
                         LOG.warning('Commodity recovery catalog failed %s', diagnostic_details(exc))
+                    # Prefer date-indexed, explicitly attributed daily tables
+                    # over scanning unrelated commentary. Use only public
+                    # reports, and leave at least one request for an article.
+                    if requests + 2 <= self.max_requests and not should_stop():
+                        try:
+                            daily = cnmn_daily_links(read(client, CNMN_CATALOG, True), targets=historical)
+                            for day, url in sorted(daily.items()):
+                                if should_stop():
+                                    limited = True
+                                    break
+                                try:
+                                    recovery['articlesChecked'] += 1
+                                    row = parse_cnmn_daily(read(client, url), url, expected=day, today=today)
+                                    if save(row):
+                                        recovery['recoveredCount'] += 1
+                                        historical.discard(day)
+                                        if historical_target and day == target:
+                                            current_verified = True
+                                            target_result = 'current'
+                                        LOG.info('Commodity dated public report recovered day=%s', day)
+                                except Exception as exc:
+                                    LOG.warning('Commodity dated public report rejected day=%s type=%s', day, type(exc).__name__)
+                        except Exception as exc:
+                            # Optional fallback failure must not suppress the
+                            # primary recovery path or poison a complete result.
+                            LOG.warning('Commodity daily report catalog unavailable type=%s', type(exc).__name__)
+                    if catalog_failed and historical:
+                        failures += 1
                     with self.db() as db:
                         for url in (() if isolated else dict.fromkeys(candidates)):
                             db.execute("INSERT OR IGNORE INTO a00_source_checks VALUES(?,'','pending')", (url,))

@@ -6,6 +6,8 @@ from urllib.parse import urlsplit, urljoin
 
 HOSTS = {'www.ccmn.cn','m.ccmn.cn','alu.ccmn.cn','pb.ccmn.cn','copper.ccmn.cn'}
 CATALOG = 'https://m.ccmn.cn/al/alxinwen/'
+ALU_HOME = 'https://alu.ccmn.cn/'
+CNMN_CATALOG = 'https://www.cnmn.com.cn/ShowNewsList.aspx?id=95410'
 START = '2026-10-08'
 
 class QuoteError(ValueError):
@@ -32,9 +34,14 @@ class Document(HTMLParser):
 
 def safe_url(url, catalog=False):
     p=urlsplit(url)
+    # A public daily table with explicit CCMN attribution, not a hidden CCMN endpoint.
+    if p.scheme == 'https' and p.netloc == 'www.cnmn.com.cn' and not p.fragment:
+        if (catalog and url == CNMN_CATALOG) or (p.path == '/ShowNews1.aspx' and re.fullmatch(r'id=[0-9]{1,10}', p.query)):
+            return url
+        raise QuoteError('不支持的公开日报地址')
     if p.scheme!='https' or p.hostname not in HOSTS or p.port not in (None,443) or p.username or p.password or p.query or p.fragment:
         raise QuoteError('不支持的公开来源地址')
-    if not ((catalog and url in (CATALOG, 'https://m.ccmn.cn/')) or re.fullmatch(r'/(?:mnewsinfo/[a-f0-9]{29,32}|news/ZX003/\d{6}/[a-f0-9]{29,32})\.html',p.path)):
+    if not ((catalog and url in (CATALOG, 'https://m.ccmn.cn/', ALU_HOME)) or re.fullmatch(r'/(?:mnewsinfo/[a-f0-9]{29,32}|news/ZX(?:003|018)/\d{6}/[a-f0-9]{29,32})\.html',p.path)):
         raise QuoteError('不是受支持的公开历史正文')
     return url
 
@@ -47,7 +54,19 @@ def fetch(client,url,catalog=False):
             size+=len(chunk)
             if size>2_000_000:raise QuoteError('来源正文过大')
             chunks.append(chunk)
-        return b''.join(chunks).decode(r.encoding or 'utf-8',errors='replace')
+        body = b''.join(chunks)
+        if urlsplit(url).hostname == 'www.cnmn.com.cn':
+            # Respect declared Chinese encodings on the public daily pages;
+            # an undecodable response must fail validation rather than invent data.
+            charset = re.search(rb'''charset\s*=\s*["']?([A-Za-z0-9_-]+)''', body[:8192], re.I)
+            encoding = charset[1].decode('ascii').lower() if charset else (r.encoding or 'utf-8')
+            if encoding.lower().replace('_','-') not in ('utf-8','utf8','utf-8-sig','gb2312','gbk','gb18030'):
+                raise QuoteError('日报字符编码不受支持')
+            try:
+                return body.decode(encoding, errors='strict')
+            except UnicodeError:
+                raise QuoteError('日报字符编码无效') from None
+        return body.decode(r.encoding or 'utf-8',errors='replace')
 
 def discover(content):
     urls=[]
@@ -59,7 +78,7 @@ def discover(content):
         url=urljoin(CATALOG,href)
         try:safe_url(url)
         except (ValueError,TypeError):continue
-        if url not in urls:urls.append(url)
+        if urlsplit(url).hostname in HOSTS and url not in urls:urls.append(url)
     return urls[:60]
 
 def parse(content,url,known=None):
@@ -127,7 +146,7 @@ class HomeDocument(Document):
         super().handle_endtag(tag)
 
 
-def home_date_reference(content):
+def home_date_reference(content, *, references=None, base=HOME):
     """Find the matching public daily report metadata; never read its paid quote."""
     doc = HomeDocument(content)
     heading = re.search(r'(?:(20\d{2})年)?(\d{1,2})月(\d{1,2})日长江有色金属价格行情', doc.text)
@@ -135,12 +154,14 @@ def home_date_reference(content):
         raise QuoteError('首页缺少长江报价日期标题')
     month, day = map(int, heading.group(2, 3))
     matches = set()
-    for href, label in doc.anchors:
-        match = re.fullmatch(r'\s*(\d{1,2})月(\d{1,2})日长江有色金属现货行情(?:\s+\d{2}-\d{2})?\s*', label)
+    for href, label in (doc.anchors if references is None else HomeDocument(references).anchors):
+        match = re.fullmatch(r'\s*(\d{1,2})月(\d{1,2})日长江有色金属现货行情(?:\s+(?:20\d{2}-)?\d{2}-\d{2})?\s*', label)
         if match and tuple(map(int, match.group(1, 2))) == (month, day):
-            url = urljoin(HOME, href)
-            safe_url(url)
-            matches.add(url)
+            url = urljoin(base, href)
+            try: safe_url(url)
+            except (ValueError, TypeError): continue
+            if urlsplit(url).hostname in HOSTS:
+                matches.add(url)
     if len(matches) != 1:
         raise QuoteError('首页报价年份无法确认，未找到唯一同日公开日期信息')
     return matches.pop()
@@ -192,6 +213,10 @@ def diagnostic_reason(error):
     if isinstance(error, QuoteError):
         return {
             '未找到历史行情段落，保留已有记录': 'history_section_missing',
+            '首页缺少长江报价日期标题': 'home_date_heading_missing',
+            '首页报价年份无法确认，未找到唯一同日公开日期信息': 'home_date_reference_missing',
+            '无法核验公开报价日期信息': 'public_report_date_missing',
+            '公开标题与发布日期不一致': 'public_report_date_conflict',
             '无法确认正文发布日期': 'publication_date_missing',
             '未找到明确的A00现货历史区间': 'spot_range_missing',
             '历史行情未注明报价日期，拒绝推算上一交易日': 'quote_date_missing',
@@ -207,6 +232,95 @@ def explicit_home_date(content):
     """Use one request only when the source itself supplies a complete date."""
     match = re.search(r'(20\d{2})年(\d{1,2})月(\d{1,2})日长江有色金属价格行情', HomeDocument(content).text)
     return date(*map(int, match.groups())) if match else None
+
+
+_CNMN_TITLE = r'(20[0-9]{2})年([0-9]{1,2})月([0-9]{1,2})日长江有色金属现货行情'
+
+
+def cnmn_daily_links(content, *, targets):
+    """Find only dated public daily reports matching requested trading dates."""
+    matches = {}
+    for href, label in HomeDocument(content).anchors:
+        title = re.fullmatch(r'\s*' + _CNMN_TITLE + r'\s*', re.sub(r'\s+', '', label))
+        if title is None:
+            continue
+        try:
+            stamp = date(*map(int, title.groups())).isoformat()
+            url = urljoin(CNMN_CATALOG, href)
+            safe_url(url)
+        except (ValueError, TypeError):
+            continue
+        if stamp in targets and urlsplit(url).hostname == 'www.cnmn.com.cn':
+            matches.setdefault(stamp, set()).add(url)
+    return {day: next(iter(urls)) for day, urls in matches.items() if len(urls) == 1}
+
+
+class DailyTable(Document):
+    def __init__(self, content):
+        self.tables, self.rows, self.row, self.cell = [], None, None, None
+        super().__init__(content)
+
+    def handle_starttag(self, tag, attrs):
+        super().handle_starttag(tag, attrs)
+        if tag == 'table':
+            self.rows = []
+        elif tag == 'tr' and self.rows is not None:
+            self.row = []
+        elif tag in ('td', 'th') and self.row is not None:
+            self.cell = []
+
+    def handle_data(self, data):
+        super().handle_data(data)
+        if self.cell is not None and not self.hidden:
+            self.cell.append(data)
+
+    def handle_endtag(self, tag):
+        super().handle_endtag(tag)
+        if tag in ('td', 'th') and self.cell is not None and self.row is not None:
+            self.row.append(re.sub(r'\s+', '', ''.join(self.cell)))
+            self.cell = None
+        elif tag == 'tr' and self.row is not None and self.rows is not None:
+            self.rows.append(self.row)
+            self.row = None
+        elif tag == 'table' and self.rows is not None:
+            self.tables.append(self.rows)
+            self.rows, self.row, self.cell = None, None, None
+
+
+def parse_cnmn_daily(content, url, *, expected, today):
+    safe_url(url)
+    if urlsplit(url).hostname != 'www.cnmn.com.cn':
+        raise QuoteError('不是中国有色网公开日报')
+    doc = DailyTable(content)
+    raw = doc.text
+    # Heading immediately followed by full public publication date/time. Do
+    # not accept titles from related links, an inferred year or other markets.
+    stamp = re.search(_CNMN_TITLE + r'(20[0-9]{2})年([0-9]{1,2})月([0-9]{1,2})日[0-9]{1,2}:[0-9]{1,2}', raw)
+    if not stamp:
+        raise QuoteError('日报标题或发布日期无法核验')
+    try:
+        quote = date(*map(int, stamp.groups()[:3]))
+        published = date(*map(int, stamp.groups()[3:]))
+    except ValueError:
+        raise QuoteError('日报日期无效') from None
+    if quote != published or quote.isoformat() != expected or not START <= expected <= today.isoformat():
+        raise QuoteError('日报报价日期与目标不一致')
+    if not re.search(r'来源[：:]长江有色金属网(?:www\.)?ccmn\.cn', raw, re.I) or not re.search(r'单位[：:]元[，,]含税13%', raw):
+        raise QuoteError('日报未明确标注CCMN来源和含税单位')
+    header = ['品种', '材质', '最低价', '最高价', '均价', '涨跌']
+    tables = [table for table in doc.tables if header in table]
+    rows = [row for table in tables for row in table if row and row[0] == 'A00铝']
+    if len(tables) != 1 or len(rows) != 1 or len(rows[0]) != 6 or rows[0][1] != 'A00':
+        raise QuoteError('日报缺少唯一完整A00现货报价')
+    prices = rows[0][2:]
+    if any(not re.fullmatch(r'[+-]?(?:[0-9]+|[0-9]{1,3}(?:,[0-9]{3})+)', value) for value in prices):
+        raise QuoteError('日报报价字段不完整')
+    low, high, mean, change = [int(value.replace(',', '')) for value in prices]
+    if not 0 < low <= mean <= high < 1_000_000 or abs(change) >= 1_000_000:
+        raise QuoteError('日报价格区间校验失败')
+    return dict(quoteDate=expected, low=low, high=high, mean=mean, change=change,
+                publishedDate=published.isoformat(), sourceUrl=url,
+                rangeEvidence='page', sourceSection='中国有色网公开日报（注明CCMN来源）')
 
 
 def homepage_review_link(content):
@@ -241,7 +355,7 @@ def recovery_links(content, *, start, end, base=CATALOG):
             safe_url(url)
         except (ValueError, TypeError):
             continue
-        if url not in urls:
+        if urlsplit(url).hostname in HOSTS and url not in urls:
             urls.append(url)
     return urls[:60]
 

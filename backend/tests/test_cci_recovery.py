@@ -73,7 +73,7 @@ def test_manual_and_scheduled_update_fill_last_quote_through_today(setup, monkey
     assert state['trigger'] == ('scheduled' if scheduled else 'manual')
     assert state['recovery']['dateFrom'] == '2026-11-04'
     assert state['targetHits'] == 3 and state['inserted'] == 12
-    assert state['recovery']['unavailableCount'] == 6  # No invented Nov 7/8 prices.
+    assert state['recovery']['unavailableCount'] == 0  # Closed Nov 7/8 are not targets.
 
 
 @pytest.mark.parametrize('persisted_floor', [False, True])
@@ -211,9 +211,9 @@ def test_each_grade_recovers_from_its_own_latest_quote_not_early_seed(setup, mon
     assert not any(d in {'2026-11-07', '2026-11-08'} for d, _ in pairs(store))
     state = store.status()
     assert state['outcome'] == 'completed' and state['targetHits'] == 3
-    assert state['recovery']['pendingCount'] == state['recovery']['unavailableCount'] == 6
+    assert state['recovery']['pendingCount'] == state['recovery']['unavailableCount'] == 0
     assert state['recovery']['deferredCount'] == 0
-    assert state['recovery']['requestCount'] == len(calls) == 6
+    assert state['recovery']['requestCount'] == len(calls) == 5
     old = store.history()['rows']
     store.collect(store.lock())
     assert store.history()['rows'] == old
@@ -449,3 +449,20 @@ def test_cci_delayed_worker_freezes_target_but_uses_execution_calendar(setup, mo
         assert db.execute('SELECT count(*) FROM schedule_runs').fetchone() == (0,)
         assert bool(db.execute('SELECT * FROM cci_gap_checks').fetchall()) is not isolated
         assert bool(db.execute('SELECT * FROM cci_recovery').fetchall()) is not isolated
+
+
+def test_november_weekends_are_not_historical_recovery_targets(setup, monkeypatch):
+    module, clock, _, store = setup
+    clock[0]=datetime(2026,11,25,8,21,tzinfo=timezone.utc)
+    sessions=('2026-11-09','2026-11-10','2026-11-11','2026-11-12','2026-11-13',
+              '2026-11-16','2026-11-17','2026-11-18','2026-11-19','2026-11-20','2026-11-23')
+    seed(store,*[(d,g) for d in sessions for g in GRADES])
+    with store.db() as db:
+        db.executemany('INSERT INTO cci_recovery VALUES(?,?,?)',
+                       [(g,'2026-11-09','latest_quote') for g in GRADES])
+    calls=install_source(monkeypatch,module,{('2026-11-24',g) for g in GRADES})
+    store.collect(store.lock())
+    state=store.status()
+    assert state['outcome']=='completed' and state['recovery']['pendingCount']==0
+    assert state['recovery']['unavailableCount']==0
+    assert set(calls)=={('2026-11-24','2026-11-24',g) for g in GRADES}

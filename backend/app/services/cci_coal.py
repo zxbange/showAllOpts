@@ -187,7 +187,7 @@ class CCICoal(Commodities):
             cursor = date.fromisoformat(floor)
             while cursor.isoformat() <= day:
                 key = (cursor.isoformat(), grade)
-                if key not in existing:
+                if automatic_collection_allowed(cursor) and key not in existing:
                     missing.add(key)
                 cursor += timedelta(days=1)
         # Retry old holes too, including source-empty dates. Prioritize unchecked
@@ -255,6 +255,9 @@ class CCICoal(Commodities):
                 raise ValueError('Unexpected quote range or grade')
             if self.stopping.is_set():
                 return
+            # A date interval can include closed dates, but the user's A-share
+            # collection calendar must not create new quotes or gap targets then.
+            rows = [row for row in rows if automatic_collection_allowed(date.fromisoformat(row['quoteDate']))]
             # A valid, complete window commits independently. Later failures may
             # not discard already recovered data, nor overwrite existing history.
             window_details = details[offset:]

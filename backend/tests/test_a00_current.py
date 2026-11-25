@@ -2,7 +2,7 @@ from datetime import date, datetime, timezone
 from pathlib import Path
 import pytest
 from app.services import commodities
-from app.services.commodity_source import (HOME, CATALOG, QuoteError, parse_home,
+from app.services.commodity_source import (HOME, CATALOG, CNMN_CATALOG, QuoteError, parse_home,
     home_date_reference, public_report_date)
 from app.core.config import Settings
 
@@ -42,7 +42,7 @@ def service(tmp_path, monkeypatch):
     monkeypatch.setattr(commodities,'SEED',seed)
     monkeypatch.setattr(job.stopping,'wait',lambda *_:False)
     def fetch(client,url,catalog=False):
-        return {HOME:HOME_HTML,DATE_URL:DATE_HTML,CATALOG:'<html></html>'}[url]
+        return {HOME:HOME_HTML,DATE_URL:DATE_HTML,CATALOG:'<html></html>',CNMN_CATALOG:'<html></html>'}[url]
     monkeypatch.setattr(commodities,'fetch',fetch)
     return job
 
@@ -211,7 +211,7 @@ def test_interval_recovery_keeps_unverified_dates_pending(tmp_path,monkeypatch,m
         return original(client,requested,catalog)
     monkeypatch.setattr(commodities,'fetch',fetch)
     job.collect(job.lock())
-    assert requests==[HOME,DATE_URL,CATALOG,url]
+    assert requests==[HOME,DATE_URL,CATALOG,CNMN_CATALOG,url]
     assert job.status()['recovery']['dateFrom']=='2026-10-29'
     assert job.status()['recovery']['articlesChecked']==1
     with job.db() as db:
@@ -304,3 +304,20 @@ def test_a00_delayed_worker_uses_request_cutoff(tmp_path, monkeypatch, before, a
     state = job.status()
     assert (state['targetDate'], state['targetMode']) == (target, mode)
     assert all(row['quoteDate'] <= target for row in job.history()['rows'])
+
+
+def test_home_report_missing_uses_public_same_publisher_catalog_date(tmp_path, monkeypatch):
+    from app.services.commodity_source import ALU_HOME
+    job=service(tmp_path,monkeypatch)
+    url='https://alu.ccmn.cn/news/ZX018/202611/7b5bddb4db0f4bb78be5fc8eb984d553.html'
+    home=HOME_HTML.replace('11月03日长江有色金属现货行情','无关新闻')
+    catalog_html=f'<a href="{url}">11月03日长江有色金属现货行情</a>'
+    calls=[]
+    def fetch(client,url_arg,catalog=False):
+        calls.append(url_arg)
+        return {HOME:home,ALU_HOME:catalog_html,url:DATE_HTML}[url_arg]
+    monkeypatch.setattr(commodities,'fetch',fetch)
+    job.collect(job.lock())
+    assert job.status()['currentVerified'] and job.status()['outcome']=='completed'
+    assert calls==[HOME,ALU_HOME,url]
+    assert job.history()['rows'][-1]['dateSourceUrl']==url

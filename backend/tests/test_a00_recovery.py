@@ -6,7 +6,7 @@ import pytest
 
 from app.core.config import Settings
 from app.services import commodities
-from app.services.commodity_source import HOME, CATALOG, QuoteError, parse_recovery, recovery_links
+from app.services.commodity_source import HOME, CATALOG, CNMN_CATALOG, QuoteError, parse_recovery, recovery_links
 
 
 def article_url(index):
@@ -50,6 +50,8 @@ def install(monkeypatch, available, *, failing=(), home_failure=False, catalogue
             if home_failure:
                 raise TimeoutError('private-secret')
             return home
+        if url == CNMN_CATALOG:
+            return ''
         if url == CATALOG:
             return ''.join(f'<a href="{url}">现铝早评</a>' for url in bodies) if catalogue else ''
         if url in failing:
@@ -312,3 +314,80 @@ def test_manual_failure_crossing_into_weekend_keeps_prior_queue(setup, monkeypat
         for table, rows in before.items():
             assert db.execute(f'SELECT * FROM {table}').fetchall() == rows
     assert job.status()['outcome'] == 'failed'
+
+
+def daily_report(day, low='22,320', high='22,360', mean='22,340', change='60'):
+    d = date.fromisoformat(day)
+    title = f'{d.year}年{d.month}月{d.day}日长江有色金属现货行情'
+    return (f'<h4>{title}</h4><p>{d.year}年{d.month}月{d.day}日 15:57 来源：中国有色网</p>'
+            '<p>单位:元，含税13%</p><table><tr>' +
+            ''.join(f'<td>{v}</td>' for v in ['品种','材质','最低价','最高价','均价','涨跌']) +
+            '</tr><tr>' + ''.join(f'<td>{v}</td>' for v in ['A00铝','A00',low,high,mean,change]) +
+            '</tr><tr><td>铝升贴水</td><td></td><td>370</td><td>410</td><td>390</td><td>-5</td></tr></table>'
+            '<p>来源：长江有色金属网www.ccmn.cn</p>')
+
+
+def test_cnmn_day_table_proves_exact_market_and_date():
+    from app.services.commodity_source import cnmn_daily_links, parse_cnmn_daily
+    url='https://www.cnmn.com.cn/ShowNews1.aspx?id=475476'
+    day='2026-11-20'
+    body=daily_report(day)
+    row=parse_cnmn_daily(body,url,expected=day,today=date(2026,11,25))
+    assert (row['low'],row['high'],row['mean'],row['change'])==(22320,22360,22340,60)
+    assert row['sourceUrl']==url and row['rangeEvidence']=='page'
+    catalog = (f'<a href="{url}">2026年11月20日长江有色金属现货行情</a>'
+               '<a href="https://evil.invalid/ShowNews1.aspx?id=2">2026年11月23日长江有色金属现货行情</a>'
+               '<a href="/ShowNews1.aspx?id=3">2026年11月24日长江有色金属现货行情</a>')
+    assert cnmn_daily_links(catalog,targets={day,'2026-11-23'})=={day:url}
+    for bad in [body.replace('长江有色金属网www.ccmn.cn','其他来源'),
+                body.replace('含税13%','不含税'),body.replace('22,340','请登录'),
+                body.replace('15:57',''),body.replace('A00铝','其他铝'),
+                body.replace('22,320','23,320')]:
+        with pytest.raises(QuoteError):parse_cnmn_daily(bad,url,expected=day,today=date(2026,11,25))
+    with pytest.raises(QuoteError):parse_cnmn_daily(body,url,expected='2026-11-23',today=date(2026,11,25))
+
+
+def test_daily_reports_fill_two_known_gaps_without_commentary_scan(setup, monkeypatch):
+    from pathlib import Path
+    clock, _, job = setup
+    clock[0]=datetime(2026,11,25,8,12,tzinfo=timezone.utc)
+    with job.db() as db:
+        db.execute('DELETE FROM quotes')
+        for d in ('2026-11-19','2026-11-24'):
+            row = dict(quoteDate=d,low=23000,high=23040,mean=23020,change=20,rangeEvidence='page')
+            db.execute('INSERT INTO quotes VALUES(?,?)',(d,json.dumps(row)))
+        for d in ('2026-11-20','2026-11-23'):
+            db.execute('INSERT INTO failed_targets VALUES(?,?,?)',(d,'sourceReadFailed',clock[0].isoformat()))
+    home=(Path(__file__).parent/'fixtures/commodities/home-visible.html').read_text().replace('11月03日','2026年11月25日')
+    urls={'2026-11-20':'https://www.cnmn.com.cn/ShowNews1.aspx?id=475476',
+          '2026-11-23':'https://www.cnmn.com.cn/ShowNews1.aspx?id=475522'}
+    listing=''.join(f'<a href="{url}">2026年11月{int(day[-2:])}日长江有色金属现货行情</a>' for day,url in urls.items())
+    calls=[]
+    def fetch(client,url,catalog=False):
+        calls.append(url)
+        if url==HOME:return home
+        if url==CATALOG:return '<a href="'+article_url(1)+'">铝新闻</a>'
+        if url==CNMN_CATALOG:return listing
+        if url==urls['2026-11-20']:return daily_report('2026-11-20')
+        if url==urls['2026-11-23']:return daily_report('2026-11-23','22,570','22,610','22,590','250')
+        pytest.fail('Unexpected commentary read')
+    monkeypatch.setattr(commodities,'fetch',fetch)
+    job.collect(job.lock())
+    status=job.status()
+    assert status['currentVerified'] and status['outcome']=='completed'
+    assert status['recovery']['recoveredCount']==2 and status['recovery']['pendingCount']==0
+    assert calls==[HOME,CATALOG,CNMN_CATALOG,*urls.values()]
+    rows={r['quoteDate']:r for r in job.history()['rows']}
+    assert rows['2026-11-20']['mean']==22340 and rows['2026-11-23']['mean']==22590
+
+
+def test_cnmn_transport_handles_public_gb_encoding_and_rejects_other_urls():
+    import httpx
+    from app.services.commodity_source import fetch, parse_cnmn_daily, safe_url
+    url='https://www.cnmn.com.cn/ShowNews1.aspx?id=475476'
+    html='<meta charset="gb18030">'+daily_report('2026-11-20')
+    with httpx.Client(transport=httpx.MockTransport(lambda req: httpx.Response(200,content=html.encode('gb18030')))) as client:
+        assert parse_cnmn_daily(fetch(client,url),url,expected='2026-11-20',today=date(2026,11,25))['mean']==22340
+    for bad in ('http://www.cnmn.com.cn/ShowNews1.aspx?id=1','https://www.cnmn.com.cn/ShowNews1.aspx?id=1&extra=1',
+                'https://www.cnmn.com.cn/ShowNews1.aspx?id=1#anchor','https://www.cnmn.com.cn/other?id=1'):
+        with pytest.raises(QuoteError):safe_url(bad)

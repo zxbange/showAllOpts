@@ -92,7 +92,10 @@ function QuoteChart({ rows }: { rows: Quote[] }) {
         axisLabel: { hideOverlap: true, formatter: (s: string) => s.slice(5) },
       },
       yAxis: { type: 'value', scale: true, name: '元/吨' },
-      dataZoom: [{ type: 'inside' }, { type: 'slider', bottom: 8, height: 22 }],
+      dataZoom: [
+        { type: 'inside', zoomOnMouseWheel: false, moveOnMouseWheel: false },
+        { type: 'slider', bottom: 8, height: 22 },
+      ],
       series: [
         {
           name: '报价区间',
