@@ -6,12 +6,14 @@
 
 - [架构与扩展约定](development/architecture.md)
 - [工程与页面规范](development/engineering.md)
+- [前端质量门禁](development/frontend-quality.md) · [已实现的共享界面及剩余边界](development/shared-ui-plan.md)
 - [采集策略与执行边界](development/collection-policy-boundaries.md)
 
 ## 运行与维护
 
 - [数据更新时间](operations/data-update-display.md) · [采集状态](operations/collection-status.md) · [历史留存](operations/collection-history-retention.md) · [采集通知](operations/collection-notifications.md)
 - [业绩选股调度](operations/earnings-schedule.md) · [数据库超时](operations/database-timeouts.md)
+- [数据库结构迁移与原子发布](operations/database-schema-migrations.md) · [独立执行器试点（默认关闭）](operations/queue-runtime-pilot.md)
 
 - [自动采集运行日历与手动失败隔离](operations/collection-calendar.md)
 
@@ -58,7 +60,7 @@
 - [微盘温度计历史恢复](data/microcap-history-recovery.md)
 - [微盘温度计：采集与展示](data/microcap-temperature.md)
 - [机构持仓全历史补洞](data/ownership-history-recovery.md)
-- [个人持仓（管理员）](data/personal-holdings.md)
+- [个人持仓（管理员）](data/personal-holdings.md) · [Tushare 设置](data/tushare-settings.md)
 - [计算入库与历史兼容](data/raw-pipeline.md)
 - [高股息低估值：当前名单和历史档案恢复](data/selection-history-recovery.md)
 - [博主动态监控](data/social-monitor.md)
