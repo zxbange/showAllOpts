@@ -3,7 +3,7 @@ import { expect, test } from './fixtures'
 // Every page now polls collection status independently of the saved result.
 // Per-test routes registered later override this default when testing mutations.
 test.beforeEach(async ({ page }) => {
-  await page.route('**/api/v1/dividend-selection/status', route =>
+  await page.route('**/api/v1/dividend-selection/status', (route) =>
     route.fulfill({ json: { running: false, available: true } }),
   )
 })
@@ -174,7 +174,7 @@ test('legacy successful results remain visible with an old-rule warning', async 
         ...fixture,
         requires_refresh: true,
         snapshot: { ...fixture.snapshot, rule_version: 'dividend_value_pe12_age3_v7' },
-        groups: groups.map(g => ({ ...g, items: g.items.slice(0, g.id === 'bank' ? 10 : 25) })),
+        groups: groups.map((g) => ({ ...g, items: g.items.slice(0, g.id === 'bank' ? 10 : 25) })),
       },
     }),
   )
@@ -203,44 +203,80 @@ test('retired method URL defaults to nonbank and has no obsolete controls', asyn
   await expect(page.locator('thead')).not.toContainText('累计分红')
 })
 
-test('administrator can collect both groups and cancel the shared task', async ({ page }) => {
+test('administrator uses one shared collection button and waits for a new terminal run', async ({
+  page,
+}) => {
   let running = false
+  let runId = 'old-run'
+  let pending = true
   let refreshes = 0
-  let cancellations = 0
-  await page.route('**/api/v1/dividend-selection/latest', route => route.fulfill({ json: fixture }))
-  await page.route('**/api/v1/dividend-selection/status', route => route.fulfill({ json: { running, available: true } }))
-  await page.route('**/api/v1/dividend-selection/refresh', route => {
-    refreshes++; running = true
+  let cancels = 0
+  await page.route('**/api/v1/dividend-selection/latest', (route) =>
+    route.fulfill({ json: fixture }),
+  )
+  await page.route('**/api/v1/dividend-selection/status', (route) =>
+    route.fulfill({
+      json: { running, available: true, run_id: runId, publication_pending: pending },
+    }),
+  )
+  await page.route('**/api/v1/dividend-selection/refresh', (route) => {
+    refreshes++
+    // Acknowledgement can precede the next fresh status response.
     return route.fulfill({ status: 202, json: { started: true } })
   })
-  await page.route('**/api/v1/dividend-selection/cancel', route => {
-    cancellations++; running = false
+  await page.route('**/api/v1/dividend-selection/cancel', (route) => {
+    cancels++
     return route.fulfill({ status: 202, json: { cancelled: true } })
   })
   await page.goto('/dividend-selection')
-  await page.getByRole('button', { name: '更新数据', exact: true }).click()
-  await expect(page.getByRole('button', { name: '采集中', exact: true })).toBeDisabled()
+  const button = page.locator('.page-header-actions').getByRole('button')
+  await expect(button).toHaveAccessibleName('更新数据')
+  await expect(page.getByText('已有待发布结果，更新数据将优先恢复数据库及本地同步。')).toBeVisible()
+  await button.click()
+  await expect(button).toHaveAccessibleName('采集中…')
+  await expect(button).toBeDisabled()
+  await expect(button).toHaveCount(1)
+  await expect(page.getByRole('button', { name: '取消采集', exact: true })).toHaveCount(0)
+  runId = 'new-run'
+  running = true
   await page.getByRole('link', { name: '高股息低估值（银行业）', exact: true }).click()
-  await expect(page.getByRole('button', { name: '采集中', exact: true })).toBeDisabled()
-  await page.getByRole('button', { name: '取消采集', exact: true }).click()
-  await expect(page.getByRole('button', { name: '更新数据', exact: true })).toBeEnabled()
+  await expect(button).toHaveAccessibleName('采集中…')
+  await expect(button).toBeDisabled()
+  running = false
+  pending = false
+  await expect(button).toHaveAccessibleName('更新数据', { timeout: 10000 })
+  await expect(button).toBeEnabled()
   expect(refreshes).toBe(1)
-  expect(cancellations).toBe(1)
+  expect(cancels).toBe(0)
 })
 
 test('shared earnings task busy is not presented as a successful collection', async ({ page }) => {
-  await page.route('**/api/v1/dividend-selection/latest', route => route.fulfill({ json: fixture }))
-  await page.route('**/api/v1/dividend-selection/status', route => route.fulfill({ json: { running: false, available: true } }))
-  await page.route('**/api/v1/dividend-selection/refresh', route => route.fulfill({ status: 202, json: { started: false } }))
+  await page.route('**/api/v1/dividend-selection/latest', (route) =>
+    route.fulfill({ json: fixture }),
+  )
+  await page.route('**/api/v1/dividend-selection/status', (route) =>
+    route.fulfill({ json: { running: false, available: true } }),
+  )
+  await page.route('**/api/v1/dividend-selection/refresh', (route) =>
+    route.fulfill({ status: 202, json: { started: false } }),
+  )
   await page.goto('/dividend-selection')
   await page.getByRole('button', { name: '更新数据', exact: true }).click()
-  await expect(page.getByRole('status').filter({ hasText: '其他业绩选股任务正在运行' })).toBeVisible()
+  await expect(
+    page.getByRole('status').filter({ hasText: '其他业绩选股任务正在运行' }),
+  ).toBeVisible()
 })
 
 test('collection rejection is visible and does not hide previous results', async ({ page }) => {
-  await page.route('**/api/v1/dividend-selection/latest', route => route.fulfill({ json: fixture }))
-  await page.route('**/api/v1/dividend-selection/status', route => route.fulfill({ json: { running: false, available: true } }))
-  await page.route('**/api/v1/dividend-selection/refresh', route => route.fulfill({ status: 409, json: { detail: '当日数据须在16:00后采集' } }))
+  await page.route('**/api/v1/dividend-selection/latest', (route) =>
+    route.fulfill({ json: fixture }),
+  )
+  await page.route('**/api/v1/dividend-selection/status', (route) =>
+    route.fulfill({ json: { running: false, available: true } }),
+  )
+  await page.route('**/api/v1/dividend-selection/refresh', (route) =>
+    route.fulfill({ status: 409, json: { detail: '当日数据须在16:00后采集' } }),
+  )
   await page.goto('/dividend-selection')
   await page.getByRole('button', { name: '更新数据', exact: true }).click()
   await expect(page.getByRole('alert')).toContainText('当日数据须在16:00后采集')
@@ -248,18 +284,30 @@ test('collection rejection is visible and does not hide previous results', async
 })
 
 test('read-only users do not receive collection controls', async ({ page }) => {
-  await page.route('**/api/auth/**', route => route.fulfill({ json: {
-    user: { id: 'viewer', username: 'viewer', role: 'viewer', enabled: true, created_at: 0 },
-    csrf_token: 'test-csrf', configured: true, https_required: false,
-  } }))
-  await page.route('**/api/v1/dividend-selection/latest', route => route.fulfill({ json: fixture }))
+  await page.route('**/api/auth/**', (route) =>
+    route.fulfill({
+      json: {
+        user: { id: 'viewer', username: 'viewer', role: 'viewer', enabled: true, created_at: 0 },
+        csrf_token: 'test-csrf',
+        configured: true,
+        https_required: false,
+      },
+    }),
+  )
+  await page.route('**/api/v1/dividend-selection/latest', (route) =>
+    route.fulfill({ json: fixture }),
+  )
   await page.goto('/dividend-selection')
   await expect(page.locator('tbody tr').first()).toBeVisible()
   await expect(page.getByRole('button', { name: '更新数据', exact: true })).toHaveCount(0)
 })
 
-test('collection action stays outside scrolling tabs on narrow screens and clears on navigation', async ({ page }) => {
-  await page.route('**/api/v1/dividend-selection/latest', route => route.fulfill({ json: fixture }))
+test('collection action stays outside scrolling tabs on narrow screens and clears on navigation', async ({
+  page,
+}) => {
+  await page.route('**/api/v1/dividend-selection/latest', (route) =>
+    route.fulfill({ json: fixture }),
+  )
   for (const width of [320, 375]) {
     await page.setViewportSize({ width, height: 812 })
     await page.goto('/dividend-selection')
@@ -267,13 +315,19 @@ test('collection action stays outside scrolling tabs on narrow screens and clear
     const update = actions.getByRole('button', { name: '更新数据', exact: true })
     await expect(update).toBeEnabled()
     await expect(page.getByRole('button', { name: '更新数据', exact: true })).toHaveCount(1)
-    await expect(page.locator('.module-card-switch').getByRole('button', { name: '更新数据' })).toHaveCount(0)
+    await expect(
+      page.locator('.module-card-switch').getByRole('button', { name: '更新数据' }),
+    ).toHaveCount(0)
     const tabs = page.locator('.page-header .module-card-switch')
     const tabBox = await tabs.boundingBox()
     const actionBox = await actions.boundingBox()
     expect(actionBox!.x).toBeGreaterThanOrEqual(tabBox!.x + tabBox!.width)
-    expect(Math.abs((actionBox!.y + actionBox!.height / 2) - (tabBox!.y + tabBox!.height / 2))).toBeLessThan(2)
-    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true)
+    expect(
+      Math.abs(actionBox!.y + actionBox!.height / 2 - (tabBox!.y + tabBox!.height / 2)),
+    ).toBeLessThan(2)
+    expect(
+      await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth),
+    ).toBe(true)
     await tabs.getByRole('link', { name: '高股息低估值（银行业）', exact: true }).click()
     await expect(update).toBeEnabled()
     await expect(page.getByRole('button', { name: '更新数据', exact: true })).toHaveCount(1)
@@ -305,5 +359,6 @@ test('collection displays real stage and counts without invented overall percent
   await expect(page.getByRole('progressbar', { name: '高股息采集更新进度' })).not.toHaveAttribute(
     'value',
   )
-  await expect(page.getByRole('button', { name: '取消采集' })).toBeVisible()
+  await expect(page.getByRole('button', { name: '采集中…', exact: true })).toBeDisabled()
+  await expect(page.getByRole('button', { name: '取消采集' })).toHaveCount(0)
 })

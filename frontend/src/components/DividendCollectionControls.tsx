@@ -1,7 +1,23 @@
 import { useEffect, useRef, useState } from 'react'
 import { PageHeaderActions } from './PageHeaderActions'
 import { RefreshCw } from 'lucide-react'
-import { getDividendStatus, updateDividend, type DividendCollectionStatus } from '../api/dividend'
+import {
+  getDividendStatus,
+  updateDividend,
+  DividendRequestError,
+  type DividendCollectionStatus,
+} from '../api/dividend'
+
+// Shared by bank/nonbank routes so an accepted asynchronous POST never
+// becomes clickable while a stale status response still reports idle.
+const mutation = {
+  pending: false,
+  awaiting: false,
+  uncertain: false,
+  baselineId: null as string | null,
+  baselineAttempt: null as string | null,
+  observedRunning: false,
+}
 
 const stageLabels: Record<string, string> = {
   collecting: '准备采集',
@@ -25,70 +41,135 @@ export function DividendCollectionControls({ onComplete }: { onComplete: () => v
   const [error, setError] = useState('')
   const [pollError, setPollError] = useState('')
   const [notice, setNotice] = useState('')
-  const [busy, setBusy] = useState(false)
+  const [busy, setBusy] = useState(mutation.pending)
+  const [awaiting, setAwaiting] = useState(mutation.awaiting)
   const previous = useRef<DividendCollectionStatus | null>(null)
-  const command = useRef<AbortController | null>(null)
+  const mounted = useRef(false)
+  const generation = useRef(0)
+  const statusRequest = useRef<AbortController | null>(null)
 
   const acceptStatus = (next: DividendCollectionStatus) => {
     const old = previous.current
-    if (old && ((old.running && !next.running) || old.last_success_at !== next.last_success_at))
+    const wasAwaiting = mutation.awaiting
+    if (next.running) mutation.observedRunning = true
+    const changedRun = !!next.run_id && next.run_id !== mutation.baselineId
+    const changedAttempt =
+      !!next.last_attempt_at && next.last_attempt_at !== mutation.baselineAttempt
+    if (
+      mutation.awaiting &&
+      !mutation.pending &&
+      !next.running &&
+      (mutation.observedRunning || changedRun || changedAttempt)
+    ) {
+      mutation.awaiting = false
+      mutation.uncertain = false
+      mutation.observedRunning = false
+    }
+    if (
+      old &&
+      ((old.running && !next.running) ||
+        old.last_success_at !== next.last_success_at ||
+        (wasAwaiting && !mutation.awaiting))
+    )
       onComplete()
     previous.current = next
     setStatus(next)
+    setBusy(mutation.pending)
+    setAwaiting(mutation.awaiting)
   }
 
-  useEffect(() => {
+  async function readStatus() {
+    statusRequest.current?.abort()
     const controller = new AbortController()
+    statusRequest.current = controller
+    const epoch = ++generation.current
+    try {
+      const next = await getDividendStatus(controller.signal)
+      if (
+        !mounted.current ||
+        controller.signal.aborted ||
+        epoch !== generation.current ||
+        mutation.pending
+      )
+        return
+      acceptStatus(next)
+      setPollError('')
+      return next
+    } catch (err) {
+      if (mounted.current && !controller.signal.aborted && epoch === generation.current)
+        setPollError(err instanceof Error ? err.message : '读取采集状态失败')
+    }
+  }
+  useEffect(() => {
+    mounted.current = true
+    let stopped = false
     let timer: ReturnType<typeof setTimeout>
     async function poll() {
-      try {
-        const next = await getDividendStatus(controller.signal)
-        if (!controller.signal.aborted) {
-          acceptStatus(next)
-          setPollError('')
-        }
-      } catch (err) {
-        if (!controller.signal.aborted)
-          setPollError(err instanceof Error ? err.message : '读取采集状态失败')
-      } finally {
-        if (!controller.signal.aborted) timer = setTimeout(poll, 2000)
-      }
+      if (!mutation.pending) await readStatus()
+      if (!stopped) timer = setTimeout(poll, 2000)
     }
     void poll()
     return () => {
-      controller.abort()
+      stopped = true
+      mounted.current = false
+      generation.current++
+      statusRequest.current?.abort()
       clearTimeout(timer)
-      command.current?.abort()
     }
     // onComplete is a stable useResource callback.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [onComplete])
 
-  async function act(action: 'refresh' | 'cancel') {
-    if (command.current) return
-    const controller = new AbortController()
-    command.current = controller
+  async function act() {
+    if (
+      mutation.pending ||
+      mutation.awaiting ||
+      !previous.current ||
+      previous.current.running ||
+      !previous.current.available ||
+      pollError
+    )
+      return
+    mutation.pending = true
+    mutation.uncertain = false
+    mutation.baselineId = previous.current.run_id ?? null
+    mutation.baselineAttempt = previous.current.last_attempt_at ?? null
+    mutation.observedRunning = false
+    generation.current++
+    statusRequest.current?.abort()
     setBusy(true)
     setError('')
     setNotice('')
     try {
-      const result = await updateDividend(action, controller.signal)
-      const next = await getDividendStatus(controller.signal)
-      if (controller.signal.aborted) return
-      acceptStatus(next)
-      if (action === 'refresh' && !result.started && !next.running) {
-        setNotice('其他业绩选股任务正在运行，请等待完成后再更新。')
-      } else if (action === 'cancel') {
-        setNotice(result.cancelled ? '已请求取消，正在等待当前步骤结束。' : '采集已结束。')
+      const result = await updateDividend('refresh')
+      mutation.awaiting = result.started === true
+      if (mounted.current) {
+        setAwaiting(mutation.awaiting)
+        if (!result.started) setNotice('其他业绩选股任务正在运行，请等待完成后再更新。')
       }
     } catch (err) {
-      if (!controller.signal.aborted) setError(err instanceof Error ? err.message : '操作失败')
+      // A lost response is not a definite rejection. Wait for a new run or
+      // its terminal result, just like an accepted request.
+      mutation.awaiting = !(
+        err instanceof DividendRequestError &&
+        err.status >= 400 &&
+        err.status < 500
+      )
+      mutation.uncertain = mutation.awaiting
+      if (mounted.current) {
+        setAwaiting(mutation.awaiting)
+        setError(err instanceof Error ? err.message : '操作失败')
+      }
     } finally {
-      if (!controller.signal.aborted) setBusy(false)
-      command.current = null
+      mutation.pending = false
+      if (mounted.current) {
+        setBusy(false)
+        await readStatus()
+      }
     }
   }
 
+  const running = !!status?.running || awaiting
   const stageStarted = Date.parse(status?.stage_started_at || '')
   const stageSeconds = Number.isFinite(stageStarted)
     ? Math.max(0, Math.floor((Date.now() - stageStarted) / 1000))
@@ -104,32 +185,25 @@ export function DividendCollectionControls({ onComplete }: { onComplete: () => v
         <PageHeaderActions>
           <button
             className="button button-primary"
-            disabled={busy || !status || status.running || !status.available}
-            onClick={() => void act('refresh')}
+            disabled={busy || !status || running || !!pollError || !status.available}
+            onClick={() => void act()}
           >
-            <RefreshCw size={16} className={status?.running ? 'spin' : ''} />
-            {status?.running ? '采集中' : status?.publication_pending ? '恢复同步' : '更新数据'}
+            <RefreshCw size={16} className={busy || running ? 'spin' : ''} />
+            {running ? '采集中…' : busy ? '提交中…' : '更新数据'}
           </button>
-          {status?.running && (
-            <button
-              className="button button-quiet"
-              disabled={busy}
-              onClick={() => void act('cancel')}
-            >
-              取消采集
-            </button>
-          )}
         </PageHeaderActions>
       </div>
       {status && (
         <div className="growth-dividend-progress" aria-live="polite">
           <div className="growth-dividend-progress-label">
             <span>
-              {status.interrupted
-                ? '上次采集中断'
-                : status.stage
-                  ? stageLabel(status.stage)
-                  : '等待更新'}
+              {awaiting && !status.running
+                ? '等待确认本次采集状态'
+                : status.interrupted
+                  ? '上次采集中断'
+                  : status.stage
+                    ? stageLabel(status.stage)
+                    : '等待更新'}
             </span>
             {status.stage === 'history' && status.total != null && status.processed != null && (
               <span>
@@ -137,16 +211,14 @@ export function DividendCollectionControls({ onComplete }: { onComplete: () => v
               </span>
             )}
           </div>
-          {status.running && <progress aria-label="高股息采集更新进度" />}
-          {status.running && (
+          {running && <progress aria-label="高股息采集更新进度" />}
+          {running && (
             <p>
               按实际阶段更新，耗时取决于数据源和数据库响应。
               {stageSeconds != null && ` 当前阶段已用时 ${stageSeconds} 秒。`}
             </p>
           )}
-          {!status.running && status.failed_stage && (
-            <p>停止阶段：{stageLabel(status.failed_stage)}</p>
-          )}
+          {!running && status.failed_stage && <p>停止阶段：{stageLabel(status.failed_stage)}</p>}
           {status.last_success_at && (
             <p>
               上次成功更新：
@@ -161,7 +233,13 @@ export function DividendCollectionControls({ onComplete }: { onComplete: () => v
       {(error || pollError || status?.error) && (
         <p role="alert">{error || pollError || status?.error}</p>
       )}
-      {notice && <p role="status">{notice}</p>}
+      {notice && !running && <p role="status">{notice}</p>}
+      {status?.publication_pending && !running && (
+        <p role="status">已有待发布结果，更新数据将优先恢复数据库及本地同步。</p>
+      )}
+      {mutation.uncertain && awaiting && (
+        <p role="status">提交结果待确认，正在读取采集状态，请勿重复启动。</p>
+      )}
       {status && !status.available && (
         <p role="status">{status.unavailable_reason || '采集暂不可用'}</p>
       )}

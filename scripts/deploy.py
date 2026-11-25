@@ -426,9 +426,20 @@ def prepare_release(target, stage, check_env):
     run([sys.executable, '-m', 'venv', str(venv)])
     python = str(venv / 'bin/python')
     run([python, '-m', 'pip', 'install', '--disable-pip-version-check', '-r', str(source / 'backend/requirements.lock.txt')])
-    run([python, '-m', 'pip', 'check'], capture=True)
-    run([python, str(source / 'scripts/check_database.py')], capture=True, env=check_env)
-    run([python, '-c', 'import app.main'], capture=True, cwd=source / 'backend', env=check_env)
+    # Keep subprocess output private, while distinguishing the readiness
+    # gates in Actions logs instead of reporting three identical python errors.
+    for label, args, kwargs in (
+        ('dependency compatibility', [python, '-m', 'pip', 'check'], {}),
+        ('database read-only connectivity', [python, str(source / 'scripts/check_database.py')], {'env': check_env}),
+        ('backend import', [python, '-c', 'import app.main'], {'cwd': source / 'backend', 'env': check_env}),
+    ):
+        LOG.info('Release preflight start stage=%s', label)
+        try:
+            run(args, capture=True, **kwargs)
+        except Exception:
+            LOG.error('Release preflight failed stage=%s', label)
+            raise
+        LOG.info('Release preflight passed stage=%s', label)
     if run(['git', 'status', '--porcelain', '--untracked-files=normal'], capture=True, cwd=source):
         raise DeployError('Build changed tracked source; refusing to publish.')
     return dist, venv
