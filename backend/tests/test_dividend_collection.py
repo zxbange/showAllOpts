@@ -514,3 +514,48 @@ def test_progress_persists_real_stages_and_failure_location(tmp_path, monkeypatc
     service.refresh(background=False, moment=datetime(2026, 11, 16, 21, tzinfo=CHINA))
     assert service.status()['stage'] == 'complete'
     assert service.status()['failed_stage'] is None
+
+
+def test_storage_roundtrip_precision_allows_idempotent_recovery(tmp_path, engine):
+    from decimal import Decimal
+    import math
+    from sqlalchemy.orm import Session
+    meta, expected = result()
+    expected[0]['market_cap'] = Decimal('123.4567825')
+    expected[0]['dividend_yield_history'][2]['yield_pct'] = 7.123456789012345
+    stored = deepcopy(expected)
+    stored[0]['market_cap'] = Decimal('123.456783')
+    stored[0]['dividend_yield_history'][2]['yield_pct'] = math.nextafter(
+        expected[0]['dividend_yield_history'][2]['yield_pct'], math.inf)
+    write_result(engine, meta, stored)
+    before = read(engine)
+    assert write_result(engine, meta, expected) == 0
+    assert read(engine) == before
+    cache = SimpleNamespace(refresh=lambda *a, **k: True, session=lambda *a: Session(engine))
+    service = DividendCollection(SimpleNamespace(log_path=tmp_path), cache=cache)
+    service.sync_local(meta, expected)
+
+
+@pytest.mark.parametrize('field', ['market_cap', 'close', 'history_value', 'history_year',
+                                   'history_null', 'identity', 'missing', 'duplicate'])
+def test_storage_comparison_rejects_real_mismatch(field):
+    from decimal import Decimal
+    from app.services.dividend_collection import records_match
+    _, expected = result()
+    expected[0]['dividend_yield_history'][2]['yield_pct'] = 7.123456789012345
+    actual = deepcopy(expected)
+    if field in ('market_cap', 'close'):
+        actual[0][field] += Decimal('0.000001')
+    elif field == 'history_value':
+        actual[0]['dividend_yield_history'][2]['yield_pct'] += 0.000001
+    elif field == 'history_year':
+        actual[0]['dividend_yield_history'][2]['fiscal_year'] -= 1
+    elif field == 'history_null':
+        actual[0]['dividend_yield_history'][2]['yield_pct'] = None
+    elif field == 'identity':
+        actual[0]['code'] = 'wrong'
+    elif field == 'missing':
+        actual.pop()
+    elif field == 'duplicate':
+        actual.append(deepcopy(actual[0]))
+    assert not records_match(actual, expected)

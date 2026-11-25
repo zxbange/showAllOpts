@@ -10,9 +10,10 @@ snapshots and the unified database-sync pipeline remain available.
 """
 from contextlib import contextmanager
 from datetime import date, datetime, timedelta, timezone
-from decimal import Decimal
+from decimal import Decimal, ROUND_HALF_UP
 import json
 import logging
+import math
 import sqlite3
 import threading
 import uuid
@@ -98,12 +99,63 @@ def validate_result(meta, records):
         raise DividendCollectionError('Incomplete dividend result')
 
 
-def signature(rows):
-    def normalize(value, key):
-        return str(Decimal(str(value)).quantize(Decimal('0.00000001' if key == 'dividend_per_share' else '0.000001')))
-    numeric = {'dividend_yield_1y', 'dividend_cash_1y', 'pe_ttm', 'pb', 'market_cap', 'close', 'dividend_per_share'}
-    return sorted(json.dumps({key: normalize(value, key) if key in numeric and value is not None else value
-                              for key, value in dict(row).items()}, sort_keys=True, default=str) for row in rows)
+def records_match(actual, expected):
+    """Compare full snapshots using their database storage representations.
+
+    MySQL DECIMAL rounds ties away from zero. JSON DOUBLE can round-trip
+    to an adjacent IEEE-754 float: allow only one ULP for historical yields.
+    All identities, years, nulls, ranks and other fields remain exact.
+    """
+    numeric = {c.name: c.type.scale for c in DividendStock.__table__.columns
+               if hasattr(c.type, 'scale') and c.type.scale is not None}
+
+    def normalize(value, scale):
+        return Decimal(str(value)).quantize(Decimal(1).scaleb(-scale), rounding=ROUND_HALF_UP)
+
+    def history_match(a, b):
+        if a is None or b is None:
+            return a is b
+        if not isinstance(a, list) or not isinstance(b, list) or len(a) != len(b):
+            return False
+        for left, right in zip(a, b):
+            if not isinstance(left, dict) or not isinstance(right, dict) or left.keys() != right.keys():
+                return False
+            if any(left[k] != right[k] for k in left if k != 'yield_pct'):
+                return False
+            x, y = left.get('yield_pct'), right.get('yield_pct')
+            if x is None or y is None:
+                if x is not y:
+                    return False
+                continue
+            if type(x) not in (int, float) or type(y) not in (int, float):
+                return False
+            if not math.isfinite(x) or not math.isfinite(y):
+                return False
+            if x != y and (x == 0 or y == 0 or math.nextafter(x, y) != y):
+                return False
+        return True
+
+    def by_identity(rows):
+        return {(r['method'], r['code']): dict(r) for r in rows}
+
+    a, b = by_identity(actual), by_identity(expected)
+    if len(a) != len(actual) or len(b) != len(expected) or a.keys() != b.keys():
+        return False
+    for key, row in a.items():
+        other = b[key]
+        if row.keys() != other.keys():
+            return False
+        for field, x in row.items():
+            y = other[field]
+            if field == 'dividend_yield_history':
+                if not history_match(x, y):
+                    return False
+            elif field in numeric and x is not None and y is not None:
+                if normalize(x, numeric[field]) != normalize(y, numeric[field]):
+                    return False
+            elif x != y:
+                return False
+    return True
 
 def dividend_database_engine(settings, *, configuration=None):
     # Explicit dividend budget; shared transport applies the common 60-second floor.
@@ -173,7 +225,7 @@ def write_result(engine, meta, records, check=lambda: None, *, progress=None):
         check()
         with publication_phase('读取现有股票记录', progress):
             existing = conn.execute(select(stocks)).mappings().all()
-        if previous and all(previous[key] == value for key, value in meta.items()) and signature(existing) == signature(records):
+        if previous and all(previous[key] == value for key, value in meta.items()) and records_match(existing, records):
             return 0
         values = dict(meta, updated_at=datetime.now(CHINA).replace(tzinfo=None))
         with publication_phase('写入两组股票快照', progress):
@@ -252,12 +304,12 @@ class DividendCollection:
             head = session.execute(select(DividendSnapshot.__table__).where(DividendSnapshot.id == 1)).mappings().first()
             rows = session.execute(select(DividendStock.__table__)).mappings().all()
             meta_fields = sorted(key for key, value in meta.items() if not head or head[key] != value)
-            records_match = signature(rows) == signature(records)
-            if meta_fields or not records_match:
+            matches = records_match(rows, records)
+            if meta_fields or not matches:
                 # Field names/counts only: preserve the strict full-snapshot gate.
                 LOG.error('Dividend local verification mismatch metadata_fields=%s records_match=%s '
                           'expected_stock_rows=%s actual_stock_rows=%s',
-                          ','.join(meta_fields) or '-', records_match, len(records), len(rows))
+                          ','.join(meta_fields) or '-', matches, len(records), len(rows))
                 raise DividendCollectionError('Local synchronization did not verify the complete dividend snapshot')
 
     def acquire(self):
