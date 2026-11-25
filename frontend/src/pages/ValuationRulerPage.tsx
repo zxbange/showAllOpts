@@ -1,12 +1,11 @@
 import { PageHeaderActions } from '../components/PageHeaderActions'
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { RefreshCw, Download, Square, Gauge, Layers3 } from 'lucide-react'
+import { RefreshCw, Gauge, Layers3 } from 'lucide-react'
 import { useAuth } from '../components/AccountAccess'
 import { PageHeader } from '../components/PageHeader'
 import { StatCard } from '../components/StatCard'
 import { ValuationRulerChart } from '../components/ValuationRulerChart'
 import { getValuationHistory, getValuationStatus, updateValuation } from '../api/valuationRuler'
-import type { ValuationAction } from '../api/valuationRuler'
 import type { ValuationHistory, ValuationStatus } from '../types/valuationRuler'
 import { valuationNumber, valuationSource } from '../lib/valuationRuler'
 import '../styles/valuation-ruler.css'
@@ -128,20 +127,16 @@ export function ValuationRulerPage() {
       statusEpoch.current++
     }
   }, [readStatus])
-  async function act(action: ValuationAction) {
+  async function act() {
     if (!admin || mutation.pending || mutation.uncertain || !current.current || statusError) return
-    if (
-      current.current.database_syncing ||
-      (action !== 'cancel' && current.current.status === 'running')
-    )
-      return
+    if (current.current.database_syncing || current.current.status === 'running') return
     mutation.pending = true
     setBusy(true)
     setActionError('')
     statusEpoch.current++
     statusRequest.current?.abort()
     try {
-      const result = await updateValuation(action)
+      const result = await updateValuation('refresh')
       if (mounted.current && result.started === false && result.detail) {
         setActionError(result.detail)
       }
@@ -333,27 +328,17 @@ export function ValuationRulerPage() {
           <button
             className="button button-primary"
             disabled={disabled || running}
-            onClick={() => void act('refresh')}
+            onClick={() => void act()}
           >
-            <Download size={16} />
+            <RefreshCw size={15} className={busy || running ? 'spin' : ''} />
             {databaseSyncing
               ? '数据库同步中'
               : running
-                ? '采集中'
+                ? '采集中…'
                 : busy
                   ? '正在提交…'
                   : '更新数据'}
           </button>
-          {running && (
-            <button
-              className="button button-quiet"
-              disabled={!admin || busy || uncertain}
-              onClick={() => void act('cancel')}
-            >
-              <Square size={14} />
-              取消采集
-            </button>
-          )}
         </PageHeaderActions>
         {(running || databaseSyncing) && (
           <p role="status">

@@ -16,7 +16,7 @@ describe('compact collection controls replace obsolete footer cards', () => {
     expect(text).toContain('role="alert"')
   })
   it('retains cancel handlers and operation guards', () => {
-    for (const file of ['GrowthDividendPage', 'MarginPage', 'ValuationRulerPage']) {
+    for (const file of ['GrowthDividendPage', 'MarginPage']) {
       const text = source(`pages/${file}`)
       expect(text).toContain("act('cancel')")
       expect(text).toContain('取消采集')
@@ -38,6 +38,8 @@ describe('compact collection controls replace obsolete footer cards', () => {
     expect(valuation).not.toContain('onClick={() => void readStatus()}')
     expect(valuation).toContain('if (!mutation.pending) await readStatus()')
     expect(valuation).toContain('disabled={disabled || running}')
+    expect(valuation).toContain('采集中…')
+    expect(valuation).not.toContain('取消采集')
   })
   it('describes preserved growth data honestly on failure', () => {
     expect(source('pages/GrowthDividendPage')).toContain(

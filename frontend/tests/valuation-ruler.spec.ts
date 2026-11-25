@@ -148,27 +148,44 @@ test('valuation tab, ranges, real quantiles and disclosure render without overfl
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
 })
 
-test('running prevents duplicate submissions and allows cancellation', async ({ page }) => {
+test('the same collection button stays in place and is disabled until polling confirms completion', async ({
+  page,
+}) => {
   let status = idle
-  let starts = 0
+  const commands: string[] = []
   await page.route('**/api/v1/valuation-ruler/**', async (route) => {
     const path = new URL(route.request().url()).pathname.split('/').at(-1)
+    if (route.request().method() === 'POST') commands.push(path ?? '')
     if (path === 'refresh') {
-      starts++
       status = { ...idle, status: 'running' }
       await route.fulfill({ status: 202, json: { started: true } })
-    } else if (path === 'cancel') {
-      status = { ...idle, cancelled: true }
-      await route.fulfill({ status: 202, json: { cancelled: true } })
     } else await route.fulfill({ json: path === 'status' ? status : history })
   })
+  await page.clock.install()
   await page.goto('/valuation-ruler')
-  await page.getByRole('button', { name: '更新数据', exact: true }).click()
-  await expect(page.getByRole('button', { name: '采集中', exact: true })).toBeDisabled()
+  const actions = page.locator('.page-header-actions')
+  const button = actions.getByRole('button')
+  await expect(button).toBeEnabled()
+  await expect(button).toHaveAccessibleName('更新数据')
+  await button.evaluate((el) => el.setAttribute('data-mounted-button', 'original'))
+  await button.click()
+  await expect(button).toHaveAccessibleName('采集中…')
+  await expect(button).toBeDisabled()
+  await expect(button).toHaveAttribute('data-mounted-button', 'original')
+  await expect(button).toHaveCount(1)
+  await expect(page.getByRole('button', { name: '取消采集', exact: true })).toHaveCount(0)
   await expect(page.getByRole('button', { name: '同步聚宽历史', exact: true })).toHaveCount(0)
-  expect(starts).toBe(1)
-  await page.getByRole('button', { name: '取消采集', exact: true }).click()
-  await expect(page.getByRole('button', { name: '更新数据', exact: true })).toBeEnabled()
+
+  status = { ...idle, last_success_at: '2026-11-10T18:30:00+08:00' }
+  await expect
+    .poll(async () => {
+      await page.clock.fastForward(16000)
+      return button.isEnabled()
+    })
+    .toBe(true)
+  await expect(button).toHaveAccessibleName('更新数据')
+  await expect(button).toHaveAttribute('data-mounted-button', 'original')
+  expect(commands).toEqual(['refresh'])
 })
 
 test('a verified no-start explains the due date without hiding saved data or locking retry', async ({
@@ -230,7 +247,7 @@ test('uncertain start stays locked across navigation until automatic polling see
   await expect(update).toBeDisabled()
 
   status = { ...idle, status: 'running' }
-  const running = page.getByRole('button', { name: '采集中', exact: true })
+  const running = page.getByRole('button', { name: '采集中…', exact: true })
   await expect
     .poll(async () => {
       await page.clock.fastForward(16000)
@@ -327,7 +344,7 @@ test('older status cannot re-enable collection after a newer running response', 
       })
       .toBe(true)
     await page.getByRole('button', { name: '更新数据', exact: true }).click()
-    const running = page.getByRole('button', { name: '采集中', exact: true })
+    const running = page.getByRole('button', { name: '采集中…', exact: true })
     await expect(running).toBeDisabled()
     release?.()
     await expect.poll(() => finishedHeldResponse).toBe(true)
