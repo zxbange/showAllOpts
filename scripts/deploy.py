@@ -814,7 +814,7 @@ def cumulative_deployment_required(previous, target, was_active, options):
         paths = entries[1::2]
     except (OSError, ValueError, KeyError, TypeError, DeployError) as exc:
         raise DeployError('Deployment baseline cannot be verified; no release attempted.') from exc
-    required = any(path and (path == 'scripts/deploy.py' or not path.startswith(NO_DEPLOY_PREFIXES))
+    required = any(path and (path == 'scripts/deploy.py' or (path != 'README.md' and not path.startswith(NO_DEPLOY_PREFIXES)))
                    for path in paths)
     LOG.info('Deployment cumulative impact baseline=%s target=%s required=%s', base, target, required)
     return required

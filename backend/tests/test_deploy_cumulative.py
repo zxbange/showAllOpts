@@ -89,3 +89,33 @@ def test_missing_or_mismatching_live_frontend_blocks(repo, monkeypatch):
     monkeypatch.setattr(deploy,'frontend_check',mismatch)
     with pytest.raises(deploy.DeployError):
         deploy.cumulative_deployment_required(repo.base,repo.base,True,repo.options)
+
+
+def test_readme_only_keeps_active_release(repo, monkeypatch):
+    head = repo.commit('README.md', 'documentation')
+    options = deploy.parse_args(['--non-interactive', '--commit', head])
+    monkeypatch.setattr(deploy, 'preflight', lambda o: (repo.root / 'web', {}))
+    monkeypatch.setattr(deploy, 'clean_head', lambda **kw: repo.base)
+    monkeypatch.setattr(deploy, 'identity', lambda *a: ('active', '1', 'generation'))
+    monkeypatch.setattr(deploy, 'ready', lambda *a, **kw: None)
+    monkeypatch.setattr(deploy, 'target_commit', lambda *a: head)
+    monkeypatch.setattr(deploy, 'prepare_release', lambda *a: pytest.fail('unexpected build'))
+    before = repo.record.read_bytes()
+    assert not deploy.cumulative_deployment_required(repo.base, head, True, options)
+    deploy.deploy(options)
+    assert repo.record.read_bytes() == before
+    assert len(list((repo.root / '.runtime/releases').iterdir())) == 1
+
+
+def test_readme_after_unpublished_runtime_still_requires_release(repo):
+    repo.commit('backend/app/main.py', 'v2')
+    head = repo.commit('README.md', 'documentation')
+    assert deploy.cumulative_deployment_required(repo.base, head, True, repo.options)
+    assert json.loads(repo.record.read_text())['target'] == repo.base
+
+
+@pytest.mark.parametrize('path', ['README.md.bak', 'readme.md', 'other/README.md', 'scripts/deploy.py'])
+def test_readme_exclusion_is_exact_and_runtime_remains_required(repo, path):
+    repo.commit('README.md', 'documentation')
+    head = repo.commit(path, 'runtime')
+    assert deploy.cumulative_deployment_required(repo.base, head, True, repo.options)
