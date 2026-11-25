@@ -482,4 +482,27 @@ describe('collection command and status lifecycle', () => {
     expect(controller.getSnapshot().status).toEqual(active())
     stopFive()
   })
+  it('cash-cow read retry rechecks the selected view without submitting another command', async () => {
+    const { controller, start, readStatus } = setup({ manualReconcile: true, idlePollMs: null })
+    const reader = vi.fn<CollectionTaskReader<Status>>().mockResolvedValue(idle)
+    const detach = controller.subscribe(() => {}, reader)
+    await flush()
+    start.mockRejectedValueOnce(new Error('启动失败'))
+    await controller.start(true)
+    expect(controller.getSnapshot()).toMatchObject({
+      actionError: 'Error: 启动失败',
+      uncertain: true,
+    })
+    const reload = deferred<Status>()
+    reader.mockReturnValueOnce(reload.promise)
+    const retry = controller.recheck()
+    expect(reader.mock.calls.at(-1)?.[1].refreshHistory).toBe(true)
+    expect(controller.getSnapshot().uncertain).toBe(true)
+    reload.resolve(idle)
+    await retry
+    expect(controller.getSnapshot()).toMatchObject({ actionError: '', uncertain: false })
+    expect(start).toHaveBeenCalledTimes(1)
+    expect(readStatus).not.toHaveBeenCalled()
+    detach()
+  })
 })

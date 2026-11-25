@@ -237,10 +237,10 @@ function CashCowPeriodPage({
             {snapshot ? ' 已保留上次成功结果。' : ''}
           </div>
         )}
-        {error && (
+        {(error || actionError || statusError) && (
           <button
             className="button button-quiet"
-            disabled={loading || busy}
+            disabled={loading || pending}
             onClick={() => void recheck()}
           >
             重新读取
