@@ -74,14 +74,14 @@ python backend/check_quality.py
   规则、消息、源行摘要及次数跟踪，不是按整模块关闭规则；新增问题失败。原有未格式化文件
   可逐步迁移，新文件必须格式化。清理后执行 `python backend/check_quality.py --prune`，只允许减少基线。
 - CI 传入比较提交 SHA，拒绝已有基线的扩张。首次建立基线后，后续业务变更不得变更规则来掩盖新问题。
-- Mypy strict 从两个公共交易日历接口开始；新公共基础设施加入严格检查范围。逐模块增加类型约束，
+- Mypy strict 已纳入 14 个明确列在 pyproject.toml 的共享服务及仓储文件；不是全后端严格检查。逐模块增加类型约束，
   不把金融规则实现强制改写为与历史口径不一致的算法。
 - 开发工具独立锁定，不加入生产运行依赖。覆盖率不是质量的唯一指标，先补真实数据库与失败恢复等关键路径。
 
 ### 数据库集成测试边界
 
 `backend/tests/integration/test_mysql_dividend.py` 使用独立、空的 MySQL CI 容器及合成数据，
-验证 MySQL DECIMAL、JSON、InnoDB 事务和 SQLite 发布，不使用线上数据库、应用配置或真实股票资料。
+验证 MySQL 5.7.44 / 8.4 的 DECIMAL、JSON、InnoDB 事务和 SQLite 发布，不使用线上数据库、应用配置或真实股票资料。
 本地未显式启用时跳过；CI 显式启用时若数据库不可用，测试必须失败。
 真实数据库测试与 SQLite 单测并行互补，不能用一个替代另一个。
 

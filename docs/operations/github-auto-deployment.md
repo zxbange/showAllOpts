@@ -62,7 +62,7 @@ MySQL CI 使用每个任务独立的临时 Docker 服务，固定虚构账号与
 
 ## 实现与维护边界
 
-- backend 全量 pytest，frontend Vitest、build、Playwright 全部通过才能访问服务器。没有削减 CI，也没有第三方 SSH Action。
+- backend 全量 pytest、Ruff/Mypy 质量门禁、两版本 MySQL 隔离测试，以及 frontend 质量门禁、Vitest、build、Playwright 全部通过才能访问服务器。没有削减 CI，也没有第三方 SSH Action。
 - 固定小入口安装到 root 管理的 `/usr/local/libexec/showallopts-ssh`；配置为 `/etc/showallopts-deploy.json`。每次 `check/deploy <完整SHA>` 都核验 origin、干净 main、提交确实属于远端 main 且可从当前 HEAD 快进，再在私有临时目录暂存该 SHA 的 `scripts/deploy.py`。不提前切换生产源码；因此 runner 修复也随通过测试的 main 提交自动生效，旧源码仍是恢复基点。
 - bootstrap 在授权公钥前验证环境和入口。文件以原子 rename 发布；已有内容、属主及权限完全匹配时可重试，不同安装拒绝覆盖。公钥原子追加，完全相同条目不重复添加，同 key 不同权限条目拒绝。旧 authorized_keys 内容保留。固定入口/配置自身若需改变，应单独审核升级，不自动覆盖。
 - 使用现有免密 sudo，不安装 admin helper/sudoers，不改变静态树属主、账号、网络、unit 或 drop-in；保留 xvfb 与截图支持。服务器须已有非交互读取仓库的能力；现有 unit/drop-in/Nginx 由 root 管理。保留用户明确选择的 `NOPASSWD ALL`，main 写入者可以取得 ubuntu/root；入口不声称隔离 main 写入者。
@@ -75,11 +75,11 @@ MySQL CI 使用每个任务独立的临时 Docker 服务，固定虚构账号与
 
 ## 仅文档、脚本或测试变更时不实际发布
 
-正常 main 推送仍跑完整 CI，五个分片全部成功且 `DEPLOY_ENABLED=true` 后调用受限服务器入口。是否实际发布，由服务器在部署锁内比较当前健康发布版本与本次已测试 SHA 的累计差异，不再比较单次推送的 before/head。Actions 仍可能显示 `deploy` 作业成功，因为它运行了受限 SSH 入口及线上基线校验。实际跳过以日志中的 `Deployment cumulative impact ... required=False` 和随后的 `Deployment not required: no cumulative runtime changes; live release unchanged.` 为准，不以作业颜色判断。
+正常 main 推送仍跑完整 CI，统一 CI gate 的全部必需检查成功且 `DEPLOY_ENABLED=true` 后调用受限服务器入口。是否实际发布，由服务器在部署锁内比较当前健康发布版本与本次已测试 SHA 的累计差异，不再比较单次推送的 before/head。Actions 仍可能显示 `deploy` 作业成功，因为它运行了受限 SSH 入口及线上基线校验。实际跳过以日志中的 `Deployment cumulative impact ... required=False` 和随后的 `Deployment not required: no cumulative runtime changes; live release unchanged.` 为准，不以作业颜色判断。
 
 基线来自 `backend/.venv` 实际指向的 `.runtime/releases/<release>/status.json`：必须为 `complete`，目标 SHA 与干净生产 checkout 一致，服务、分支及祖先关系均须匹配，并通过现有进程身份和健康检查。仅 CI 成功、check 成功或上一轮跳过发布都不会前移基线。
 
-累计差异仅涉及 `scripts/`、`collectors/`、`docs/`、`backend/tests/`、`frontend/tests/` 时，不创建 release、不构建、不重启、不移动源码或基线。`scripts/deploy.py` 是部署运行器，保持原有运行时代码例外；应用、依赖、工作流及其他目录的变更仍实际发布。相似前缀（如 `scripts-other/`）不在排除范围。空差异同样为 no-op。根目录 `README.md` 不在排除范围；如要求仅更新文档且不重部署，不能假定更新根 README 会被视为 no-op。正常推送并希望走 CI 且不实际发布时，应将改动限制在已排除目录（例如 `docs/`、`scripts/README.md`）。
+累计差异仅涉及根路径 `README.md`、`scripts/`、`collectors/`、`docs/`、`backend/tests/`、`frontend/tests/` 时，不创建 release、不构建、不重启、不移动源码或基线。`scripts/deploy.py` 是部署运行器，保持原有运行时代码例外；应用、依赖、工作流及其他目录的变更仍实际发布。相似前缀（如 `scripts-other/`）不在排除范围。空差异同样为 no-op。根 README 仅按精确区分大小写的 `README.md` 路径排除；其他目录中的同名文件、近似文件名和未发布的运行差异仍按原规则处理。更改发布判定本身（`scripts/deploy.py`）是运行相关变更；先完成该发布器修订的独立 CI 与部署验收，再单独推送 README／文档。
 
 例如功能提交 A 的 CI 失败，随后只改测试的 B 通过，服务器会从仍在运行的旧版比较到 B，发现 A 的未发布功能，正常部署 B。若线上已包含全部功能而只修改采集脚本，则只检查而不发布网站。
 
