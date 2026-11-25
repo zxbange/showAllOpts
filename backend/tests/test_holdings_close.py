@@ -40,7 +40,7 @@ def put_rows(monitor, *rows):
 
 @pytest.fixture
 def fixture(tmp_path, monkeypatch):
-    current = [moment(MONDAY, '15:05')]
+    current = [moment(MONDAY, '15:30')]
     monkeypatch.setattr(personal_holdings, 'clock', lambda: current[0])
     settings = Settings(_env_file=None, log_dir=tmp_path / 'log', auth_allow_http=True, tushare_token=TOKEN)
     monitor = PersonalHoldings(settings)
@@ -60,10 +60,11 @@ def collect(monitor, current, day, at):
     return monitor.close_prices.collect_due(current[0])
 
 
-def test_weekend_early_then_exact_1505(fixture, monkeypatch):
+def test_weekend_early_then_exact_1530(fixture, monkeypatch):
     monitor, current = fixture
-    assert not collect(monitor, current, '2026-11-21', '15:05')
-    assert not collect(monitor, current, MONDAY, '15:04:59')
+    assert not collect(monitor, current, '2026-11-21', '15:30')
+    assert not collect(monitor, current, MONDAY, '15:05')
+    assert not collect(monitor, current, MONDAY, '15:29:59')
     calls = []
 
     def fetch(day, token):
@@ -71,7 +72,7 @@ def test_weekend_early_then_exact_1505(fixture, monkeypatch):
         return {'000001.SZ': '12.34'}
 
     monkeypatch.setattr(holdings_close, 'fetch_daily_closes', fetch)
-    assert collect(monitor, current, MONDAY, '15:05:00')
+    assert collect(monitor, current, MONDAY, '15:30:00')
     assert calls == [(MONDAY, TOKEN)]
     assert monitor.status()['close_valuation'] == {
         'trade_date': MONDAY, 'prices': {'000001': '12.34'}, 'strategy_totals': {'A': '30.85'},
@@ -89,16 +90,16 @@ def test_delayed_publication_cooldown_restart_and_previous_close(fixture, monkey
         return {'000001.SZ': '10' if day.isoformat() == FRIDAY else '12'}
 
     monkeypatch.setattr(holdings_close, 'fetch_daily_closes', fetch)
-    assert collect(monitor, current, FRIDAY, '15:05')
-    assert not collect(monitor, current, MONDAY, '15:05')
+    assert collect(monitor, current, FRIDAY, '15:30')
+    assert not collect(monitor, current, MONDAY, '15:30')
     restarted = PersonalHoldings(monitor.settings)
     assert restarted.status()['close_valuation'] == {
         'trade_date': FRIDAY, 'prices': {'000001': '10'}, 'strategy_totals': {'A': '25.00'},
     }
-    assert not collect(restarted, current, MONDAY, '15:09:59')
-    assert collect(restarted, current, MONDAY, '15:10')
+    assert not collect(restarted, current, MONDAY, '15:34:59')
+    assert collect(restarted, current, MONDAY, '15:35')
     second_restart = PersonalHoldings(monitor.settings)
-    assert not collect(second_restart, current, MONDAY, '15:15')
+    assert not collect(second_restart, current, MONDAY, '15:40')
     assert calls == [FRIDAY, MONDAY, MONDAY]
     assert second_restart.status()['close_valuation']['strategy_totals'] == {'A': '30.00'}
 
@@ -129,7 +130,7 @@ def test_api_status_uses_decode_keys_and_current_rows_without_exposing_market(mo
 
     monkeypatch.setattr(holdings_close_source.httpx, 'Client', client)
     monkeypatch.setattr(holdings_close, 'fetch_daily_closes', holdings_close_source.fetch_daily_closes)
-    assert collect(monitor, current, MONDAY, '15:05')
+    assert collect(monitor, current, MONDAY, '15:30')
     assert calls == [dict(api_name='daily', token=TOKEN, params={'trade_date': '20261123'},
                           fields='ts_code,trade_date,close')]
 
@@ -171,7 +172,7 @@ def test_switch_source_during_fetch_does_not_publish(fixture, monkeypatch):
         return {'000001.SZ': '12.34'}
 
     monkeypatch.setattr(holdings_close, 'fetch_daily_closes', fetch)
-    assert not collect(monitor, current, MONDAY, '15:05')
+    assert not collect(monitor, current, MONDAY, '15:30')
     assert monitor.status()['close_valuation'] == {
         'trade_date': None, 'prices': {}, 'strategy_totals': {'A': None},
     }
@@ -188,16 +189,16 @@ def test_partial_market_never_replaces_same_day_covered_prices(fixture, monkeypa
         {'000001.SZ': '10', '600000.SH': '4', '920001.BJ': '2'},
     ])
     monkeypatch.setattr(holdings_close, 'fetch_daily_closes', lambda day, token: next(responses))
-    assert collect(monitor, current, MONDAY, '15:05')
+    assert collect(monitor, current, MONDAY, '15:30')
     first = monitor.status()['close_valuation']
     assert first == {
         'trade_date': MONDAY, 'prices': {'000001': '10', '920001': '2'},
         'strategy_totals': {'A': None, 'B': '2.00'},
     }
-    assert not collect(monitor, current, MONDAY, '15:09:59')
-    assert not collect(monitor, current, MONDAY, '15:10')
+    assert not collect(monitor, current, MONDAY, '15:34:59')
+    assert not collect(monitor, current, MONDAY, '15:35')
     assert monitor.status()['close_valuation'] == first
-    assert collect(monitor, current, MONDAY, '15:15')
+    assert collect(monitor, current, MONDAY, '15:40')
     assert monitor.status()['close_valuation'] == {
         'trade_date': MONDAY, 'prices': {'000001': '10', '600000': '4', '920001': '2'},
         'strategy_totals': {'A': '37.00', 'B': '2.00'},

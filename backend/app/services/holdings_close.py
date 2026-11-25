@@ -11,7 +11,7 @@ from app.services.holdings_close_source import HoldingsCloseUnavailable, fetch_d
 from app.services.holdings_valuation import value_positions
 
 LOG = logging.getLogger(__name__)
-FIRST_CHECK = wall_time(15, 5)
+FIRST_CHECK = wall_time(15, 30)
 LAST_CHECK = wall_time(16, 30)
 RETRY_INTERVAL_SECONDS = 300
 

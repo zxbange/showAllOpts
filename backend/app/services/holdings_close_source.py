@@ -3,7 +3,7 @@
 The provider documents a 6,000-row ceiling and a 15:00–16:00 release window,
 but no pagination contract for `daily`. Reject a cap-sized response rather
 than guessing offsets or asking for any of the user's security identifiers.
-Empty or partial market publication at 15:05 is possible; this adapter cannot
+Empty or partial market publication even at 15:30 is possible; this adapter cannot
 prove completeness below the cap. Callers must check every required symbol.
 """
 from datetime import date
