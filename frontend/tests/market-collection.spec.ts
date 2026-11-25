@@ -982,3 +982,35 @@ for (const result of ['complete', 'partial', 'paused']) {
     expect(ids[1]).toBe(ids[0])
   })
 }
+
+test('a pending market command follows its shared identity across heat and crowding tabs', async ({
+  page,
+}) => {
+  const ids: string[] = []
+  let release!: () => void
+  const pending = new Promise<void>((resolve) => {
+    release = resolve
+  })
+  await page.route('**/api/v1/market-collection/status', (route) => route.fulfill({ json: idle }))
+  await page.route('**/api/v1/market-collection/run', async (route) => {
+    const id = route.request().postDataJSON().request_id
+    ids.push(id)
+    await pending
+    return route.fulfill({ status: 202, json: { id, status: 'queued' } })
+  })
+  await page.goto('/market-sentiment')
+  const actions = page.locator('.page-header-actions')
+  await actions.getByRole('button', { name: '更新数据', exact: true }).click()
+  await expect.poll(() => ids.length).toBe(1)
+  try {
+    await page.getByRole('link', { name: '抱团拥挤度', exact: true }).click()
+    await expect(page).toHaveURL(/market-crowding$/)
+    await expect(actions.getByRole('button', { name: '提交中…', exact: true })).toBeDisabled()
+  } finally {
+    release()
+  }
+  await expect(actions.getByRole('button', { name: '采集中…', exact: true })).toBeDisabled()
+  await page.goBack()
+  await expect(actions.getByRole('button', { name: '采集中…', exact: true })).toBeDisabled()
+  expect(ids).toHaveLength(1)
+})

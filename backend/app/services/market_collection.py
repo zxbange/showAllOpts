@@ -1,27 +1,20 @@
-from app.services.collection_errors import safe_error as public_error
-from app.services.collection_outcomes import record_outcome
 """Durable, paced Sina snapshots and verified JoinQuant-method observations.
 
 One process owns collection.lock for a run. SQLite commits the universe before
 the first per-stock request, and each observation before the next request. A
 restart therefore resumes pending stocks without rebuilding a historical pool.
 """
-from app.services.collection_calendar import automatic_collection_allowed, latest_due_slot, manual_failure_isolated, next_automatic_collection
-from app.services.holdings_calendar import trading_day
-from app.services.system_runtime import source_client
-from app.services.system_configuration import task_config, pin_configuration, SystemConfiguration
-from app.services.collection_notifications import emit_collection_result
-from contextlib import contextmanager
-from datetime import date, datetime, time, timedelta, timezone
-from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
+
 import hashlib
 import json
 import logging
-import re
 import sqlite3
 import threading
 import time as monotonic_time
 import uuid
+from contextlib import contextmanager
+from datetime import date, datetime, time, timedelta, timezone
+from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 from zoneinfo import ZoneInfo
 
 import httpx
@@ -29,17 +22,32 @@ import portalocker
 from sqlalchemy import create_engine
 
 from app.core.diagnostics import diagnostic_details
-from app.services.market_diagnostics import copy_source_failure, source_failure_details
+from app.services.collection_calendar import (
+    automatic_collection_allowed,
+    latest_due_slot,
+    manual_failure_isolated,
+    next_automatic_collection,
+)
+from app.services.collection_errors import safe_error as public_error
+from app.services.collection_lifecycle import start_worker, try_lease
+from app.services.collection_notifications import emit_collection_result
+from app.services.collection_outcomes import record_outcome
 from app.services.etf_configuration import ConfigurationFailure, reconcile_system_ledger
 from app.services.growth_dividend_source import fetch_calendar
+from app.services.holdings_calendar import trading_day
 from app.services.market_configuration import MarketConfiguration
+from app.services.market_diagnostics import copy_source_failure, source_failure_details
 from app.services.market_methodology import JOINQUANT_HEAT_METHOD, LEGACY_SINA_HEAT_METHOD
-from app.services.market_sina import (
-    SinaDataError, SinaMarketProvider, SinaRateLimitError, aggregate_crowding, aggregate_heat,
-)
 from app.services.market_public import MarketDependencyError, PublicMarketProvider
+from app.services.market_sina import (
+    SinaDataError,
+    SinaRateLimitError,
+    aggregate_crowding,
+    aggregate_heat,
+)
 from app.services.market_writer import read_market_dates, write_market_results
-
+from app.services.system_configuration import SystemConfiguration, pin_configuration, task_config
+from app.services.system_runtime import source_client
 
 LOG = logging.getLogger(__name__)
 CHINA = ZoneInfo('Asia/Shanghai')
@@ -208,6 +216,7 @@ class CheckedStreamResponse:
 
 def configured_asharehub_key(settings):
     from pydantic import SecretStr
+
     from app.services.system_integrations import integrations_config
     return SecretStr(integrations_config(settings)['asharehub']['token'])
 
@@ -301,11 +310,7 @@ class MarketCollection:
         self.root.mkdir(parents=True, exist_ok=True, mode=0o700)
         lock = portalocker.Lock(str(self.root / 'collection.lock'), timeout=0,
                                 flags=portalocker.LOCK_EX | portalocker.LOCK_NB)
-        try:
-            lock.acquire()
-            return lock
-        except portalocker.exceptions.LockException:
-            return None
+        return try_lease(lock, portalocker.exceptions.LockException)
 
     def _meta(self, key, default=None):
         with self.connect() as db:
@@ -708,8 +713,8 @@ class MarketCollection:
             if self.worker and self.worker.is_alive():
                 return
             self.stop_event.clear()
-            self.worker = threading.Thread(target=self._loop, name='market-collection', daemon=True)
-            self.worker.start()
+            start_worker(self._loop, name='market-collection',
+                         assign=lambda worker: setattr(self, 'worker', worker), factory=threading.Thread)
 
     def stop(self):
         self.stop_event.set()
@@ -843,8 +848,9 @@ class MarketCollection:
         if self.notification_cache is None:
             return {}
         from sqlalchemy import select
-        from app.models.sentiment import MarketSentiment
+
         from app.models.crowding import MarketCrowding
+        from app.models.sentiment import MarketSentiment
         samples = {}
         for kind, module, model in (('heat', 'market-sentiment', MarketSentiment),
                                     ('crowding', 'market-crowding', MarketCrowding)):

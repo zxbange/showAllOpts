@@ -1,22 +1,14 @@
 import { PageHeaderActions } from './PageHeaderActions'
-import { useCallback, useEffect, useRef, useState } from 'react'
 import { RefreshCw } from 'lucide-react'
 import { useAuth } from './AccountAccess'
-import { usePolling } from '../hooks/usePolling'
+import { useQueuedCollectionTask } from '../hooks/useQueuedCollectionTask'
 import {
-  MarketCollectionRequestError,
-  getMarketCollectionStatus,
-  runMarketCollection,
-} from '../api/marketCollection'
-import {
-  marketCollectionActive,
-  marketCollectionErrorMessage,
-  marketCollectionFindRun,
-  marketCollectionRunFailure,
-  marketCollectionRunMessage,
-  marketCollectionNeedsReload,
-} from '../lib/marketCollection'
-import type { MarketCollectionStatus } from '../types/marketCollection'
+  marketQueuedTask,
+  marketQueuedRunning,
+  marketWorkerDisabled,
+  startMarketQueuedTask,
+} from '../lib/marketQueuedTask'
+import { marketCollectionErrorMessage } from '../lib/marketCollection'
 import '../styles/market-collection.css'
 
 const count = (value: number | null | undefined) =>
@@ -36,150 +28,16 @@ const phases: Record<string, string> = {
 }
 
 export function MarketCollectionPanel({ onCollected }: { onCollected: () => void }) {
-  const admin = useAuth().session?.user?.role === 'admin'
-  const [status, setStatus] = useState<MarketCollectionStatus | null>(null)
-  const [statusError, setStatusError] = useState('')
-  const [actionError, setActionError] = useState('')
-  const [message, setMessage] = useState('')
-  const [busy, setBusy] = useState('')
-  const [uncertain, setUncertain] = useState(false)
-  const [confirming, setConfirming] = useState(false)
-  const [acceptedActive, setAcceptedActive] = useState(false)
-  const mounted = useRef(false)
-  const lock = useRef(false)
-  const mutationVersion = useRef(0)
-  const operation = useRef<AbortController | null>(null)
-  const actionKind = useRef<'save' | 'test' | 'run' | null>(null)
-  const requestId = useRef<string | null>(null)
-  const awaitingRun = useRef<string | null>(null)
-  const busyConflict = useRef(false)
-  const previous = useRef<MarketCollectionStatus | null>(null)
-  const onPublished = useRef(onCollected)
-  onPublished.current = onCollected
-
-  useEffect(() => {
-    mounted.current = true
-    return () => {
-      mounted.current = false
-      operation.current?.abort()
-    }
-  }, [])
-
-  const loadStatus = useCallback(async (signal: AbortSignal) => {
-    const version = mutationVersion.current
-    const value = await getMarketCollectionStatus(signal)
-    return { value, version }
-  }, [])
-  const { refresh: refreshStatus } = usePolling(
-    loadStatus,
-    ({ value: next, version }) => {
-      if (!mounted.current || lock.current || version !== mutationVersion.current) return
-      const matched = requestId.current && marketCollectionFindRun(next, requestId.current)
-      if (matched) {
-        requestId.current = null
-        setUncertain(false)
-        if (actionKind.current === 'run') {
-          setActionError('')
-          setMessage(marketCollectionRunMessage(matched))
-        }
-      }
-      // A successful POST must not reopen Start while its status read is still stale.
-      if (
-        !awaitingRun.current ||
-        marketCollectionFindRun(next, awaitingRun.current) ||
-        marketCollectionActive(next)
-      ) {
-        awaitingRun.current = null
-        setAcceptedActive(false)
-        setConfirming(false)
-        if (busyConflict.current) {
-          busyConflict.current = marketCollectionActive(next)
-          setMessage(
-            marketCollectionActive(next)
-              ? '已有采集正在运行，正在查看当前采集进度。'
-              : requestId.current
-                ? '上次请求的结果仍待确认，可重试同一请求。'
-                : '采集状态已更新，可按需重新发起采集。',
-          )
-        }
-      }
-      if (marketCollectionNeedsReload(previous.current, next)) onPublished.current()
-      previous.current = next
-      setStatus(next)
-      setStatusError('')
-    },
-    () => setStatusError('暂时无法读取采集状态，已有图表仍可查看。'),
-    marketCollectionActive(status) || status?.cache_pending || confirming || uncertain
-      ? 1500
-      : 30000,
-  )
-
-  const running = marketCollectionActive(status) || acceptedActive
-  const workerDisabled = !!status?.worker_disabled || status?.status === 'worker_disabled'
+  const { session } = useAuth()
+  const admin = session?.user?.role === 'admin'
+  const { task, state } = useQueuedCollectionTask(marketQueuedTask, session, onCollected)
+  const { status, statusError, actionError, message, busy, uncertain, confirming } = state
+  const running = marketQueuedRunning(state)
+  const workerDisabled = marketWorkerDisabled(state)
   const retry =
     ['paused', 'partial', 'blocked', 'failed'].includes(status?.status ?? '') || !!status?.pending
-
-  function pollNow() {
-    void refreshStatus().catch(() => {
-      if (mounted.current) setStatusError('暂时无法读取采集状态，已有图表仍可查看。')
-    })
-  }
-
-  async function run() {
-    if (!admin || lock.current || running || confirming || workerDisabled || !status?.configured)
-      return
-    lock.current = true
-    actionKind.current = 'run'
-    mutationVersion.current++
-    const controller = new AbortController()
-    operation.current = controller
-    busyConflict.current = false
-    setBusy('run')
-    setActionError('')
-    setMessage('')
-    const hadUncertainRequest = requestId.current !== null
-    requestId.current ??= crypto.randomUUID()
-    try {
-      const accepted = await runMarketCollection(requestId.current, controller.signal)
-      if (!mounted.current || controller.signal.aborted) return
-      requestId.current = null
-      setUncertain(false)
-      const active = ['queued', 'running'].includes(accepted.status)
-      awaitingRun.current = active ? accepted.id : null
-      setAcceptedActive(active)
-      setConfirming(active)
-      setMessage(marketCollectionRunMessage(accepted))
-    } catch (reason) {
-      if (mounted.current && !controller.signal.aborted) {
-        const failure = marketCollectionRunFailure(reason)
-        // A rejection of this retry does not resolve an earlier lost response.
-        const keepRequest = hadUncertainRequest || failure === 'uncertain'
-        if (!keepRequest) requestId.current = null
-        setUncertain(keepRequest)
-        if (failure === 'busy') {
-          awaitingRun.current =
-            reason instanceof MarketCollectionRequestError ? (reason.activeRun?.id ?? null) : null
-          setAcceptedActive(reason instanceof MarketCollectionRequestError && !!reason.activeRun)
-          busyConflict.current = true
-          setConfirming(true)
-          setMessage('采集服务已有任务占用，正在确认当前进度；请等待当前采集结束。')
-        } else {
-          setActionError(
-            failure === 'uncertain'
-              ? '暂时无法确认采集请求的结果，正在核对状态。重试将沿用同一请求，不重复启动任务。'
-              : marketCollectionErrorMessage(reason instanceof Error ? reason.message : ''),
-          )
-        }
-      }
-    } finally {
-      lock.current = false
-      if (operation.current === controller) operation.current = null
-      if (mounted.current) {
-        setBusy('')
-        pollNow()
-      }
-    }
-  }
+  const run = () => startMarketQueuedTask(task, admin)
+  const pollNow = () => void task.pollNow()
 
   const total = Math.max(0, status?.progress?.total ?? status?.total ?? 0)
   const completed = Math.max(0, status?.progress?.completed ?? status?.completed ?? 0)
@@ -229,9 +87,7 @@ export function MarketCollectionPanel({ onCollected }: { onCollected: () => void
       )}
       {workerDisabled && <p role="status">服务端采集任务未启用，请管理员检查系统配置。</p>}
       {status && !status.configured && <p role="status">请管理员在系统配置中设置数据库。</p>}
-      {actionError && !(actionKind.current === 'run' && running) && (
-        <p role="alert">{actionError}</p>
-      )}
+      {actionError && !running && <p role="alert">{actionError}</p>}
       {message && <p role="status">{message}</p>}
     </>
   )
