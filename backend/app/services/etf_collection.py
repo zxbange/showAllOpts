@@ -238,12 +238,13 @@ def collector_module():
 
 class ETFCollection:
     def __init__(self, settings, refresh=None, *, collector=None, engine_factory=create_engine,
-                 client_factory=None, clock=None):
+                 client_factory=None, clock=None, remote_worker=None, tick_gate=None):
         self.settings, self.refresh = settings, refresh
         self.collector, self.engine_factory = collector, engine_factory
         self.client_factory = client_factory or (lambda: source_client(self.settings, factory=httpx.Client, timeout=30, trust_env=False))
         self.clock = clock or (lambda: datetime.now(CHINA))
         self.root = settings.log_path / 'market-data' / 'etf-collection'
+        self.remote_worker, self.tick_gate = remote_worker, tick_gate
         self.stop_event = threading.Event()
         self.worker = None
         self.floor = None
@@ -334,9 +335,12 @@ class ETFCollection:
             config = self.configuration.load()
         except ConfigurationFailure:
             return dict(status=issue, ready=False, configured=False, disabled_reason=issue)
-        state = dict(enabled=config['enabled'], configured=not issue, ready=not issue,
-                     status=issue or ('configured' if config['enabled'] else 'disabled'),
-                     disabled_reason=issue, worker_running=bool(self.worker and self.worker.is_alive()),
+        remote_ready = self.remote_worker is None or self.remote_worker.worker_running('etf')
+        worker_issue = None if remote_ready else 'queue_worker_unavailable'
+        state = dict(enabled=config['enabled'], configured=not issue, ready=not issue and remote_ready,
+                     status=issue or worker_issue or ('configured' if config['enabled'] else 'disabled'),
+                     disabled_reason=issue or worker_issue, worker_running=(bool(self.worker and self.worker.is_alive())
+                                                                           if self.remote_worker is None else remote_ready),
                      timezone='Asia/Shanghai', schedule=config['schedule'], target_sessions=1,
                      collection_scope='latest_completed_session', historical_backfill='joinquant_manual',
                      manual_collection_scope='known_trading_session_gaps', manual_gap_start=None,
@@ -422,6 +426,8 @@ class ETFCollection:
                         if row['id'] == request_id:
                             return dict(row)
                         raise ConfigurationFailure('已有采集任务排队，请勿重复触发')
+                    if self.remote_worker is not None:
+                        self.remote_worker.require_ready('etf')
                     schedule = self.configuration.load().get('schedule')
                     db.execute('INSERT INTO manual_runs(id,status,requested_at,phase) VALUES (?,?,?,?)',
                                (request_id, 'queued', requested_at, 'queued'))
@@ -561,6 +567,12 @@ class ETFCollection:
         return result
 
     def start(self):
+        if self.remote_worker is not None:
+            # A split API is a durable queue producer, never a local executor.
+            self.remote_worker.signal_queue()
+            return
+        if self.tick_gate is not None and self.tick_gate.closed:
+            return
         with self.thread_lock:
             if self.worker and self.worker.is_alive():
                 return
@@ -601,6 +613,14 @@ class ETFCollection:
                 LOG.warning('ETF scheduler interrupted %s', diagnostic_details(exc))
 
     def tick(self, moment):
+        if self.remote_worker is not None:
+            return False
+        if self.tick_gate is not None:
+            with self.tick_gate.admit() as allowed:
+                if not allowed:
+                    return False
+                with pin_configuration(self.settings):
+                    return self._tick(moment)
         with pin_configuration(self.settings):
             return self._tick(moment)
 

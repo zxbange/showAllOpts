@@ -6,6 +6,7 @@ from starlette.concurrency import run_in_threadpool
 from app.api.routes.accounts import require_admin
 from app.services.accounts import AccountError
 from app.services.etf_configuration import ConfigurationFailure
+from app.services.queue_runtime import QueueExecutorUnavailable
 from app.services.market_collection import CollectionBusy
 
 
@@ -52,6 +53,8 @@ async def call(function, *args):
         return await run_in_threadpool(function, *args)
     except CollectionBusy as error:
         raise HTTPException(409, error.detail()) from None
+    except QueueExecutorUnavailable as error:
+        raise HTTPException(503, str(error)) from None
     except ConfigurationFailure as error:
         raise HTTPException(409, str(error)) from None
     except Exception:

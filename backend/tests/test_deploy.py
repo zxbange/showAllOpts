@@ -42,6 +42,7 @@ class TransactionTests(unittest.TestCase):
         for target, value in [
             ('ROOT', self.project), ('NON_INTERACTIVE', False),
             ('preflight', lambda o: (self.web, {'APP_ENV_FILE': '/private/config'})),
+            ('require_combined_runtime', lambda *a: self.maybe_fail('runtime-role')),
             ('run', self.run_command), ('property_value', self.property),
             ('health_check', self.health), ('owns_listener', lambda *a: True),
             ('frontend_check', self.frontend),
@@ -309,7 +310,7 @@ def activation_case(point, after=False, interrupted=False):
     return test
 
 
-for point in ('fetch','npm','build','pip','pip-check','database','import'):
+for point in ('fetch','npm','build','pip','pip-check','database','import','runtime-role'):
     setattr(TransactionTests, 'test_preparation_failure_'+point.replace('-','_'), preparation_case(point))
 for point in ('stop','merge','restart','health','assets','index'):
     setattr(TransactionTests, 'test_activation_failure_'+point, activation_case(point))

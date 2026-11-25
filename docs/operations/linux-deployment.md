@@ -367,3 +367,6 @@ npm run build
 ## 启用统一账号后的 HTTPS 接入
 
 全站默认拒绝通过 HTTP 登录。现有部署升级请按 [账号与HTTPS配置](账号与HTTPS配置.md) 创建首个管理员、申请 IP 证书并安装自动续期任务。`deploy.sh` 和 GitHub 自动发布不会擅自签发证书、开放端口或替换服务器 Nginx 配置。
+
+### 独立采集执行器与发布
+默认 `COLLECTION_RUNTIME_ROLE=combined` 保持现有 Linux/systemd 自动发布。API-only 发布会在准备前和切换前检查有效角色与约定的独立执行器状态，拒绝 split 配置，避免只替换 API 而留下旧版本 worker。正式双服务切换的版本、排空、权限及回滚验收见 [独立执行器发布保护](queue-runtime-pilot.md#自动发布保护与正式切换的验收条件)。目前不要在生产启用独立执行器或扩大部署权限。

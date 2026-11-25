@@ -40,6 +40,7 @@ def resolve_env_file() -> Path:
 
 class Settings(BaseSettings):
     collection_history_retention_enabled: bool = False
+    collection_runtime_role: Literal['combined', 'split-api', 'queue-worker'] = 'combined'
     _resolved_env_file: Path | None = PrivateAttr(default=None)
 
     @property

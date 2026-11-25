@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 from app.api.routes.accounts import require_admin
 from app.services.accounts import AccountError
 from app.services.etf_configuration import ConfigurationFailure
+from app.services.queue_runtime import QueueExecutorUnavailable
 from app.core.database import get_session
 from app.core.etf_catalog import ETF_GROUPS
 from app.repositories.etf import ETFRepository
@@ -80,6 +81,8 @@ async def collection_body(request):
 async def collection_call(function, *args):
     try:
         return await run_in_threadpool(function, *args)
+    except QueueExecutorUnavailable as error:
+        raise HTTPException(503, str(error)) from None
     except ConfigurationFailure as error:
         raise HTTPException(409, str(error)) from None
     except Exception:

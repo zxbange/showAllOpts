@@ -34,6 +34,7 @@ from app.services.accounts import Accounts
 from app.services.etf_collection import ETFCollection
 from app.services.market_collection import MarketCollection
 from app.services.personal_holdings import PersonalHoldings
+from app.services.queue_runtime import QueueRuntime
 from app.api.routes.accounts import router as accounts_router, require_user
 from fastapi import Depends
 
@@ -51,12 +52,18 @@ def request_route(request):
 
 def create_app(settings: Settings | None = None, engine: Engine | None = None) -> FastAPI:
     settings = settings or Settings()
+    role = settings.collection_runtime_role
+    if role == 'queue-worker':
+        raise RuntimeError('The queue-worker role must use the dedicated process entry, not the API.')
+    queue_runtime = QueueRuntime(settings.log_path, verify_release=role == 'split-api')
+    remote_worker = queue_runtime if role == 'split-api' else None
     database = engine if engine is not None else VersionedDatabase(settings, for_cache=settings.cache_enabled)
 
     cache = SnapshotCache(settings, database)
 
     @asynccontextmanager
     async def lifespan(application: FastAPI):
+        application.state.lifecycle_ready = False
         ensure_logging(settings)
         from datetime import datetime, timezone
 
@@ -87,6 +94,11 @@ def create_app(settings: Settings | None = None, engine: Engine | None = None) -
         # Register cleanup before starting workers, including partially failed startup.
         # ExitStack also continues cleanup if an individual stop() raises.
         async with AsyncExitStack() as cleanup:
+            queue_services = []
+            if role == 'combined':
+                role_lease = queue_runtime.acquire_authority(exclusive=False)
+                cleanup.callback(lambda: queue_runtime.release_after_workers(
+                    role_lease, [getattr(service, 'worker', None) for service in queue_services]))
             cleanup.callback(database.dispose)
             cleanup.push_async_callback(stop_worker, 'cache', cache)
             social = SocialMonitor(settings)
@@ -126,15 +138,21 @@ def create_app(settings: Settings | None = None, engine: Engine | None = None) -
             holdings = PersonalHoldings(settings)
             cleanup.push_async_callback(stop_worker, 'holdings', holdings)
             application.state.personal_holdings = holdings
-            etf_collection = ETFCollection(settings, refresh=cache.refresh_etf_collection)
+            etf_collection = ETFCollection(settings, refresh=cache.refresh_etf_collection,
+                                           remote_worker=remote_worker)
+            queue_services.append(etf_collection)
             cleanup.push_async_callback(stop_worker, 'etf_collection', etf_collection)
             application.state.etf_collection = etf_collection
-            start_worker('etf_collection', etf_collection)
-            market_collection = MarketCollection(settings, refresh=cache.refresh_market_collection, cache=cache)
+            if role == 'combined':
+                start_worker('etf_collection', etf_collection)
+            market_collection = MarketCollection(settings, refresh=cache.refresh_market_collection, cache=cache,
+                                                 remote_worker=remote_worker)
+            queue_services.append(market_collection)
             market_collection.shared_configuration = etf_collection.configuration
             cleanup.push_async_callback(stop_worker, 'market_collection', market_collection)
             application.state.market_collection = market_collection
-            start_worker('market_collection', market_collection)
+            if role == 'combined':
+                start_worker('market_collection', market_collection)
             start_worker('holdings', holdings)
             start_worker('cache', cache)
             start_worker('social', social)
@@ -150,13 +168,18 @@ def create_app(settings: Settings | None = None, engine: Engine | None = None) -
             start_runtime(settings)
             cleanup.push_async_callback(asyncio.to_thread, stop_runtime, settings)
             cleanup.push_async_callback(asyncio.to_thread, stop_notifications, settings)
-            logger.info('Application ready cache_enabled=%s', settings.cache_enabled)
-            yield
+            application.state.lifecycle_ready = True
+            logger.info('Application ready cache_enabled=%s collection_role=%s', settings.cache_enabled, role)
+            try:
+                yield
+            finally:
+                application.state.lifecycle_ready = False
         logger.info('Application shutdown complete')
 
     application = FastAPI(title=settings.app_name, version='1.0.0', lifespan=lifespan,
                           docs_url=None, redoc_url=None, openapi_url=None)
     application.state.cache = cache
+    application.state.lifecycle_ready = False
     application.state.accounts = Accounts(settings)
     application.state.session_factory = sessionmaker(bind=database.current() if isinstance(database, VersionedDatabase) else database, autoflush=False)
     application.add_middleware(CORSMiddleware, allow_origins=settings.cors_origins,
@@ -219,6 +242,17 @@ def create_app(settings: Settings | None = None, engine: Engine | None = None) -
     @application.get('/api/v1/health')
     def health():
         return {'status': 'ok', 'service': 'showallopts-api'}
+
+    @application.get('/api/v1/readiness')
+    def readiness():
+        # Local startup/role heartbeat only. No database or source request,
+        # and no process IDs, paths, credentials or business data.
+        started = application.state.lifecycle_ready
+        queue = queue_runtime.status() if role == 'split-api' else None
+        ready = bool(started and (queue is None or queue['ready']))
+        payload = {'status': 'ready' if ready else 'not_ready', 'service': 'showallopts-api',
+                   'collection_role': role, 'queue_executor': queue['state'] if queue is not None else 'combined'}
+        return JSONResponse(status_code=200 if ready else 503, content=payload)
 
     application.include_router(accounts_router)
     application.include_router(router, dependencies=[Depends(require_user)])
