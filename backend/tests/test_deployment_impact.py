@@ -68,3 +68,19 @@ def test_workflow_keeps_ci_and_manual_deploy():
     assert "scripts/deployment_impact.py" not in workflow
     assert "github.event_name == 'workflow_dispatch' && inputs.operation == 'deploy' && vars.DEPLOY_ENABLED == 'true'" in workflow
     assert 'fetch-depth: 0' in workflow
+
+
+@pytest.mark.parametrize(
+    'paths,expected',
+    [
+        (['README.md'], False),
+        (['README.md', 'docs/notes.md'], False),
+        (['README.md', 'backend/app/main.py'], True),
+        (['README.md', 'scripts/deploy.py'], True),
+        (['README.md.bak'], True),
+        (['readme.md'], True),
+        (['other/README.md'], True),
+    ],
+)
+def test_root_readme_impact_is_exact(paths, expected):
+    assert impact.requires_deployment(paths) is expected
