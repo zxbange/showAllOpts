@@ -2,6 +2,8 @@ export interface CollectionTaskActivity {
   running: boolean
   databaseSyncing: boolean
   runId?: string | null
+  attemptAt?: string | null
+  cancelling?: boolean
 }
 
 export interface CollectionTaskStartResult {
@@ -13,6 +15,8 @@ export interface CollectionTaskStartResult {
 export interface CollectionTaskAdapter<Status> {
   readStatus: (signal: AbortSignal) => Promise<Status>
   start: () => Promise<CollectionTaskStartResult>
+  cancel?: () => Promise<{ cancelled?: boolean }>
+  manualReconcile?: boolean
   activity: (status: Status) => CollectionTaskActivity
   needsHistoryReload: (previous: Status, next: Status) => boolean
   errorText: (reason: unknown) => string
@@ -28,7 +32,16 @@ export interface CollectionTaskSnapshot<Status> {
   pending: boolean
   accepted: boolean
   uncertain: boolean
+  stopping: boolean
   historyRevision: number
+}
+
+// Legacy public-collection APIs expose an attempt timestamp, not a run ID.
+// Only a strictly newer server timestamp counts as a new attempt; no inference
+// of success or publication is made from it.
+function attemptAdvanced(before?: string | null, after?: string | null) {
+  const next = Date.parse(after ?? '')
+  return Number.isFinite(next) && (!before || next > Date.parse(before))
 }
 
 /**
@@ -43,10 +56,14 @@ function createController<Status>(adapter: CollectionTaskAdapter<Status>) {
     pending: false,
     accepted: false,
     uncertain: false,
+    stopping: false,
     historyRevision: 0,
   }
   let runId: string | null = null
   let observedRunning = false
+  let baselineAttempt: string | null | undefined
+  let latestAttemptAt: string | undefined
+  let cancelTarget: CollectionTaskActivity | null = null
   let request: AbortController | null = null
   let timer: ReturnType<typeof setTimeout> | undefined
   let epoch = 0
@@ -69,11 +86,15 @@ function createController<Status>(adapter: CollectionTaskAdapter<Status>) {
     if (!listeners.size || snapshot.pending) return
     const activity = snapshot.status == null ? null : adapter.activity(snapshot.status)
     const active =
-      activity?.running || activity?.databaseSyncing || snapshot.accepted || snapshot.uncertain
+      activity?.running ||
+      activity?.databaseSyncing ||
+      snapshot.accepted ||
+      snapshot.uncertain ||
+      snapshot.stopping
     timer = setTimeout(() => void readStatus(), active ? adapter.activePollMs : adapter.idlePollMs)
   }
 
-  async function readStatus() {
+  async function readStatus(manuallyReconcile = false, refreshHistory = false) {
     if (!listeners.size || snapshot.pending) return
     stopReading()
     const controller = new AbortController()
@@ -84,31 +105,65 @@ function createController<Status>(adapter: CollectionTaskAdapter<Status>) {
       if (controller.signal.aborted || !listeners.size || version !== epoch) return
       const previous = snapshot.status
       const activity = adapter.activity(next)
+      // Remember the latest server attempt across route changes too. A legacy
+      // idle snapshot older than an observed attempt must not reopen controls.
+      if (
+        latestAttemptAt &&
+        (!Number.isFinite(Date.parse(activity.attemptAt ?? '')) ||
+          attemptAdvanced(activity.attemptAt, latestAttemptAt))
+      ) {
+        publish({
+          statusError: '采集状态已过期，正在重新读取。',
+          historyRevision: snapshot.historyRevision + (refreshHistory ? 1 : 0),
+        })
+        return
+      }
+      if (activity.attemptAt && Number.isFinite(Date.parse(activity.attemptAt)))
+        latestAttemptAt = activity.attemptAt
       const matchingRun = !runId || activity.runId === runId
       if (activity.running && matchingRun) observedRunning = true
       const terminal = !activity.running && !activity.databaseSyncing
-      let { accepted, uncertain } = snapshot
-      if (accepted && terminal && (runId ? matchingRun : observedRunning)) {
+      const changedAttempt = attemptAdvanced(baselineAttempt, activity.attemptAt)
+      let { accepted, uncertain, stopping } = snapshot
+      if (accepted && terminal && (runId ? matchingRun : observedRunning || changedAttempt)) {
         accepted = false
         runId = null
       }
-      if (terminal && observedRunning) {
+      if (
+        terminal &&
+        (observedRunning ||
+          (uncertain && changedAttempt) ||
+          (uncertain && manuallyReconcile && adapter.manualReconcile))
+      ) {
         uncertain = false
         observedRunning = false
+      }
+      if (cancelTarget) {
+        const replaced = attemptAdvanced(cancelTarget.attemptAt, activity.attemptAt)
+        const matchesTarget = !cancelTarget.runId || activity.runId === cancelTarget.runId
+        if (replaced || (terminal && matchesTarget)) {
+          stopping = false
+          uncertain = false
+          cancelTarget = null
+        }
       }
       publish({
         status: next,
         statusError: '',
         accepted,
         uncertain,
+        stopping,
         historyRevision:
-          previous != null && adapter.needsHistoryReload(previous, next)
+          refreshHistory || (previous != null && adapter.needsHistoryReload(previous, next))
             ? snapshot.historyRevision + 1
             : snapshot.historyRevision,
       })
     } catch (reason) {
       if (!controller.signal.aborted && listeners.size && version === epoch)
-        publish({ statusError: adapter.errorText(reason) })
+        publish({
+          statusError: adapter.errorText(reason),
+          historyRevision: snapshot.historyRevision + (refreshHistory ? 1 : 0),
+        })
     } finally {
       if (version === epoch) {
         request = null
@@ -124,6 +179,7 @@ function createController<Status>(adapter: CollectionTaskAdapter<Status>) {
       snapshot.pending ||
       snapshot.accepted ||
       snapshot.uncertain ||
+      snapshot.stopping ||
       snapshot.status == null ||
       snapshot.statusError
     )
@@ -133,6 +189,7 @@ function createController<Status>(adapter: CollectionTaskAdapter<Status>) {
     // Synchronous lock, before React rendering or any async work.
     stopReading()
     observedRunning = false
+    baselineAttempt = activity.attemptAt
     runId = null
     publish({ pending: true, actionError: '' })
     try {
@@ -148,11 +205,45 @@ function createController<Status>(adapter: CollectionTaskAdapter<Status>) {
       publish({ uncertain: true, actionError: adapter.errorText(reason) })
     } finally {
       publish({ pending: false })
-      if (listeners.size) {
-        await readStatus()
-        if (listeners.size) publish({ historyRevision: snapshot.historyRevision + 1 })
-      }
+      if (listeners.size) await readStatus(false, true)
     }
+  }
+
+  async function cancel(allowed: boolean) {
+    if (
+      !adapter.cancel ||
+      !allowed ||
+      !listeners.size ||
+      snapshot.pending ||
+      snapshot.stopping ||
+      snapshot.uncertain ||
+      snapshot.status == null ||
+      snapshot.statusError
+    )
+      return
+    const activity = adapter.activity(snapshot.status)
+    if (!activity.running || activity.databaseSyncing || activity.cancelling) return
+    stopReading()
+    cancelTarget = activity
+    observedRunning = true
+    publish({ pending: true, actionError: '' })
+    try {
+      const result = await adapter.cancel()
+      if (result.cancelled === true) publish({ stopping: true })
+      else cancelTarget = null
+    } catch (reason) {
+      publish({ uncertain: true, actionError: adapter.errorText(reason) })
+    } finally {
+      publish({ pending: false })
+      if (listeners.size) await readStatus(false, true)
+    }
+  }
+
+  async function reconcile() {
+    // Existing display-refresh actions may explicitly recheck an ambiguous
+    // legacy command. Ordinary history reads and background polling never
+    // clear that lock merely because an old idle response is returned.
+    if (adapter.manualReconcile && snapshot.uncertain && !snapshot.pending) await readStatus(true)
   }
 
   return {
@@ -171,6 +262,8 @@ function createController<Status>(adapter: CollectionTaskAdapter<Status>) {
       }
     },
     start,
+    cancel,
+    reconcile,
   }
 }
 

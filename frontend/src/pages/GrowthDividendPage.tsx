@@ -1,11 +1,7 @@
 import { PageHeaderActions } from '../components/PageHeaderActions'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Download, RefreshCw, Square, TrendingUp } from 'lucide-react'
-import {
-  getGrowthDividendHistory,
-  getGrowthDividendStatus,
-  updateGrowthDividend,
-} from '../api/growthDividend'
+import { getGrowthDividendHistory } from '../api/growthDividend'
 import { useAuth } from '../components/AccountAccess'
 import { GrowthDividendChart } from '../components/GrowthDividendChart'
 import { PageHeader } from '../components/PageHeader'
@@ -20,24 +16,36 @@ import {
   type GrowthDividendYears,
 } from '../lib/growthDividend'
 import type { GrowthDividendHistory, GrowthDividendStatus } from '../types/growthDividend'
+import { useCollectionTask } from '../hooks/useCollectionTask'
+import {
+  growthDividendCollectionTask,
+  growthCollectionErrorText,
+} from '../lib/growthDividendCollectionTask'
 import '../styles/growth-dividend.css'
 
-const message = (error: unknown) =>
-  error instanceof Error && error.message !== 'Failed to fetch'
-    ? error.message
-    : '暂时无法连接数据服务，请稍后重试。'
-
 export function GrowthDividendPage() {
-  const admin = useAuth().session?.user?.role === 'admin'
+  const { session } = useAuth()
+  const admin = session?.user?.role === 'admin'
+  const {
+    status,
+    statusError: pollError,
+    actionError,
+    pending,
+    accepted,
+    uncertain,
+    stopping,
+    historyRevision,
+    act: startCollection,
+    cancel,
+    reconcile,
+  } = useCollectionTask(growthDividendCollectionTask, session, admin)
   const [data, setData] = useState<GrowthDividendHistory | null>(null)
-  const [status, setStatus] = useState<GrowthDividendStatus | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
-  const [actionError, setActionError] = useState<string | null>(null)
-  const [pollError, setPollError] = useState<string | null>(null)
-  const [uncertain, setUncertain] = useState(false)
-  const [busy, setBusy] = useState(false)
-  const [stopping, setStopping] = useState(false)
+  const historyProgress = useRef(-1)
+  const historyAt = useRef(0)
+  const historyLoading = useRef(false)
+  const historyStatus = useRef<GrowthDividendStatus | null>(null)
   const [revision, setRevision] = useState(0)
   const [selection, setSelection] = useState<GrowthDividendSelection>({ years: 5, revision: 0 })
   const [activeYears, setActiveYears] = useState<GrowthDividendYears | null>(5)
@@ -45,9 +53,12 @@ export function GrowthDividendPage() {
   const [start, setStart] = useState('')
   const [end, setEnd] = useState('')
   const [rangeError, setRangeError] = useState<string | null>(null)
-  const operation = useRef<AbortController | null>(null)
   const editingDates = useRef(false)
   const reload = useCallback(() => setRevision((current) => current + 1), [])
+  const reloadDisplay = () => {
+    reload()
+    void reconcile()
+  }
   const onRangeChange = useCallback((span: DateSpan, manual: boolean) => {
     setShownRange(span)
     if (manual) editingDates.current = false
@@ -58,106 +69,73 @@ export function GrowthDividendPage() {
     if (manual) setActiveYears(null)
   }, [])
 
-  useEffect(() => () => operation.current?.abort(), [])
-
   useEffect(() => {
     const controller = new AbortController()
-    let timer: ReturnType<typeof setTimeout>
-    let previous: GrowthDividendStatus | null = null
-    let historyAt = 0
-    let historyProgress = -1
+    historyLoading.current = true
     setLoading(true)
     setError(null)
-    async function loadHistory() {
-      const result = await getGrowthDividendHistory(controller.signal)
-      if (controller.signal.aborted) return
-      setData(result)
-      setStatus(result.status)
-      setUncertain(false)
-      previous = result.status
-      historyAt = Date.now()
-      historyProgress = result.status.processed
-      if (!result.status.running) setStopping(false)
-      setError(null)
-    }
-    async function poll() {
-      try {
-        const next = await getGrowthDividendStatus(controller.signal)
+    getGrowthDividendHistory(controller.signal)
+      .then((result) => {
         if (controller.signal.aborted) return
-        const completed =
-          !previous ||
-          (previous.running && !next.running) ||
-          (previous.database_syncing && !next.database_syncing) ||
-          previous.last_success_at !== next.last_success_at ||
-          (!next.running && previous.last_attempt_at !== next.last_attempt_at)
-        const progressed =
-          next.running &&
-          next.processed !== historyProgress &&
-          (historyProgress <= 0 || Date.now() - historyAt >= 15000)
-        previous = next
-        setStatus(next)
-        if (!next.running) setStopping(false)
-        if (completed || progressed) await loadHistory()
-        if (!controller.signal.aborted) setPollError(null)
-      } catch (reason) {
-        if (!controller.signal.aborted) setPollError(message(reason))
-      } finally {
-        if (!controller.signal.aborted)
-          timer = setTimeout(poll, previous?.running || previous?.database_syncing ? 2000 : 30000)
-      }
-    }
-    void loadHistory()
+        // The independent /status request is the authority for command state.
+        setData(result)
+        historyAt.current = Date.now()
+        historyProgress.current = result.status.processed
+        historyStatus.current = result.status
+      })
       .catch((reason: unknown) => {
-        if (!controller.signal.aborted) setError(message(reason))
+        if (!controller.signal.aborted) setError(growthCollectionErrorText(reason))
       })
       .finally(() => {
         if (!controller.signal.aborted) {
+          historyLoading.current = false
           setLoading(false)
-          timer = setTimeout(poll, 2000)
         }
       })
     return () => {
       controller.abort()
-      clearTimeout(timer)
+      historyLoading.current = false
     }
-  }, [revision])
+  }, [revision, historyRevision])
 
-  async function act(action: 'refresh' | 'cancel') {
-    if (
-      status?.database_syncing ||
-      operation.current ||
-      !admin ||
-      uncertain ||
-      (status?.running && action !== 'cancel')
-    )
-      return
-    const controller = new AbortController()
-    operation.current = controller
-    setBusy(true)
-    setError(null)
-    setActionError(null)
-    setPollError(null)
-    try {
-      const result = await updateGrowthDividend(action, controller.signal)
-      if (controller.signal.aborted) return
-      if (action === 'cancel' && result.cancelled) setStopping(true)
-      reload()
-    } catch (reason) {
-      if (!controller.signal.aborted) {
-        setUncertain(true)
-        setActionError(message(reason) + ' 操作结果待确认，请重新加载后再操作。')
-      }
-    } finally {
-      if (operation.current === controller) operation.current = null
-      if (!controller.signal.aborted) setBusy(false)
-    }
+  useEffect(() => {
+    if (!status || historyLoading.current) return
+    const shown = historyStatus.current
+    const elapsed = Date.now() - historyAt.current
+    const progressed =
+      status.running &&
+      status.processed !== historyProgress.current &&
+      (historyProgress.current <= 0 || elapsed >= 15000)
+    // A status response can arrive before initial history. Recheck on the
+    // next poll if that history captured an older terminal/publication state.
+    const completedSinceHistory =
+      shown &&
+      elapsed >= 15000 &&
+      !status.running &&
+      !status.database_syncing &&
+      (shown.running ||
+        shown.database_syncing ||
+        status.last_success_at !== shown.last_success_at ||
+        status.last_attempt_at !== shown.last_attempt_at)
+    if (progressed || completedSinceHistory) reload()
+  }, [status, reload])
+
+  function act(action: 'refresh' | 'cancel') {
+    return action === 'refresh' ? startCollection() : cancel()
   }
 
   const latest = data?.latest
   const databaseSyncing = status?.database_syncing ?? false
   const running = !databaseSyncing && (status?.running ?? false)
+  const busy = pending || (!running && (accepted || stopping))
   const progress = status?.percent == null ? null : Math.max(0, Math.min(100, status.percent))
-  const shownError = actionError || error || pollError || (!running ? status?.error : null)
+  const shownError =
+    (actionError && uncertain
+      ? actionError + ' 操作结果待确认，请重新加载后再操作。'
+      : actionError) ||
+    error ||
+    pollError ||
+    (!running ? status?.error : null)
 
   return (
     <div className="page-enter growth-dividend-page">
@@ -171,7 +149,7 @@ export function GrowthDividendPage() {
           <button
             className="button button-quiet icon-button"
             aria-label="刷新创红比展示数据"
-            onClick={reload}
+            onClick={reloadDisplay}
             disabled={loading}
           >
             <RefreshCw size={16} className={loading ? 'spin' : ''} />
@@ -328,7 +306,7 @@ export function GrowthDividendPage() {
           <button
             className="button button-quiet"
             onClick={() => void act('cancel')}
-            disabled={busy || stopping || status?.cancelling || !admin || uncertain}
+            disabled={busy || stopping || status?.cancelling || !admin || uncertain || !!pollError}
           >
             <Square size={15} />
             {stopping || status?.cancelling ? '正在停止…' : '取消采集'}
@@ -337,7 +315,9 @@ export function GrowthDividendPage() {
           <button
             className="button button-primary"
             onClick={() => void act('refresh')}
-            disabled={databaseSyncing || busy || loading || !admin || uncertain}
+            disabled={
+              databaseSyncing || busy || loading || !admin || uncertain || !status || !!pollError
+            }
           >
             <Download size={16} />
             {databaseSyncing ? '数据库同步中' : busy ? '正在启动…' : '更新数据'}

@@ -10,5 +10,11 @@ export function useCollectionTask<Status>(
 ) {
   const controller = task(session ?? anonymousScope)
   const state = useSyncExternalStore(controller.subscribe, controller.getSnapshot)
-  return { ...state, act: () => controller.start(session != null && canStart) }
+  const allowed = session != null && canStart
+  return {
+    ...state,
+    act: () => controller.start(allowed),
+    cancel: () => controller.cancel(allowed),
+    reconcile: controller.reconcile,
+  }
 }

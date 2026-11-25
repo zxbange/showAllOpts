@@ -364,3 +364,41 @@ test('legacy date correction does not add explanatory text to the page', async (
   await expect(page.locator('.margin-chart canvas')).toBeVisible()
   await expect(page.getByText('已核验原文件并按统计日期保存。', { exact: false })).toHaveCount(0)
 })
+
+test('a stale history response cannot hide the currently running collection', async ({ page }) => {
+  const current: MarginStatus = {
+    ...status,
+    running: true,
+    stage: '采集中（最新状态）',
+    last_attempt_at: '2026-11-24T16:00:00+08:00',
+  }
+  let historyReads = 0
+  await page.route('**/api/v1/margin-guarantee/**', (route) => {
+    if (route.request().url().endsWith('/status')) return route.fulfill({ json: current })
+    historyReads++
+    return route.fulfill({ json: { ...history, status } })
+  })
+  await page.clock.install()
+  await page.goto('/margin-guarantee')
+  const cancel = page.getByRole('button', { name: '取消采集', exact: true })
+  await expect
+    .poll(async () => {
+      await page.clock.fastForward(2000)
+      return cancel.isVisible()
+    })
+    .toBe(true)
+  await expect(page.locator('.margin-chart canvas')).toBeVisible()
+  // Freeze polling so the stale history cannot be masked by a later status GET.
+  await page.clock.pauseAt(new Date((await page.evaluate(() => Date.now())) + 1000))
+  const previous = historyReads
+  const refresh = page.getByRole('button', { name: '刷新两融展示数据' })
+  await expect(refresh).toBeEnabled()
+  await refresh.evaluate((button: HTMLButtonElement) => button.click())
+  await expect.poll(() => historyReads).toBeGreaterThan(previous)
+  await expect(refresh).toBeEnabled()
+  await expect(cancel).toBeEnabled()
+  await expect(page.getByRole('button', { name: '更新数据', exact: true })).toHaveCount(0)
+  await expect(
+    page.getByRole('main').getByRole('status').filter({ hasText: '采集中（最新状态）' }),
+  ).toBeVisible()
+})
