@@ -1,5 +1,5 @@
 import { useEffect, useRef } from 'react'
-import { init, use } from 'echarts/core'
+import { init, use as registerChartComponents } from 'echarts/core'
 import { BarChart, LineChart } from 'echarts/charts'
 import {
   GridComponent,
@@ -10,7 +10,7 @@ import {
 } from 'echarts/components'
 import { CanvasRenderer } from 'echarts/renderers'
 import { chartColors } from '../lib/chartTheme'
-use([
+registerChartComponents([
   BarChart,
   LineChart,
   GridComponent,

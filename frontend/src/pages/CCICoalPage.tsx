@@ -1,6 +1,6 @@
 import { PageHeaderActions } from '../components/PageHeaderActions'
 import { useEffect, useRef, useState } from 'react'
-import { init, use } from 'echarts/core'
+import { init, use as registerChartComponents } from 'echarts/core'
 import { LineChart } from 'echarts/charts'
 import {
   GridComponent,
@@ -12,7 +12,7 @@ import {
 import { CanvasRenderer } from 'echarts/renderers'
 import { apiFetch } from '../api/http'
 import { useAuth } from '../components/AccountAccess'
-use([
+registerChartComponents([
   LineChart,
   GridComponent,
   TooltipComponent,

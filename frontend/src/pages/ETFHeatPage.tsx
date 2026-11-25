@@ -1,15 +1,7 @@
 import { PageHeader } from '../components/PageHeader'
 import { useCallback, useMemo, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
-import {
-  ArrowLeft,
-  Flame,
-  RefreshCw,
-  Search,
-  TrendingUp,
-  Layers,
-  CheckCircle2,
-} from 'lucide-react'
+import { ArrowLeft, Flame, RefreshCw, Search, TrendingUp, Layers, CheckCircle2 } from 'lucide-react'
 import { getETFHeat, getETFHeatHistory } from '../api/client'
 import { useResource } from '../hooks/useResource'
 import { EmptyState, ErrorState, LoadingState } from '../components/States'

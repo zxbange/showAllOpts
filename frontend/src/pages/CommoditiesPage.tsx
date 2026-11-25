@@ -5,7 +5,7 @@ import { Coins } from 'lucide-react'
 import { useSearchParams } from 'react-router-dom'
 import { CCICoalPage } from './CCICoalPage'
 import { useEffect, useRef, useState } from 'react'
-import { init, use } from 'echarts/core'
+import { init, use as registerChartComponents } from 'echarts/core'
 import { LineChart, CustomChart } from 'echarts/charts'
 import {
   GridComponent,
@@ -18,7 +18,7 @@ import { CanvasRenderer } from 'echarts/renderers'
 import { apiFetch } from '../api/http'
 import { useAuth } from '../components/AccountAccess'
 import '../styles/commodities.css'
-use([
+registerChartComponents([
   LineChart,
   CustomChart,
   GridComponent,

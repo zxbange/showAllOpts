@@ -3,8 +3,10 @@
 Manual collection remains available on closed/unknown dates. Its failed work
 must not be enrolled in automatic retries; normal later schedules are separate.
 """
-from datetime import date, datetime, timedelta
+
 import re
+from collections.abc import Callable, Sequence
+from datetime import date, datetime, timedelta
 from zoneinfo import ZoneInfo
 
 from app.services.holdings_calendar import trading_day
@@ -25,7 +27,9 @@ def manual_failure_isolated(moment: datetime | date) -> bool:
     return not automatic_collection_allowed(moment)
 
 
-def latest_due_slot(moment: datetime, times, *, is_open=None) -> datetime | None:
+def latest_due_slot(
+    moment: datetime, times: Sequence[str], *, is_open: Callable[[date], bool | None] | None = None
+) -> datetime | None:
     """Latest configured slot at/before a frozen request, in Beijing time.
 
     With no calendar predicate, schedule days are civil dates. Otherwise only
@@ -36,10 +40,13 @@ def latest_due_slot(moment: datetime, times, *, is_open=None) -> datetime | None
     """
     if moment.tzinfo is None or moment.utcoffset() is None:
         raise ValueError('Timezone-aware schedule time required')
-    if (not isinstance(times, (list, tuple)) or not times or
-            any(not isinstance(value, str) or not _SCHEDULE_TIME.fullmatch(value) for value in times)):
+    if (
+        not isinstance(times, (list, tuple))
+        or not times
+        or any(not isinstance(value, str) or not _SCHEDULE_TIME.fullmatch(value) for value in times)
+    ):
         raise ValueError('Configured collection times must use HH:MM')
-    clocks = sorted({tuple(map(int, value.split(':'))) for value in times}, reverse=True)
+    clocks = sorted({(int(value[:2]), int(value[3:])) for value in times}, reverse=True)
     local = moment.astimezone(CHINA)
     day = local
     for _ in range(370):

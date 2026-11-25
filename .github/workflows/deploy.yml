@@ -3,6 +3,8 @@ name: Test and deploy main
 on:
   push:
     branches: [main]
+  pull_request:
+    branches: [main]
   workflow_dispatch:
     inputs:
       operation:
@@ -14,9 +16,10 @@ on:
 permissions:
   contents: read
 
-# Do not interrupt an active release/rollback. Up to 100 runs can wait in this queue.
+# PR checks have their own queue and never block or cancel a production release.
+# Do not interrupt an active release/rollback.
 concurrency:
-  group: showallopts-production
+  group: ${{ github.event_name == 'pull_request' && format('showallopts-pr-{0}', github.event.pull_request.number) || 'showallopts-production' }}
   cancel-in-progress: false
   queue: max
 
@@ -26,7 +29,11 @@ jobs:
       fail-fast: false
       matrix:
         shard: [1, 2, 3]
-    if: github.repository == 'zxbange/showAllOpts' && github.ref == 'refs/heads/main'
+    if: >-
+      github.repository == 'zxbange/showAllOpts' &&
+      ((github.event_name == 'pull_request' && github.event.pull_request.base.ref == 'main') ||
+       ((github.event_name == 'push' || github.event_name == 'workflow_dispatch') &&
+        github.ref == 'refs/heads/main'))
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
@@ -51,7 +58,11 @@ jobs:
       fail-fast: false
       matrix:
         shard: [1, 2]
-    if: github.repository == 'zxbange/showAllOpts' && github.ref == 'refs/heads/main'
+    if: >-
+      github.repository == 'zxbange/showAllOpts' &&
+      ((github.event_name == 'pull_request' && github.event.pull_request.base.ref == 'main') ||
+       ((github.event_name == 'push' || github.event_name == 'workflow_dispatch') &&
+        github.ref == 'refs/heads/main'))
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     container:
@@ -74,6 +85,9 @@ jobs:
           node-version: '22'
           package-manager-cache: false
       - run: npm ci --no-audit --no-fund
+      - name: Check frontend engineering quality
+        if: matrix.shard == 1
+        run: npm run quality:check
       - run: npm test
       - run: npm run build
       - name: Verify the locked preinstalled browser and launch Chromium
@@ -98,9 +112,130 @@ jobs:
           include-hidden-files: false
           if-no-files-found: warn
 
-  deploy:
-    needs: [backend, frontend]
+  backend-quality:
     if: >-
+      github.repository == 'zxbange/showAllOpts' &&
+      ((github.event_name == 'pull_request' && github.event.pull_request.base.ref == 'main') ||
+       ((github.event_name == 'push' || github.event_name == 'workflow_dispatch') &&
+        github.ref == 'refs/heads/main'))
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+          fetch-depth: 0
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: '3.12'
+      - name: Install backend quality dependencies
+        run: |
+          python -m pip install --disable-pip-version-check -r backend/requirements.lock.txt -r backend/requirements-dev.txt
+          python -m pip install --disable-pip-version-check -r backend/requirements-quality.txt
+          python -m pip check
+      - name: Check backend engineering quality
+        env:
+          QUALITY_BASE_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.event_name == 'push' && github.event.before || '' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          args=()
+          if [[ -n "$QUALITY_BASE_SHA" && "$QUALITY_BASE_SHA" != 0000000000000000000000000000000000000000 ]]; then
+            [[ "$QUALITY_BASE_SHA" =~ ^[0-9a-f]{40}$ ]]
+            git cat-file -e "$QUALITY_BASE_SHA^{commit}"
+            args=(--base "$QUALITY_BASE_SHA")
+          fi
+          python backend/check_quality.py "${args[@]}"
+
+  mysql-integration:
+    if: >-
+      github.repository == 'zxbange/showAllOpts' &&
+      ((github.event_name == 'pull_request' && github.event.pull_request.base.ref == 'main') ||
+       ((github.event_name == 'push' || github.event_name == 'workflow_dispatch') &&
+        github.ref == 'refs/heads/main'))
+    strategy:
+      fail-fast: false
+      matrix:
+        mysql: ['8.4', '5.7.44']
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    services:
+      mysql:
+        image: mysql:${{ matrix.mysql }}
+        env:
+          # Disposable, fixed CI account only. No repository/production credentials.
+          MYSQL_DATABASE: showallopts_ci
+          MYSQL_USER: showallopts_ci
+          MYSQL_PASSWORD: showallopts_ci_password
+          MYSQL_ROOT_PASSWORD: showallopts_ci_root_only
+        ports:
+          - 3306/tcp
+        options: >-
+          --health-cmd="mysqladmin ping --host=127.0.0.1 --silent --connect-timeout=2"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=12
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+          fetch-depth: 0
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: '3.12'
+      - name: Install locked integration-test dependencies
+        run: |
+          python -m pip install --disable-pip-version-check -r backend/requirements.lock.txt -r backend/requirements-dev.txt
+          python -m pip check
+      - name: Require real MySQL integration tests
+        env:
+          SHOWALLOPTS_TEST_MYSQL: '1'
+          SHOWALLOPTS_TEST_MYSQL_PORT: ${{ job.services.mysql.ports[3306] }}
+        working-directory: backend
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pytest -q tests/integration/test_mysql_dividend.py --junitxml="$RUNNER_TEMP/mysql-tests.xml"
+          python - "$RUNNER_TEMP/mysql-tests.xml" <<'PYTHON'
+          import sys
+          import xml.etree.ElementTree as ET
+
+          root = ET.parse(sys.argv[1]).getroot()
+          cases = root.findall(".//testcase")
+          if not cases or any(case.find("skipped") is not None for case in cases):
+              raise SystemExit("Required real MySQL integration tests were not all executed.")
+          PYTHON
+
+  ci-gate:
+    name: CI gate
+    needs: [backend, frontend, backend-quality, mysql-integration]
+    if: >-
+      always() && github.repository == 'zxbange/showAllOpts' &&
+      ((github.event_name == 'pull_request' && github.event.pull_request.base.ref == 'main') ||
+       ((github.event_name == 'push' || github.event_name == 'workflow_dispatch') &&
+        github.ref == 'refs/heads/main'))
+    runs-on: ubuntu-24.04
+    timeout-minutes: 2
+    steps:
+      - name: Require every test and quality result
+        env:
+          BACKEND_RESULT: ${{ needs.backend.result }}
+          FRONTEND_RESULT: ${{ needs.frontend.result }}
+          QUALITY_RESULT: ${{ needs.backend-quality.result }}
+          MYSQL_RESULT: ${{ needs.mysql-integration.result }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          for result in "$BACKEND_RESULT" "$FRONTEND_RESULT" "$QUALITY_RESULT" "$MYSQL_RESULT"; do
+            [[ "$result" == success ]] || { echo 'A required CI job failed, was skipped, or was cancelled.' >&2; exit 1; }
+          done
+
+  deploy:
+    needs: [ci-gate]
+    if: >-
+      needs.ci-gate.result == 'success' &&
       github.repository == 'zxbange/showAllOpts' && github.ref == 'refs/heads/main' &&
       ((github.event_name == 'push' && vars.DEPLOY_ENABLED == 'true') ||
        (github.event_name == 'workflow_dispatch' && inputs.operation == 'deploy' && vars.DEPLOY_ENABLED == 'true') ||

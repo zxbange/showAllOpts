@@ -1,0 +1,3384 @@
+{
+  "version": 1,
+  "lint": {
+    "backend/app/api/router.py": {
+      "I001:d27a33f424bc38c3e8f3": 1
+    },
+    "backend/app/api/routes/accounts.py": {
+      "B008:15f8d3285c4cd8f64812": 1,
+      "B008:1effc96c5a7102648497": 1,
+      "B008:de1351d0f063fea74c87": 1,
+      "I001:d3731201d14c6039d599": 1
+    },
+    "backend/app/api/routes/breadth.py": {
+      "I001:500da9ca03aa4afb3236": 1
+    },
+    "backend/app/api/routes/cache.py": {
+      "I001:fb72e65ab3a1eb1ccf83": 1
+    },
+    "backend/app/api/routes/cash_cow.py": {
+      "B008:4625f003da157e5b8882": 1,
+      "B008:8715564c03c0a615237e": 1,
+      "B008:cf696e0ba53b6982cf5f": 1,
+      "B008:d799d11939a1e94eeff8": 1,
+      "I001:a116601f2cc29eb5bc49": 1
+    },
+    "backend/app/api/routes/collection_outcomes.py": {
+      "I001:bb3cd542c2e529a1d6cf": 1
+    },
+    "backend/app/api/routes/commodities.py": {
+      "B008:33d293f4706da2853eb2": 1,
+      "B008:6d59458c337f21cba23c": 1,
+      "B008:b3956feb496491f8a8f9": 1,
+      "B008:d092f8d7982eaffab73d": 1,
+      "I001:75c5ece990f597d89fbf": 1
+    },
+    "backend/app/api/routes/crowding.py": {
+      "I001:500da9ca03aa4afb3236": 1
+    },
+    "backend/app/api/routes/dividend.py": {
+      "B008:600b06b1e7e30639f9fb": 1,
+      "B008:9574915a8982d2284a7e": 1,
+      "B008:c44f08c47d96d30be2c1": 1,
+      "I001:eedf0547e37a4481ec69": 1
+    },
+    "backend/app/api/routes/etf.py": {
+      "B008:17981847f2ac2030d4d9": 1,
+      "I001:500da9ca03aa4afb3236": 1
+    },
+    "backend/app/api/routes/etf_heat.py": {
+      "I001:eedf0547e37a4481ec69": 1
+    },
+    "backend/app/api/routes/growth_dividend.py": {
+      "B008:2954fd6101808a604bc2": 1,
+      "B008:470fb8bc1d8ff6e2ba94": 1,
+      "B008:8be76a35abc4c54c32dc": 1,
+      "B008:d092f8d7982eaffab73d": 1
+    },
+    "backend/app/api/routes/margin_guarantee.py": {
+      "B008:2954fd6101808a604bc2": 1,
+      "B008:470fb8bc1d8ff6e2ba94": 1,
+      "B008:8be76a35abc4c54c32dc": 1,
+      "B008:d092f8d7982eaffab73d": 1
+    },
+    "backend/app/api/routes/market_collection.py": {
+      "B008:98e8b2ab9c82e3d3ce40": 1,
+      "I001:2c2303ee67d91008a625": 1
+    },
+    "backend/app/api/routes/ownership.py": {
+      "I001:500da9ca03aa4afb3236": 1
+    },
+    "backend/app/api/routes/personal_holdings.py": {
+      "B008:27fbe308291e660f7126": 1,
+      "B008:7b8bbdc72c37085b2eaa": 1,
+      "B008:9c5e85bef233345776f3": 1,
+      "B008:a02f154695c7d42a6d6a": 1,
+      "B008:be0f9428782f3ae79a6e": 1,
+      "B008:c687dc60fe381d31929a": 2,
+      "B008:e86b3ff33faab2db5971": 1,
+      "B008:f3b4983304b46216bb70": 1,
+      "I001:500da9ca03aa4afb3236": 1
+    },
+    "backend/app/api/routes/sentiment.py": {
+      "I001:500da9ca03aa4afb3236": 1
+    },
+    "backend/app/api/routes/social.py": {
+      "B008:2794e15a98cf6721521b": 1,
+      "B008:2f1aa620d3644f9b5cfe": 1,
+      "B008:33e58fea4745ed2fa8e4": 1,
+      "B008:416c524a4b8ab2964a51": 1,
+      "B008:4d9149ff1b5b4ee12c0e": 1,
+      "B008:60e7af7f3d2bbac9f0f7": 1,
+      "B008:91377ecaca518062891d": 1,
+      "B008:9147a956c9eecceb8755": 1,
+      "B008:978aacf5b83229b87f27": 1,
+      "B008:aadce60b183a08c0f14e": 1,
+      "B008:d850a5f6feed78018ee9": 1,
+      "B008:e0ccc990b116b1a455e5": 1,
+      "B008:f31e58531383b1537f43": 1,
+      "I001:a89b86d86c7a9464943d": 1
+    },
+    "backend/app/api/routes/social_browser.py": {
+      "B008:5e44f1b93c18f45e0a05": 1,
+      "B008:601b7113913734d7d6a2": 1,
+      "B008:69767b1f3ae9303958b0": 1,
+      "B008:fb27b38a4c056ae75990": 1,
+      "B008:fcbbb5a1a8432b176857": 1,
+      "I001:a89b86d86c7a9464943d": 1
+    },
+    "backend/app/api/routes/system_configuration.py": {
+      "B008:f02db87c0b1a07a6ea05": 1,
+      "I001:5a185032e7c6e08a194d": 1,
+      "I001:6c97a8425ee70d1e4f77": 1
+    },
+    "backend/app/api/routes/valuation_ruler.py": {
+      "B008:0f8cffbcb1ac9220b3e3": 1,
+      "B008:8be76a35abc4c54c32dc": 1,
+      "B008:d092f8d7982eaffab73d": 1,
+      "B008:f8c6bc54a9c483f396b6": 1,
+      "I001:e43de9e232f2689206b3": 1
+    },
+    "backend/app/core/cache.py": {
+      "B023:04f8cacb12986df4a63c": 1,
+      "B023:35e01212109eba1c2e03": 1,
+      "B023:3ababfa331990f539a1c": 1,
+      "B023:553509d0a154e9cfc1a3": 1,
+      "B023:5f7737e686b6b30625a2": 1,
+      "B023:9e1cb0c96b8afdbaec55": 1,
+      "B023:fd1e81bbcec42974f6b6": 1,
+      "E402:037c7cb7404a4f905f09": 1,
+      "E402:06dbfa0af9f1fd04767e": 1,
+      "E402:17b51389b46f80417cf5": 1,
+      "E402:19ae6286c74b6de250d1": 1,
+      "E402:19c26ef301c43bb9e80e": 1,
+      "E402:205507797324335154ab": 1,
+      "E402:210196ff22e608a21a7a": 1,
+      "E402:2187716b5f1cc1a7c794": 1,
+      "E402:23921537ba7dff87296b": 1,
+      "E402:273308c9408d73d2fcd7": 1,
+      "E402:2be0f5e7bb134759e94d": 1,
+      "E402:34cecb3457a034dcfa1c": 1,
+      "E402:3f24368750890b1427a7": 1,
+      "E402:45319782cdf02b659241": 1,
+      "E402:53f3fa119e47c6342aab": 1,
+      "E402:59c8aad6975ed36bd609": 1,
+      "E402:6dcd3199f217be8ab12d": 1,
+      "E402:7a6fd6c66025d4d11190": 1,
+      "E402:7f37e06af964a220f06a": 1,
+      "E402:7ffeee7559f1e2b0aca6": 1,
+      "E402:90e207b0438bd2382629": 1,
+      "E402:9b99b749c642ce381370": 1,
+      "E402:a86fa6465822150a8242": 1,
+      "E402:a993eab22d57224ccbd5": 1,
+      "E402:b54c483164fde549594d": 1,
+      "E402:b6a6458711c6b461963c": 1,
+      "E402:b82dfcbbfcca126b058f": 1,
+      "E402:b949bc6844f7fd302938": 1,
+      "E402:bc1253878f46e464f6f2": 1,
+      "E402:d29e9364f136ef3b202f": 1,
+      "E402:d3be11ffd0db067cb1ff": 1,
+      "E402:db842083a17d20a09158": 1,
+      "E402:f8ed4e7ef157aa149de4": 1,
+      "E402:fbead6a4515e3f80fcbe": 1,
+      "E402:fedb14be9e1bd6f3bd07": 1,
+      "I001:8b49b23adc22228d7ba1": 1,
+      "I001:8bd01e378743df9f655f": 1,
+      "I001:d158c93704ab55d296b1": 1
+    },
+    "backend/app/core/cache_errors.py": {
+      "I001:645cfa1c18b0203f1555": 1
+    },
+    "backend/app/core/cache_schedule.py": {
+      "I001:716fbe1d4171e065883b": 1
+    },
+    "backend/app/core/cache_sync.py": {
+      "I001:5a185032e7c6e08a194d": 1
+    },
+    "backend/app/core/config.py": {
+      "I001:96372e4af67bf0b1825e": 1
+    },
+    "backend/app/core/database.py": {
+      "E701:019a2ecd60b12c2fd6dd": 1,
+      "E701:16abfaf9b051494147da": 2,
+      "E701:4ccd5dd6f7e037d759c5": 1,
+      "E701:4d7bbbe86e670f43a663": 1,
+      "E701:e42113ac0a5cecc1284c": 1,
+      "I001:635b34f077779658a8c1": 1,
+      "I001:e47f3ff00d3009d89bdf": 1
+    },
+    "backend/app/core/diagnostics.py": {
+      "I001:2f5143689e9a68a92730": 1
+    },
+    "backend/app/core/etf_snapshot.py": {
+      "I001:503792f266494d284594": 1
+    },
+    "backend/app/core/etf_sync.py": {
+      "B905:890c83b4ceb8ad711de9": 1,
+      "I001:43e012ff2861b485e9c3": 1
+    },
+    "backend/app/core/history_sync.py": {
+      "I001:40f65f1908ac2f862c6f": 1,
+      "I001:462c74f7196b41dc78c1": 1
+    },
+    "backend/app/core/ownership_baseline.py": {
+      "I001:5a185032e7c6e08a194d": 1
+    },
+    "backend/app/core/ownership_sync.py": {
+      "I001:5a185032e7c6e08a194d": 1
+    },
+    "backend/app/core/result_sync.py": {
+      "B905:d95ba8183cce33c39eeb": 1,
+      "I001:500da9ca03aa4afb3236": 1
+    },
+    "backend/app/core/worker_diagnostics.py": {
+      "I001:2c1674f05bd32e01d3fa": 1
+    },
+    "backend/app/main.py": {
+      "F401:0848d26a3cfef40c5b57": 1,
+      "I001:1a4bc52331cf16c78be9": 1,
+      "I001:5a185032e7c6e08a194d": 1
+    },
+    "backend/app/models/breadth.py": {
+      "I001:a1ebbdc32b1385e4ffd1": 1
+    },
+    "backend/app/models/cash_cow.py": {
+      "I001:0d020d4b7834de0e54ad": 1
+    },
+    "backend/app/models/dividend.py": {
+      "I001:47ca67900b4918a1ba00": 1
+    },
+    "backend/app/models/etf_heat.py": {
+      "I001:9f3cf6431f73fb4c4311": 1
+    },
+    "backend/app/models/ownership.py": {
+      "I001:d672d868e7cd7645321c": 1
+    },
+    "backend/app/models/sentiment.py": {
+      "I001:a1ebbdc32b1385e4ffd1": 1
+    },
+    "backend/app/repositories/breadth.py": {
+      "I001:500da9ca03aa4afb3236": 1
+    },
+    "backend/app/repositories/dividend.py": {
+      "I001:ecd83b93dd12128f7f88": 1
+    },
+    "backend/app/repositories/etf_heat.py": {
+      "I001:6b56e8d498eb7b753bc8": 1
+    },
+    "backend/app/repositories/microcap.py": {
+      "I001:500da9ca03aa4afb3236": 1
+    },
+    "backend/app/repositories/ownership.py": {
+      "I001:ceab782e0550b4f5819b": 1
+    },
+    "backend/app/repositories/sentiment.py": {
+      "I001:500da9ca03aa4afb3236": 1
+    },
+    "backend/app/schemas/breadth.py": {
+      "I001:e7137d000588a59b074a": 1
+    },
+    "backend/app/schemas/dividend.py": {
+      "I001:a1ebbdc32b1385e4ffd1": 1
+    },
+    "backend/app/schemas/etf.py": {
+      "I001:e7137d000588a59b074a": 1
+    },
+    "backend/app/schemas/etf_heat.py": {
+      "I001:a1ebbdc32b1385e4ffd1": 1
+    },
+    "backend/app/schemas/ownership.py": {
+      "I001:a1ebbdc32b1385e4ffd1": 1
+    },
+    "backend/app/schemas/sentiment.py": {
+      "I001:a1ebbdc32b1385e4ffd1": 1
+    },
+    "backend/app/services/accounts.py": {
+      "I001:2c1674f05bd32e01d3fa": 1
+    },
+    "backend/app/services/breadth.py": {
+      "B905:2d1528c099519440e6c3": 1,
+      "I001:57e4ec98c6a9d8ea166e": 1
+    },
+    "backend/app/services/cash_cow.py": {
+      "E402:037c7cb7404a4f905f09": 1,
+      "E402:273308c9408d73d2fcd7": 1,
+      "E402:2be0f5e7bb134759e94d": 1,
+      "E402:36aa21ec1bd68ad280e8": 1,
+      "E402:6e33b307a64a141a4695": 1,
+      "E402:9781718638dff9308fce": 1,
+      "E402:9b77a18be6bdffa40dab": 1,
+      "E402:9b99b749c642ce381370": 1,
+      "E402:a86fa6465822150a8242": 1,
+      "E402:b91204fbb27179650166": 1,
+      "E402:bc1253878f46e464f6f2": 1,
+      "E402:c01ae15564c6d88d7cd3": 1,
+      "E402:d29e9364f136ef3b202f": 1,
+      "E402:d3be11ffd0db067cb1ff": 1,
+      "E402:dcfeb942bb07abc7dd56": 1,
+      "E402:e377baff56d0ad635e94": 1,
+      "F401:14703155151b747a0b96": 1,
+      "F401:35d4a029e4752a66d028": 1,
+      "I001:0fbad4ce2d7b41acc045": 1,
+      "I001:616696bad159deedffb3": 1,
+      "I001:95181fe1c8948dee187e": 1,
+      "I001:f7dee3b14d3d48a61e82": 1
+    },
+    "backend/app/services/cash_cow_combined.py": {
+      "E402:2d60d124c02b1e776b23": 1,
+      "E402:34aacd3ade5ff8031dfb": 1,
+      "E702:56e6c83d4762c0b06083": 1,
+      "E702:cf78bd03ed2bceacb1dc": 2,
+      "I001:4e803627da324ab69dbf": 1,
+      "I001:6dfe5637f059b7a379c7": 1
+    },
+    "backend/app/services/cash_cow_import.py": {
+      "I001:cc205ebbec335ff25d2f": 1
+    },
+    "backend/app/services/cash_cow_rules.py": {
+      "I001:57e4ec98c6a9d8ea166e": 1
+    },
+    "backend/app/services/cash_cow_source.py": {
+      "E402:34cecb3457a034dcfa1c": 1,
+      "E402:53f3fa119e47c6342aab": 1,
+      "E402:7ffeee7559f1e2b0aca6": 1,
+      "E402:b7883d17bf1b2b74f8b2": 1,
+      "E402:d48a5ff4b96ea502712a": 1,
+      "E402:dcfeb942bb07abc7dd56": 1,
+      "I001:500da9ca03aa4afb3236": 1,
+      "I001:e7fa38b6a63c55785057": 1
+    },
+    "backend/app/services/cci_coal.py": {
+      "E402:037c7cb7404a4f905f09": 1,
+      "E402:1a6ea4de44f735cbe8c8": 1,
+      "E402:53f3fa119e47c6342aab": 1,
+      "E402:5a4fdde9f776e273a973": 1,
+      "E402:66063475e9e6b3e69c88": 1,
+      "E402:9781718638dff9308fce": 1,
+      "E402:9b77a18be6bdffa40dab": 1,
+      "E402:a86fa6465822150a8242": 1,
+      "E402:b91204fbb27179650166": 1,
+      "E402:d3be11ffd0db067cb1ff": 1,
+      "E402:dcfeb942bb07abc7dd56": 1,
+      "I001:8b49b23adc22228d7ba1": 1,
+      "I001:f7dee3b14d3d48a61e82": 1
+    },
+    "backend/app/services/cci_source.py": {
+      "I001:500da9ca03aa4afb3236": 1
+    },
+    "backend/app/services/collection_errors.py": {
+      "I001:5bd2a8e0808451796556": 1
+    },
+    "backend/app/services/collection_notifications.py": {
+      "I001:43e012ff2861b485e9c3": 1
+    },
+    "backend/app/services/collection_outcomes.py": {
+      "I001:2c1674f05bd32e01d3fa": 1,
+      "I001:900f92317a7d06155aa8": 1
+    },
+    "backend/app/services/collection_retention.py": {
+      "I001:7fffdf710f2340ad1d36": 1
+    },
+    "backend/app/services/collection_summary.py": {
+      "B023:1533e2118878bfd05321": 1,
+      "E731:66c65af65f7dc023d4d1": 1,
+      "E731:b5da084bcdc67a9da7c0": 1,
+      "E731:ef346cdbc2f9431f8f21": 1
+    },
+    "backend/app/services/commodities.py": {
+      "E402:037c7cb7404a4f905f09": 1,
+      "E402:1cc53c57adf013f32a9b": 1,
+      "E402:273308c9408d73d2fcd7": 1,
+      "E402:2be0f5e7bb134759e94d": 1,
+      "E402:36aa21ec1bd68ad280e8": 1,
+      "E402:53f3fa119e47c6342aab": 1,
+      "E402:5990c3911a59858d0781": 1,
+      "E402:87e5110435406a61309d": 1,
+      "E402:9781718638dff9308fce": 1,
+      "E402:9b77a18be6bdffa40dab": 1,
+      "E402:9b99b749c642ce381370": 1,
+      "E402:a86fa6465822150a8242": 1,
+      "E402:b91204fbb27179650166": 1,
+      "E402:d3be11ffd0db067cb1ff": 1,
+      "E402:dcfeb942bb07abc7dd56": 1,
+      "E701:0e7fbe961a4aee0ca01d": 1,
+      "E701:149d66b61ff26c958101": 1,
+      "E701:426fa073470ddaa1efb6": 1,
+      "E701:7aae433b5a763c604b91": 1,
+      "E701:7de1fb05510ce2559309": 1,
+      "E701:7dfa722be972454fa28c": 1,
+      "E701:9b7ed1f648f3c12786e8": 1,
+      "E701:c7373dda34114c9fe660": 1,
+      "E701:d32748fa0fcd085d1c55": 1,
+      "E701:d6e7775d9d1cfd32226d": 1,
+      "E701:dbfc6ce64db63e1cdcff": 1,
+      "E701:e40bf748c518b1e767b8": 1,
+      "E701:f31fedbf4ebe0b0f7495": 1,
+      "E702:2889f632e0abe00fb0dc": 1,
+      "E702:3d9cddee5834a15be763": 1,
+      "E702:be4972d4e5c7c88cc0bc": 1,
+      "E702:c38d4acd0a4d7fd1a899": 2,
+      "I001:8b49b23adc22228d7ba1": 1,
+      "I001:f7dee3b14d3d48a61e82": 1
+    },
+    "backend/app/services/commodity_source.py": {
+      "B904:40dd9f449fa71e1afa12": 1,
+      "B904:8a56007921189a2b8189": 1,
+      "B904:a553c5771a4bc8ab9fa7": 1,
+      "B904:b3f9236eadcb39f9853e": 1,
+      "B904:d60eee27a89022fd0981": 1,
+      "E701:05a9404873585af6fe29": 1,
+      "E701:0ca23b1db426c7eab6a7": 1,
+      "E701:1accb89c2d7ddd8c4f90": 1,
+      "E701:27ee6fdb14e35677eea1": 1,
+      "E701:29fba64b276e541c2a5e": 1,
+      "E701:547f85fd26269ffb076d": 1,
+      "E701:5dd050ffd117190d27f2": 1,
+      "E701:6846c87d19d4d7d1bdb5": 1,
+      "E701:6cd04e88394b36944119": 1,
+      "E701:6e5d277d361df9a9abcb": 1,
+      "E701:84c1ee50ce08f5aa72f0": 1,
+      "E701:b7bd0c88c4e6babd67e4": 1,
+      "E701:be1989fc41f515c01f86": 1,
+      "E701:d919b9a13a750da74971": 1,
+      "E701:ece7c407eb0918861162": 1,
+      "E701:f9dc6ca43f4fa657f4f3": 1,
+      "E701:fa905bd7e1d37631918c": 1,
+      "E702:5aee32512c93d4e19e18": 4,
+      "E702:a71feeb013b348b0510d": 1,
+      "I001:500da9ca03aa4afb3236": 1
+    },
+    "backend/app/services/crowding.py": {
+      "I001:6dfe5637f059b7a379c7": 1
+    },
+    "backend/app/services/database_retry.py": {
+      "I001:4cceab662496925e6365": 1
+    },
+    "backend/app/services/database_sources.py": {
+      "E402:a993eab22d57224ccbd5": 1,
+      "E402:eec2afedadcc8da4a38f": 1,
+      "I001:2c1674f05bd32e01d3fa": 1,
+      "I001:7c6ddeffd7456d465b84": 1,
+      "I001:d4f0dcf2e94e24e7eb5a": 1
+    },
+    "backend/app/services/dividend_collection.py": {
+      "B905:e08b6321c57a43190b6d": 1,
+      "E402:037c7cb7404a4f905f09": 1,
+      "E402:273308c9408d73d2fcd7": 1,
+      "E402:2be0f5e7bb134759e94d": 1,
+      "E402:3574960d54b62e43eeb1": 1,
+      "E402:36aa21ec1bd68ad280e8": 1,
+      "E402:436d4d25bee5cb002a49": 1,
+      "E402:59c8aad6975ed36bd609": 1,
+      "E402:6ea644dbce4a11dca7e8": 1,
+      "E402:9b77a18be6bdffa40dab": 1,
+      "E402:9b99b749c642ce381370": 1,
+      "E402:a86fa6465822150a8242": 1,
+      "E402:bc1253878f46e464f6f2": 1,
+      "E402:c6afb5c8327a1d27d50e": 1,
+      "E402:d3be11ffd0db067cb1ff": 1,
+      "E402:d498fb985f16cd7bdf5b": 1,
+      "E402:d646473ff12f428d4bdc": 1,
+      "E402:dcfeb942bb07abc7dd56": 1,
+      "E402:efff2421df044b332308": 1,
+      "E402:f0ba53ea8dff6a48ca24": 1,
+      "E402:f1c295419b069069a7c0": 1,
+      "I001:2c1674f05bd32e01d3fa": 1,
+      "I001:353ebc7308fb8af5ecbb": 1,
+      "I001:8b49b23adc22228d7ba1": 1
+    },
+    "backend/app/services/dividend_notification_facts.py": {
+      "I001:eaa9b5e76f11b61f38e2": 1
+    },
+    "backend/app/services/dividend_public_source.py": {
+      "F401:4af32fb8eb18c57dadde": 1,
+      "I001:03be59ff1bbd4a68f431": 1,
+      "I001:4b0231809b6ce0128d11": 1,
+      "I001:ff86c52fbdddb6a561d3": 1
+    },
+    "backend/app/services/earnings_schedule.py": {
+      "E402:037c7cb7404a4f905f09": 1,
+      "E402:11bb2de7457de0181f76": 1,
+      "E402:273308c9408d73d2fcd7": 1,
+      "E402:2be0f5e7bb134759e94d": 1,
+      "E402:36aa21ec1bd68ad280e8": 1,
+      "E402:9b99b749c642ce381370": 1,
+      "E402:a86fa6465822150a8242": 1,
+      "E402:d29e9364f136ef3b202f": 1,
+      "E402:d3be11ffd0db067cb1ff": 1,
+      "F401:34377fffde4f9a1b6f53": 1,
+      "I001:2c1674f05bd32e01d3fa": 1,
+      "I001:925f493fba86f7daa28b": 1
+    },
+    "backend/app/services/etf.py": {
+      "B905:30b60ca5ed6e41148520": 1,
+      "I001:6dfe5637f059b7a379c7": 1
+    },
+    "backend/app/services/etf_collection.py": {
+      "E731:1621b7ebc98167272243": 1,
+      "I001:a757f8ee938a976ae475": 1
+    },
+    "backend/app/services/etf_collection_history.py": {
+      "I001:5bd2a8e0808451796556": 1
+    },
+    "backend/app/services/etf_configuration.py": {
+      "E701:2443f2402d0dd1ac06c8": 1,
+      "E702:52b6e334764933ed143f": 1,
+      "E702:f86efd4a5e970ce911d8": 1,
+      "E731:f636e9f97a1d6438d69d": 1,
+      "F401:597467b763dec936149b": 1,
+      "F401:fd9f9b45d11b3ce96af1": 1,
+      "I001:0659f77b46d0a36fbfd9": 1,
+      "I001:454448011c3d5272e539": 1,
+      "I001:5a185032e7c6e08a194d": 1
+    },
+    "backend/app/services/etf_diagnostics.py": {
+      "I001:2f5143689e9a68a92730": 1
+    },
+    "backend/app/services/etf_exchange.py": {
+      "B905:3eafe366753431e34d73": 1,
+      "I001:189de176e2a7d4874b84": 1,
+      "I001:27248267e523a302af3c": 1,
+      "I001:ce6b2f8526f21345b19f": 1
+    },
+    "backend/app/services/etf_notifications.py": {
+      "I001:3331577e9c0d62d1cf6a": 1
+    },
+    "backend/app/services/growth_dividend.py": {
+      "E402:037c7cb7404a4f905f09": 1,
+      "E402:11bb2de7457de0181f76": 1,
+      "E402:273308c9408d73d2fcd7": 1,
+      "E402:2be0f5e7bb134759e94d": 1,
+      "E402:36aa21ec1bd68ad280e8": 1,
+      "E402:436d4d25bee5cb002a49": 1,
+      "E402:87e5110435406a61309d": 1,
+      "E402:93fe87373ee09f89a9b9": 1,
+      "E402:9781718638dff9308fce": 1,
+      "E402:9b77a18be6bdffa40dab": 1,
+      "E402:9b99b749c642ce381370": 1,
+      "E402:a096e09cc4901c919c36": 1,
+      "E402:a86fa6465822150a8242": 1,
+      "E402:b91204fbb27179650166": 1,
+      "E402:bc1253878f46e464f6f2": 1,
+      "E402:d3be11ffd0db067cb1ff": 1,
+      "E402:dcfeb942bb07abc7dd56": 1,
+      "E402:e2e9e2993ce3068a8052": 1,
+      "E402:e2f175d2429ccba765eb": 1,
+      "E402:e377baff56d0ad635e94": 1,
+      "F841:3ab402a5963b0bd73d8d": 1,
+      "I001:023583bc2f7a004b29cc": 1,
+      "I001:0fbad4ce2d7b41acc045": 1
+    },
+    "backend/app/services/growth_dividend_import.py": {
+      "B007:24b70392a1240af45d71": 1,
+      "B905:0b3491b54a717e22e449": 1,
+      "I001:cc205ebbec335ff25d2f": 1
+    },
+    "backend/app/services/growth_dividend_source.py": {
+      "E402:dcfeb942bb07abc7dd56": 1,
+      "I001:3331577e9c0d62d1cf6a": 1
+    },
+    "backend/app/services/holdings_close.py": {
+      "I001:8847c3933d73ce627f24": 1
+    },
+    "backend/app/services/holdings_close_source.py": {
+      "I001:500da9ca03aa4afb3236": 1
+    },
+    "backend/app/services/holdings_valuation.py": {
+      "I001:4ebf7c946113976c7981": 1
+    },
+    "backend/app/services/index_valuation.py": {
+      "B905:6d4cd9f41effc5195672": 1,
+      "E701:45784338bf307b50d89d": 1,
+      "I001:a1ebbdc32b1385e4ffd1": 1
+    },
+    "backend/app/services/index_valuation_collection.py": {
+      "F401:f62e69c88d36b87a356e": 1,
+      "I001:500da9ca03aa4afb3236": 1
+    },
+    "backend/app/services/index_valuation_rules.py": {
+      "I001:396c5927673f1396e793": 1
+    },
+    "backend/app/services/index_valuation_source.py": {
+      "B023:f867a2b9ce1fafc6f315": 1,
+      "B905:15a7dd7d1625fee27895": 1,
+      "E402:3f919c8722635cc3e5c0": 1,
+      "E402:5b76a245b00aee06be8c": 1,
+      "I001:6dfe5637f059b7a379c7": 1
+    },
+    "backend/app/services/margin_eastmoney.py": {
+      "I001:3331577e9c0d62d1cf6a": 1
+    },
+    "backend/app/services/margin_guarantee.py": {
+      "E402:037c7cb7404a4f905f09": 1,
+      "E402:273308c9408d73d2fcd7": 1,
+      "E402:2be0f5e7bb134759e94d": 1,
+      "E402:36aa21ec1bd68ad280e8": 1,
+      "E402:436d4d25bee5cb002a49": 1,
+      "E402:892d59ec6cc9d1200a41": 1,
+      "E402:9781718638dff9308fce": 1,
+      "E402:9b77a18be6bdffa40dab": 1,
+      "E402:9b99b749c642ce381370": 1,
+      "E402:a86fa6465822150a8242": 1,
+      "E402:b91204fbb27179650166": 1,
+      "E402:bc1253878f46e464f6f2": 1,
+      "E402:c6afb5c8327a1d27d50e": 1,
+      "E402:d3be11ffd0db067cb1ff": 1,
+      "E402:dcfeb942bb07abc7dd56": 1,
+      "E402:efb245a2847f632e7c43": 1,
+      "E402:eff4e440c6ea408d8949": 1,
+      "I001:0fbad4ce2d7b41acc045": 1,
+      "I001:f7dee3b14d3d48a61e82": 1
+    },
+    "backend/app/services/margin_source.py": {
+      "I001:3331577e9c0d62d1cf6a": 1
+    },
+    "backend/app/services/market_asharehub.py": {
+      "B905:0d3a11f4a79e6827cf0a": 1,
+      "I001:1e68c95d458ebc5ba541": 1
+    },
+    "backend/app/services/market_asharehub_listing.py": {
+      "I001:e57dd835d083d1dc029b": 1
+    },
+    "backend/app/services/market_bulk.py": {
+      "F401:6f0df90a63eab9f1ef69": 1,
+      "I001:cc205ebbec335ff25d2f": 1
+    },
+    "backend/app/services/market_collection.py": {
+      "E402:037c7cb7404a4f905f09": 1,
+      "E402:0faa517c08c260046ab0": 1,
+      "E402:273308c9408d73d2fcd7": 1,
+      "E402:2be0f5e7bb134759e94d": 1,
+      "E402:34b7136aad3434753dd6": 1,
+      "E402:36aa21ec1bd68ad280e8": 1,
+      "E402:4f828e946e4e6a0e83c4": 1,
+      "E402:62f1990f65e6e5219635": 1,
+      "E402:637b4f8e78235f5de9d0": 1,
+      "E402:7ffeee7559f1e2b0aca6": 1,
+      "E402:855629b41a5ad935e646": 1,
+      "E402:86ca1757dfdd1dc65323": 1,
+      "E402:87e5110435406a61309d": 1,
+      "E402:88f169190464c486803f": 1,
+      "E402:93fe87373ee09f89a9b9": 1,
+      "E402:9b77a18be6bdffa40dab": 1,
+      "E402:9b99b749c642ce381370": 1,
+      "E402:a86fa6465822150a8242": 1,
+      "E402:a993eab22d57224ccbd5": 1,
+      "E402:bc1253878f46e464f6f2": 1,
+      "E402:d3be11ffd0db067cb1ff": 1,
+      "E402:d6ff39d217140663d113": 1,
+      "E402:dcfeb942bb07abc7dd56": 1,
+      "E402:e2f175d2429ccba765eb": 1,
+      "E402:e43755ca337667f242aa": 1,
+      "E402:ecc23460de74157a7db6": 1,
+      "E402:f09c10ecf2191665425f": 1,
+      "E402:f8928e80b9d06b8bb8a7": 1,
+      "E402:ff502f275f44b1ae69ed": 1,
+      "E731:e5a9626c303d012bbe57": 1,
+      "F401:73273c337187390e489c": 1,
+      "F401:fd9f9b45d11b3ce96af1": 1,
+      "F841:8cea682e60d9c95f16c3": 1,
+      "I001:503792f266494d284594": 1,
+      "I001:7e45f1acea8e79bacda4": 1,
+      "I001:8b49b23adc22228d7ba1": 1,
+      "I001:d172b930968c177723ba": 1
+    },
+    "backend/app/services/market_configuration.py": {
+      "E701:2443f2402d0dd1ac06c8": 1,
+      "E701:6ff78d7abdfa046a1352": 1,
+      "E701:e929fc8a5ab9eecd64a5": 1,
+      "E702:61497b16727aebb22e4c": 1,
+      "E731:f636e9f97a1d6438d69d": 1,
+      "F401:597467b763dec936149b": 1,
+      "F401:c5573b44f1a77b93f33c": 1,
+      "I001:167607509dc02c6d94d8": 1,
+      "I001:716fbe1d4171e065883b": 1
+    },
+    "backend/app/services/market_counts.py": {
+      "I001:ae46f890d9a887e095c9": 1
+    },
+    "backend/app/services/market_diagnostics.py": {
+      "I001:2c1674f05bd32e01d3fa": 1
+    },
+    "backend/app/services/market_eastmoney_listing.py": {
+      "E731:0f6674f6bccefc74a9c2": 1,
+      "I001:2c1674f05bd32e01d3fa": 1
+    },
+    "backend/app/services/market_eastmoney_universe.py": {
+      "I001:2c1674f05bd32e01d3fa": 1
+    },
+    "backend/app/services/market_factor_cache.py": {
+      "I001:500da9ca03aa4afb3236": 1
+    },
+    "backend/app/services/market_history.py": {
+      "I001:396e2f2787e152f31141": 1
+    },
+    "backend/app/services/market_listing.py": {
+      "I001:5a185032e7c6e08a194d": 1
+    },
+    "backend/app/services/market_provenance.py": {
+      "I001:974801dea889dbafd9fa": 1
+    },
+    "backend/app/services/market_public.py": {
+      "E731:35d6c99f4a2be9bf2dfa": 1,
+      "I001:07ea3150e996cdf3c235": 1
+    },
+    "backend/app/services/market_sina.py": {
+      "I001:58272dd3451e79749474": 1,
+      "I001:8ed73eb9535cdcc91a56": 1
+    },
+    "backend/app/services/market_suspensions.py": {
+      "I001:2c3efb4ef740f9e5a477": 1
+    },
+    "backend/app/services/market_universe.py": {
+      "B905:3010b4019433366036c4": 1,
+      "B905:80a772d0d564fcb23475": 1,
+      "E731:0f6674f6bccefc74a9c2": 1,
+      "I001:6d09bde0067c17b5665d": 1
+    },
+    "backend/app/services/market_writer.py": {
+      "I001:a1ebbdc32b1385e4ffd1": 1
+    },
+    "backend/app/services/momentum.py": {
+      "I001:3661ed22f3046776478c": 1
+    },
+    "backend/app/services/ownership.py": {
+      "I001:bf473fd20e35acef0648": 1
+    },
+    "backend/app/services/personal_holdings.py": {
+      "E402:037c7cb7404a4f905f09": 1,
+      "E402:1205655a7a0d570a6630": 1,
+      "E402:2187716b5f1cc1a7c794": 1,
+      "E402:273308c9408d73d2fcd7": 1,
+      "E402:2be0f5e7bb134759e94d": 1,
+      "E402:30ba0e127681ea1a272d": 1,
+      "E402:36aa21ec1bd68ad280e8": 1,
+      "E402:659c9811736529c98fcc": 1,
+      "E402:7fbe79d5f9bda46dda9a": 1,
+      "E402:87e5110435406a61309d": 1,
+      "E402:9b99b749c642ce381370": 1,
+      "E402:a86fa6465822150a8242": 1,
+      "E402:a9bff8d4220dc144c0e8": 1,
+      "E402:bc1253878f46e464f6f2": 1,
+      "E402:d3be11ffd0db067cb1ff": 1,
+      "E402:e6a696f0da9454baf9ed": 1,
+      "E402:eafafd1fb5ffc4a3b735": 1,
+      "E402:eec2afedadcc8da4a38f": 1,
+      "E402:ff502f275f44b1ae69ed": 1,
+      "I001:2c1674f05bd32e01d3fa": 1,
+      "I001:8b49b23adc22228d7ba1": 1
+    },
+    "backend/app/services/public_publication.py": {
+      "I001:219606c78b40209fff21": 1
+    },
+    "backend/app/services/safe_env.py": {
+      "E731:9f0313b97b2ac8bfbb26": 1,
+      "I001:2c1674f05bd32e01d3fa": 1
+    },
+    "backend/app/services/sentiment.py": {
+      "I001:6dfe5637f059b7a379c7": 1
+    },
+    "backend/app/services/social.py": {
+      "B023:3671586156108f7ad594": 1,
+      "B023:4900bbd11734b71cdecf": 1,
+      "B023:c58c40048eb9a6e2c6c2": 1,
+      "B023:d9a309114fcf491378fc": 1,
+      "E402:00b06e676790f4eacec2": 1,
+      "E402:037c7cb7404a4f905f09": 1,
+      "E402:2187716b5f1cc1a7c794": 1,
+      "E402:273308c9408d73d2fcd7": 1,
+      "E402:2be0f5e7bb134759e94d": 1,
+      "E402:34cecb3457a034dcfa1c": 1,
+      "E402:36aa21ec1bd68ad280e8": 1,
+      "E402:64330975d091116ceb6b": 1,
+      "E402:6f91ce5a38fc8e4b7613": 1,
+      "E402:83fc392c8dd06a0de53b": 1,
+      "E402:8db6e1304919289fcb1c": 1,
+      "E402:9b99b749c642ce381370": 1,
+      "E402:a86fa6465822150a8242": 1,
+      "E402:bc1253878f46e464f6f2": 1,
+      "E402:c50204f149fc7ccdac1a": 1,
+      "E402:d3be11ffd0db067cb1ff": 1,
+      "E402:dcfeb942bb07abc7dd56": 1,
+      "E402:e9cd0d63c94bc6416d93": 1,
+      "F401:06530d46a1f484330887": 1,
+      "F401:5e4b521516923cafefc7": 1,
+      "F811:d408232ec704fbf80d07": 1,
+      "F811:e14b1b138388779d6073": 1,
+      "I001:2c1674f05bd32e01d3fa": 1,
+      "I001:8b49b23adc22228d7ba1": 1
+    },
+    "backend/app/services/social_browser.py": {
+      "I001:716fbe1d4171e065883b": 1
+    },
+    "backend/app/services/social_cube_sources.py": {
+      "I001:5a4b820f64859e690c74": 1
+    },
+    "backend/app/services/social_cubes.py": {
+      "B023:8ab37bda6bc569d439cc": 2,
+      "I001:5a4b820f64859e690c74": 1
+    },
+    "backend/app/services/social_images.py": {
+      "I001:2a1f2ec0c9739bbd0775": 1
+    },
+    "backend/app/services/social_notifications.py": {
+      "B023:0dbbd4630fdd2adc0c03": 1,
+      "B023:13c0591bcc8f79f8bb75": 1,
+      "B023:2ea3bfde138e5a5ff44a": 1,
+      "B023:32c9ca7ca25e8ee601b3": 1,
+      "B023:b2a19251fda46d239475": 1,
+      "B023:f209a28367f79a19a410": 1,
+      "E402:2be0f5e7bb134759e94d": 1,
+      "E402:b7883d17bf1b2b74f8b2": 1,
+      "E402:dcfeb942bb07abc7dd56": 1,
+      "I001:19e0565a32c9493ac08f": 1,
+      "I001:349121e14567a0e01f37": 1,
+      "I001:36c50682407ac4b4f7eb": 1
+    },
+    "backend/app/services/social_sources.py": {
+      "I001:2a1f2ec0c9739bbd0775": 1
+    },
+    "backend/app/services/source_keys.py": {
+      "I001:96372e4af67bf0b1825e": 1
+    },
+    "backend/app/services/system_configuration.py": {
+      "B023:7b9cfe456c482ac9e408": 2,
+      "I001:3603ef5d8c27ee064b44": 1,
+      "I001:df82fac98b0e9026ed72": 1,
+      "I001:ef0f2febd36c8b2449fa": 1
+    },
+    "backend/app/services/system_integrations.py": {
+      "I001:40f65f1908ac2f862c6f": 1
+    },
+    "backend/app/services/system_runtime.py": {
+      "I001:58272dd3451e79749474": 1
+    },
+    "backend/app/services/valuation_ruler.py": {
+      "E402:037c7cb7404a4f905f09": 1,
+      "E402:09befade6b9b0f1b50e9": 1,
+      "E402:273308c9408d73d2fcd7": 1,
+      "E402:2be0f5e7bb134759e94d": 1,
+      "E402:36aa21ec1bd68ad280e8": 1,
+      "E402:4a039d0453bd5661bed2": 1,
+      "E402:7ffeee7559f1e2b0aca6": 1,
+      "E402:8181ad8735951bbd0f58": 1,
+      "E402:87e5110435406a61309d": 1,
+      "E402:93fe87373ee09f89a9b9": 1,
+      "E402:9781718638dff9308fce": 1,
+      "E402:97d05348f3d11a81e095": 1,
+      "E402:9b77a18be6bdffa40dab": 1,
+      "E402:9b99b749c642ce381370": 1,
+      "E402:a86fa6465822150a8242": 1,
+      "E402:b91204fbb27179650166": 1,
+      "E402:bc1253878f46e464f6f2": 1,
+      "E402:d3be11ffd0db067cb1ff": 1,
+      "E402:dcfeb942bb07abc7dd56": 1,
+      "E701:003f0896b753a279a4af": 1,
+      "E701:0e7fbe961a4aee0ca01d": 1,
+      "E701:0f128e27d3ee403f5527": 1,
+      "E701:12efe0bbf457749f03c4": 1,
+      "E701:33256a9c01aea1aa366a": 1,
+      "E701:41c0692ae945b5d88cd6": 1,
+      "E701:473838f0694c46bdd304": 1,
+      "E701:4b665b1d4487e06b841b": 1,
+      "E701:643c495883bbc4078ebb": 1,
+      "E701:6462ee8c20e20bb28fa5": 1,
+      "E701:6b0ea1e221bf5a5d9a94": 1,
+      "E701:71c092ba03afc5431776": 1,
+      "E701:71f66969d03452733605": 1,
+      "E701:7e0813db1a6d524f09cf": 1,
+      "E701:83d82d5af4e28985ffc1": 1,
+      "E701:841e2d83b03f26c0aeb5": 1,
+      "E701:87f73058f6b58624f063": 1,
+      "E701:8876eb6ef0a35e2ff7ab": 1,
+      "E701:8ee7cd87ae3234d7cd83": 1,
+      "E701:8f6259a0602e2ac86dcd": 1,
+      "E701:90aa5797c3e2a8e3bb91": 1,
+      "E701:90db6db0c252fc664f1f": 1,
+      "E701:94ddb72ef16837cfeee9": 1,
+      "E701:97f6770ba80d291ab93d": 1,
+      "E701:9abe5f3c308451dcfc6c": 1,
+      "E701:9bdfc3f7c35214e6b9b2": 1,
+      "E701:a065a725790953df8590": 1,
+      "E701:a4eac9d5b9f6158d9553": 1,
+      "E701:a65dd46bd4a95540a1cb": 1,
+      "E701:a790c7f196f98e7c083b": 1,
+      "E701:b14c18338d047a9ac6e4": 1,
+      "E701:c1df22c36069b9bd85b6": 1,
+      "E701:c90f42471c785970801b": 1,
+      "E701:cb7a67db413a5854e642": 1,
+      "E701:cf0887beebc32e59f7ed": 1,
+      "E701:d109b7096978a72634f7": 1,
+      "E701:d6984841bcf11d68d458": 1,
+      "E701:dba07e22197974b01fcc": 1,
+      "E701:e142dad7ab160d03c702": 1,
+      "E701:e37422f3f604e3031b6a": 1,
+      "E701:eef6932ba2479e6c783f": 1,
+      "E701:ef83355ff9c9980323ae": 1,
+      "E701:f2e85227eb12b22a1d64": 1,
+      "E701:f98a9633814c0413a880": 1,
+      "E702:059b67808ec8e81a7e45": 2,
+      "E702:0a2d6c784fb127dfc340": 1,
+      "E702:4fedcf3ebc01953708e9": 1,
+      "E702:6459dea2a81382a535b6": 1,
+      "E702:65eb41b4321f1bad13a2": 1,
+      "E702:7bb53a9f47061f8e0730": 3,
+      "E702:c8dd396d5d798cb54949": 1,
+      "E702:e3afc5dfa21d7592a891": 1,
+      "E702:e83c04fc2a9a3a456475": 1,
+      "E702:e8e266b7993b7bb9d6a0": 1,
+      "E702:ebccb236c21a023d2bf0": 1,
+      "I001:0fbad4ce2d7b41acc045": 1,
+      "I001:f7dee3b14d3d48a61e82": 1
+    },
+    "backend/app/services/valuation_ruler_import.py": {
+      "I001:2c1674f05bd32e01d3fa": 1
+    },
+    "backend/app/services/valuation_ruler_model.py": {
+      "I001:500da9ca03aa4afb3236": 1
+    },
+    "backend/app/services/valuation_ruler_source.py": {
+      "E701:32003843d72343d5ba76": 1,
+      "E701:358c7bda9794dc8459b1": 1,
+      "E701:3b390d9baa60e548d799": 1,
+      "E701:45c58aae598e38a58c44": 1,
+      "E701:4b6642f2ef1df7858b4b": 1,
+      "E701:7727eed531ef202ab3d0": 1,
+      "E701:7c0363da8d3caa3c371c": 1,
+      "E701:c8be638ea2b9d02b8c66": 1,
+      "E701:fe49f347dde6aa9f770b": 1,
+      "E702:27622cecee677f0fcb98": 2,
+      "E702:28775b3757f385e52d47": 1,
+      "I001:500da9ca03aa4afb3236": 1
+    },
+    "backend/ci_shard.py": {
+      "I001:396e2f2787e152f31141": 1
+    },
+    "backend/manage_users.py": {
+      "I001:81bad7c6cc7b77829fb1": 1
+    },
+    "backend/run.py": {
+      "I001:81bad7c6cc7b77829fb1": 1
+    },
+    "backend/tests/account_helpers.py": {
+      "F401:631551f12c517cab887f": 1,
+      "I001:8606be6d187a275bde00": 1
+    },
+    "backend/tests/history_sync_helpers.py": {
+      "I001:a1ebbdc32b1385e4ffd1": 1
+    },
+    "backend/tests/test_a00_current.py": {
+      "E701:176b885c8182d486a322": 1,
+      "E701:2ce83b97c7b20932642c": 1,
+      "E701:2fa99b9157b66c1871ac": 1,
+      "E701:35d4ea47e056e76d992f": 1,
+      "E701:5b7a519f2559d0540e80": 1,
+      "E701:ba47fc79e9968d86dc54": 1,
+      "E701:bfae38ce06e0e82e73eb": 1,
+      "E701:d50dc9f3d69db6796cff": 1,
+      "E701:f189922f161698930cb6": 1,
+      "E702:24292d075b540131b037": 2,
+      "E702:803ffda82b21d30ab0c9": 4,
+      "E702:8cc82ad22b3ea20afde1": 2,
+      "E702:8f9a39b18a4839d52659": 1,
+      "E702:b2be5af041c81e371ff1": 1,
+      "E702:f928a3dbe42b1e70e01e": 3,
+      "I001:55c16b57955b32885f48": 1,
+      "I001:cc205ebbec335ff25d2f": 1
+    },
+    "backend/tests/test_a00_recovery.py": {
+      "E701:0891a5e0230269566e09": 1,
+      "E701:2b304b3424f33b4e207f": 1,
+      "E701:2ef815c01626b43b7409": 1,
+      "E701:478f131165aa9a27ad93": 1,
+      "E701:5e38b54b7ae0d9e8682f": 1,
+      "E701:99da53e6076811669ef7": 1,
+      "E701:b0475fe658e5f82aba66": 1,
+      "E701:b65941f94193e8544043": 1,
+      "I001:3661ed22f3046776478c": 1,
+      "I001:e7fa38b6a63c55785057": 1
+    },
+    "backend/tests/test_accounts.py": {
+      "E701:30a020b149f2f61bafc3": 1,
+      "E701:3f763cdc52d0fc68a1e5": 1,
+      "E701:5cd263cd1d78bddc7a04": 1,
+      "E701:a75bb790604cb795b435": 1,
+      "E701:b864857babb0332990c7": 1,
+      "E701:dd4667084084af7f1e22": 1,
+      "E701:f1e1d33936fb95e747bd": 4,
+      "E702:9136a08e39f3c4d86f9b": 1,
+      "I001:d4208c60e5b415806689": 1
+    },
+    "backend/tests/test_autodeploy.py": {
+      "B023:6990d4758676f0bb15b6": 1,
+      "B023:79bb0a95695856c36684": 1,
+      "B023:fb9fd4774429422d7f1c": 1,
+      "I001:3b7d079be805611887ce": 1
+    },
+    "backend/tests/test_batch_index_history.py": {
+      "F401:073d56346da1b663ebdb": 1,
+      "F401:39cfdf28bf0f4a9ac408": 1,
+      "F401:c1ee32bf22d36c1cc78f": 1,
+      "I001:2ffe749e3841b7fd1142": 1
+    },
+    "backend/tests/test_breadth_api.py": {
+      "E701:423ddf343e39bfb2e334": 1,
+      "E701:6a9eb651a5b7c6d9b997": 1,
+      "E702:0a588a1483e6b1b43c91": 1,
+      "E702:202d7455b9638112cc3c": 1,
+      "E702:81950e16d8af03c5829d": 1,
+      "I001:4825e411713cde14b144": 1
+    },
+    "backend/tests/test_breadth_collector.py": {
+      "E701:0202897bd45d42d9480c": 1,
+      "E701:043ca33bfbd5420c8f76": 1,
+      "E701:1c9c1db7dcadb5866c9d": 1,
+      "E701:1f01c442056aebcdbdd1": 1,
+      "E701:666829fbf202784930c9": 1,
+      "E701:68f228313477d81874ff": 1,
+      "E701:ae204a3ad45231e5de84": 1,
+      "E701:d8397bdb514e26fc53be": 1,
+      "E701:e8d697f03d130c5cd177": 1,
+      "E702:ab21df422f162dcedcb3": 1,
+      "E702:ad296986b7ff2224a1bf": 1,
+      "I001:629c0c64ed7475ebafc7": 1
+    },
+    "backend/tests/test_browser_diagnostic.py": {
+      "I001:416a0385869c8640f699": 1
+    },
+    "backend/tests/test_cache.py": {
+      "E701:15668870473d65f91385": 1,
+      "E701:22fd4d062e634ad406f2": 1,
+      "E701:247889b08d3ccc43f497": 1,
+      "E701:6a9e50745495b378198a": 1,
+      "E701:8fec30f0bda119680b91": 1,
+      "E701:a74045a330c0b68c0495": 1,
+      "E701:b682c49c9518d0888869": 1,
+      "E701:b9c1a59347630be16096": 1,
+      "E701:bf0c47a7274ebc18fb27": 1,
+      "F401:66dfcdb402b98c6afb40": 1,
+      "F401:832f602d06add35ebf11": 1,
+      "I001:24ad4cae494e1a01cb2e": 1,
+      "I001:70e5ed5af94d8844935b": 1,
+      "I001:d6f2ce54b07da556c5ce": 1
+    },
+    "backend/tests/test_cache_append.py": {
+      "E701:099effcd0a7dbc6bc232": 1,
+      "E701:1a3cc39b7872a1d99edc": 1,
+      "E701:2ac1db3da80b3eaab78e": 1,
+      "E701:2bc61aa5d8948d25771e": 1,
+      "E701:9eed5ff560afe863516d": 1,
+      "E701:a383346d9ee35bd4808b": 1,
+      "E701:eaedb5224e443b9449c7": 1,
+      "F401:119451bcd4a7a897ffe6": 1,
+      "F811:0122d4929e977b0a45bb": 1,
+      "F811:0b35d8263b1abdb7b96b": 1,
+      "F811:92a0c90f259d1c668df3": 1,
+      "F811:a16aefab3be0686c1d4b": 1,
+      "F811:aa6cdbed6d08f0ef93d3": 1,
+      "F811:b9a8c268fddc3f14766e": 1,
+      "I001:4825e411713cde14b144": 1
+    },
+    "backend/tests/test_cache_errors.py": {
+      "F401:119451bcd4a7a897ffe6": 1,
+      "F811:0dbbd3289d9f8cabceef": 1,
+      "I001:645cfa1c18b0203f1555": 1
+    },
+    "backend/tests/test_cache_incremental.py": {
+      "E701:247d23af29cf8f1a67c1": 2,
+      "E701:c2c18056a884f4b9ba34": 1,
+      "E701:ca37b2314d214ff684a0": 1,
+      "E701:dfce727fa68234fed9d3": 2,
+      "E701:eaedb5224e443b9449c7": 1,
+      "E702:0d4b8c4d179d5af14199": 1,
+      "F401:119451bcd4a7a897ffe6": 1,
+      "F811:0fbff952e150226e45cf": 1,
+      "F811:242b481f820828854c28": 1,
+      "F811:3a1b866c435bcdad3169": 1,
+      "F811:a9851593144d1dd832bf": 1,
+      "F811:bc945dd008b50d199995": 1,
+      "F811:c24cab028228c0ac0b27": 1,
+      "F811:f92b4130d6f4a798884a": 1,
+      "I001:a1ebbdc32b1385e4ffd1": 1
+    },
+    "backend/tests/test_cache_json_transfer.py": {
+      "I001:5a185032e7c6e08a194d": 1
+    },
+    "backend/tests/test_cache_network.py": {
+      "E701:b326cebaf47d2390ccb0": 1,
+      "F401:119451bcd4a7a897ffe6": 1,
+      "F401:fb65fab09bf24fe3fca5": 1,
+      "F811:354acc49a34ff67a7fc0": 1,
+      "F811:3d0223a8bc9b4787f10d": 1,
+      "F811:3d07c6224856a3090e27": 1,
+      "F811:49460713590b98403c9c": 1,
+      "F811:e46579ac627406cc68dc": 1,
+      "F811:e6938908308fa663e571": 1,
+      "I001:775f59225bd680deee41": 1,
+      "I001:a1ebbdc32b1385e4ffd1": 1
+    },
+    "backend/tests/test_cache_schedule.py": {
+      "E702:07f93c2bddfcc66c01de": 1,
+      "E702:c67f4cf295270b357a58": 6,
+      "E702:d108d2310eac911f264e": 1,
+      "I001:26b1dbd4746255ae0d0c": 1
+    },
+    "backend/tests/test_cash_cow.py": {
+      "B023:cbc4aabd80d3f970d0f5": 1,
+      "I001:219606c78b40209fff21": 1,
+      "I001:2c1674f05bd32e01d3fa": 1
+    },
+    "backend/tests/test_cash_cow_combined.py": {
+      "E701:54e1b74c7c0649eca837": 1,
+      "E701:6e845d2548a3f631da30": 1,
+      "E701:95b29a66164c11ff7bd9": 2,
+      "E701:97828bc3bb099f0a8527": 1,
+      "E701:a6f9bcf87a3b0a5aaf79": 1,
+      "E701:b2efacdc908de00828ab": 1,
+      "E701:c61674429c69f498054f": 2,
+      "E701:e382addc8471fdb6106d": 1,
+      "E701:e80848235726e10cacc3": 2,
+      "E701:fe3355c48059efe988a1": 1,
+      "E702:00a46a4fd82566c340a6": 1,
+      "E702:6ce801d24929f580652d": 1,
+      "E702:990a977038cb58dcba00": 1,
+      "E702:aba75b9f8b8aa8de1721": 1,
+      "E702:c8e515d76d46e738789c": 1,
+      "I001:115e9ba69d26390801df": 1,
+      "I001:775f59225bd680deee41": 1
+    },
+    "backend/tests/test_cash_cow_database_recovery.py": {
+      "I001:85b5af10929e6e9d18f1": 1
+    },
+    "backend/tests/test_cash_cow_source.py": {
+      "B023:12e687f21aff7103395b": 1,
+      "B023:97cba1660389a21f00e9": 1,
+      "E701:03decae8f408b4e98008": 1,
+      "E701:40b3c398207877549cb1": 2,
+      "E701:7da8e9cdcd46e2f99d96": 3,
+      "E701:8835ba2aa8bc26ef3b1d": 1,
+      "E701:8e2af4ebcde4e23948de": 1,
+      "E701:c47e84b15caa6815b30c": 1,
+      "E701:c52071542ad93c5c0058": 2,
+      "E701:e9e410279030dede584b": 1,
+      "E702:1510b2187e81503891f3": 1,
+      "E702:a0cd2f4fa96d1d25e0b7": 1,
+      "E702:da76dc0ecf82f3cfd0e4": 1,
+      "I001:e7fa38b6a63c55785057": 1
+    },
+    "backend/tests/test_cash_cow_unified.py": {
+      "B905:e46671bf6842e5ef458b": 1,
+      "E402:037c7cb7404a4f905f09": 1,
+      "E402:654a27a0584e90026867": 1,
+      "E402:69a5e04e44088273c554": 1,
+      "E402:7b60f28e7e2d613a61be": 1,
+      "E402:9b99b749c642ce381370": 1,
+      "E402:a9bff8d4220dc144c0e8": 1,
+      "E402:b222b292b602ea114266": 1,
+      "E402:b35d0c5752e70740953e": 1,
+      "E402:b46495cd9a92e513ab61": 1,
+      "E402:c469de86cd5519d8bd04": 1,
+      "E402:c922abd352090de5bffc": 1,
+      "E402:d3be11ffd0db067cb1ff": 1,
+      "E402:dcfeb942bb07abc7dd56": 1,
+      "E701:de6852c8435c3ace3c0d": 1,
+      "F841:3e8f009d615a86503a24": 1,
+      "I001:36d1c6b5b3b7856f49e1": 1,
+      "I001:396e2f2787e152f31141": 1,
+      "I001:503792f266494d284594": 1,
+      "I001:cda233262796ba1cb134": 1
+    },
+    "backend/tests/test_cash_cow_universe_fallback.py": {
+      "E701:0f69abcff7319cccd46f": 1,
+      "E701:2d9dd0f2f0a6e03398a0": 1,
+      "E701:51e3acadf5c318d6fd67": 1,
+      "E701:684a78e35d4b79154765": 1,
+      "E701:a2e1995025371e1c9a68": 1,
+      "E701:e1349d3198b59d2dc6ab": 1,
+      "E701:e6056efb421679798045": 1,
+      "E701:f34d8c6ec4c6fdbb1427": 1,
+      "E702:57a6da2bab92cf1e0bdd": 2,
+      "I001:e7fa38b6a63c55785057": 1
+    },
+    "backend/tests/test_cci_coal.py": {
+      "E701:36db3584d871b8fd13b1": 1,
+      "E701:5211a77a6087287d7f48": 1,
+      "E701:5fb2430576d85bd270cb": 1,
+      "E701:65529e13d24063ed1da6": 1,
+      "E701:673e21c9e3f7414460b7": 1,
+      "E701:cf0887beebc32e59f7ed": 1,
+      "E701:df9b0162283fb2d087d1": 1,
+      "E701:e3aa20a9543c7bc754a2": 1,
+      "E702:0a02a5aad450856daae2": 1,
+      "E702:1d48e68b86d4ea613074": 3,
+      "E702:90f4e3a0647307c1c0c2": 1,
+      "E702:ad3d78426411d34c1c68": 1,
+      "E702:af25e4e4aebc0930cc7c": 1,
+      "E702:b47aa9ee458a6989534b": 1,
+      "E702:bc5408206a6da479500d": 1,
+      "E702:e9cbe798cf42abd816cd": 1,
+      "E702:ef5b2b106dc5bcf6a889": 2,
+      "F401:34377fffde4f9a1b6f53": 1,
+      "F401:6f0df90a63eab9f1ef69": 1,
+      "I001:26b1dbd4746255ae0d0c": 1,
+      "I001:cda233262796ba1cb134": 1,
+      "I001:d805c8b2111cc5f292f1": 1
+    },
+    "backend/tests/test_cci_recovery.py": {
+      "B007:054284c4ebf5c9588ac6": 1,
+      "B905:097d2af44e3d8b654e15": 1,
+      "I001:2c1674f05bd32e01d3fa": 1,
+      "I001:3661ed22f3046776478c": 1
+    },
+    "backend/tests/test_cci_source_windows.py": {
+      "I001:e7fa38b6a63c55785057": 1
+    },
+    "backend/tests/test_central_market_schedule.py": {
+      "I001:e63d383c699fc4d3c70d": 1
+    },
+    "backend/tests/test_certificate_maintenance.py": {
+      "E701:5471f86cd06bae804e9e": 1,
+      "E701:b4c68f022f029b90c3b3": 1,
+      "E701:ceb3b359cfa76592b9fb": 1,
+      "I001:416a0385869c8640f699": 1
+    },
+    "backend/tests/test_ci_browser_image.py": {
+      "I001:716fbe1d4171e065883b": 1
+    },
+    "backend/tests/test_ci_shard.py": {
+      "I001:96372e4af67bf0b1825e": 1
+    },
+    "backend/tests/test_collection_calendar.py": {
+      "E731:930ac57e0c15bc48895a": 1,
+      "I001:cc205ebbec335ff25d2f": 1
+    },
+    "backend/tests/test_collection_failure_isolation.py": {
+      "I001:0ed3e024ccde05b78081": 1,
+      "I001:2c1674f05bd32e01d3fa": 1
+    },
+    "backend/tests/test_collection_notifications.py": {
+      "E701:0121d30c64bb6648631b": 1,
+      "E701:1d4e84e017e708d59a07": 1,
+      "E701:3e053c475f320db0cbd9": 1,
+      "E701:66269663fd5b984b797c": 3,
+      "E701:7bf8fa8d6a4a330d3341": 1,
+      "E701:7c29d0076330ddac9a6d": 1,
+      "E701:8481b3960bfc45a651ff": 2,
+      "E701:87d325369a80344b6a58": 1,
+      "E701:dbb5592a2b8db121399d": 1,
+      "E702:23413ad208780b148c49": 1,
+      "E702:254d4ca3e38868446a42": 1,
+      "E702:2b4f5fbd5f00af0d5d21": 1,
+      "E702:6a7cdae0c01f01d20ff0": 2,
+      "E702:d4e1301f1a7e650e742a": 1,
+      "E702:dc8162c5aea32d19d4a5": 1,
+      "I001:2c1674f05bd32e01d3fa": 1
+    },
+    "backend/tests/test_collection_outcome_history.py": {
+      "I001:716fbe1d4171e065883b": 1
+    },
+    "backend/tests/test_collection_outcome_logs.py": {
+      "E702:d958aa321e6fcc011922": 1,
+      "F401:25164e09031ba0dad595": 1,
+      "F401:2ba32f2502a3d0508942": 1,
+      "F401:5fe650102e5252150f8f": 1,
+      "F811:654ba00d8ee2ebf1f34c": 1,
+      "F811:72baed191208ffd72950": 1,
+      "F811:8b1543d90721d49c1a97": 1,
+      "F811:c62517984c94734045c4": 1,
+      "F811:cbb1346a947e29a2c598": 1,
+      "F811:f6d0b4278173c9ca1afb": 1,
+      "I001:5a185032e7c6e08a194d": 1
+    },
+    "backend/tests/test_collection_outcomes.py": {
+      "E401:ddfc23f7f4d54936fc11": 3,
+      "E401:f95512c2f805c1bc0e8b": 1,
+      "I001:775f59225bd680deee41": 1,
+      "I001:a9c67c2a31d1e66d390b": 3,
+      "I001:c9b50622c21b3ba27f63": 1
+    },
+    "backend/tests/test_collection_queue_calendar.py": {
+      "F401:2a3bf02714d39fde7e2d": 1,
+      "I001:4825e411713cde14b144": 1,
+      "I001:929170e0906446453be1": 1
+    },
+    "backend/tests/test_collection_report_producers.py": {
+      "I001:219606c78b40209fff21": 1
+    },
+    "backend/tests/test_collection_retention.py": {
+      "I001:775f59225bd680deee41": 1
+    },
+    "backend/tests/test_collection_summary.py": {
+      "I001:500da9ca03aa4afb3236": 1
+    },
+    "backend/tests/test_collector_batch.py": {
+      "B007:8b352f6b698e8a6d381f": 1,
+      "B905:f1e5abea1f068d7c4abe": 1,
+      "E701:10c71c1313ec9345a72d": 1,
+      "E701:16165b6027018077d002": 1,
+      "E701:19e266280d062b78f75d": 1,
+      "E701:2bc093fa2af2b8d94f2d": 1,
+      "E701:334cfc3450d1227bd12a": 2,
+      "E701:353d8a34fb0262f65cb1": 1,
+      "E701:376c99161fa7e853ac14": 1,
+      "E701:40cc999a437513e6d254": 1,
+      "E701:4e9764b3362658b597ca": 2,
+      "E701:5f2cdbad743831312b41": 1,
+      "E701:67ead46e4aca1cf34de5": 1,
+      "E701:69a05192aa8f31190ba3": 1,
+      "E701:773a82c4f7f00987c496": 1,
+      "E701:795a5c51665ce7b6c04b": 2,
+      "E701:928d2ab94264f85782f6": 1,
+      "E701:97bf09961b4cef900ba4": 1,
+      "E701:97cb36151a0d59045b59": 1,
+      "E701:a499d2437bd8be6949f2": 2,
+      "E701:b4cb7ab39aa7abc70fcf": 1,
+      "E701:b5bde1dc3f84a09b8b3a": 1,
+      "E701:d0ead0a39435113a22e0": 1,
+      "E701:d3f3a122d82afb4dffda": 1,
+      "E701:e1a2e7d64032b7dddf21": 1,
+      "E701:ff69861a6d9975cdc216": 1,
+      "I001:2ffe749e3841b7fd1142": 1
+    },
+    "backend/tests/test_collector_batch_modes.py": {
+      "F401:3bdfd084dc2571e5a510": 1,
+      "F401:b651af0170a3f123be24": 1,
+      "F811:3097d14bd8ae6a17afd0": 1,
+      "F811:35313cb77132db94098f": 1,
+      "F811:804e8c7baa6d2e1eb6e1": 1,
+      "F811:9d2182373eefbc99441e": 1,
+      "F811:9e501947dffa62d3dd24": 1,
+      "F811:b999d86db10f8dd0536d": 1,
+      "F811:de5c90d8206ade34b14e": 1,
+      "I001:629c0c64ed7475ebafc7": 1
+    },
+    "backend/tests/test_collector_protocol_init.py": {
+      "E731:d4772f4e20752b4229c3": 1,
+      "F401:07052a6067fc360bc6ab": 1,
+      "F401:455b83a91d10f1306a99": 1,
+      "F401:5f7f5594dd66e0c325eb": 1,
+      "F401:ba443610d33bf5d7df73": 1,
+      "F401:f62e69c88d36b87a356e": 1,
+      "I001:26b1dbd4746255ae0d0c": 1
+    },
+    "backend/tests/test_collector_snapshot_common.py": {
+      "F401:5e7b21569d00c9964558": 1,
+      "F811:4d25d3571fecb953bc15": 1,
+      "F811:55bc1554601db3e12ecb": 1,
+      "F811:76db16c44d3e3232f151": 1,
+      "F811:c5e821d14b11bf36539a": 1,
+      "I001:2ffe749e3841b7fd1142": 1
+    },
+    "backend/tests/test_commodities.py": {
+      "E401:23b6016778b6299551eb": 1,
+      "E402:365da2628284087eeddf": 1,
+      "E402:a9bff8d4220dc144c0e8": 1,
+      "E701:0e8db67ceab287a195bc": 1,
+      "E701:2f0559427e2c307b0e5c": 1,
+      "E701:5f80b904e24b6a3f388c": 1,
+      "E701:63ccd307ecd2a28b32bf": 1,
+      "E701:979d07b7eff12e4fd405": 1,
+      "E701:9d0229410983fa7b5165": 1,
+      "E701:b33142932b4d07a08774": 1,
+      "E701:bad1b00c37f28a07e52e": 1,
+      "E701:c95eeee41147b3aa2e18": 1,
+      "E701:cf0887beebc32e59f7ed": 3,
+      "E701:d7c7fdd04dc29f6daace": 1,
+      "E701:d936de23a5e24de18fa2": 1,
+      "E701:dd048696a8c16878fd99": 1,
+      "E702:023aa3a6acb41db38620": 1,
+      "E702:223b26cc417878bfc748": 2,
+      "E702:2d9f0606996d57f77015": 1,
+      "E702:6d81f315d5a5ffb36ee9": 1,
+      "E702:8ea7999a5acdf479e32f": 1,
+      "E702:95e87070d255837302e3": 2,
+      "E702:a2c5c38ec4f193be5a2c": 1,
+      "E702:b47aa9ee458a6989534b": 1,
+      "E702:bc5408206a6da479500d": 1,
+      "E702:e364cd726ae2e76f5e74": 2,
+      "I001:0ed3e024ccde05b78081": 1,
+      "I001:15d7876dd6ffecfb5f0a": 1,
+      "I001:cda233262796ba1cb134": 1,
+      "I001:d805c8b2111cc5f292f1": 1
+    },
+    "backend/tests/test_deploy.py": {
+      "E701:09a48c3e73314d82014b": 1,
+      "E701:0ad35db01fb0bd40aff2": 1,
+      "E701:20b69bafd64d39653a02": 1,
+      "E701:32e795ef15273c5090d6": 1,
+      "E701:33e55c5a5104945bed64": 1,
+      "E701:3b2b12d4b1f8a98d6a2c": 1,
+      "E701:3be6822ec3d02df98a9c": 1,
+      "E701:465245c2a3d9931f4553": 1,
+      "E701:597a648d905cd2d4aade": 1,
+      "E701:5c81bff33fb4211bb16c": 1,
+      "E701:81b77cbbcbbd8897cd75": 1,
+      "E701:838cc9733a8ee9812cfe": 1,
+      "E701:99bb207d7af58763a8a2": 1,
+      "E701:a04699e18dc543bd6faf": 1,
+      "E701:b1900673ad9335ac04ec": 1,
+      "E701:bd6258142055d0e62bce": 1,
+      "E701:c59f4501783cf9236f4f": 1,
+      "E701:c9ec2c74bcaf2f05e552": 1,
+      "E701:ca1ca6d1a489f2ef3b5d": 3,
+      "E701:cbf97d72a6c45a94a477": 1,
+      "E701:cc734b100433c9cd1d54": 1,
+      "E701:d8013d6a5944f81375a7": 1,
+      "E701:f71aa7e24411db35bfa2": 1,
+      "E702:2adac7ed3796edd98c62": 2,
+      "E702:3873bc69803c1868ee2d": 2,
+      "E702:cb845e218eeeae8e092a": 1,
+      "E731:fe3753661c11740bd088": 1,
+      "I001:416a0385869c8640f699": 1
+    },
+    "backend/tests/test_deploy_bootstrap.py": {
+      "B023:6c8344c5357bc04c46f4": 1,
+      "I001:36c50682407ac4b4f7eb": 1
+    },
+    "backend/tests/test_deploy_cumulative.py": {
+      "E701:057f77b2271c67e117ae": 1,
+      "E701:1918d0e2be9cbaec0669": 1,
+      "E701:532a73cb48a6c861731c": 1,
+      "E701:6e1cca4b067250a5bbb5": 1,
+      "E701:bcc2011b053a08863837": 1,
+      "E702:0b7e71a318ec914a0625": 1,
+      "E702:0dade497ce6d6c4335af": 1,
+      "E702:12be9a5569c21dc697d7": 1,
+      "E702:20b2d3a30bad98d339fd": 1,
+      "E702:29651dc967fd9217ce3d": 2,
+      "E702:984c1c6571e031433e18": 2,
+      "E702:9bb38cf6beab43ea3d74": 2,
+      "E702:b2ca86c07e661a4eb980": 2,
+      "E702:b65c2d9ba4773ad0ad2c": 1,
+      "E702:b819c0f9bf71107a099e": 1,
+      "E702:b853c1601b2c1c2b7d3d": 1,
+      "E702:c30131bf0e56ff9f8c49": 1,
+      "E702:e4996479c0eec50933ed": 1,
+      "E702:e8fe5680e7b3aeb06868": 1,
+      "E702:f9a2f0233c4f02953a26": 1,
+      "I001:416a0385869c8640f699": 1
+    },
+    "backend/tests/test_deploy_process.py": {
+      "B023:f516717270af918a43c1": 1,
+      "I001:5534890ef7df2a3c050e": 1
+    },
+    "backend/tests/test_deploy_runtime_git.py": {
+      "I001:3b7d079be805611887ce": 1
+    },
+    "backend/tests/test_deployment_impact.py": {
+      "E702:0dcca96f2b1e75a086e5": 2,
+      "E702:4e45519919c80439d0c0": 2,
+      "E702:5dde28e00b9311e66f3c": 2,
+      "E702:6bd698c596b5b4115430": 2,
+      "E702:824e0699494f2b72481c": 2,
+      "E702:87b1df26c6fddfbb6435": 2,
+      "E702:cf502fea32306779c8f0": 2,
+      "I001:416a0385869c8640f699": 1
+    },
+    "backend/tests/test_dividend_api.py": {
+      "E701:238b1d823e06cd6c132e": 1,
+      "E701:82dac6580fbf34654931": 1,
+      "E701:ad61d3eccae16629491b": 1,
+      "E701:ea08259156e25851affb": 1,
+      "E702:12860b66e3a1edc36668": 1,
+      "F401:2f2800c19bffcb73fa66": 1,
+      "F401:e59156d6cd368a9a79eb": 1,
+      "I001:a1ebbdc32b1385e4ffd1": 1
+    },
+    "backend/tests/test_dividend_collection.py": {
+      "E701:066abef4cd143df68dac": 1,
+      "E701:2b5b80672d9937396515": 1,
+      "E701:4f005ab5ea20a587fa47": 1,
+      "E702:2f18ea1c7f854d11ccf4": 1,
+      "E702:3952c7c714b430fd07c5": 1,
+      "F401:aedad88a435c0d274456": 1,
+      "F401:ca7eaefb59876e2ea1b8": 1,
+      "I001:424bdd0d5e5a27fd1d34": 1,
+      "I001:71fc6933877c42c44f67": 4,
+      "I001:be79b4132b669fb5467c": 1,
+      "I001:cda233262796ba1cb134": 1,
+      "I001:eaa9b5e76f11b61f38e2": 2
+    },
+    "backend/tests/test_dividend_collector.py": {
+      "B905:55fd97217b00bd8716fe": 1,
+      "E701:1abcc0c302521705bc1f": 1,
+      "E701:2fd268030067f8b276e6": 1,
+      "E701:6781ee9c9509cfeaf99e": 1,
+      "E701:75422f9b310866879efd": 1,
+      "E701:77ae9254194d9825ec8f": 1,
+      "E701:813a19755215ead8d9db": 1,
+      "E702:1cf8aa1f0fe787aa0a2f": 1,
+      "E702:3d72ee2b3e146b2e7467": 6,
+      "E702:4260913ed4956dabf62d": 1,
+      "E702:5109eb16059bb97ed8e2": 1,
+      "E702:814024f93ce4c1d41953": 1,
+      "E702:869857ddff3ee364ced6": 1,
+      "E702:9ff053a01044a628afcd": 1,
+      "E702:aab6c62ffaaa8c2c4725": 1,
+      "E702:b91b900ba788b289fd37": 2,
+      "E702:c718bf9d5c9b51031d25": 1,
+      "E702:fea2737c3afdc379ea25": 1,
+      "E731:0d638657c8705eaf4ef0": 1,
+      "I001:13597d8ef53ed09e3b31": 1,
+      "I001:629c0c64ed7475ebafc7": 1
+    },
+    "backend/tests/test_dividend_database_phases.py": {
+      "I001:775f59225bd680deee41": 1
+    },
+    "backend/tests/test_dividend_history.py": {
+      "E702:a065c7b319dea9f53b21": 1,
+      "E702:b0f6c27ea5b1d8194592": 1
+    },
+    "backend/tests/test_dividend_notification_facts.py": {
+      "I001:2c1674f05bd32e01d3fa": 1
+    },
+    "backend/tests/test_dividend_proposals.py": {
+      "E701:0e76b665d5f34758c526": 1,
+      "E701:28cd1949361f494e4021": 1,
+      "E701:40ad7176f125c9bb4b19": 1,
+      "E701:4538b6bcf24d1e653d4a": 1,
+      "E701:6e14520981e99f848607": 2,
+      "E701:83da9a95ac326f5b56e0": 1,
+      "E701:8a753a9b1e2ff7d2627f": 1,
+      "E701:b20297135e72603fb1cf": 1,
+      "E701:d713f839eda2c4135cd0": 1,
+      "E701:dcec418bd946a3cf80f8": 1,
+      "E701:e08cf5e7910461d4294d": 1,
+      "I001:500da9ca03aa4afb3236": 1,
+      "I001:716fbe1d4171e065883b": 1,
+      "I001:8ca174d61c09deca5d43": 3
+    },
+    "backend/tests/test_dividend_public_source.py": {
+      "E701:3c8f2663f8032c79b6bc": 1,
+      "E701:f95939e325f371d8e684": 1,
+      "I001:48650b19bb2c1a26a32d": 2,
+      "I001:500da9ca03aa4afb3236": 1
+    },
+    "backend/tests/test_dividend_publication_retry.py": {
+      "I001:a1ebbdc32b1385e4ffd1": 1
+    },
+    "backend/tests/test_documentation.py": {
+      "I001:974801dea889dbafd9fa": 1
+    },
+    "backend/tests/test_earnings_due_cutoff.py": {
+      "I001:a1ebbdc32b1385e4ffd1": 1
+    },
+    "backend/tests/test_earnings_schedule.py": {
+      "E701:8b11fe02d0721a4888be": 1,
+      "I001:48650b19bb2c1a26a32d": 1
+    },
+    "backend/tests/test_etf_cache.py": {
+      "F401:119451bcd4a7a897ffe6": 1,
+      "F811:50a70063eae33ec52af5": 1,
+      "F811:60441a465c4694a29e85": 1,
+      "F811:830a5e3166a807a4cefd": 1,
+      "F811:831315c0ecc0fc2b97b0": 1,
+      "F811:88d2694c2a09197a3f21": 1,
+      "F811:93af042992097e71d207": 1,
+      "F811:ac6b6434fa2139a48233": 1,
+      "F811:bfcebe35aeb205445487": 1,
+      "F811:c8a08bf87f0bda0179a9": 1,
+      "I001:48650b19bb2c1a26a32d": 1,
+      "I001:a1ebbdc32b1385e4ffd1": 1
+    },
+    "backend/tests/test_etf_cancellation.py": {
+      "I001:219606c78b40209fff21": 1
+    },
+    "backend/tests/test_etf_collection.py": {
+      "E702:21af5b85f7382cd67319": 1,
+      "I001:3661ed22f3046776478c": 1,
+      "I001:416a0385869c8640f699": 1,
+      "I001:5a185032e7c6e08a194d": 3,
+      "I001:716fbe1d4171e065883b": 2,
+      "I001:9a92e9968f08724969aa": 1,
+      "I001:be79b4132b669fb5467c": 1,
+      "I001:e7fa38b6a63c55785057": 1,
+      "I001:eaa9b5e76f11b61f38e2": 1,
+      "I001:ee40fd7e14fc5e290b5e": 4
+    },
+    "backend/tests/test_etf_diagnostics.py": {
+      "B904:dfa814ee094b1a9517d2": 1,
+      "I001:219606c78b40209fff21": 1
+    },
+    "backend/tests/test_etf_exchange_collector.py": {
+      "I001:416a0385869c8640f699": 1,
+      "I001:775f59225bd680deee41": 1,
+      "I001:c7dca90489bc599618db": 1
+    },
+    "backend/tests/test_etf_heat_api.py": {
+      "E701:47291d8c99aec422f991": 1,
+      "E701:82dac6580fbf34654931": 1,
+      "E702:2e3cb16ddaff9696cbd4": 1,
+      "E702:3fea312155012d2a26cc": 1,
+      "E702:5f99785d0667ee9d5adf": 1,
+      "E702:7313b17cf361965be285": 1,
+      "E702:773b3cf89fa05954de51": 2,
+      "E702:b2faae03d024954b2c45": 3,
+      "E702:bb868d23855353e7bee4": 1,
+      "E702:d117dc21db850b9489ff": 1,
+      "I001:1a443608f33698ece3bb": 1,
+      "I001:58237cd4400bdcb50d86": 1,
+      "I001:e63d383c699fc4d3c70d": 1,
+      "I001:f5d70f07c5556677fa49": 1
+    },
+    "backend/tests/test_etf_heat_collector.py": {
+      "B023:1c38ce2f7614c8fc161f": 1,
+      "B905:4fe6a24911d3af753659": 1,
+      "E701:2179e252ceb4eae49920": 1,
+      "E701:387ea5b16bfb9540cfd6": 1,
+      "E701:49a5a827c8a32a993aba": 1,
+      "E701:6189cf0c101fc30a09b5": 1,
+      "E701:786ae809261ba8d2c5d6": 1,
+      "E701:a14020685730c3027cf5": 1,
+      "E701:b50d641ba7620a09b5cc": 1,
+      "E701:b6aa1172eb6ec3e87704": 1,
+      "E701:bf5356fe76cee3df031b": 1,
+      "E701:cc5ffe2abad0a3bdc6e3": 1,
+      "E701:cdf9ad8147c8e6ef6dda": 1,
+      "E701:dbbb59a68d0dba53580e": 1,
+      "E702:023da59d26995ff56f10": 2,
+      "E702:192d9d9599fedf29216b": 1,
+      "E702:1acb34a9f742c0ba7537": 3,
+      "E702:2a21aae39583f9088334": 2,
+      "E702:3b72d16e23ba1921ddca": 1,
+      "E702:44b2ec1283ed78fb3e3a": 1,
+      "E702:4fe57188bf253fe12900": 1,
+      "E702:696e38ef38d3180e9acb": 2,
+      "E702:6be1216d59d1188fbb28": 1,
+      "E702:802d1e2fadbca92f1574": 1,
+      "E702:be7599170f193686e7c4": 1,
+      "E702:e7fae465704498fc032e": 1,
+      "E702:eb4be845bbbcdd778088": 4,
+      "E731:708390555df86b9f69b4": 1,
+      "I001:629c0c64ed7475ebafc7": 1
+    },
+    "backend/tests/test_etf_joinquant_history.py": {
+      "B007:cd1f8eb5b8d6b972b69d": 1,
+      "B905:463176bfebd0d7d201ed": 1,
+      "E701:1cc0a15a4b5ed8c4cdb1": 3,
+      "E701:3568d606d4c5be1db4be": 1,
+      "E701:4cea76656d9eed15e8ae": 1,
+      "E701:7fa689d6a7e89ad6a80d": 1,
+      "E701:8d1bc0c02e3a2fbf33de": 1,
+      "I001:629c0c64ed7475ebafc7": 1,
+      "I001:b2db498b0d64d5199544": 1
+    },
+    "backend/tests/test_etf_market_value.py": {
+      "B905:166a7a5f3c06568aaac5": 1,
+      "B905:21aeb9da7d8c6c212bc2": 1,
+      "B905:bdbeb7087c2163b28cd2": 1,
+      "E731:d8872ad04e60c47ba09f": 1,
+      "I001:a1ebbdc32b1385e4ffd1": 1
+    },
+    "backend/tests/test_etf_momentum_point_in_time.py": {
+      "E701:38d31da347dba7ce82e2": 3,
+      "E701:471414457fc6ef38ab74": 1,
+      "E701:4cb2bdf0b57ce36417c8": 1,
+      "E701:5208fa2aa0cf08545d90": 1,
+      "E701:6b851eb9283f36769a7a": 1,
+      "E701:79c0965f840a7843e154": 1,
+      "E701:ac6e58499c22faaf4a5d": 1,
+      "E701:dfb5a8e518040d7bf947": 1,
+      "E701:f8ef6c9453ebb50383a6": 1,
+      "E702:29c75b6b7896fa2ca6a3": 1,
+      "E702:393349cf541a243f389a": 1,
+      "E702:3fe6b78611edc2a82752": 1,
+      "E702:43f2b37da7c4a33e4cfa": 1,
+      "E702:46b49cf04cbc2bfd6240": 2,
+      "E702:479779f67b189ff46efa": 1,
+      "E702:4ac8afbed078e30a8671": 2,
+      "E702:ed818ce95a04573db1d1": 1,
+      "E702:f06b0694293710019fdd": 2,
+      "E702:f59f481849f97a5f0bef": 3,
+      "E702:fc97e492c419d155e5e9": 1,
+      "F401:58752c97d0dfdba48d74": 1,
+      "F811:09556fbb598badac70ee": 1,
+      "I001:2ffe749e3841b7fd1142": 1
+    },
+    "backend/tests/test_etf_notifications.py": {
+      "E731:785eedcac4b48bf5f07c": 1,
+      "I001:70e5ed5af94d8844935b": 1
+    },
+    "backend/tests/test_etf_optional_cache.py": {
+      "F401:119451bcd4a7a897ffe6": 1,
+      "F811:0a31d3fbfc822cee85ea": 1,
+      "F811:603331cd94fa30c2b881": 1,
+      "F811:b5f39fad4dbd9c736bef": 1,
+      "F811:df12688c9bbd20e4097b": 1,
+      "I001:4825e411713cde14b144": 1
+    },
+    "backend/tests/test_etf_page_configuration.py": {
+      "E701:3b35e853112c6a2fe9e1": 1,
+      "E701:53c9ffbf56ebfc50ef69": 1,
+      "E701:7d13c377d80e68f59509": 1,
+      "E701:7d157ec80eb115739df0": 1,
+      "E701:990cd4d1f7f519c6951b": 2,
+      "E701:dce9bc1689a671199f25": 1,
+      "E701:e0df4590754ed9b8c293": 1,
+      "E701:ee886f38528cedc7ccab": 2,
+      "E702:0577c413879586d209be": 1,
+      "E702:11e8cc18c7a33505cdfb": 2,
+      "E702:2868aec2231493c7fc2c": 2,
+      "E702:3330f54991c196d09a86": 1,
+      "E702:3b71e0c23999fbd63473": 1,
+      "E702:4a4e3ac9cbc7e992e24a": 1,
+      "E702:5a7e66f080307ec85047": 1,
+      "E702:6b2e8389ee4fef3b32f4": 1,
+      "E702:6ed9bcb36f945018f199": 3,
+      "E702:85bb471fbf0323aade6b": 1,
+      "E702:887ab5b16544f88ad4c6": 3,
+      "E702:8d8c9183161db6b204a6": 2,
+      "E702:9a96ac3658f813970248": 1,
+      "E702:9ac7fb9c7df8ef0989ad": 1,
+      "E702:9ef5d0c65a3f5ebdda94": 2,
+      "E702:a09a55910479c7aa6648": 1,
+      "E702:a1f9ce450e1e6d5ac440": 1,
+      "E702:a5fde0748ba96137a813": 2,
+      "E702:af41ac16280f5c0687d7": 1,
+      "E702:af6a5eef01eeaefcd7d8": 1,
+      "E702:d517c614f55e6349fc7e": 2,
+      "E702:d66e0317169f6eee965d": 2,
+      "E702:dd02662a305c68020ab0": 1,
+      "E702:e3bc6fa018896a6c43db": 1,
+      "E702:e553aeec41d7b8fae19a": 1,
+      "E702:e8aaf91e0b59f1964cb4": 1,
+      "E702:f60c2fdb0da584691c06": 2,
+      "E702:f70d3392972525942a2a": 1,
+      "E702:fda6885f63bc0f787d60": 1,
+      "F401:66dfcdb402b98c6afb40": 1,
+      "I001:1a443608f33698ece3bb": 1,
+      "I001:219606c78b40209fff21": 1,
+      "I001:454448011c3d5272e539": 2,
+      "I001:5a185032e7c6e08a194d": 1,
+      "I001:7e45f1acea8e79bacda4": 1,
+      "I001:f8352e976ea61195ff5b": 1
+    },
+    "backend/tests/test_etf_reader_target.py": {
+      "E702:0d76843264d446784c2e": 1,
+      "F401:119451bcd4a7a897ffe6": 1,
+      "F811:6c039cc8e5513365e74d": 1,
+      "I001:500da9ca03aa4afb3236": 1
+    },
+    "backend/tests/test_etf_selection.py": {
+      "I001:29ffe6de2669c44325d0": 1
+    },
+    "backend/tests/test_etf_snapshot_recovery.py": {
+      "E701:0113de76e66074bfa722": 1,
+      "E701:06dce41f0da069a48d64": 1,
+      "E701:258e23fad130d775a6ae": 1,
+      "E701:3fcaeb719f9f9e2ab203": 1,
+      "E701:6f26339afdddd9d3d5c0": 1,
+      "E701:7d0d0d357ff8edf53f7e": 1,
+      "E701:82dac6580fbf34654931": 1,
+      "E701:92c2079b93af2c3b02e5": 1,
+      "E701:b1bcff17caaa23b481c7": 1,
+      "E701:b880f2b8a1e7123f94d3": 2,
+      "E701:b8ae975119bec3e4d542": 1,
+      "E701:bb16f5596485bc89fcad": 1,
+      "E701:be2cfa7c7843d659182a": 1,
+      "E701:c6c85fafc271c628280b": 1,
+      "E701:dcf14e814904c9ada904": 1,
+      "E701:e72985dc43e3ef69a31a": 1,
+      "E702:0f3c67b76598630f9bfa": 1,
+      "E702:266451a490860427ff74": 1,
+      "E702:28683225f3737cd8eba3": 1,
+      "E702:2a17ee559b47a65b46b7": 5,
+      "E702:3da3b9389235ba90b7cd": 1,
+      "E702:44714f39065f1a18f2fb": 1,
+      "E702:69675394a9bf2a09c0e8": 1,
+      "E702:721d2a5721cff2cad91e": 2,
+      "E702:761c90c194d5500f6091": 1,
+      "E702:81e3475eab44b937499e": 1,
+      "E702:a23757ef060ccbc439ea": 1,
+      "E702:de19905f2762c6a8b397": 1,
+      "E702:e9b8131ff25db98fe00b": 1,
+      "E702:ed193145f90a8ecb0ab3": 1,
+      "F401:2ef11dd1326e430c10ce": 1,
+      "F401:351e8387f82ca43f4782": 1,
+      "I001:a1ebbdc32b1385e4ffd1": 1
+    },
+    "backend/tests/test_etf_sse_scoped_worker.py": {
+      "E731:87e4271af23271561f03": 1,
+      "I001:4825e411713cde14b144": 1
+    },
+    "backend/tests/test_growth_dividend.py": {
+      "E402:09b2b3ca8bb91eedc1ef": 1,
+      "E402:5a4fdde9f776e273a973": 1,
+      "E402:69a5e04e44088273c554": 1,
+      "E402:7b60f28e7e2d613a61be": 1,
+      "E402:a04d3616c735a874a1e7": 1,
+      "E402:b222b292b602ea114266": 1,
+      "E402:dcfeb942bb07abc7dd56": 1,
+      "I001:716fbe1d4171e065883b": 1,
+      "I001:cda233262796ba1cb134": 1
+    },
+    "backend/tests/test_growth_dividend_import.py": {
+      "E701:06b30e890b84c400dc85": 1,
+      "E701:1df8bee6e8c1327861c4": 1,
+      "E701:507118bb6f823c03257b": 1,
+      "E701:8adfda163a4e38549a54": 2,
+      "E701:9abc4dfc4453a160b397": 1,
+      "E701:acc60217ac4fc799e096": 1,
+      "F401:66dfcdb402b98c6afb40": 1,
+      "F401:d66d9a6211917d363d43": 1,
+      "F401:f5389ca9d3bad001eb61": 1,
+      "I001:a1ebbdc32b1385e4ffd1": 1,
+      "I001:affce4c86fcbbccd4df0": 1
+    },
+    "backend/tests/test_history_result_sync.py": {
+      "F401:119451bcd4a7a897ffe6": 1,
+      "F811:64ade9c09ea3b282b016": 1,
+      "F811:73996123509048e3604c": 1,
+      "F811:92ea0f97151f6a8f8b18": 1,
+      "F811:a4c5dc1a21f88b45cc16": 1,
+      "F811:b077577ff35beec067d8": 1,
+      "F811:d374aacc66f14cfc6960": 1,
+      "I001:4825e411713cde14b144": 1
+    },
+    "backend/tests/test_history_unified_sync.py": {
+      "F401:d3b6d9fcced6f6498e1f": 1,
+      "I001:462c74f7196b41dc78c1": 1,
+      "I001:4825e411713cde14b144": 1,
+      "I001:85d4031eeae163ff5bc5": 1
+    },
+    "backend/tests/test_holdings_close.py": {
+      "I001:48650b19bb2c1a26a32d": 1
+    },
+    "backend/tests/test_holdings_close_source.py": {
+      "I001:a1ebbdc32b1385e4ffd1": 1
+    },
+    "backend/tests/test_index_valuation_collector.py": {
+      "E701:189bded67b24ecd35e16": 1,
+      "E701:7d89a5603caaa641e239": 1,
+      "E701:f590faf9c2bd299b001e": 1,
+      "F401:e700a6b062b8c1c4a34e": 1,
+      "I001:629c0c64ed7475ebafc7": 1
+    },
+    "backend/tests/test_index_valuation_public.py": {
+      "E701:03f3045d8b23eb175d07": 1,
+      "E701:09b5011ea8ed19568838": 1,
+      "E701:10d3bf9478d9faf59501": 1,
+      "E701:1af73513b78258590a7f": 1,
+      "E701:1d1ae3cf3dc5f33c7785": 1,
+      "E701:2871027ec198af10522e": 1,
+      "E701:28cd964f1140fcab9ba7": 2,
+      "E701:28fca655d825155f196d": 1,
+      "E701:42cee455f31f29c97894": 1,
+      "E701:48a12bbe9ec25371c15b": 1,
+      "E701:4cbc431b9d262d1aa3c2": 1,
+      "E701:642a3f5d51f5262e2ac3": 1,
+      "E701:6dbeb434ce11573d20bf": 1,
+      "E701:70af176fb10973f581a7": 1,
+      "E701:7a3d50f5da5baa30544a": 1,
+      "E701:7ce88033213d9e4777a0": 1,
+      "E701:80676aefa476b2b7006c": 1,
+      "E701:882a57a79007f907b2b3": 1,
+      "E701:9b01fa71fcbb60ca4a34": 1,
+      "E701:a224a9f2bd4611a0d37c": 1,
+      "E701:a22694182400f5c71c11": 1,
+      "E701:a5622e7c6d48f14fad27": 1,
+      "E701:c5233fb00a8a00898285": 1,
+      "E701:d6a64c60b79988308f52": 1,
+      "E702:43e0ed2fa231f72c71db": 6,
+      "E702:6fd3945fa9cfd6115f07": 2,
+      "F401:24eafe55842ca986b346": 1,
+      "F401:4d7cd1b7b21da972ad26": 1,
+      "F401:9e6f75ae329ecbd1f008": 1,
+      "I001:219606c78b40209fff21": 1
+    },
+    "backend/tests/test_index_valuation_sync.py": {
+      "E701:043fef28c04eb32cd85c": 1,
+      "E701:34d3f77909ba321267ec": 1,
+      "E701:78369bcde25bf406771a": 1,
+      "E701:c7453c18d4e0364e97b3": 1,
+      "E701:d7b7baeaff0c9a56344e": 1,
+      "E701:f3bedd5dc63777124a5a": 1,
+      "F401:5acbc572322a0e98f07d": 1,
+      "F811:5153e09a5540e181bebf": 1,
+      "I001:2ffe749e3841b7fd1142": 1,
+      "I001:8afe110edea104961a4f": 1
+    },
+    "backend/tests/test_logging.py": {
+      "I001:073b32b74e45060ddc77": 1
+    },
+    "backend/tests/test_margin_eastmoney.py": {
+      "B023:774d8586b389d8406dc1": 1,
+      "I001:500da9ca03aa4afb3236": 1,
+      "I001:e219930b659a6b1a1f80": 2
+    },
+    "backend/tests/test_margin_guarantee.py": {
+      "E402:037c7cb7404a4f905f09": 1,
+      "E402:69a5e04e44088273c554": 1,
+      "E402:7b60f28e7e2d613a61be": 1,
+      "E402:942be1c5b7384ffec94f": 1,
+      "E402:b222b292b602ea114266": 1,
+      "E402:b5c33a82cfb277729cc7": 1,
+      "E402:c2b36f190d789850920f": 1,
+      "E402:c6afb5c8327a1d27d50e": 1,
+      "F841:8f06ef518ed8be3fc245": 1,
+      "I001:219606c78b40209fff21": 1,
+      "I001:cda233262796ba1cb134": 1
+    },
+    "backend/tests/test_margin_source.py": {
+      "B023:12aea2a4dd72e3db4b06": 1,
+      "B023:f7bd9414fcc5ff39adb7": 1,
+      "I001:a1ebbdc32b1385e4ffd1": 1
+    },
+    "backend/tests/test_market_asharehub.py": {
+      "E701:2369cc7d8871329a299e": 1,
+      "E701:359b64912896493fe0ac": 1,
+      "E701:47f44b187df0cf3afc15": 1,
+      "E701:78f2150c76c1d868781e": 1,
+      "E701:9ae8c0ce7c847120b35b": 1,
+      "E701:deb87f28db379968dd07": 1,
+      "E701:f1248bc6030afc03788e": 1,
+      "E702:2a95ac42a84fa4bf5c38": 1,
+      "E702:3f410d0ea82f10ae7c5f": 1,
+      "E702:642b2a24661c39cf265c": 1,
+      "E702:7c1a6daee374330fac53": 1,
+      "E702:b05aa4917bc4c23cf1b8": 1,
+      "E702:b902bc51ce9515cd025b": 1,
+      "E702:c4de61e72ffe0091a938": 1,
+      "E702:ef4bc4782049f2337b77": 1,
+      "I001:58272dd3451e79749474": 1
+    },
+    "backend/tests/test_market_asharehub_listing.py": {
+      "E702:a7a4fc3e516b6062ae48": 1,
+      "F401:2cd53171f2774bfe7ffe": 1,
+      "F401:6461e1217215a917e142": 1,
+      "F401:8e712cbcaaec1e40fe47": 1,
+      "I001:58272dd3451e79749474": 1
+    },
+    "backend/tests/test_market_bulk.py": {
+      "I001:073b32b74e45060ddc77": 1
+    },
+    "backend/tests/test_market_bulk_diagnostics.py": {
+      "B905:2bcb6918f713fe0fa543": 1,
+      "I001:645cfa1c18b0203f1555": 1
+    },
+    "backend/tests/test_market_collection.py": {
+      "E701:55ea1a0913854fec1c38": 1,
+      "F401:bc2d7b042bd0b6be922d": 1,
+      "I001:495682d88f055744a40d": 1
+    },
+    "backend/tests/test_market_collection_api.py": {
+      "I001:775f59225bd680deee41": 1
+    },
+    "backend/tests/test_market_collection_retry.py": {
+      "I001:396e2f2787e152f31141": 1
+    },
+    "backend/tests/test_market_configuration.py": {
+      "E701:5b9ca37a7350d30c7cea": 2,
+      "E701:66269663fd5b984b797c": 1,
+      "E701:8481b3960bfc45a651ff": 1,
+      "E701:9762c1f2b97947dcd85b": 1,
+      "E701:bc204cf476b970a955cf": 1,
+      "E701:fd3477082b4e80429da5": 1,
+      "E702:0c77e87108601c5a744e": 1,
+      "E702:0f38ac22abe7b73a6ba6": 2,
+      "E702:1461ddf48b8680aa2563": 1,
+      "E702:3275843d152ba30b027c": 1,
+      "E702:453d1972b2338ea1a9b2": 4,
+      "E702:4b5e0f4db9f9f3ad2f7d": 1,
+      "E702:6a5cba3303063ae23d06": 4,
+      "E702:8d9d51859395ab213b02": 2,
+      "E702:91e4ce301b7d80120214": 2,
+      "E702:a52a854f2e70f7931e1c": 2,
+      "E702:d12d71bd522ec821eb5e": 3,
+      "E702:ff58a6c2cc2e8e8ac08a": 1,
+      "I001:2c1674f05bd32e01d3fa": 1
+    },
+    "backend/tests/test_market_counts.py": {
+      "B023:2b9d6e19d0e72a5797c9": 1,
+      "B023:50bc72cf5cc05112d4dd": 1,
+      "B023:97cba1660389a21f00e9": 1,
+      "B905:7770d8bb9f7d005e4743": 1,
+      "I001:58272dd3451e79749474": 1
+    },
+    "backend/tests/test_market_dated_collection.py": {
+      "E702:1fe9e29075af294b5ce2": 1,
+      "E702:7543301eb0d6bf09c227": 1,
+      "E702:bc7c71b4c3e81c21458f": 1,
+      "I001:716fbe1d4171e065883b": 1
+    },
+    "backend/tests/test_market_dated_integration.py": {
+      "E701:0ac0ce79d0a65db79095": 1,
+      "E701:0c93a4d48f22f70b5e5b": 1,
+      "E701:1db6ee699f31a2b9cdd1": 1,
+      "E701:1ecad5bf9711f3b0216f": 1,
+      "E701:21b0254e5cfdfe1c5428": 1,
+      "E701:22f7d974fe8fc3e1cdc4": 1,
+      "E701:294aa609acd57909c1cc": 1,
+      "E701:2b8c5e0509064635b287": 1,
+      "E701:3031636d7290e8312799": 1,
+      "E701:3b17638c43d46d81447f": 1,
+      "E701:41013c454aaddeb312b2": 1,
+      "E701:4e178a105f9447200760": 1,
+      "E701:51e60599d4784fce76ae": 1,
+      "E701:5713d2734e634f442afc": 1,
+      "E701:5dbeabcaf7a632057c62": 1,
+      "E701:5e41ba9306b59d5f88a6": 1,
+      "E701:6bcc31de0a3c0730fcbb": 1,
+      "E701:70837fbf0858295dfbb1": 1,
+      "E701:79caba4bd3fc6f80f49b": 1,
+      "E701:7cdbe8d573e690a6dec4": 1,
+      "E701:811a9cd22acd5863dc36": 1,
+      "E701:87b978246efe3c1df5c0": 1,
+      "E701:8a6b99dbf1e3219e9297": 1,
+      "E701:8e212492f762478d121b": 1,
+      "E701:9aa7626c361c254d0030": 1,
+      "E701:9c65a79776f077cef070": 1,
+      "E701:a3b21ab4c3add51b1afe": 1,
+      "E701:a3c5000aa1e7e0983a7c": 1,
+      "E701:aa1aa0b9e4c3bebf50e5": 1,
+      "E701:b7d29185e4f5095a1b64": 2,
+      "E701:c006b04c52bc6e57ea31": 1,
+      "E701:c2c3513cd936cecf2c31": 1,
+      "E701:c977c584a71c7bb08ff2": 1,
+      "E701:cfa2977099ef38b1937e": 1,
+      "E701:d67fa16640d32030dc54": 1,
+      "E701:e218dcdb355614de107d": 1,
+      "E701:edad121944e0f709568d": 1,
+      "E702:0ee53abfe50630b6c1e6": 3,
+      "E702:12e8da15ee65928ebca8": 1,
+      "E702:19a3e5ef35c3403c2cdc": 1,
+      "E702:20ada18cb2c9f8129ad0": 1,
+      "E702:2b976d555a604270d229": 1,
+      "E702:2da732ed7a294fbd5b46": 1,
+      "E702:32ec0e921d0a3c613736": 1,
+      "E702:55ed6bdbfc73a2fb4736": 1,
+      "E702:69c680a9e423a448b5e3": 1,
+      "E702:6a580558c5339dd5a43d": 3,
+      "E702:719cf5168d2c7ad8bbdc": 1,
+      "E702:7d299fbb5b339a5fcddd": 2,
+      "E702:8244a2a7127ccad57f0f": 1,
+      "E702:851747728482ba17cc46": 1,
+      "E702:85a12ce81f52da8f9976": 1,
+      "E702:8f74dd801e14ca2d9531": 2,
+      "E702:a8f64a657c91fc88ddd9": 1,
+      "E702:adee4f982f4cf7c1c64d": 1,
+      "E702:bf38fda931b77f5e1e00": 1,
+      "E702:c55bcd8aac28c82ef8f2": 1,
+      "E702:e59fc252867e68c92943": 1,
+      "E702:ed94a080fd1534422221": 2,
+      "E702:eea9299479e3be02a847": 1,
+      "E702:efa34016e532117c24ff": 1,
+      "E702:f925c8ab603d09206450": 1,
+      "I001:58272dd3451e79749474": 1,
+      "I001:7e45f1acea8e79bacda4": 1,
+      "I001:82ce5e911a136c909954": 1,
+      "I001:d02d02380be0e636d52b": 1
+    },
+    "backend/tests/test_market_eastmoney_listing.py": {
+      "I001:ae46f890d9a887e095c9": 1
+    },
+    "backend/tests/test_market_eastmoney_universe.py": {
+      "I001:58272dd3451e79749474": 1
+    },
+    "backend/tests/test_market_factor_cache.py": {
+      "I001:a1ebbdc32b1385e4ffd1": 1
+    },
+    "backend/tests/test_market_history.py": {
+      "I001:58272dd3451e79749474": 1
+    },
+    "backend/tests/test_market_listing.py": {
+      "I001:775f59225bd680deee41": 1
+    },
+    "backend/tests/test_market_provenance.py": {
+      "I001:2c1674f05bd32e01d3fa": 2,
+      "I001:a1ebbdc32b1385e4ffd1": 1
+    },
+    "backend/tests/test_market_public.py": {
+      "E702:1d95c18ba578357f2264": 1,
+      "E702:2aa22e5ce6628d0b696f": 1,
+      "E702:7763ac63ac72f93d2cc8": 1,
+      "E702:bd4075c6e4629eaa5108": 1,
+      "E702:dd691f362af244ab6fdc": 1,
+      "I001:0ed3e024ccde05b78081": 1,
+      "I001:6dfe5637f059b7a379c7": 1,
+      "I001:b0f019d4f6de9ae20b93": 1
+    },
+    "backend/tests/test_market_schedule_identity.py": {
+      "I001:57d8e008bba0d104afb5": 1
+    },
+    "backend/tests/test_market_sina.py": {
+      "B905:37eb27ce244a1650b56c": 1,
+      "F401:537fd14395c8a2b17963": 1,
+      "F401:8c920f98447fd67b14f1": 1,
+      "I001:5a185032e7c6e08a194d": 1,
+      "I001:629c0c64ed7475ebafc7": 1
+    },
+    "backend/tests/test_market_source_diagnostics.py": {
+      "I001:716fbe1d4171e065883b": 1
+    },
+    "backend/tests/test_market_suspensions.py": {
+      "I001:0ed3e024ccde05b78081": 1
+    },
+    "backend/tests/test_market_universe.py": {
+      "F401:7aa4b0a8d6a69fd011d3": 1,
+      "I001:58272dd3451e79749474": 1,
+      "I001:ac6b772ec9d196dae021": 1
+    },
+    "backend/tests/test_market_writer.py": {
+      "I001:2c1674f05bd32e01d3fa": 1,
+      "I001:ee40fd7e14fc5e290b5e": 1
+    },
+    "backend/tests/test_microcap_collector.py": {
+      "E701:4c5aa1ed32f897073254": 1,
+      "E701:5a72d815e38e5098f1be": 1,
+      "F401:0572c79d47fa549254ac": 1,
+      "F811:7a9749178813df1a9d5e": 1,
+      "I001:629c0c64ed7475ebafc7": 1
+    },
+    "backend/tests/test_momentum_collector.py": {
+      "I001:3261bff81b9a166c1289": 1
+    },
+    "backend/tests/test_momentum_journal_upgrade.py": {
+      "F401:119451bcd4a7a897ffe6": 1,
+      "F811:bdd905a51fe21b0ec084": 1,
+      "I001:2ffe749e3841b7fd1142": 1
+    },
+    "backend/tests/test_momentum_threshold.py": {
+      "B905:336c9dc774144c8d5605": 1,
+      "I001:2ffe749e3841b7fd1142": 1
+    },
+    "backend/tests/test_mysql_connector.py": {
+      "I001:219606c78b40209fff21": 1,
+      "I001:416a0385869c8640f699": 1
+    },
+    "backend/tests/test_mysql_payload.py": {
+      "E701:58a9fb706a843a5869b0": 1,
+      "E701:7fe99c1fe0151881afa9": 1,
+      "I001:8afe110edea104961a4f": 1
+    },
+    "backend/tests/test_ownership.py": {
+      "E702:47ab8799c744208f66c8": 1,
+      "E702:927e89132e34739f604d": 1,
+      "E702:c2cfa4ddaa18064d0374": 1,
+      "F401:119451bcd4a7a897ffe6": 1,
+      "F811:dc3715ad7248f2e0ff1b": 1,
+      "I001:c91a930f41dc58f30c8b": 1,
+      "I001:ef46d40136c98c1c3352": 1
+    },
+    "backend/tests/test_ownership_baseline.py": {
+      "F401:11b444989f4ce3786387": 1,
+      "F401:4c31ae1176e92d43be9f": 1,
+      "F401:5b05881ff3a4271825ba": 1,
+      "F401:f62e69c88d36b87a356e": 1,
+      "F811:0e6828715c1223dda7e4": 1,
+      "F811:10d5ca108c8a3bd48fed": 1,
+      "F811:30c03b183026ffcc533d": 1,
+      "F811:7dbc71efd097a6ebac3a": 1,
+      "F811:8587d208c56a50f48351": 1,
+      "F811:a666c2a2bfbc59d9e1c2": 1,
+      "F811:a95d6fc2c1ed5381c03d": 1,
+      "F811:c05337d0fbed076df429": 1,
+      "F811:c5665fad24b6b56a1f06": 1,
+      "F811:cc0b0d4a6b7cd81e703e": 1,
+      "F811:d6a9be4775526338197f": 1,
+      "F811:fa9484932c4422a29fbe": 1,
+      "I001:500da9ca03aa4afb3236": 1,
+      "I001:58237cd4400bdcb50d86": 1,
+      "I001:8757e2c4948203a7185b": 1
+    },
+    "backend/tests/test_ownership_classification.py": {
+      "F401:83d2e61286a66491a2d5": 1,
+      "F401:a3dc23a47f387332da8b": 1,
+      "F811:037aa7b127fda764227d": 1,
+      "F811:0873aabdfa108197736a": 1,
+      "F811:14378f0ec6a981a7cc1c": 1,
+      "F811:2ab0b5ef20f0a55f25c1": 1,
+      "F811:3d893878ae7494613a7e": 1,
+      "F811:6f1dfe2bb8a1439512ac": 1,
+      "F811:90736e87ca220a88691a": 1,
+      "F811:a4d4f88edaf8c9d12555": 1,
+      "F811:c4739e2b4e7ce045dd0a": 1,
+      "F811:c4c2194143384bbc5396": 1,
+      "F811:c50941643a5c73523890": 1,
+      "F811:d1c61e8311c24e720c2a": 1,
+      "F811:d2049f6a66e6dbbe5750": 1,
+      "F811:dcf42e1fc07986a592bc": 1,
+      "F811:dd0b87eb4eda2228e560": 1,
+      "F811:e6d037ae021403f7e1ea": 1,
+      "F811:eb677e9709168b462ab7": 1,
+      "I001:36b70adf04b37cf19f5b": 1
+    },
+    "backend/tests/test_ownership_collector.py": {
+      "B007:0a983020e19e764ba17d": 1,
+      "E702:03ba0fbdc3be7f5895f8": 2,
+      "E702:1076a8fc1ee85c2a5636": 2,
+      "E702:1eb0d0fab29877e572dd": 2,
+      "E702:3b72d16e23ba1921ddca": 1,
+      "E702:54f9e017cb55ef0b650a": 1,
+      "E702:6ab3007e3c909bdb1235": 3,
+      "E702:76159163da910e86755d": 2,
+      "E702:7f519f5b2148cbb98679": 1,
+      "E702:8994e8c02619ad4fa62d": 1,
+      "E702:8e5910857c1992436bba": 6,
+      "E702:a8940b2a80b765e370e8": 2,
+      "E702:b761e077de1a6b47c0b4": 1,
+      "E702:c1ebbd0abd8c7d692d28": 1,
+      "E702:c577c6652e8edbfd6ae2": 2,
+      "E702:ef98fba44df2bd226c74": 3,
+      "E702:f1cd60d7b8d7aa17bf19": 1,
+      "E702:f67aeeae52e25118e2e8": 2,
+      "F841:89f0af496da2ca99f45b": 1,
+      "I001:629c0c64ed7475ebafc7": 1
+    },
+    "backend/tests/test_ownership_fund_queries.py": {
+      "F401:4c31ae1176e92d43be9f": 1,
+      "F811:961b2d03199994638cb0": 1,
+      "I001:2ffe749e3841b7fd1142": 1
+    },
+    "backend/tests/test_ownership_history.py": {
+      "E702:015cd4b801af28b0f11f": 1,
+      "E702:0c23aa08c7b5f5c65d22": 1,
+      "E702:1f1f280d67417548ee85": 4,
+      "E702:3a0744076cb2e911f218": 1,
+      "E702:41270a4fcbd3874f25c0": 1,
+      "E702:4a803eef9a37265cfe28": 1,
+      "E702:632e922297328a638cde": 1,
+      "E702:c3d3443e8cd102a48ab7": 1,
+      "E702:d48874eb14ef4e59beb5": 3,
+      "F401:4c31ae1176e92d43be9f": 1,
+      "F811:7bfa892a7ff823cd5c72": 1,
+      "F811:a0291e508f5ac033b318": 1,
+      "I001:2ffe749e3841b7fd1142": 1
+    },
+    "backend/tests/test_ownership_period_incremental.py": {
+      "F401:4c31ae1176e92d43be9f": 1,
+      "F811:4e339d67cc95b90d351e": 1,
+      "I001:36b70adf04b37cf19f5b": 1
+    },
+    "backend/tests/test_ownership_sync.py": {
+      "E701:823c299060f036fd7ed9": 1,
+      "E701:93a14b46f8da5db308f7": 2,
+      "E701:9a6b7e721f0b2e0e0473": 1,
+      "E701:a2e2c0cf69fb3d1d4b7e": 1,
+      "E702:1676fa956a832e12c796": 3,
+      "E702:2e5204c54183595a39fa": 1,
+      "E702:664833792f7ae7b56734": 1,
+      "E702:6ca650194dba211a84ed": 2,
+      "E702:773d2984ab0be4886d98": 3,
+      "E702:7f8f5044f822c463fb88": 1,
+      "E702:c5949847fa54939ee3d1": 2,
+      "E702:f31fe2a5138f7bf1cb7c": 3,
+      "F401:3dde63ae670d5c0ffd8c": 1,
+      "F401:4c31ae1176e92d43be9f": 1,
+      "F401:5e23e7077439b7580844": 1,
+      "F811:d3555d6794ad3e8a1222": 1,
+      "I001:a1ebbdc32b1385e4ffd1": 1
+    },
+    "backend/tests/test_personal_holdings.py": {
+      "E701:03dd602272fdfccdb930": 1,
+      "E701:0cc9cc732b08aa7ed40e": 1,
+      "E701:37f5a8c97163c38a6a6b": 1,
+      "E701:4cb94f8808e1e449e55a": 1,
+      "E701:4fd23396f3e5b21685f3": 1,
+      "E701:51d0b0e785d8a99c43b2": 1,
+      "E701:5d2c59723c90b5cb68a6": 1,
+      "E701:663e77c7400d01f7b32b": 1,
+      "E701:68c50de335cdd625b085": 1,
+      "E701:7856a9dbd0eea39dbadd": 1,
+      "E701:7deaaa88554571c47ded": 1,
+      "E701:81bd41695d75c467acd5": 1,
+      "E701:92a2adc796c038a2c3e3": 1,
+      "E701:9ba9fe645e41f452dcaf": 1,
+      "E701:d4a80ef4ff64060e83fb": 1,
+      "E701:d828257525ad8b7ae638": 1,
+      "E701:d83149906dca9b87aabf": 1,
+      "E701:df2129e9413459bd606b": 1,
+      "E701:e02b3057a4d21be955a6": 1,
+      "E701:e3461fabdd90cea8d8ad": 1,
+      "E701:e798bafd56636acb508b": 1,
+      "E701:ed67f6833e2b8989ca2a": 1,
+      "E701:f9d4b2c01d24b50a408f": 1,
+      "E702:047f16e49257732c7cec": 1,
+      "E702:0602c3131d526c8fd6c7": 1,
+      "E702:0c68e7008c29c1dda681": 1,
+      "E702:0fa2cf176caa8c17915e": 1,
+      "E702:193794db482fff5cb8d2": 4,
+      "E702:1f3fe665fe1a72b3387f": 2,
+      "E702:1fdddaae3bf753273a7d": 4,
+      "E702:25c4caaecd83371194de": 3,
+      "E702:35a3c262b8c31893755d": 1,
+      "E702:3807b2e581de9d425b8a": 1,
+      "E702:3acb16a24dc30ea01778": 2,
+      "E702:40c2311dd4ad2f631443": 1,
+      "E702:410e70f057469ad17735": 1,
+      "E702:41cdc68ca0081013c53b": 2,
+      "E702:489ae6d2b4d160023892": 1,
+      "E702:4beb6beda0f2a110c303": 1,
+      "E702:568d209e2155202262b9": 1,
+      "E702:67ee2ae4280df60522d6": 3,
+      "E702:691eed7fde93113aa24d": 2,
+      "E702:74fdfb2181ced9af6582": 1,
+      "E702:7a4f1ba5a4eb4935083c": 1,
+      "E702:7f12d7b875610937680e": 1,
+      "E702:808b95f98af93c484e28": 6,
+      "E702:860725e988044adabe43": 2,
+      "E702:8cfe7bcbca8bc7c8403e": 1,
+      "E702:9f173ff2427a5184b4d5": 1,
+      "E702:a1db98509d210363e32c": 2,
+      "E702:a563eb5057cdd0086894": 1,
+      "E702:a8b4dc7a72d134d633de": 1,
+      "E702:abb4ac1d4e59cd0b0922": 1,
+      "E702:b063787f5fb6558065a2": 1,
+      "E702:b4249c949f9aeb1800f9": 2,
+      "E702:b4ee1f3f42563393c29c": 1,
+      "E702:b9350d1a101cfd486a07": 2,
+      "E702:b9f35b72195a8aeb273a": 1,
+      "E702:bd543c0c352585f6eda5": 1,
+      "E702:beeab7157939b76974ca": 1,
+      "E702:c3edae975f117389ba7b": 1,
+      "E702:c48801fae65eeebac916": 2,
+      "E702:ceb31921b3940e9f8164": 2,
+      "E702:d0a09dad3d6a44cb0a04": 2,
+      "E702:e5e25e1588a4f88d71d3": 3,
+      "E702:e5e4b4754dacf4aa7e75": 6,
+      "E702:e864dd74879f4798871e": 1,
+      "E702:e977ac24f249c568fd50": 2,
+      "E702:ee117ba097c8e9725ee9": 1,
+      "E702:f21002dfe0e85d84a9ec": 1,
+      "E702:fdd53d8b8c0905e668c1": 2,
+      "I001:71a75d1dc3d059eede17": 1,
+      "I001:8d5b2ab51c417144a902": 1,
+      "I001:cda233262796ba1cb134": 1,
+      "I001:e82ccaa405b22d11d5f2": 1
+    },
+    "backend/tests/test_poll_collection_calendar.py": {
+      "I001:48650b19bb2c1a26a32d": 1
+    },
+    "backend/tests/test_public_collection_publication.py": {
+      "E701:13e1449f4f1f0d1ca58f": 1,
+      "E701:20fe799a48752623203b": 1,
+      "E701:34e44d1f3b91a37e619a": 1,
+      "E701:59562919e39c63284b1e": 1,
+      "E701:63fbbe865ff3e63a164e": 1,
+      "E701:b39b72d7a0b3fab6aef4": 1,
+      "I001:219606c78b40209fff21": 1,
+      "I001:3cd8a7a3e569abfdf3b2": 1
+    },
+    "backend/tests/test_recovered_joinquant_history.py": {
+      "E701:16cf35c1d9f6f83c81ca": 1,
+      "E701:1c43cfdb9ea26cb7add7": 1,
+      "E701:2aed00f008fef054d58e": 1,
+      "E701:40ec47e057b477285566": 1,
+      "E701:50e5965515b3e13d08aa": 1,
+      "E701:552668f722ee8c96aa6e": 1,
+      "E701:621329fbedd0db26a099": 1,
+      "E701:6790a59ddc7807b03e94": 1,
+      "E701:84f248b6b6c3844759cb": 1,
+      "E701:903ca868d6ee96d1e1d9": 1,
+      "E701:9eba47c454033fbc2001": 1,
+      "E701:a2321e9f5794aed2e995": 1,
+      "E701:b08ccbf20505013f0527": 1,
+      "E701:df3939c2dc462c6a3ed3": 1,
+      "E701:fb9aa8fe1c5606e3612c": 1,
+      "E702:5b3eba32f40442eafca9": 1,
+      "E702:f570552fb78b7b3b1d87": 2,
+      "I001:1e976196bdd5bd987b57": 1,
+      "I001:629c0c64ed7475ebafc7": 1
+    },
+    "backend/tests/test_release_retention.py": {
+      "E702:20ca04b1d19aa941085b": 1,
+      "E702:3c0ec8d57742846dba3f": 1,
+      "E702:47411574e18da4419d95": 2,
+      "E702:81f95bfb9c47a64e78c3": 2,
+      "E702:9afa4cfbd72851887ec1": 6,
+      "E702:aefbbd1e50ba8dfac047": 1,
+      "E702:f771a086372753e911ae": 2,
+      "F401:8e0574eae1613ceb9dbb": 1,
+      "I001:416a0385869c8640f699": 1
+    },
+    "backend/tests/test_request_diagnostics.py": {
+      "I001:5a185032e7c6e08a194d": 1,
+      "I001:775f59225bd680deee41": 1
+    },
+    "backend/tests/test_result_journal_sync.py": {
+      "B028:3488f57b581ebeaedce1": 1,
+      "B028:3610137ddd1a2309eb6f": 1,
+      "B028:761663f0c1df09751c6f": 1,
+      "B028:f93997246c7ed73f40a2": 1,
+      "F401:119451bcd4a7a897ffe6": 1,
+      "F811:34a3f17e1b896b8c1c56": 1,
+      "F811:595b23a9f9843d32c295": 1,
+      "F811:7fa387e2134923c5dd72": 1,
+      "F811:c1c656c727307b64c896": 1,
+      "F811:c8c064bdd9638898a447": 1,
+      "I001:500da9ca03aa4afb3236": 1
+    },
+    "backend/tests/test_retired_selection.py": {
+      "F401:cae3e59b2bcc6d039fd0": 1,
+      "F811:b3712e084b99e3646f01": 1,
+      "I001:e63d383c699fc4d3c70d": 1
+    },
+    "backend/tests/test_retired_short_term.py": {
+      "F401:34377fffde4f9a1b6f53": 1,
+      "F401:66dfcdb402b98c6afb40": 1,
+      "F401:cae3e59b2bcc6d039fd0": 1,
+      "F811:96704a4b10798007587c": 1,
+      "I001:974801dea889dbafd9fa": 1
+    },
+    "backend/tests/test_runtime.py": {
+      "I001:073b32b74e45060ddc77": 2,
+      "I001:416a0385869c8640f699": 1
+    },
+    "backend/tests/test_safe_env.py": {
+      "E701:267948f22245c7f50ab5": 1,
+      "E701:77ddfbabd64c6f11bb98": 1,
+      "E701:b66a2964d9773bdfde06": 1,
+      "E701:fc8e566b09868b9de3df": 1,
+      "E702:04369e7319f3fde5cd1d": 2,
+      "E702:0c99701ab4fe2a76c056": 2,
+      "E702:130ca26342337f66b1a1": 2,
+      "E702:25072ca02b2fd22b9cf6": 1,
+      "E702:7f43aeca447a555e2ca0": 1,
+      "E702:a7842cfa785f9b729894": 1,
+      "E702:b9f55a916b317e2b95ba": 1,
+      "I001:180fd93ae43b7c79db56": 1,
+      "I001:716fbe1d4171e065883b": 1
+    },
+    "backend/tests/test_selection_history_archive.py": {
+      "B905:a6e58b3aeddc3e13ca25": 3,
+      "E701:09e92e349826f9d7884c": 1,
+      "E701:30a8cea2f87ca3bd3971": 1,
+      "E701:50f6a534124aed7bc84f": 1,
+      "E701:7625fba1100d32fed01d": 1,
+      "E701:7d7cffd43b33c15af4c5": 1,
+      "E701:8ccf45ba3fddf5abc900": 1,
+      "E701:9f71bb5616f1a5155943": 1,
+      "E701:aeb92f43399a953e7bc1": 1,
+      "E701:b616069f1a7e49a41115": 1,
+      "E701:bbdf170d8fecdca62528": 1,
+      "E701:bf761933f052ccb1692b": 1,
+      "E701:d0d3a7373024b9484602": 1,
+      "E702:18112f7be1cea2666f13": 1,
+      "E702:27f0d956af2364a610db": 1,
+      "E702:46c5f5eec094847347c1": 1,
+      "E702:ecd5269d44e41efc2669": 1,
+      "I001:2ffe749e3841b7fd1142": 1
+    },
+    "backend/tests/test_sentiment_api.py": {
+      "I001:4825e411713cde14b144": 1
+    },
+    "backend/tests/test_social.py": {
+      "F841:3bfdc887fd8a0ad9c092": 1,
+      "I001:d4208c60e5b415806689": 1
+    },
+    "backend/tests/test_social_browser.py": {
+      "I001:716fbe1d4171e065883b": 1,
+      "I001:96372e4af67bf0b1825e": 1,
+      "I001:e7fa38b6a63c55785057": 1,
+      "I001:e82ccaa405b22d11d5f2": 1
+    },
+    "backend/tests/test_social_channels.py": {
+      "I001:36c50682407ac4b4f7eb": 1
+    },
+    "backend/tests/test_social_cube_metadata.py": {
+      "I001:5bd2a8e0808451796556": 1
+    },
+    "backend/tests/test_social_cube_sources.py": {
+      "I001:2c1674f05bd32e01d3fa": 1
+    },
+    "backend/tests/test_social_cubes.py": {
+      "B905:2a09bef08e53bdcaaa76": 1,
+      "I001:2c1674f05bd32e01d3fa": 1
+    },
+    "backend/tests/test_social_images.py": {
+      "E701:1d8b0191e03d275d671c": 2,
+      "E701:408165942e214fe3cb73": 1,
+      "E701:6de533055532b94c0ef8": 1,
+      "E701:73967b3364315624e879": 2,
+      "E701:a38aa7f887ebda0bd586": 1,
+      "E702:10ab1929f2aeed546e87": 2,
+      "E702:40bdf514ed754fd40289": 2,
+      "E702:57d32179e04c61d390e5": 3,
+      "E702:c68572123a475e80bd1b": 1,
+      "F401:5fec480d3c3818e96aa5": 1,
+      "F401:cae5de74bab0d472d27f": 1,
+      "F811:03b475469f0c54a6dc58": 1,
+      "F811:3bc5700fe0b176773857": 1,
+      "F811:410617f53bae7855854b": 1,
+      "F811:5c6aef468ffe9a462514": 1,
+      "F811:690cfcf674acbba91dd4": 1,
+      "F811:7b9c0994a403e4757631": 1,
+      "F811:8b0dc27188e6e11e5324": 1,
+      "F811:a8b23d72befa422d86d3": 1,
+      "F811:f758037a1c90f0fac928": 1,
+      "I001:a5a400cc3e66d4eba90d": 1
+    },
+    "backend/tests/test_social_notification_order.py": {
+      "B905:6429ef0fc27e9e6f2e02": 1,
+      "I001:2c1674f05bd32e01d3fa": 1
+    },
+    "backend/tests/test_social_outcomes.py": {
+      "I001:b2db498b0d64d5199544": 1
+    },
+    "backend/tests/test_social_polling_config.py": {
+      "I001:70e5ed5af94d8844935b": 1
+    },
+    "backend/tests/test_social_resume.py": {
+      "I001:2c1674f05bd32e01d3fa": 1
+    },
+    "backend/tests/test_source_diagnostic_logging.py": {
+      "I001:219606c78b40209fff21": 1,
+      "I001:500da9ca03aa4afb3236": 1,
+      "I001:758f223420f3bbb93791": 1
+    },
+    "backend/tests/test_source_keys.py": {
+      "E702:7dcdf1715963c1ea82e1": 1,
+      "E702:82bb360774b9561c9135": 1,
+      "E702:fc8f04c3e5795960b038": 1,
+      "F401:f872bfc31c3a9e9e13fb": 1,
+      "F811:3df45658652f236eab67": 1,
+      "F811:69e83b472257a369224f": 1,
+      "I001:8cfcb3d642c5d85b045f": 1
+    },
+    "backend/tests/test_system_configuration.py": {
+      "B905:85969db33c339189b0bc": 1,
+      "E701:06a4ffc0003b313d5436": 1,
+      "E701:0c279c162aad7fe6a1af": 1,
+      "E701:35c291070a81e9ddfd96": 1,
+      "E701:3e2619d0569518bc3c15": 1,
+      "E701:72b823cd6e5148e0f540": 1,
+      "E701:871f6fd6d8f42b5be974": 1,
+      "E701:89830a8c4b1ae240c844": 1,
+      "E701:89f95fc92b7ce2c3c6fd": 1,
+      "E701:f33663798016b03df973": 1,
+      "E701:ffee8bd7d5e8f8b4e334": 1,
+      "E702:0f49c84277a8ee6c6947": 2,
+      "E702:2bdebd3cac23360eca4e": 1,
+      "E702:2f28ca587917c353f7f6": 1,
+      "E702:3e8783ea1e5af8e0f991": 1,
+      "E702:3ea0db584e45d4a860f2": 1,
+      "E702:4da5cb5d8b4b6d3c7642": 1,
+      "E702:a13aa5669e29f9afe21a": 1,
+      "E702:c823a42f32d0e5b89569": 1,
+      "E702:cb4b49e25a2b67b01f14": 1,
+      "E702:ce4ef00734c468032993": 2,
+      "E702:e30f7df7fab8cdc33d0c": 1,
+      "E702:fd3bc00ff2c0dda3dcab": 1,
+      "I001:2c1674f05bd32e01d3fa": 1,
+      "I001:48650b19bb2c1a26a32d": 3,
+      "I001:70e5ed5af94d8844935b": 1
+    },
+    "backend/tests/test_system_database_adapters.py": {
+      "E701:4f8f4afe66b99ae41dd4": 1,
+      "E702:603baf601fdfa9c62582": 1,
+      "E702:6566207ea1b72ec78eba": 1,
+      "E702:79dda84f14cbb2b844d1": 2,
+      "E702:9c0981d66a2c453252e9": 1,
+      "E702:9cf924aa4aee38f3137a": 1,
+      "E702:b14e978f40ce84e4ef07": 2,
+      "E702:bdb1706c89b802dfd71a": 1,
+      "E702:c3cc292bb79bb7a33728": 1,
+      "I001:2c1674f05bd32e01d3fa": 1,
+      "I001:645cfa1c18b0203f1555": 1,
+      "I001:716fbe1d4171e065883b": 1
+    },
+    "backend/tests/test_system_database_runtime.py": {
+      "E702:5133b7e8e854dbac6527": 1,
+      "I001:ce6b2f8526f21345b19f": 1
+    },
+    "backend/tests/test_system_integrations.py": {
+      "E701:27ddc28e5bb908669695": 1,
+      "E701:a70c45d36d0e2bdd1c90": 3,
+      "E701:bc0161cd98aab1531a7e": 1,
+      "E701:e90955bf21da58a2df49": 2,
+      "E701:ed76f9b6db3a7700a811": 1,
+      "E702:2646f06c71e326ae545b": 1,
+      "E702:30428b392a008b27243e": 1,
+      "E702:4745137b3a722a609c1e": 1,
+      "E702:55aa3c92fa1772b8eda5": 1,
+      "E702:6f2211944b69f719c677": 1,
+      "E702:8ad953b020516653e56b": 3,
+      "E702:a341553e205181a31c41": 1,
+      "E702:a41e59ed6b34bcae4e61": 1,
+      "E702:f35433a428ec7cf211cd": 1,
+      "I001:716fbe1d4171e065883b": 1,
+      "I001:c91f73a3a517f07ef15c": 1,
+      "I001:e219930b659a6b1a1f80": 1
+    },
+    "backend/tests/test_system_runtime.py": {
+      "E701:757db09bcfcee9b13dd5": 1,
+      "E701:c33b4435ea6f4cd4d572": 1,
+      "E702:1d332ca31e59c22bab4d": 2,
+      "E702:30b5fdde583f19a26602": 1,
+      "E702:377e234d6837719c12cf": 1,
+      "E702:43d21882517640e92ff9": 1,
+      "E702:ae28cf8735e49cf293d9": 2,
+      "E702:b6dc0e9dc26fc2323bee": 1,
+      "E702:ed7e1be89ef804c5c101": 1,
+      "E702:eef6aeb36490b4371cb4": 1,
+      "E702:f065a7debcc922ce3f25": 1,
+      "I001:716fbe1d4171e065883b": 1
+    },
+    "backend/tests/test_valuation_incremental_sync.py": {
+      "I001:4825e411713cde14b144": 1
+    },
+    "backend/tests/test_valuation_missing_pe.py": {
+      "I001:a1ebbdc32b1385e4ffd1": 1
+    },
+    "backend/tests/test_valuation_ruler.py": {
+      "B905:ee9b9fee84ba811002ed": 1,
+      "E402:037c7cb7404a4f905f09": 1,
+      "E402:39c8f776c2c8ee277942": 1,
+      "E402:4bba682a36b195f27678": 1,
+      "E402:5a4fdde9f776e273a973": 1,
+      "E402:69a5e04e44088273c554": 1,
+      "E402:7b60f28e7e2d613a61be": 1,
+      "E402:7ffeee7559f1e2b0aca6": 1,
+      "E402:942be1c5b7384ffec94f": 1,
+      "E402:b222b292b602ea114266": 1,
+      "E402:c2b36f190d789850920f": 1,
+      "E402:d3be11ffd0db067cb1ff": 1,
+      "E402:f3c5a54ac1e2d8ff2fea": 1,
+      "E402:f4486c25b825e4b6f776": 1,
+      "E701:0c2e53a48d7335c9a910": 1,
+      "E701:0cb7d28e3065f608d702": 1,
+      "E701:0ead614b44005f792f5f": 1,
+      "E701:0f50681b4091ea3359b8": 1,
+      "E701:124eed9685d7ec23f2d6": 1,
+      "E701:145a2958d1991d1008c2": 1,
+      "E701:2beb947c609e7ad3f71c": 1,
+      "E701:4ca2875f3ff3009124f3": 1,
+      "E701:501f467fa6f25f845e0a": 1,
+      "E701:77662bdb4b2d22a1e04a": 1,
+      "E701:8cb71f8c0030c6c83dd0": 1,
+      "E701:8ec70f100cd9df31941a": 1,
+      "E701:9af135297ec995dfd2e5": 1,
+      "E701:b498e76fa67ccaec1566": 1,
+      "E701:b80ac7e6f0ff1fe3b7f4": 1,
+      "E701:bc899f8cd8ddcee4cd29": 1,
+      "E701:cf0887beebc32e59f7ed": 1,
+      "E701:e7bf8b26662903648afc": 1,
+      "E701:f118073599d1fa5e0d26": 1,
+      "E701:f54818cea2c56ec1e90f": 1,
+      "E702:051e3f7db851b91652fe": 2,
+      "E702:2d3d97de8526054706a0": 1,
+      "E702:2fc0d84659815e9c4a0e": 1,
+      "E702:401656d6d6e00a4cb03d": 1,
+      "E702:48aa0e42b46e6d1a055c": 1,
+      "E702:4b3520259994c2cb60cf": 2,
+      "E702:58f4402bc6cbd15501ed": 2,
+      "E702:648cc3f827e03cbe7444": 1,
+      "E702:724864983a2ecbc1cadb": 1,
+      "E702:736c382461f8ed74cc60": 1,
+      "E702:81499eeea21f31bfb3a4": 1,
+      "E702:840156e16284d7375d3c": 2,
+      "E702:a091e1fd2287b73b7850": 2,
+      "E702:a4bcaa40ed616716c6ff": 1,
+      "E702:a823813b51efa28b7a77": 2,
+      "E702:aa54cfd4ca6223719813": 1,
+      "E702:adf16efc7a0f247109d3": 1,
+      "E702:be2f4c95f711c2aa9b5f": 1,
+      "E702:cd1ec383cad75bdd7fac": 1,
+      "E702:d36c4a5df50b0a134d84": 2,
+      "E702:d4679412498dac4b46cf": 1,
+      "E702:df8e23213bdfac2086ec": 1,
+      "E702:ecd0b494ebccc30e05a6": 2,
+      "E702:f3dbc0cd55fc96cf2bc2": 1,
+      "E702:fcbd2b0baa4e5fd9b05e": 2,
+      "I001:219606c78b40209fff21": 1,
+      "I001:5a185032e7c6e08a194d": 1,
+      "I001:cda233262796ba1cb134": 1
+    },
+    "backend/tests/test_valuation_ruler_import.py": {
+      "I001:6b56e8d498eb7b753bc8": 1,
+      "I001:a1ebbdc32b1385e4ffd1": 1
+    },
+    "backend/tests/test_valuation_ruler_source.py": {
+      "E701:2fb95ac7f180d7830a94": 1,
+      "E701:5acc3baba7bbaaf84ab6": 1,
+      "E701:6baa27d4179d8375030c": 1,
+      "E701:7c604b29788638a38d88": 1,
+      "E701:919dd83c8802aae83616": 1,
+      "E701:9fecc130c4b5d47f917f": 1,
+      "E701:afd1428263c88279d5a7": 1,
+      "E701:bc23d17c623fff10d128": 2,
+      "E701:c09b4f2e421b35ec4d5c": 1,
+      "E701:d78ce09e58946859536b": 1,
+      "E701:dc4824de5bedadd1c83b": 1,
+      "E701:dfb97ea9962b91e2a515": 1,
+      "E701:f20b9ec65a7c65c5d350": 1,
+      "E701:f405c1360d6f82fcdfaa": 1,
+      "E701:f6e9e02453f31d7a9954": 1,
+      "E701:f9e79746fecb4465f07d": 1,
+      "E701:fb2a7fce13b5263016b0": 1,
+      "E702:0cdad2cb00b75528ef16": 2,
+      "E702:44a710ea0e3b3418b6c8": 1,
+      "E702:8d2bdf554d35206e171e": 3,
+      "E702:8dfb23707102e83fd50f": 1,
+      "E702:8fc227c0da555d4c17ec": 1,
+      "E702:cf93135d9b568b3d4a5a": 2,
+      "E702:ed655dcbae4455ddc69b": 1,
+      "E702:f08c5acf36e06456b93f": 1,
+      "E702:fd8c874d6d6833fa413e": 2,
+      "E702:ff6d6a25e47be30d69f1": 1,
+      "F401:34377fffde4f9a1b6f53": 1,
+      "I001:6dfe5637f059b7a379c7": 1
+    },
+    "backend/tests/test_valuation_sync_checkpoint.py": {
+      "F401:698e4076a3970118dd0f": 1,
+      "F811:02da2d3e9a4a0503c4f2": 1,
+      "F811:0c08afa85876f45bb0a6": 1,
+      "F811:37de13d58982de25327c": 1,
+      "F811:3c8a930b4b43eb9f71ee": 1,
+      "F811:6f7f97c50e342b827826": 1,
+      "F811:8596260c158194ad6bc7": 1,
+      "F811:d7e22f44f2c89b212f5e": 1,
+      "F811:d8efe59413da6aa0ed12": 1,
+      "F811:fd2c780e25653a4b3c22": 1,
+      "I001:500da9ca03aa4afb3236": 1
+    },
+    "backend/tests/test_weibo_repost_filter.py": {
+      "I001:f8352e976ea61195ff5b": 1
+    },
+    "backend/tests/test_windows_job.py": {
+      "I001:594e609861e432806c36": 1
+    },
+    "backend/tests/test_worker_diagnostics.py": {
+      "I001:5a185032e7c6e08a194d": 1
+    },
+    "backend/tests/test_xueqiu_diagnostic.py": {
+      "I001:416a0385869c8640f699": 1
+    },
+    "collectors/ETF分类去重_研究版.py": {
+      "I001:2f5143689e9a68a92730": 1
+    },
+    "collectors/ETF动量热度_数据库版.py": {
+      "B007:eca0ed1c58d66ee316c2": 1,
+      "B905:3654e73f1fe18d695b4b": 1,
+      "B905:a8e53bf72a4cb5ff1030": 1,
+      "B905:ad7e8d0a4eafe7cfe972": 1,
+      "B905:c68596c420b178db7e89": 1,
+      "E731:9819e14529df3d4a0d44": 1,
+      "F401:0162712eea039161e4cd": 1,
+      "F401:0e4a5b291bb5d7089a94": 1,
+      "F401:2052c08df3fb13a603cb": 1,
+      "F401:409b9dadcf41872214b9": 1,
+      "F401:65652d35ef2c34486465": 1,
+      "F401:9eeff6282f7782f82bfe": 1,
+      "F401:d7eb10ea4ebc29666fe2": 1,
+      "F821:c89309fd761cb5a7e6a2": 1,
+      "I001:99f3266be02311654696": 1
+    },
+    "collectors/ETF历史补采_聚宽研究版.py": {
+      "B023:31d65ccc1980072f2fe6": 1,
+      "B905:3ff7a04627a3fc8da3b1": 1,
+      "B905:4a6e37a316360058e931": 1,
+      "B905:c1a03b70ff9b7f03eb93": 1,
+      "E402:990a49cfcd3f744ef80f": 1,
+      "I001:0c2a0657bcdce0aba4a9": 1,
+      "I001:4441d4d663dbf25cb94f": 1
+    },
+    "collectors/etf_exchange_collector.py": {
+      "E402:3e34ffc451650960dfeb": 1,
+      "E402:5b9eb0516e4195f4b3f1": 1,
+      "E402:f4d9b9cf8b35918522db": 1,
+      "F403:a460aadd8ec1ffce2a7a": 1,
+      "I001:974801dea889dbafd9fa": 1,
+      "I001:cc0db1c981914fe5d187": 1
+    },
+    "collectors/mysql_connector.py": {
+      "F401:09edd69aeef841b2ecfd": 1,
+      "F401:3c27a2455ee52b2647f8": 1
+    },
+    "collectors/rules/index_valuation.py": {
+      "I001:396c5927673f1396e793": 1
+    },
+    "collectors/rules/result_journal.py": {
+      "I001:716fbe1d4171e065883b": 1
+    },
+    "collectors/rules/selection_archive.py": {
+      "F821:027aa2423c5674a78fca": 1,
+      "F821:06f698ede8a3f59b923c": 1,
+      "F821:07544e28e831f431bceb": 2,
+      "F821:099dd41a5f7c0e232cf8": 1,
+      "F821:122a89c00b64b49b7056": 1,
+      "F821:1506f11b5268df44191c": 1,
+      "F821:1a234d2e482c0bc7df31": 1,
+      "F821:290b600cbc0f6a13938f": 1,
+      "F821:2b5782629ccb0c0a56a7": 1,
+      "F821:3505400a3d2e7e383faf": 1,
+      "F821:374d1c2201c8148916a8": 1,
+      "F821:45b99ca7e6edad58fd77": 1,
+      "F821:4dfab8db4719cfc2aa58": 1,
+      "F821:50271fcd2bc1905ea971": 1,
+      "F821:51890a48091971fc4d4f": 1,
+      "F821:5782fe3fd9399058477b": 2,
+      "F821:5dc7f0f67da468104384": 1,
+      "F821:6248deeb1dfdb5abbae4": 1,
+      "F821:76e06f076089097738d1": 1,
+      "F821:7815c200450fb7ff29ef": 1,
+      "F821:7c5f134e557a77bb86b6": 1,
+      "F821:81330d299dddc9b9abce": 1,
+      "F821:9b1d8413455502048e5d": 1,
+      "F821:9cac94a201de181691e8": 1,
+      "F821:9db00dcfc00cc3620516": 1,
+      "F821:a37e3ffdd357cab7053f": 1,
+      "F821:a42a998a07a1d03cdf85": 1,
+      "F821:a827d0b05fe1366deac4": 1,
+      "F821:af6202aea0fdd1494380": 1,
+      "F821:b061e70d6f56d6b513d9": 5,
+      "F821:b0937253c1257597cb0e": 1,
+      "F821:b372d0f884aee2dbc879": 1,
+      "F821:b86cbb687e6f2d707bc7": 1,
+      "F821:bb9aa224b1d6d5bf606b": 1,
+      "F821:c950403ec8a158cd7497": 1,
+      "F821:cad79f471a240d44c0e5": 1,
+      "F821:cfc6ff81ad7016532703": 1,
+      "F821:d2d6f7fd179778667b92": 1,
+      "F821:dd709c057834df878721": 1,
+      "F821:ec0d0936524458e1f188": 1,
+      "F821:f2c5dc8d1f02acddf712": 2,
+      "F821:f5462861041cd1df4b2e": 1,
+      "I001:a6987850904633682aaf": 1
+    },
+    "collectors/tools/sync_history_strategies.py": {
+      "I001:629c0c64ed7475ebafc7": 1
+    },
+    "collectors/个股机构持仓_数据库版.py": {
+      "E711:00fb544e71c95d2b6991": 1,
+      "E711:048e322483a6bb3c6a62": 1,
+      "E711:775519b71f7c9f93dbc8": 1,
+      "E711:a9e63687de4bdce5185e": 1,
+      "E711:ab3fb01b2890f7a571f4": 1,
+      "E711:cb4e1fa9af7a1611db47": 1,
+      "E731:362d93c401507905d031": 1,
+      "I001:2f5143689e9a68a92730": 1
+    },
+    "collectors/估值标尺历史补采_聚宽研究版.py": {
+      "I001:4441d4d663dbf25cb94f": 1
+    },
+    "collectors/市场情绪历史补采_聚宽研究版.py": {
+      "F401:341bf54906d88ad9168f": 1,
+      "I001:4441d4d663dbf25cb94f": 1
+    },
+    "collectors/市场情绪跟踪_数据库版.py": {
+      "B905:7cb0fdff26bcc75741a8": 1,
+      "I001:2f5143689e9a68a92730": 1
+    },
+    "collectors/微盘新高新低数量统计_数据库版.py": {
+      "B007:351376f8e73dcaf2317c": 1,
+      "I001:2f5143689e9a68a92730": 1
+    },
+    "collectors/微盘温度计_数据库版.py": {
+      "B905:2e4c0ef041c9aaf36aff": 1,
+      "B905:4120ce34af03a12e4ea2": 1,
+      "B905:dc7384a515d97e7d3162": 1,
+      "F403:f46d08c0eae9d1b322ba": 1,
+      "F405:1e70cd735272891e1ec6": 1,
+      "F405:20fca6e893ec00feb281": 1,
+      "F405:3eee7d359592a655c6d4": 1,
+      "F405:548af8db01191f91b0f9": 1,
+      "F405:767d40f5ba8ec44ff213": 1,
+      "F405:7734b3358f16e78101c2": 1,
+      "F405:7df67a1f57d3f38059d0": 1,
+      "F405:8b542ed1125b2c3f8a12": 1,
+      "F405:c56446fc76c5c7ebee94": 1,
+      "F405:cc0d8965fbd30b54862b": 1,
+      "F405:e2cc99cc2e05ed7b0e84": 1,
+      "F405:e97ca458a703dc67f9cd": 1,
+      "I001:4441d4d663dbf25cb94f": 1
+    },
+    "collectors/抱团拥挤度_数据库版.py": {
+      "B905:9196ae9322ab2b73d80f": 1,
+      "E402:990a49cfcd3f744ef80f": 1,
+      "F403:f46d08c0eae9d1b322ba": 1,
+      "F405:0d4f5e62a603b0164c85": 1,
+      "F405:44e279ff3e28cece9fe5": 1,
+      "F405:e2cc99cc2e05ed7b0e84": 1,
+      "I001:0c2a0657bcdce0aba4a9": 1,
+      "I001:4441d4d663dbf25cb94f": 1
+    },
+    "collectors/策略批量采集_数据库版.py": {
+      "B007:351376f8e73dcaf2317c": 1,
+      "B007:613b30b2023e586b662e": 1,
+      "B007:eca0ed1c58d66ee316c2": 1,
+      "B905:3654e73f1fe18d695b4b": 1,
+      "B905:4120ce34af03a12e4ea2": 1,
+      "B905:7cb0fdff26bcc75741a8": 1,
+      "B905:9196ae9322ab2b73d80f": 1,
+      "B905:a8e53bf72a4cb5ff1030": 1,
+      "B905:ad7e8d0a4eafe7cfe972": 1,
+      "B905:c68596c420b178db7e89": 1,
+      "B905:dc7384a515d97e7d3162": 1,
+      "E711:00fb544e71c95d2b6991": 1,
+      "E711:048e322483a6bb3c6a62": 1,
+      "E711:775519b71f7c9f93dbc8": 1,
+      "E711:a9e63687de4bdce5185e": 1,
+      "E711:ab3fb01b2890f7a571f4": 1,
+      "E711:cb4e1fa9af7a1611db47": 1,
+      "E731:362d93c401507905d031": 1,
+      "E731:9819e14529df3d4a0d44": 1,
+      "F401:0718c58d090514c1f8e3": 1,
+      "F401:0724f4e0007fceded808": 1,
+      "F401:10d5386ff472edac9ad3": 1,
+      "F401:11726150f5dd164a8179": 1,
+      "F401:479ce6e0b828ca82f293": 1,
+      "F401:66fa0be97ab7daa5030a": 1,
+      "F401:d3e4b7841a36c89c4825": 1,
+      "F401:dc01d932770b94abb5bb": 1,
+      "F401:ef915389285dc5490674": 1,
+      "F402:ceed71575fc3415d9c90": 1,
+      "F811:02b6484e21e5c42f242b": 1,
+      "F811:2829d9ca84929d0b0a45": 1,
+      "F811:9b71a6765ff1d07a0a02": 1,
+      "I001:99f3266be02311654696": 1
+    },
+    "collectors/行业动量计算_数据库版.py": {
+      "F403:f46d08c0eae9d1b322ba": 1,
+      "F405:0d4f5e62a603b0164c85": 1,
+      "F405:2ea85b06b45db6af7470": 1,
+      "F405:3ff2b26c80e9284c6b32": 1,
+      "F405:4ab221c06386ba42bf64": 1,
+      "F405:74dec0e2e506e32f99b1": 1,
+      "F405:832e335d1b6d5e1df27b": 1,
+      "F405:8de52fe70d754c30c768": 1,
+      "F405:b58dae204098353d359a": 1,
+      "F405:df7046dfc2166c0c7401": 1,
+      "F405:e2a4bb66d3dae594fce6": 1,
+      "F405:e2cc99cc2e05ed7b0e84": 1,
+      "F405:e4c451d7b4796475bb51": 1,
+      "F405:e85c0e2494d96111c92b": 1,
+      "F405:edce680bce61ac10845d": 1,
+      "F405:ee3b62c5547cfb120680": 1,
+      "F405:f39e679c7490bc58ee6a": 1,
+      "I001:4441d4d663dbf25cb94f": 1
+    },
+    "collectors/高股息选股_数据库版.py": {
+      "B023:e626af5fc9f9e34f4075": 1,
+      "E731:57dc00b0cf07c29d8783": 1,
+      "F401:57f12f8bb574e329e48c": 1,
+      "F401:cad3f488d1f501702143": 1,
+      "I001:2f5143689e9a68a92730": 1
+    },
+    "scripts/check_social_browser.py": {
+      "E402:7b60f28e7e2d613a61be": 1,
+      "E402:88e9fbc16e842343569e": 1,
+      "E402:c9bda65d0b2bc506bda6": 1,
+      "I001:96372e4af67bf0b1825e": 1,
+      "I001:e219930b659a6b1a1f80": 1
+    },
+    "scripts/check_xueqiu_browser.py": {
+      "E402:7b60f28e7e2d613a61be": 1,
+      "E402:832a3e581791e738ab56": 1,
+      "E402:d5863d676469edc1e1db": 1,
+      "E402:dcfeb942bb07abc7dd56": 1,
+      "E402:ec14e36a9c54eea0b9ca": 1,
+      "I001:716fbe1d4171e065883b": 1
+    },
+    "scripts/check_xueqiu_response.py": {
+      "E402:5683f50065c5a988f255": 1,
+      "E402:7b60f28e7e2d613a61be": 1,
+      "E402:dcfeb942bb07abc7dd56": 1,
+      "E402:e9cd0d63c94bc6416d93": 1,
+      "I001:716fbe1d4171e065883b": 1,
+      "I001:e7fa38b6a63c55785057": 1
+    },
+    "scripts/configure_database.py": {
+      "E402:28c92c4d10c549cd0555": 1,
+      "I001:81bad7c6cc7b77829fb1": 1
+    },
+    "scripts/deploy.py": {
+      "B007:2e9176f26b98323f5916": 1,
+      "I001:81bad7c6cc7b77829fb1": 1
+    },
+    "scripts/deployment_impact.py": {
+      "I001:81bad7c6cc7b77829fb1": 1
+    },
+    "scripts/dev.py": {
+      "E402:573ee3985a2540bc0af0": 1,
+      "E402:9a1139f513e9e8d21fad": 1,
+      "E402:b2e4771a31a07f4291e8": 1,
+      "I001:81bad7c6cc7b77829fb1": 1
+    },
+    "scripts/install_social_browser.py": {
+      "I001:96372e4af67bf0b1825e": 1
+    },
+    "scripts/prune_collection_history.py": {
+      "I001:e219930b659a6b1a1f80": 1,
+      "I001:fa785c381480a482ffc9": 1
+    },
+    "scripts/refresh_cache.py": {
+      "E402:17868baf346216c53571": 1,
+      "E402:28a3a58b07b4e906ab5e": 1,
+      "E402:7b60f28e7e2d613a61be": 1,
+      "E402:90d0dad7e5c1866b63f0": 1,
+      "I001:81bad7c6cc7b77829fb1": 1
+    },
+    "scripts/repair_ownership_classification.py": {
+      "E402:1250070516e05249dd53": 1,
+      "E402:1356af6742770890d542": 1,
+      "E402:17868baf346216c53571": 1,
+      "E402:7b60f28e7e2d613a61be": 1,
+      "I001:0d934d274e0f56ff71f1": 1,
+      "I001:81bad7c6cc7b77829fb1": 1
+    }
+  },
+  "format": [
+    "backend/app/api/router.py",
+    "backend/app/api/routes/accounts.py",
+    "backend/app/api/routes/breadth.py",
+    "backend/app/api/routes/cache.py",
+    "backend/app/api/routes/cash_cow.py",
+    "backend/app/api/routes/collection_outcomes.py",
+    "backend/app/api/routes/commodities.py",
+    "backend/app/api/routes/crowding.py",
+    "backend/app/api/routes/dividend.py",
+    "backend/app/api/routes/etf.py",
+    "backend/app/api/routes/etf_heat.py",
+    "backend/app/api/routes/market_collection.py",
+    "backend/app/api/routes/microcap.py",
+    "backend/app/api/routes/momentum.py",
+    "backend/app/api/routes/ownership.py",
+    "backend/app/api/routes/personal_holdings.py",
+    "backend/app/api/routes/sentiment.py",
+    "backend/app/api/routes/social.py",
+    "backend/app/api/routes/social_browser.py",
+    "backend/app/api/routes/system_configuration.py",
+    "backend/app/api/routes/valuation_ruler.py",
+    "backend/app/core/append_sync.py",
+    "backend/app/core/cache.py",
+    "backend/app/core/cache_errors.py",
+    "backend/app/core/cache_schedule.py",
+    "backend/app/core/cache_sync.py",
+    "backend/app/core/config.py",
+    "backend/app/core/database.py",
+    "backend/app/core/diagnostics.py",
+    "backend/app/core/etf_catalog.py",
+    "backend/app/core/etf_snapshot.py",
+    "backend/app/core/etf_sync.py",
+    "backend/app/core/history_sync.py",
+    "backend/app/core/logging.py",
+    "backend/app/core/mysql_payload.py",
+    "backend/app/core/ownership_baseline.py",
+    "backend/app/core/ownership_sync.py",
+    "backend/app/core/result_sync.py",
+    "backend/app/core/sync_progress.py",
+    "backend/app/core/worker_diagnostics.py",
+    "backend/app/main.py",
+    "backend/app/models/cash_cow.py",
+    "backend/app/models/dividend.py",
+    "backend/app/models/etf.py",
+    "backend/app/models/etf_heat.py",
+    "backend/app/models/ownership.py",
+    "backend/app/models/sentiment.py",
+    "backend/app/repositories/breadth.py",
+    "backend/app/repositories/crowding.py",
+    "backend/app/repositories/dividend.py",
+    "backend/app/repositories/etf.py",
+    "backend/app/repositories/etf_heat.py",
+    "backend/app/repositories/microcap.py",
+    "backend/app/repositories/momentum.py",
+    "backend/app/repositories/ownership.py",
+    "backend/app/repositories/sentiment.py",
+    "backend/app/schemas/ownership.py",
+    "backend/app/services/accounts.py",
+    "backend/app/services/breadth.py",
+    "backend/app/services/cash_cow.py",
+    "backend/app/services/cash_cow_combined.py",
+    "backend/app/services/cash_cow_import.py",
+    "backend/app/services/cash_cow_rules.py",
+    "backend/app/services/cash_cow_source.py",
+    "backend/app/services/cci_coal.py",
+    "backend/app/services/cci_source.py",
+    "backend/app/services/collection_errors.py",
+    "backend/app/services/collection_failure_isolation.py",
+    "backend/app/services/collection_notifications.py",
+    "backend/app/services/collection_outcomes.py",
+    "backend/app/services/collection_retention.py",
+    "backend/app/services/collection_summary.py",
+    "backend/app/services/commodities.py",
+    "backend/app/services/commodity_source.py",
+    "backend/app/services/crowding.py",
+    "backend/app/services/database_retry.py",
+    "backend/app/services/database_sources.py",
+    "backend/app/services/dividend.py",
+    "backend/app/services/dividend_announcement_evidence.py",
+    "backend/app/services/dividend_collection.py",
+    "backend/app/services/dividend_history.py",
+    "backend/app/services/dividend_notification_facts.py",
+    "backend/app/services/dividend_proposals.py",
+    "backend/app/services/dividend_public_source.py",
+    "backend/app/services/earnings_schedule.py",
+    "backend/app/services/etf.py",
+    "backend/app/services/etf_collection.py",
+    "backend/app/services/etf_collection_history.py",
+    "backend/app/services/etf_configuration.py",
+    "backend/app/services/etf_diagnostics.py",
+    "backend/app/services/etf_exchange.py",
+    "backend/app/services/etf_heat.py",
+    "backend/app/services/etf_notifications.py",
+    "backend/app/services/growth_dividend.py",
+    "backend/app/services/growth_dividend_import.py",
+    "backend/app/services/growth_dividend_source.py",
+    "backend/app/services/holdings_close.py",
+    "backend/app/services/holdings_close_source.py",
+    "backend/app/services/holdings_snapshot.py",
+    "backend/app/services/holdings_valuation.py",
+    "backend/app/services/index_valuation.py",
+    "backend/app/services/index_valuation_collection.py",
+    "backend/app/services/index_valuation_rules.py",
+    "backend/app/services/index_valuation_source.py",
+    "backend/app/services/margin_eastmoney.py",
+    "backend/app/services/margin_guarantee.py",
+    "backend/app/services/margin_source.py",
+    "backend/app/services/market_asharehub.py",
+    "backend/app/services/market_asharehub_listing.py",
+    "backend/app/services/market_bulk.py",
+    "backend/app/services/market_collection.py",
+    "backend/app/services/market_configuration.py",
+    "backend/app/services/market_counts.py",
+    "backend/app/services/market_diagnostics.py",
+    "backend/app/services/market_eastmoney_listing.py",
+    "backend/app/services/market_eastmoney_universe.py",
+    "backend/app/services/market_factor_cache.py",
+    "backend/app/services/market_history.py",
+    "backend/app/services/market_listing.py",
+    "backend/app/services/market_provenance.py",
+    "backend/app/services/market_public.py",
+    "backend/app/services/market_sina.py",
+    "backend/app/services/market_suspensions.py",
+    "backend/app/services/market_universe.py",
+    "backend/app/services/market_writer.py",
+    "backend/app/services/microcap.py",
+    "backend/app/services/momentum.py",
+    "backend/app/services/ownership.py",
+    "backend/app/services/personal_holdings.py",
+    "backend/app/services/public_publication.py",
+    "backend/app/services/safe_env.py",
+    "backend/app/services/sentiment.py",
+    "backend/app/services/social.py",
+    "backend/app/services/social_browser.py",
+    "backend/app/services/social_cube_sources.py",
+    "backend/app/services/social_cubes.py",
+    "backend/app/services/social_images.py",
+    "backend/app/services/social_notifications.py",
+    "backend/app/services/social_sources.py",
+    "backend/app/services/source_keys.py",
+    "backend/app/services/system_configuration.py",
+    "backend/app/services/system_integrations.py",
+    "backend/app/services/system_runtime.py",
+    "backend/app/services/valuation_ruler.py",
+    "backend/app/services/valuation_ruler_import.py",
+    "backend/app/services/valuation_ruler_model.py",
+    "backend/app/services/valuation_ruler_source.py",
+    "backend/ci_shard.py",
+    "backend/docker_entrypoint.py",
+    "backend/manage_users.py",
+    "backend/run.py",
+    "backend/tests/account_helpers.py",
+    "backend/tests/conftest.py",
+    "backend/tests/history_sync_helpers.py",
+    "backend/tests/test_a00_current.py",
+    "backend/tests/test_a00_recovery.py",
+    "backend/tests/test_accounts.py",
+    "backend/tests/test_autodeploy.py",
+    "backend/tests/test_batch_index_history.py",
+    "backend/tests/test_breadth_api.py",
+    "backend/tests/test_breadth_collector.py",
+    "backend/tests/test_browser_diagnostic.py",
+    "backend/tests/test_cache.py",
+    "backend/tests/test_cache_append.py",
+    "backend/tests/test_cache_errors.py",
+    "backend/tests/test_cache_incremental.py",
+    "backend/tests/test_cache_json_transfer.py",
+    "backend/tests/test_cache_network.py",
+    "backend/tests/test_cache_schedule.py",
+    "backend/tests/test_cash_cow.py",
+    "backend/tests/test_cash_cow_combined.py",
+    "backend/tests/test_cash_cow_database_recovery.py",
+    "backend/tests/test_cash_cow_redirects.py",
+    "backend/tests/test_cash_cow_source.py",
+    "backend/tests/test_cash_cow_unified.py",
+    "backend/tests/test_cash_cow_universe_fallback.py",
+    "backend/tests/test_cci_coal.py",
+    "backend/tests/test_cci_recovery.py",
+    "backend/tests/test_cci_source_windows.py",
+    "backend/tests/test_central_market_schedule.py",
+    "backend/tests/test_certificate_maintenance.py",
+    "backend/tests/test_ci_browser_image.py",
+    "backend/tests/test_ci_shard.py",
+    "backend/tests/test_collection_calendar.py",
+    "backend/tests/test_collection_failure_isolation.py",
+    "backend/tests/test_collection_notifications.py",
+    "backend/tests/test_collection_outcome_history.py",
+    "backend/tests/test_collection_outcome_logs.py",
+    "backend/tests/test_collection_outcomes.py",
+    "backend/tests/test_collection_queue_calendar.py",
+    "backend/tests/test_collection_report_producers.py",
+    "backend/tests/test_collection_retention.py",
+    "backend/tests/test_collection_summary.py",
+    "backend/tests/test_collector_batch.py",
+    "backend/tests/test_collector_batch_modes.py",
+    "backend/tests/test_collector_common.py",
+    "backend/tests/test_collector_protocol_init.py",
+    "backend/tests/test_collector_retention.py",
+    "backend/tests/test_collector_snapshot_common.py",
+    "backend/tests/test_collector_standalone.py",
+    "backend/tests/test_commodities.py",
+    "backend/tests/test_config.py",
+    "backend/tests/test_crowding_api.py",
+    "backend/tests/test_crowding_collector.py",
+    "backend/tests/test_database_retry.py",
+    "backend/tests/test_deploy.py",
+    "backend/tests/test_deploy_bootstrap.py",
+    "backend/tests/test_deploy_cumulative.py",
+    "backend/tests/test_deploy_process.py",
+    "backend/tests/test_deploy_runtime_git.py",
+    "backend/tests/test_deployment_impact.py",
+    "backend/tests/test_diagnostics.py",
+    "backend/tests/test_dividend_api.py",
+    "backend/tests/test_dividend_collection.py",
+    "backend/tests/test_dividend_collector.py",
+    "backend/tests/test_dividend_database_phases.py",
+    "backend/tests/test_dividend_history.py",
+    "backend/tests/test_dividend_limits.py",
+    "backend/tests/test_dividend_notification_facts.py",
+    "backend/tests/test_dividend_proposals.py",
+    "backend/tests/test_dividend_public_source.py",
+    "backend/tests/test_dividend_publication_retry.py",
+    "backend/tests/test_dividend_universe.py",
+    "backend/tests/test_documentation.py",
+    "backend/tests/test_earnings_due_cutoff.py",
+    "backend/tests/test_earnings_schedule.py",
+    "backend/tests/test_etf_api.py",
+    "backend/tests/test_etf_cache.py",
+    "backend/tests/test_etf_cancellation.py",
+    "backend/tests/test_etf_collection.py",
+    "backend/tests/test_etf_diagnostics.py",
+    "backend/tests/test_etf_exchange_collector.py",
+    "backend/tests/test_etf_heat_api.py",
+    "backend/tests/test_etf_heat_collector.py",
+    "backend/tests/test_etf_joinquant_history.py",
+    "backend/tests/test_etf_market_value.py",
+    "backend/tests/test_etf_momentum_point_in_time.py",
+    "backend/tests/test_etf_notifications.py",
+    "backend/tests/test_etf_optional_cache.py",
+    "backend/tests/test_etf_page_configuration.py",
+    "backend/tests/test_etf_reader_target.py",
+    "backend/tests/test_etf_selection.py",
+    "backend/tests/test_etf_snapshot_recovery.py",
+    "backend/tests/test_etf_sse_scoped_worker.py",
+    "backend/tests/test_growth_dividend.py",
+    "backend/tests/test_growth_dividend_import.py",
+    "backend/tests/test_growth_dividend_source.py",
+    "backend/tests/test_history_result_sync.py",
+    "backend/tests/test_history_unified_sync.py",
+    "backend/tests/test_holdings_close.py",
+    "backend/tests/test_holdings_close_source.py",
+    "backend/tests/test_holdings_valuation.py",
+    "backend/tests/test_index_valuation_collector.py",
+    "backend/tests/test_index_valuation_public.py",
+    "backend/tests/test_index_valuation_sync.py",
+    "backend/tests/test_industry_breadth_history_recovery.py",
+    "backend/tests/test_lifespan.py",
+    "backend/tests/test_logging.py",
+    "backend/tests/test_margin_diagnostics_source.py",
+    "backend/tests/test_margin_eastmoney.py",
+    "backend/tests/test_margin_guarantee.py",
+    "backend/tests/test_margin_source.py",
+    "backend/tests/test_market_asharehub.py",
+    "backend/tests/test_market_asharehub_listing.py",
+    "backend/tests/test_market_bulk.py",
+    "backend/tests/test_market_bulk_diagnostics.py",
+    "backend/tests/test_market_collection.py",
+    "backend/tests/test_market_collection_api.py",
+    "backend/tests/test_market_collection_retry.py",
+    "backend/tests/test_market_configuration.py",
+    "backend/tests/test_market_counts.py",
+    "backend/tests/test_market_dated_collection.py",
+    "backend/tests/test_market_dated_integration.py",
+    "backend/tests/test_market_eastmoney_listing.py",
+    "backend/tests/test_market_eastmoney_universe.py",
+    "backend/tests/test_market_factor_cache.py",
+    "backend/tests/test_market_history.py",
+    "backend/tests/test_market_listing.py",
+    "backend/tests/test_market_provenance.py",
+    "backend/tests/test_market_public.py",
+    "backend/tests/test_market_schedule_identity.py",
+    "backend/tests/test_market_sina.py",
+    "backend/tests/test_market_source_diagnostics.py",
+    "backend/tests/test_market_suspensions.py",
+    "backend/tests/test_market_universe.py",
+    "backend/tests/test_market_writer.py",
+    "backend/tests/test_microcap_api.py",
+    "backend/tests/test_microcap_collector.py",
+    "backend/tests/test_momentum_api.py",
+    "backend/tests/test_momentum_collector.py",
+    "backend/tests/test_momentum_journal_upgrade.py",
+    "backend/tests/test_momentum_threshold.py",
+    "backend/tests/test_mysql_connector.py",
+    "backend/tests/test_mysql_payload.py",
+    "backend/tests/test_ownership.py",
+    "backend/tests/test_ownership_baseline.py",
+    "backend/tests/test_ownership_classification.py",
+    "backend/tests/test_ownership_collector.py",
+    "backend/tests/test_ownership_fund_queries.py",
+    "backend/tests/test_ownership_history.py",
+    "backend/tests/test_ownership_period_incremental.py",
+    "backend/tests/test_ownership_repair_cli.py",
+    "backend/tests/test_ownership_sync.py",
+    "backend/tests/test_personal_holdings.py",
+    "backend/tests/test_poll_collection_calendar.py",
+    "backend/tests/test_public_collection_publication.py",
+    "backend/tests/test_recovered_joinquant_history.py",
+    "backend/tests/test_release_retention.py",
+    "backend/tests/test_request_diagnostics.py",
+    "backend/tests/test_result_journal_sync.py",
+    "backend/tests/test_retired_selection.py",
+    "backend/tests/test_retired_short_term.py",
+    "backend/tests/test_runtime.py",
+    "backend/tests/test_safe_env.py",
+    "backend/tests/test_selection_history_archive.py",
+    "backend/tests/test_sentiment_api.py",
+    "backend/tests/test_sentiment_collector.py",
+    "backend/tests/test_social.py",
+    "backend/tests/test_social_browser.py",
+    "backend/tests/test_social_channels.py",
+    "backend/tests/test_social_cube_metadata.py",
+    "backend/tests/test_social_cube_sources.py",
+    "backend/tests/test_social_cubes.py",
+    "backend/tests/test_social_images.py",
+    "backend/tests/test_social_notification_order.py",
+    "backend/tests/test_social_outcomes.py",
+    "backend/tests/test_social_polling_config.py",
+    "backend/tests/test_social_resume.py",
+    "backend/tests/test_source_diagnostic_logging.py",
+    "backend/tests/test_source_keys.py",
+    "backend/tests/test_system_config_service_paths.py",
+    "backend/tests/test_system_configuration.py",
+    "backend/tests/test_system_database_adapters.py",
+    "backend/tests/test_system_database_runtime.py",
+    "backend/tests/test_system_integrations.py",
+    "backend/tests/test_system_runtime.py",
+    "backend/tests/test_valuation_incremental_sync.py",
+    "backend/tests/test_valuation_missing_pe.py",
+    "backend/tests/test_valuation_ruler.py",
+    "backend/tests/test_valuation_ruler_import.py",
+    "backend/tests/test_valuation_ruler_source.py",
+    "backend/tests/test_valuation_sync_checkpoint.py",
+    "backend/tests/test_weibo_repost_filter.py",
+    "backend/tests/test_windows_job.py",
+    "backend/tests/test_worker_diagnostics.py",
+    "backend/tests/test_xueqiu_browser_diagnostic.py",
+    "backend/tests/test_xueqiu_diagnostic.py",
+    "collectors/ETF分类去重_研究版.py",
+    "collectors/ETF动量热度_数据库版.py",
+    "collectors/ETF历史补采_聚宽研究版.py",
+    "collectors/etf_exchange_collector.py",
+    "collectors/mysql_connector.py",
+    "collectors/rules/index_valuation.py",
+    "collectors/rules/momentum_threshold.py",
+    "collectors/rules/result_journal.py",
+    "collectors/rules/selection_archive.py",
+    "collectors/tools/sync_history_strategies.py",
+    "collectors/tools/sync_momentum_threshold.py",
+    "collectors/tools/sync_result_journal.py",
+    "collectors/个股机构持仓_数据库版.py",
+    "collectors/估值标尺历史补采_聚宽研究版.py",
+    "collectors/市场情绪历史补采_聚宽研究版.py",
+    "collectors/市场情绪跟踪_数据库版.py",
+    "collectors/微盘新高新低数量统计_数据库版.py",
+    "collectors/微盘温度计_数据库版.py",
+    "collectors/抱团拥挤度_数据库版.py",
+    "collectors/策略批量采集_数据库版.py",
+    "collectors/行业动量计算_数据库版.py",
+    "collectors/高股息选股_数据库版.py",
+    "scripts/check_database.py",
+    "scripts/check_social_browser.py",
+    "scripts/check_xueqiu_browser.py",
+    "scripts/check_xueqiu_response.py",
+    "scripts/configure_database.py",
+    "scripts/deploy.py",
+    "scripts/deployment_impact.py",
+    "scripts/dev.py",
+    "scripts/install_social_browser.py",
+    "scripts/prune_collection_history.py",
+    "scripts/refresh_cache.py",
+    "scripts/repair_ownership_classification.py",
+    "scripts/windows_job.py"
+  ]
+}

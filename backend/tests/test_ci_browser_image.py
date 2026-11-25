@@ -24,12 +24,13 @@ def test_frontend_uses_version_matched_digest_pinned_official_image():
 def test_browser_validation_and_full_tests_still_gate_deploy():
     workflow = (ROOT / '.github/workflows/deploy.yml').read_text()
     frontend = workflow.split('\n  frontend:\n')[1].split('\n  deploy:\n')[0]
-    commands = ('npm ci --no-audit --no-fund', 'npm test', 'npm run build',
+    commands = ('npm ci --no-audit --no-fund', 'npm run quality:check', 'npm test', 'npm run build',
                 'node --test scripts/verify-ci-browser.test.mjs',
                 'node scripts/verify-ci-browser.mjs', 'npm run test:e2e')
     positions = [frontend.index(command) for command in commands]
     assert positions == sorted(positions)
     assert 'timeout-minutes: 2' in frontend
-    assert 'continue-on-error' not in workflow and 'needs: [backend, frontend]' in workflow
+    assert 'continue-on-error' not in workflow and 'needs: [backend, frontend, backend-quality, mysql-integration]' in workflow
+    assert 'needs: [ci-gate]' in workflow
     assert 'id: frontend_e2e' in frontend
     assert "steps.frontend_e2e.conclusion == 'failure'" in frontend

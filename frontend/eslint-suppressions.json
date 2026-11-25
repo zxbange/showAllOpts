@@ -1,0 +1,17 @@
+{
+  "src/components/DividendCollectionControls.tsx": {
+    "react-hooks/exhaustive-deps": {
+      "count": 1
+    }
+  },
+  "src/pages/CommoditiesPage.tsx": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 3
+    }
+  },
+  "src/pages/ValuationRulerPage.tsx": {
+    "react-hooks/exhaustive-deps": {
+      "count": 2
+    }
+  }
+}

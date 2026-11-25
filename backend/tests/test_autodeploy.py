@@ -220,7 +220,9 @@ class WorkflowTests(unittest.TestCase):
     def test_fail_closed_workflow_shape(self):
         text = (ROOT/'.github/workflows/deploy.yml').read_text()
         self.assertIn('branches: [main]', text)
-        self.assertIn('needs: [backend, frontend]', text)
+        self.assertIn('needs: [backend, frontend, backend-quality, mysql-integration]', text)
+        self.assertIn('needs: [ci-gate]', text)
+        self.assertIn("needs.ci-gate.result == 'success'", text)
         self.assertIn("vars.DEPLOY_ENABLED == 'true'", text)
         self.assertIn("inputs.operation == 'check'", text)
         self.assertNotIn("vars.DEPLOY_KNOWN_HOSTS", text)

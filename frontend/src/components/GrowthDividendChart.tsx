@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
-import { graphic, init, use } from 'echarts/core'
+import { graphic, init, use as registerChartComponents } from 'echarts/core'
 import type { EChartsType } from 'echarts/core'
 import { LineChart } from 'echarts/charts'
 import {
@@ -25,7 +25,7 @@ import {
 import type { GrowthDividendPoint } from '../types/growthDividend'
 import { growthDividendBenchmarkLabels, growthDividendGrid } from '../lib/growthDividendLabels'
 
-use([
+registerChartComponents([
   LineChart,
   GridComponent,
   TooltipComponent,

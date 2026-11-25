@@ -1,5 +1,5 @@
 import { useEffect, useRef } from 'react'
-import { init, use } from 'echarts/core'
+import { init, use as registerChartComponents } from 'echarts/core'
 import type { EChartsType } from 'echarts/core'
 import { LineChart } from 'echarts/charts'
 import {
@@ -15,7 +15,7 @@ import { CanvasRenderer } from 'echarts/renderers'
 import { chartColors } from '../lib/chartTheme'
 import type { MarginPoint } from '../types/margin'
 
-use([
+registerChartComponents([
   LineChart,
   GridComponent,
   TooltipComponent,
