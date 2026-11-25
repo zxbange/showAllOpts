@@ -336,7 +336,11 @@ def test_mysql_legacy_rule_version_widens_without_shrinking(monkeypatch, width, 
     from sqlalchemy import String
     import app.services.dividend_collection as module
     executed = []
-    conn = SimpleNamespace(execute=lambda sql: executed.append(str(sql)))
+    def execute(sql):
+        nonlocal width
+        executed.append(str(sql))
+        width = 64
+    conn = SimpleNamespace(execute=execute)
     fake = SimpleNamespace(dialect=SimpleNamespace(name='mysql'), begin=lambda: nullcontext(conn))
     monkeypatch.setattr(module, 'inspect', lambda engine: SimpleNamespace(
         get_columns=lambda table: [dict(name='rule_version', type=String(width))]))

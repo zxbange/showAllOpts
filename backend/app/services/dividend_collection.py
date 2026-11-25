@@ -22,6 +22,7 @@ from sqlalchemy import delete, inspect, select, text
 from app.core.database import build_engine, database_identity
 from app.core.diagnostics import diagnostic_details
 from app.models.dividend import DividendSnapshot, DividendStock
+from app.repositories import dividend_schema
 from app.services.collection_calendar import automatic_collection_allowed, manual_failure_isolated
 from app.services.collection_errors import safe_error as public_error
 from app.services.collection_failure_isolation import (
@@ -199,17 +200,18 @@ def ensure_rule_version_capacity(engine, progress=None):
     if engine.dialect.name != 'mysql':
         return
     with publication_phase('检查规则版本字段', progress):
-        column = next(c for c in inspect(engine).get_columns(DividendSnapshot.__tablename__)
-                      if c['name'] == 'rule_version')
-    length = getattr(column['type'], 'length', None)
-    if length is not None and length < DividendSnapshot.rule_version.type.length:
-        with publication_phase('扩容规则版本字段', progress), engine.begin() as conn:
-            conn.execute(text('ALTER TABLE dividend_selection_snapshot MODIFY COLUMN rule_version VARCHAR(64) NOT NULL'))
+        def read_columns(table):
+            return inspect(engine).get_columns(table)
+        revisions = dividend_schema.plan_rule_capacity(dividend_schema.column_shapes(read_columns(dividend_schema.HEAD)))
+    if revisions:
+        with publication_phase('扩容规则版本字段', progress):
+            def execute(statement):
+                with engine.begin() as conn:
+                    conn.execute(text(statement))
+            dividend_schema.apply_revisions(revisions, read_columns=read_columns, execute=execute)
 
-
-def write_result(engine, meta, records, check=lambda: None, *, progress=None):
-    """Both groups replace together, or neither does. Never replace a newer date."""
-    validate_result(meta, records)
+def prepare_dividend_schema(engine, *, progress=None):
+    """Verify the existing schema outside the business transaction."""
     head, stocks = DividendSnapshot.__table__, DividendStock.__table__
     # Schema creation is outside publication (MySQL DDL implicitly commits).
     with publication_phase('检查数据库表结构', progress):
@@ -219,18 +221,28 @@ def write_result(engine, meta, records, check=lambda: None, *, progress=None):
         ensure_rule_version_capacity(engine)
     else:
         ensure_rule_version_capacity(engine, progress=progress)
+    def read_columns(table):
+        return inspect(engine).get_columns(table)
+
     with publication_phase('检查股票字段', progress):
-        columns = {column['name']: column for column in inspect(engine).get_columns(stocks.name)}
+        columns = dividend_schema.column_shapes(read_columns(stocks.name))
+        try:
+            revisions = dividend_schema.plan_stock_columns(columns, mysql=engine.dialect.name == 'mysql')
+        except dividend_schema.SchemaMigrationError as exc:
+            raise DividendCollectionError(str(exc)) from None
     if engine.dialect.name == 'mysql':
-        with publication_phase('迁移股票字段', progress), engine.begin() as conn:
-            if 'dividend_per_share' not in columns:
-                conn.execute(text('ALTER TABLE dividend_selection_stock ADD COLUMN dividend_per_share NUMERIC(24,8) NULL'))
-            if 'dividend_fiscal_year' not in columns:
-                conn.execute(text('ALTER TABLE dividend_selection_stock ADD COLUMN dividend_fiscal_year INTEGER NULL'))
-            if not columns['dividend_cash_1y']['nullable']:
-                conn.execute(text('ALTER TABLE dividend_selection_stock MODIFY COLUMN dividend_cash_1y NUMERIC(28,6) NULL'))
-    elif not {'dividend_per_share', 'dividend_fiscal_year'}.issubset(columns):
-        raise DividendCollectionError('Dividend database schema migration required')
+        with publication_phase('迁移股票字段', progress):
+            def execute(statement):
+                with engine.begin() as conn:
+                    conn.execute(text(statement))
+            dividend_schema.apply_revisions(revisions, read_columns=read_columns, execute=execute)
+
+
+def write_result(engine, meta, records, check=lambda: None, *, progress=None):
+    """Both groups replace together, or neither does. Never replace a newer date."""
+    validate_result(meta, records)
+    prepare_dividend_schema(engine, progress=progress)
+    head, stocks = DividendSnapshot.__table__, DividendStock.__table__
     with publication_phase('数据库快照事务', progress), engine.begin() as conn:
         with publication_phase('锁定数据库快照', progress):
             previous = conn.execute(select(head).where(head.c.id == 1).with_for_update()).mappings().first()
