@@ -356,7 +356,7 @@ class SnapshotCache:
 
     def validate_module(self, module, target):
         if module == 'cash-cow':
-            from app.services.cash_cow_import import validate_snapshot
+            from app.repositories.cash_cow_validation import validate_snapshot
             validate_snapshot(target)
         if module == 'etf-momentum':
             from app.core.etf_snapshot import validate_etf_snapshot
