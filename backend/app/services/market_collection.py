@@ -225,7 +225,8 @@ def configured_asharehub_key(settings):
 class MarketCollection:
     def __init__(self, settings, refresh=None, *, provider_factory=None, writer=None,
                  clock=None, client_factory=None, calendar_loader=None,
-                 engine_factory=create_engine, heat_aggregator=None, source_dates_loader=None, cache=None):
+                 engine_factory=create_engine, heat_aggregator=None, source_dates_loader=None, cache=None,
+                 remote_worker=None, tick_gate=None):
         self.settings, self.refresh, self.notification_cache = settings, refresh, cache
         self.root = settings.log_path / 'market-data' / 'market-collection'
         self.clock = clock or (lambda: datetime.now(CHINA))
@@ -241,6 +242,7 @@ class MarketCollection:
         self.engine_factory = engine_factory
         self.shared_configuration = None
         self.configuration = MarketConfiguration(self)
+        self.remote_worker, self.tick_gate = remote_worker, tick_gate
         self.stop_event = threading.Event()
         self.wake_event = threading.Event()
         self.thread_lock = threading.Lock()
@@ -408,9 +410,12 @@ class MarketCollection:
             config = self.configuration.load()
         except Exception:
             config = {'enabled': False, 'schedule': SCHEDULE}
-        state = dict(enabled=config['enabled'], configured=issue is None, ready=issue is None and not worker_disabled,
-                     status='configuration_error' if issue else 'worker_disabled' if worker_disabled else 'idle' if config['enabled'] else 'disabled',
-                     disabled_reason=issue or ('worker_disabled' if worker_disabled else None),
+        remote_ready = self.remote_worker is None or self.remote_worker.worker_running('market')
+        worker_issue = ('worker_disabled' if worker_disabled else
+                        'queue_worker_unavailable' if not remote_ready else None)
+        state = dict(enabled=config['enabled'], configured=issue is None, ready=issue is None and worker_issue is None,
+                     status='configuration_error' if issue else worker_issue or ('idle' if config['enabled'] else 'disabled'),
+                     disabled_reason=issue or worker_issue,
                      worker_disabled=worker_disabled, timezone='Asia/Shanghai', schedule=list(task_config(self.settings, 'market')['times']),
                      provider='public_market', raw_price_source=(
                          'asharehub_daily' if configured_asharehub_key(self.settings)
@@ -422,7 +427,8 @@ class MarketCollection:
                      heat_status='pending', crowding_status='pending', cache_pending=False,
                      updated_at=None, error=issue, progress=None, rawprogress=None,
                      manual=None, runs=[], gaps=[], next_run_at=None,
-                     worker_running=bool(self.worker and self.worker.is_alive()), running=False)
+                     worker_running=(bool(self.worker and self.worker.is_alive())
+                                     if self.remote_worker is None else remote_ready), running=False)
         now = self.clock().astimezone(CHINA)
         slot = datetime.combine(now.date(), self._auto_time(), CHINA)
         if slot <= now:
@@ -581,6 +587,8 @@ class MarketCollection:
                 active = db.execute("SELECT * FROM manual_runs WHERE status='queued' ORDER BY rowid LIMIT 1").fetchone()
                 if active:
                     raise CollectionBusy(active)
+                if self.remote_worker is not None:
+                    self.remote_worker.require_ready('market')
                 db.execute('INSERT INTO manual_runs(id,status,requested_at,updated_at) VALUES(?,?,?,?)',
                            (request_id, 'queued', stamp, stamp))
                 db.execute('INSERT INTO manual_run_clocks VALUES (?,?)',
@@ -672,6 +680,12 @@ class MarketCollection:
         return slot.date() if slot.time() >= time(18, 30) else slot.date() - timedelta(days=1)
 
     def start(self):
+        if self.remote_worker is not None:
+            # A split API is a durable queue producer, never a local executor.
+            self.remote_worker.signal_queue()
+            return
+        if self.tick_gate is not None and self.tick_gate.closed:
+            return
         with self.thread_lock:
             if self.worker and self.worker.is_alive():
                 return
@@ -1031,6 +1045,14 @@ class MarketCollection:
         return targets
 
     def tick(self, moment=None):
+        if self.remote_worker is not None:
+            return False
+        if self.tick_gate is not None:
+            with self.tick_gate.admit() as allowed:
+                if not allowed:
+                    return False
+                with pin_configuration(self.settings):
+                    return self._tick(moment)
         with pin_configuration(self.settings):
             return self._tick(moment)
 

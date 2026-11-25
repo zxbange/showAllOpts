@@ -151,6 +151,60 @@ def deployment_lock():
             fcntl.flock(lock, fcntl.LOCK_UN)
 
 
+def require_combined_runtime(check_env, service=None):
+    """The existing CD transaction owns API only; never cut over a split deployment.
+
+    Parse the role with the live application's configuration dependency, even
+    when the currently deployed application predates the role setting. Do not
+    print configuration values or import application startup code.
+    """
+    if service is not None:
+        # A service override can change while the staged build is running. Do
+        # not activate with a different role, config source, or service env.
+        current = dict(item.split('=', 1) for item in
+                       shlex.split(property_value(service, 'Environment')) if '=' in item)
+        config = current.get('APP_ENV_FILE')
+        if property_value(service, 'EnvironmentFiles') or not config:
+            raise DeployError('Service environment changed during release preparation.')
+        candidate = Path(config)
+        if not candidate.is_absolute():
+            candidate = ROOT / candidate
+        current['APP_ENV_FILE'] = str(candidate.resolve())
+        effective = {'PATH': os.defpath, 'HOME': str(Path.home()), 'LANG': 'C.UTF-8', **current}
+        if effective != check_env:
+            raise DeployError('Service environment changed during release preparation.')
+    code = """
+from typing import Literal
+import os
+from pydantic_settings import BaseSettings, SettingsConfigDict
+class DeployRole(BaseSettings):
+    collection_runtime_role: Literal['combined', 'split-api', 'queue-worker'] = 'combined'
+    model_config = SettingsConfigDict(extra='ignore', env_file_encoding='utf-8')
+if DeployRole(_env_file=os.environ['APP_ENV_FILE']).collection_runtime_role != 'combined':
+    raise SystemExit(1)
+"""
+    try:
+        run([str(ROOT / 'backend/.venv/bin/python'), '-c', code],
+            cwd=ROOT / 'backend', env=check_env, capture=True, timeout=30)
+    except Exception:
+        raise DeployError('API-only deployment requires verified combined runtime. '
+                          'Split runtime must use coordinated API/worker deployment.') from None
+
+    # Reject the documented worker unit if it is running or transitioning, even
+    # when someone has already changed the API configuration back to combined.
+    # list-units succeeds if that exact unit has never been installed.
+    units = run(['systemctl', 'list-units', '--all', '--type=service',
+                 '--no-legend', '--no-pager', '--plain', 'showallopts-queue-worker.service'],
+                capture=True, timeout=30)
+    for row in units.splitlines():
+        fields = row.split()
+        if len(fields) < 4 or fields[0] != 'showallopts-queue-worker.service':
+            raise DeployError('Cannot verify independent queue worker service state.')
+        if fields[2] not in ('inactive', 'failed'):
+            raise DeployError('Independent queue worker is not stopped; API-only deployment refused.')
+
+
+
 def preflight(options):
     for name in ('git', 'node', 'npm', 'sudo', 'systemctl', 'rsync'):
         if not shutil.which(name):
@@ -211,6 +265,7 @@ def preflight(options):
     service_env['APP_ENV_FILE'] = str(config_path.resolve())
     # Match service variables, not interactive-shell DB_* overrides.
     check_env = {'PATH': os.defpath, 'HOME': str(Path.home()), 'LANG': 'C.UTF-8', **service_env}
+    require_combined_runtime(check_env)
     run(sudo('nginx', '-t'), timeout=30)
     run(['systemctl', 'is-active', '--quiet', 'nginx'])
     return web_root, check_env
@@ -813,6 +868,7 @@ def deploy(options):
         clean_head(previous, branch=options.branch)
         if identity(options.service) != before:
             raise DeployError('Service changed during preparation; not stopping it.')
+        require_combined_runtime(check_env, options.service)
         write_status(stage, 'activating', **details)
         activation_started = True
         run(sudo('systemctl', 'stop', options.service), timeout=60)
