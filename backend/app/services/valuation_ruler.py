@@ -263,11 +263,12 @@ class ValuationRuler:
             failures=[dict(r) for r in db.execute('SELECT * FROM failures ORDER BY trade_date DESC LIMIT 10')]
             audit=db.execute('SELECT payload FROM comparisons ORDER BY id DESC LIMIT 1').fetchone()
         busy=self.running();syncing=database_syncing(self,busy)
-        running=bool(busy and not syncing and state.get('active'));interrupted=bool(state.get('active') and not running)
+        running=bool(busy and not syncing);interrupted=bool(state.get('active') and not busy)
         comparison=json.loads(audit[0]) if audit else None
         if comparison:comparison={key:value for key,value in comparison.items() if key not in ('changed_members','candidate_members','candidate_proof')}
         return dict(database_syncing=syncing,sync_message=SYNC_MESSAGE if syncing else None,status='running' if running else 'failed' if state.get('error') or interrupted else 'idle',
             phase='interrupted' if interrupted else state.get('phase'),target_date=state.get('target_date'),
+            run_id=state.get('run_id'),
             updated_at=state.get('updated_at'),
             error='上次任务中断，已保存的数据保留，可继续补采。' if interrupted else state.get('error'),
             completed_days=state.get('completed_days',0),failed_days=failed,
@@ -306,7 +307,7 @@ class ValuationRuler:
             coverage=dict(requested_start=str(START),first_date=first,last_date=last,missing_count=len(gaps) if complete else None,
                 known_missing_count=len(gaps),calendar_complete=complete),gap_dates=gaps,sources=sorted({r['source'] for r in rows}))
 
-    def start_job(self,kind,runner,*,background=True,moment=None,slot=None,admit=None):
+    def start_job(self,kind,runner,*,background=True,moment=None,slot=None,admit=None,return_run_id=False):
         moment=moment or now()
         if slot is not None and not automatic_collection_allowed(moment):return False
         if self.stop_event.is_set():return False
@@ -350,7 +351,7 @@ class ValuationRuler:
                         if slot:db.execute('UPDATE slots SET outcome=? WHERE slot=?',('failed',slot))
             finally:lock.release()
             raise
-        return True
+        return state['run_id'] if return_run_id else True
 
     @notify_collection('valuation_ruler')
     def _execute(self,runner,lock,state,moment,slot):
@@ -399,7 +400,7 @@ class ValuationRuler:
                 record_task(self.settings, 'valuation_ruler', outcome=state['phase'], scheduled=slot is not None, run_key=state['run_id'], error_details=(state.get('_outcome_error') or safe_error(stage='validate', code='invalid_data')) if state['phase'] == 'failed' else None)
                 lock.release()
 
-    def refresh(self,background=True,*,moment=None,slot=None,cutoff=None):
+    def refresh(self,background=True,*,moment=None,slot=None,cutoff=None,return_run_id=False):
         from app.services.collection_calendar import latest_due_slot, trading_day
         moment = moment or now()
 
@@ -432,7 +433,7 @@ class ValuationRuler:
 
         def runner(monitor,state,check_cancel,moment):
             monitor._collect(state,check_cancel,moment,cutoff=cutoff,automatic=slot is not None)
-        return self.start_job('public',runner,background=background,moment=moment,slot=slot,admit=admit)
+        return self.start_job('public',runner,background=background,moment=moment,slot=slot,admit=admit,return_run_id=return_run_id)
 
     def _collect(self,state,check_cancel,moment,*,cutoff=None,automatic=False):
         cutoff=cutoff or close_cutoff(moment)

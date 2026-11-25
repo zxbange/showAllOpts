@@ -11,7 +11,13 @@ import { valuationNumber, valuationSource } from '../lib/valuationRuler'
 import '../styles/valuation-ruler.css'
 
 // Survives route changes. A failed POST response does not prove the server rejected it.
-const mutation = { pending: false, uncertain: false, observedRunning: false }
+const mutation = {
+  pending: false,
+  uncertain: false,
+  observedRunning: false,
+  accepted: false,
+  runId: null as string | null,
+}
 const phaseLabels: Record<string, string> = {
   collecting: '采集中',
   saving: '保存数据库与本地',
@@ -36,6 +42,7 @@ export function ValuationRulerPage() {
   const [loading, setLoading] = useState(true)
   const [busy, setBusy] = useState(mutation.pending)
   const [uncertain, setUncertain] = useState(mutation.uncertain)
+  const [accepted, setAccepted] = useState(mutation.accepted)
   const [days, setDays] = useState(0)
   const [indexCode, setIndexCode] = useState('000300.XSHG')
   const [basis, setBasis] = useState<'ttm' | 'lyr'>('ttm')
@@ -83,7 +90,19 @@ export function ValuationRulerPage() {
       current.current = next
       setStatus(next)
       setStatusError('')
-      if (next.status === 'running') mutation.observedRunning = true
+      if (next.status === 'running' && (!mutation.runId || next.run_id === mutation.runId))
+        mutation.observedRunning = true
+      if (
+        mutation.accepted &&
+        !mutation.pending &&
+        !next.database_syncing &&
+        next.status !== 'running' &&
+        (mutation.runId ? next.run_id === mutation.runId : mutation.observedRunning)
+      ) {
+        mutation.accepted = false
+        mutation.runId = null
+      }
+      setAccepted(mutation.accepted)
       if (mutation.observedRunning && next.status !== 'running' && !mutation.pending) {
         mutation.uncertain = false
         mutation.observedRunning = false
@@ -113,6 +132,7 @@ export function ValuationRulerPage() {
           poll,
           current.current?.status === 'running' ||
             current.current?.database_syncing ||
+            mutation.accepted ||
             mutation.uncertain ||
             mutation.pending
             ? 2000
@@ -126,19 +146,32 @@ export function ValuationRulerPage() {
       statusRequest.current?.abort()
       statusEpoch.current++
     }
-  }, [readStatus])
+  }, [readStatus, accepted])
   async function act() {
-    if (!admin || mutation.pending || mutation.uncertain || !current.current || statusError) return
+    if (
+      !admin ||
+      mutation.pending ||
+      mutation.accepted ||
+      mutation.uncertain ||
+      !current.current ||
+      statusError
+    )
+      return
     if (current.current.database_syncing || current.current.status === 'running') return
     mutation.pending = true
+    mutation.observedRunning = false
     setBusy(true)
     setActionError('')
     statusEpoch.current++
     statusRequest.current?.abort()
     try {
       const result = await updateValuation('refresh')
-      if (mounted.current && result.started === false && result.detail) {
-        setActionError(result.detail)
+      if (result.started === true) {
+        mutation.accepted = true
+        mutation.runId = result.run_id ?? null
+        if (mounted.current) setAccepted(true)
+      } else if (mounted.current) {
+        setActionError(result.detail ?? '本次未启动采集，请核对采集状态。')
       }
     } catch (reason) {
       mutation.uncertain = true
@@ -156,7 +189,7 @@ export function ValuationRulerPage() {
     }
   }
   const databaseSyncing = status?.database_syncing ?? false
-  const running = !databaseSyncing && status?.status === 'running'
+  const running = !databaseSyncing && (accepted || status?.status === 'running')
   const disabled = databaseSyncing || !admin || busy || uncertain || !status || !!statusError
   const latest = data?.latest
   const benchmark = data?.benchmarks
@@ -184,6 +217,7 @@ export function ValuationRulerPage() {
           </button>
         </div>
       </PageHeader>
+      {actionError && <p role="alert">{actionError}</p>}
       <div className="valuation-filters">
         <label>
           跟踪指数{' '}
@@ -344,11 +378,11 @@ export function ValuationRulerPage() {
           <p role="status">
             {databaseSyncing
               ? '数据库同步中'
-              : `采集中 · ${status?.phase ? (phaseLabels[status.phase] ?? status.phase) : '等待状态'}`}
+              : `采集中 · ${status?.status === 'running' && status.phase ? (phaseLabels[status.phase] ?? status.phase) : '等待确认本次采集状态'}`}
           </p>
         )}
-        {(statusError || actionError || status?.error) && (
-          <p role="alert">{statusError || actionError || status?.error}</p>
+        {(statusError || (!actionError && status?.error)) && (
+          <p role="alert">{statusError || status?.error}</p>
         )}
         {uncertain && (
           <p role="alert">上次操作结果不确定，已暂停重复提交。正在读取服务器状态；请勿重复启动。</p>

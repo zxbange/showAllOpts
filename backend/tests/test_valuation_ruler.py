@@ -346,13 +346,17 @@ def test_admin_api_contract_and_no_store(engine,tmp_path,monkeypatch):
     app=create_app(Settings(_env_file=None,log_dir=tmp_path,valuation_ruler_worker_enabled=False),engine)
     with TestClient(app) as client:
         service=app.state.valuation_ruler
-        monkeypatch.setattr(service,'refresh',lambda:True);monkeypatch.setattr(service,'cancel',lambda:False)
+        monkeypatch.setattr(service,'refresh',lambda **kwargs:'a'*32);monkeypatch.setattr(service,'cancel',lambda:False)
         for name in ('history','status'):
             response=client.get('/api/v1/valuation-ruler/'+name)
             assert response.status_code==200 and response.headers['cache-control']=='no-store'
         for name,key,value in [('refresh','started',True),('cancel','cancelled',False)]:
             response=client.post('/api/v1/valuation-ruler/'+name)
-            assert response.status_code==202 and response.json()=={key:value}
+            assert response.status_code==202 and response.json()==({key:value,'run_id':'a'*32} if name=='refresh' else {key:value})
+        monkeypatch.setattr(service,'refresh',lambda **kwargs:False)
+        response=client.post('/api/v1/valuation-ruler/refresh')
+        assert response.status_code==202 and response.json()['started'] is False
+        assert 'run_id' not in response.json() and response.json()['detail']
         assert client.post('/api/v1/valuation-ruler/sync-joinquant').status_code == 404
         assert any(item['id']=='valuation-ruler' for item in client.get('/api/v1/modules').json()['modules'])
 
@@ -389,3 +393,18 @@ def test_outcome_day_diagnostic_clears_after_retry_success(monitor, monkeypatch)
     monitor.refresh(background=False, moment=MOMENT)
     assert records[-1]['outcome'] == 'complete'
     assert records[-1]['error_details'] is None
+
+
+def test_return_receipt_matches_terminal_state_and_held_lock_is_busy(monitor, monkeypatch):
+    provider(monitor)
+    lock=monitor.acquire()
+    assert lock is not None
+    try:
+        assert monitor.status()['status']=='running'
+        assert monitor.refresh(moment=MOMENT,return_run_id=True) is False
+    finally:
+        lock.release()
+    run=monitor.refresh(background=False,moment=MOMENT,return_run_id=True)
+    assert isinstance(run,str) and len(run)==32
+    state=monitor.status()
+    assert state['run_id']==run and state['status']=='idle' and state['phase']=='complete'

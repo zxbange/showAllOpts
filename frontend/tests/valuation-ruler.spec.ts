@@ -188,6 +188,38 @@ test('the same collection button stays in place and is disabled until polling co
   expect(commands).toEqual(['refresh'])
 })
 
+test('accepted run remains locked across stale idle responses until its own terminal state', async ({
+  page,
+}) => {
+  const runId = 'a'.repeat(32)
+  const oldRun = 'b'.repeat(32)
+  let status: ValuationStatus = { ...idle, run_id: oldRun }
+  let starts = 0
+  await page.route('**/api/v1/valuation-ruler/**', async (route) => {
+    const path = new URL(route.request().url()).pathname.split('/').at(-1)
+    if (path === 'refresh') {
+      starts++
+      return route.fulfill({ status: 202, json: { started: true, run_id: runId } })
+    }
+    return route.fulfill({ json: path === 'status' ? status : history })
+  })
+  await page.clock.install()
+  await page.goto('/valuation-ruler')
+  await page.getByRole('button', { name: '更新数据', exact: true }).click()
+  const running = page.getByRole('button', { name: '采集中…', exact: true })
+  await expect(running).toBeDisabled()
+  await page.clock.fastForward(16000)
+  await expect(running).toBeDisabled()
+  status = { ...idle, run_id: runId, phase: 'complete' }
+  await expect
+    .poll(async () => {
+      await page.clock.fastForward(16000)
+      return page.getByRole('button', { name: '更新数据', exact: true }).isEnabled()
+    })
+    .toBe(true)
+  expect(starts).toBe(1)
+})
+
 test('a verified no-start explains the due date without hiding saved data or locking retry', async ({
   page,
 }) => {

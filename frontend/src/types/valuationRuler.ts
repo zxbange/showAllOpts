@@ -41,6 +41,7 @@ export interface ValuationHistory {
   sources: string[]
 }
 export interface ValuationStatus {
+  run_id?: string | null
   database_syncing?: boolean
   sync_message?: string | null
   status: 'idle' | 'running' | 'failed'

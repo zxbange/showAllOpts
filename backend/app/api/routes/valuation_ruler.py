@@ -1,5 +1,8 @@
 from fastapi import APIRouter, Depends, Request, Response
 from typing import Literal
+import logging
+
+LOG = logging.getLogger(__name__)
 
 router=APIRouter(prefix='/valuation-ruler',tags=['估值标尺'])
 
@@ -26,9 +29,15 @@ def status(response: Response,monitor=Depends(service)):
 def refresh(monitor=Depends(service)):
     from app.services.valuation_ruler import ValuationNotDue
     try:
-        return {'started': monitor.refresh()}
+        run_id = monitor.refresh(return_run_id=True)
+        if run_id:
+            LOG.info('Valuation manual collection accepted run=%s', run_id)
+            return {'started': True, 'run_id': run_id}
+        LOG.info('Valuation manual collection not started reason=busy_or_unavailable')
+        return {'started': False, 'detail': '当前未启动新采集，请等待已有任务结束或稍后重试。'}
     except ValuationNotDue as exc:
         # Definite no-start, not an ambiguous failed mutation response.
+        LOG.info('Valuation manual collection not started reason=not_due')
         return {'started': False, 'detail': str(exc)}
 
 
