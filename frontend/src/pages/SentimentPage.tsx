@@ -1,5 +1,8 @@
+import { TrendPanelHeading } from '../components/TrendPanelHeading'
+import { HistoryRangeSwitch, compactHistoryRanges } from '../components/HistoryRangeSwitch'
+import { DisplayRefreshButton } from '../components/PageActionButton'
 import { useCallback, useState } from 'react'
-import { RefreshCw, Users, Thermometer, TrendingUp, Snowflake } from 'lucide-react'
+import { Users, Thermometer, TrendingUp, Snowflake } from 'lucide-react'
 import { getSentimentHistory } from '../api/client'
 import { useResource } from '../hooks/useResource'
 import { PageHeader } from '../components/PageHeader'
@@ -33,14 +36,7 @@ export function SentimentPage() {
           <p>全市场站上20日均线的股票比例：低于20%为冰点，高于80%为过热。</p>
         </div>
         <div className="heading-actions">
-          <button
-            className="button button-quiet icon-button"
-            aria-label="刷新市场热度数据"
-            onClick={reload}
-            disabled={loading}
-          >
-            <RefreshCw size={16} className={loading ? 'spin' : ''} />
-          </button>
+          <DisplayRefreshButton ariaLabel="刷新市场热度数据" onClick={reload} loading={loading} />
         </div>
       </PageHeader>
       {error ? (
@@ -96,42 +92,29 @@ export function SentimentPage() {
         </p>
       )}
       <section className="panel trend-panel" aria-busy={loading}>
-        <div className="panel-heading">
-          <div>
-            <div className="panel-title">
-              <span className="status-dot" />
-              <h2>全市场热度走势</h2>
-              {latest && (
-                <span className={'sentiment-state sentiment-' + latest.state}>
-                  {states[latest.state]}
-                </span>
-              )}
-            </div>
-            <p>
-              {data?.start_date
-                ? `${data.start_date} — ${data.end_date}`
-                : '按交易日记录 · 保留全部已采集历史'}
-            </p>
-          </div>
-          <div className="range-switch" aria-label="市场热度历史范围">
-            {[
-              { days: 30, label: '近1月' },
-              { days: 90, label: '近3月' },
-              { days: 180, label: '近半年' },
-              { days: 365, label: '近1年' },
-              { days: 0, label: '全部' },
-            ].map((range) => (
-              <button
-                key={range.days}
-                aria-pressed={days === range.days}
-                className={days === range.days ? 'active' : ''}
-                onClick={() => setDays(range.days)}
-              >
-                {range.label}
-              </button>
-            ))}
-          </div>
-        </div>
+        <TrendPanelHeading
+          title="全市场热度走势"
+          description={
+            data?.start_date
+              ? `${data.start_date} — ${data.end_date}`
+              : '按交易日记录 · 保留全部已采集历史'
+          }
+          badge={
+            latest && (
+              <span className={'sentiment-state sentiment-' + latest.state}>
+                {states[latest.state]}
+              </span>
+            )
+          }
+          actions={
+            <HistoryRangeSwitch
+              label="市场热度历史范围"
+              options={compactHistoryRanges}
+              value={days}
+              onChange={setDays}
+            />
+          }
+        />
         {loading ? (
           <div className="skeleton chart-skeleton" />
         ) : error ? null : latest && data ? (

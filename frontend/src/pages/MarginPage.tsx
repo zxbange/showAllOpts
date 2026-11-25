@@ -1,7 +1,10 @@
+import { HistoryRangeSwitch, compactHistoryRanges } from '../components/HistoryRangeSwitch'
+import { TrendPanelHeading } from '../components/TrendPanelHeading'
+import { DisplayRefreshButton, PageActionButton } from '../components/PageActionButton'
 import { PageHeaderActions } from '../components/PageHeaderActions'
 import { useAuth } from '../components/AccountAccess'
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { RefreshCw, Download, Square, TrendingUp, TrendingDown, Gauge, Layers3 } from 'lucide-react'
+import { Download, Square, TrendingUp, TrendingDown, Gauge, Layers3 } from 'lucide-react'
 import { getMarginHistory } from '../api/client'
 import { useCollectionTask } from '../hooks/useCollectionTask'
 import { marginCollectionTask, marginCollectionErrorText } from '../lib/marginCollectionTask'
@@ -124,14 +127,11 @@ export function MarginPage() {
           <p>全市场平均维持担保比例，观察两融账户的担保充足程度。</p>
         </div>
         <div className="heading-actions">
-          <button
-            className="button button-quiet icon-button"
-            aria-label="刷新两融展示数据"
+          <DisplayRefreshButton
+            ariaLabel="刷新两融展示数据"
             onClick={reloadDisplay}
-            disabled={loading}
-          >
-            <RefreshCw size={16} className={loading ? 'spin' : ''} />
-          </button>
+            loading={loading}
+          />
         </div>
       </PageHeader>
 
@@ -191,51 +191,36 @@ export function MarginPage() {
       </div>
 
       <section className="panel trend-panel margin-trend" aria-busy={loading}>
-        <div className="panel-heading">
-          <div>
-            <div className="panel-title">
-              <span className="status-dot" />
-              <h2>两融担保比例走势 · 近六年</h2>
-            </div>
-            <p>
-              {data?.start_date
-                ? `${data.start_date} — ${data.end_date} · ${summary?.observed_days.toLocaleString('zh-CN')} 条记录`
-                : '按官方披露日期记录'}
-            </p>
-          </div>
-          {latest?.source_url && (
-            <a
-              className="button button-quiet"
-              href={latest.source_url}
-              target="_blank"
-              rel="noreferrer"
-            >
-              查看数据来源
-            </a>
-          )}
-        </div>
-        <div className="margin-chart-toolbar">
-          <div className="range-switch" aria-label="两融历史范围">
-            {[
-              [30, '近1月'],
-              [90, '近3月'],
-              [180, '近半年'],
-              [365, '近1年'],
-              [0, '全部'],
-            ].map(([value, label]) => (
-              <button
-                key={value}
-                className={chartDays === value ? 'active' : ''}
-                aria-pressed={chartDays === value}
-                onClick={() => {
-                  setChartDays(Number(value))
-                  setChartReset((current) => current + 1)
-                }}
+        <TrendPanelHeading
+          title="两融担保比例走势 · 近六年"
+          description={
+            data?.start_date
+              ? `${data.start_date} — ${data.end_date} · ${summary?.observed_days.toLocaleString('zh-CN')} 条记录`
+              : '按官方披露日期记录'
+          }
+          actions={
+            latest?.source_url && (
+              <a
+                className="button button-quiet"
+                href={latest.source_url}
+                target="_blank"
+                rel="noreferrer"
               >
-                {label}
-              </button>
-            ))}
-          </div>
+                查看数据来源
+              </a>
+            )
+          }
+        />
+        <div className="margin-chart-toolbar">
+          <HistoryRangeSwitch
+            label="两融历史范围"
+            options={compactHistoryRanges}
+            value={chartDays}
+            onChange={(value) => {
+              setChartDays(value)
+              setChartReset((current) => current + 1)
+            }}
+          />
           <span>拖动底部滑块缩放 · Ctrl + 滚轮缩放 · 触屏双指缩放</span>
         </div>
         {data?.points.length ? (
@@ -259,23 +244,23 @@ export function MarginPage() {
       <PageHeaderActions>
         <div className="margin-update-actions">
           {running ? (
-            <button
-              className="button button-quiet"
+            <PageActionButton
+              icon={Square}
+              iconSize={15}
+              tone="quiet"
               onClick={() => void act('cancel')}
               disabled={busy || cancelling || !admin || uncertain || !!pollError}
             >
-              <Square size={15} />
               {cancelling ? '正在停止…' : '取消采集'}
-            </button>
+            </PageActionButton>
           ) : (
-            <button
-              className="button button-primary"
+            <PageActionButton
+              icon={Download}
               onClick={() => void act('refresh')}
               disabled={busy || loading || !admin || uncertain || !status || !!pollError}
             >
-              <Download size={16} />
               {busy ? '正在启动…' : '更新数据'}
-            </button>
+            </PageActionButton>
           )}
         </div>
       </PageHeaderActions>

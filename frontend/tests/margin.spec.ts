@@ -63,8 +63,10 @@ test('margin ranges and zoom work and survive a data refresh', async ({ page }, 
     date: new Date(Date.UTC(2026, 0, index + 1)).toISOString().slice(0, 10),
     ratio: 250 + Math.sin(index / 10) * 20,
   }))
-  await page.route('**/api/v1/margin-guarantee/**', (route) =>
-    route.fulfill({
+  let mutations = 0
+  await page.route('**/api/v1/margin-guarantee/**', (route) => {
+    if (route.request().method() === 'POST') mutations++
+    return route.fulfill({
       json: route.request().url().endsWith('/status')
         ? status
         : {
@@ -74,8 +76,8 @@ test('margin ranges and zoom work and survive a data refresh', async ({ page }, 
             start_date: many[0].date,
             end_date: many.at(-1)!.date,
           },
-    }),
-  )
+    })
+  })
   await page.goto('/margin-guarantee')
   const chart = page.locator('.margin-chart')
   await expect(chart.locator('canvas')).toBeVisible()
@@ -86,8 +88,10 @@ test('margin ranges and zoom work and survive a data refresh', async ({ page }, 
         .map((entry) => entry.name)
         .find((value) => /\/echarts_core\.js\?/.test(value))!
       const { getInstanceByDom } = await import(url)
-      const option = getInstanceByDom(document.querySelector('.margin-chart')).getOption()
+      const instance = getInstanceByDom(document.querySelector('.margin-chart'))
+      const option = instance.getOption()
       return {
+        instanceId: instance.id,
         start: option.dataZoom[0].start as number,
         end: option.dataZoom[0].end as number,
         wheel: option.dataZoom[0].zoomOnMouseWheel,
@@ -131,6 +135,7 @@ test('margin ranges and zoom work and survive a data refresh', async ({ page }, 
   expect((await zoom()).end).toBe(100)
   expect((await zoom()).referenceLines).toEqual([240, 150])
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
+  expect(mutations).toBe(0)
 })
 
 test('market mood third tab renders official percentage units and keeps chart during reload', async ({

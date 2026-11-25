@@ -1,6 +1,9 @@
+import { ScrollableTableRegion } from '../components/ScrollableTableRegion'
+import { createChartInstance } from '../lib/chartLifecycle'
+import { PageActionButton } from '../components/PageActionButton'
 import { PageHeaderActions } from '../components/PageHeaderActions'
 import { useEffect, useRef, useState } from 'react'
-import { init, use as registerChartComponents } from 'echarts/core'
+import { use as registerChartComponents } from 'echarts/core'
 import { LineChart } from 'echarts/charts'
 import {
   GridComponent,
@@ -72,7 +75,8 @@ function CoalChart({ rows }: { rows: Quote[] }) {
   const root = useRef<HTMLDivElement>(null)
   useEffect(() => {
     if (!root.current) return
-    const chart = init(root.current)
+    const mounted = createChartInstance(root.current)
+    const chart = mounted.chart
     const dates = [...new Set(rows.map((r) => r.quoteDate))].sort()
     const lookup = new Map(rows.map((r) => [`${r.quoteDate}:${r.grade}`, r]))
     chart.setOption({
@@ -122,12 +126,8 @@ function CoalChart({ rows }: { rows: Quote[] }) {
         data: dates.map((day) => lookup.get(`${day}:${grade}`)?.price ?? null),
       })),
     })
-    const observer = new ResizeObserver(() => chart.resize())
-    observer.observe(root.current)
-    return () => {
-      observer.disconnect()
-      chart.dispose()
-    }
+    mounted.observe()
+    return () => mounted.dispose()
   }, [rows])
   return (
     <div className="commodity-chart" ref={root} role="img" aria-label="CCI动力煤三档价格走势" />
@@ -178,13 +178,12 @@ export function CCICoalPage() {
           <h2>价格走势</h2>
           {admin && (
             <PageHeaderActions>
-              <button
-                className="button button-primary"
+              <PageActionButton
                 disabled={busy || data?.status.running || !data || !!statusError}
                 onClick={() => void refresh()}
               >
                 {busy || data?.status.running ? '采集中' : '更新数据'}
-              </button>
+              </PageActionButton>
             </PageHeaderActions>
           )}
         </div>
@@ -266,12 +265,7 @@ export function CCICoalPage() {
             </select>
           </label>
         </div>
-        <div
-          className="commodity-table"
-          tabIndex={0}
-          role="region"
-          aria-label="CCI历史报价，可滚动查看"
-        >
+        <ScrollableTableRegion className="commodity-table" label="CCI历史报价，可滚动查看">
           <table>
             <thead>
               <tr>
@@ -300,7 +294,7 @@ export function CCICoalPage() {
                 ))}
             </tbody>
           </table>
-        </div>
+        </ScrollableTableRegion>
       </section>
     </div>
   )

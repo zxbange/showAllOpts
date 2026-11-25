@@ -1,3 +1,4 @@
+import { DisplayRefreshButton } from '../components/PageActionButton'
 import { PageHeader } from '../components/PageHeader'
 import { useMemo, useState } from 'react'
 import {
@@ -7,7 +8,6 @@ import {
   Flame,
   Grid2X2,
   Info,
-  RefreshCw,
   Search,
   TrendingUp,
   X,
@@ -45,14 +45,7 @@ export function MomentumPage() {
           <p>按申万二级行业比较强势股集中度。</p>
         </div>
         <div className="heading-actions">
-          <button
-            className="button button-quiet icon-button"
-            onClick={reload}
-            disabled={loading}
-            aria-label="刷新行业数据"
-          >
-            <RefreshCw size={16} className={loading ? 'spin' : ''} />
-          </button>
+          <DisplayRefreshButton ariaLabel="刷新行业数据" onClick={reload} loading={loading} />
         </div>
       </PageHeader>
       {loading ? (

@@ -1,3 +1,4 @@
+import { PageActionButton } from './PageActionButton'
 import { dataUpdateInstant, formatDataUpdatedAt } from '../lib/dataUpdatedAt'
 import { CollectionHistoryFrame, CollectionHistoryError } from './CollectionHistory'
 import { PageHeaderActions } from './PageHeaderActions'
@@ -83,8 +84,7 @@ export function ETFCollectionPanel({ onCollected }: { onCollected: () => void })
             {uncertain && <p>重试会沿用上次请求，不会重复排队。</p>}
             {cancelling && <p>正在等待当前采集步骤结束，取消后可重新开始。</p>}
             <PageHeaderActions>
-              <button
-                className="button button-primary"
+              <PageActionButton
                 disabled={
                   !!busy || !state.status || (!manualActive && (running || !status?.configured))
                 }
@@ -99,7 +99,7 @@ export function ETFCollectionPanel({ onCollected }: { onCollected: () => void })
                       : uncertain
                         ? '重试同一采集请求'
                         : '更新数据'}
-              </button>
+              </PageActionButton>
             </PageHeaderActions>
           </div>
         )}

@@ -1,3 +1,4 @@
+import { PageActionButton } from './PageActionButton'
 import { PageHeaderActions } from './PageHeaderActions'
 import { RefreshCw } from 'lucide-react'
 import { useAuth } from './AccountAccess'
@@ -46,12 +47,13 @@ export function MarketCollectionPanel({ onCollected }: { onCollected: () => void
     <>
       {admin && (
         <PageHeaderActions>
-          <button
-            className="button button-primary"
+          <PageActionButton
+            icon={RefreshCw}
+            iconSize={15}
+            spin={busy === 'run' || running}
             disabled={!!busy || running || confirming || workerDisabled || !status?.configured}
             onClick={() => void run()}
           >
-            <RefreshCw size={15} className={busy === 'run' || running ? 'spin' : ''} />
             {busy === 'run'
               ? '提交中…'
               : running
@@ -63,7 +65,7 @@ export function MarketCollectionPanel({ onCollected }: { onCollected: () => void
                     : retry
                       ? '重试未完成采集'
                       : '更新数据'}
-          </button>
+          </PageActionButton>
         </PageHeaderActions>
       )}
 

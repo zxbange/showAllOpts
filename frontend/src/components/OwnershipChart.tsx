@@ -1,5 +1,6 @@
+import { createChartInstance } from '../lib/chartLifecycle'
 import { useEffect, useRef } from 'react'
-import { init, use as registerChartComponents } from 'echarts/core'
+import { use as registerChartComponents } from 'echarts/core'
 import { BarChart, LineChart } from 'echarts/charts'
 import {
   GridComponent,
@@ -37,7 +38,8 @@ export function OwnershipChart({
   const ref = useRef<HTMLDivElement>(null)
   useEffect(() => {
     if (!ref.current) return
-    const chart = init(ref.current)
+    const mounted = createChartInstance(ref.current)
+    const chart = mounted.chart
     const holders = metric === 'holders'
     const unit = holders ? '户' : metric === 'shares' ? '万股' : '亿元'
     const valueName = holders ? 'A股股东户数' : metric === 'shares' ? '披露持股数' : '披露市值'
@@ -109,12 +111,8 @@ export function OwnershipChart({
           : []),
       ],
     })
-    const observer = new ResizeObserver(() => chart.resize())
-    observer.observe(ref.current)
-    return () => {
-      observer.disconnect()
-      chart.dispose()
-    }
+    mounted.observe()
+    return () => mounted.dispose()
   }, [dates, values, counts, title, metric])
   return <div ref={ref} className="ownership-chart" role="img" aria-label={title} />
 }

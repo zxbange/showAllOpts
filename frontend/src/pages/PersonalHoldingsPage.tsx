@@ -1,3 +1,5 @@
+import { ScrollableTableRegion } from '../components/ScrollableTableRegion'
+import { PageActionButton } from '../components/PageActionButton'
 import { CollectionOutcomeLight } from '../components/CollectionOutcome'
 import { PageHeaderActions } from '../components/PageHeaderActions'
 import { PageHeader } from '../components/PageHeader'
@@ -258,12 +260,7 @@ function Holdings() {
                       </h3>
                       <span>{rows.length} 只</span>
                     </header>
-                    <div
-                      className="holdings-scroll"
-                      tabIndex={0}
-                      role="region"
-                      aria-label="持仓表格，可横向滚动"
-                    >
+                    <ScrollableTableRegion className="holdings-scroll" label="持仓表格，可横向滚动">
                       <table>
                         <thead>
                           <tr>
@@ -288,7 +285,7 @@ function Holdings() {
                           ))}
                         </tbody>
                       </table>
-                    </div>
+                    </ScrollableTableRegion>
                   </article>
                 )
               })}
@@ -329,11 +326,9 @@ function Holdings() {
         {!history.events.length ? (
           <p className="holdings-empty">当天暂无仓位变动记录。</p>
         ) : (
-          <div
+          <ScrollableTableRegion
             className="holdings-scroll holdings-history-scroll"
-            tabIndex={0}
-            role="region"
-            aria-label="仓位变动表，可上下左右滚动"
+            label="仓位变动表，可上下左右滚动"
           >
             <table>
               <thead>
@@ -368,7 +363,7 @@ function Holdings() {
                 ))}
               </tbody>
             </table>
-          </div>
+          </ScrollableTableRegion>
         )}
         {history.next_before && (
           <button className="button" disabled={loadingMore} onClick={() => void more()}>
@@ -390,13 +385,12 @@ function Holdings() {
         </div>
         <div className="holdings-actions">
           <PageHeaderActions>
-            <button
-              className="button button-primary"
+            <PageActionButton
               disabled={busy || !status?.configured || status?.manual?.status === 'pending'}
               onClick={() => void operate('sync')}
             >
               {status?.manual?.status === 'pending' ? '采集中…' : '更新数据'}
-            </button>
+            </PageActionButton>
           </PageHeaderActions>
           <button
             className="button button-primary"

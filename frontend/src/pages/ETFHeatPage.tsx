@@ -1,7 +1,9 @@
+import { HistoryRangeSwitch } from '../components/HistoryRangeSwitch'
+import { DisplayRefreshButton } from '../components/PageActionButton'
 import { PageHeader } from '../components/PageHeader'
 import { useCallback, useMemo, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
-import { ArrowLeft, Flame, RefreshCw, Search, TrendingUp, Layers, CheckCircle2 } from 'lucide-react'
+import { ArrowLeft, Flame, Search, TrendingUp, Layers, CheckCircle2 } from 'lucide-react'
 import { getETFHeat, getETFHeatHistory } from '../api/client'
 import { useResource } from '../hooks/useResource'
 import { EmptyState, ErrorState, LoadingState } from '../components/States'
@@ -36,14 +38,12 @@ export function ETFHeatPage() {
           <p>按年化趋势收益率 × R² 排序，比较 ETF / LOF 动量。</p>
         </div>
         <div className="heading-actions">
-          <button
-            className="button button-quiet icon-button"
-            aria-label="刷新ETF热度"
+          <DisplayRefreshButton
+            ariaLabel="刷新ETF热度"
             onClick={reload}
-            disabled={loading}
-          >
-            <RefreshCw size={16} />
-          </button>
+            loading={loading}
+            animate={false}
+          />
         </div>
       </PageHeader>
       {loading ? (
@@ -213,13 +213,7 @@ export function ETFHeatDetailPage() {
           <h1>{data?.name ?? 'ETF动量走势'}</h1>
           <p>查看基金热度与收盘价的历史变化。</p>
         </div>
-        <button
-          className="button button-quiet icon-button"
-          onClick={reload}
-          aria-label="刷新ETF趋势"
-        >
-          <RefreshCw size={16} />
-        </button>
+        <DisplayRefreshButton ariaLabel="刷新ETF趋势" onClick={reload} animate={false} />
       </PageHeader>
       {loading ? (
         <LoadingState />
@@ -264,22 +258,16 @@ export function ETFHeatDetailPage() {
                 <h2>动量热度曲线</h2>
                 <p>负分正常展示，缺失数据留空，不补零。</p>
               </div>
-              <div className="range-switch">
-                {[
-                  [30, '近1月'],
-                  [90, '近3月'],
-                  [365, '近1年'],
-                ].map(([n, label]) => (
-                  <button
-                    key={n}
-                    className={days === n ? 'active' : ''}
-                    aria-pressed={days === n}
-                    onClick={() => setDays(Number(n))}
-                  >
-                    {label}
-                  </button>
-                ))}
-              </div>
+              <HistoryRangeSwitch
+                label="ETF动量历史范围"
+                options={[
+                  { value: 30, label: '近1月' },
+                  { value: 90, label: '近3月' },
+                  { value: 365, label: '近1年' },
+                ]}
+                value={days}
+                onChange={setDays}
+              />
             </div>
             <TrendChart points={points('score')} name={data.name} allowNegative precision={4} />
           </section>

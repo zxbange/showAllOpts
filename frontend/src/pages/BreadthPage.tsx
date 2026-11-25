@@ -1,6 +1,9 @@
+import { TrendPanelHeading } from '../components/TrendPanelHeading'
+import { HistoryRangeSwitch } from '../components/HistoryRangeSwitch'
+import { DisplayRefreshButton } from '../components/PageActionButton'
 import { PageHeader } from '../components/PageHeader'
 import { useCallback, useState } from 'react'
-import { Activity, ArrowUpDown, RefreshCw, TrendingUp } from 'lucide-react'
+import { Activity, ArrowUpDown, TrendingUp } from 'lucide-react'
 import { getBreadthHistory } from '../api/client'
 import { useResource } from '../hooks/useResource'
 import { formatDate } from '../lib/format'
@@ -31,14 +34,7 @@ export function BreadthPage() {
           <p>统计微盘 400 在 5、10、20、30 日周期的新高、新低数量。</p>
         </div>
         <div className="heading-actions">
-          <button
-            className="button button-quiet icon-button"
-            onClick={reload}
-            disabled={loading}
-            aria-label="刷新微盘新高新低"
-          >
-            <RefreshCw size={16} className={loading ? 'spin' : ''} />
-          </button>
+          <DisplayRefreshButton ariaLabel="刷新微盘新高新低" onClick={reload} loading={loading} />
         </div>
       </PageHeader>
       {loading ? (
@@ -116,26 +112,19 @@ export function BreadthPage() {
             ))}
           </section>
           <section className="panel trend-panel">
-            <div className="panel-heading">
-              <div>
-                <h2>{period} 日新高新低趋势</h2>
-                <p>
-                  {formatDate(data.start_date)} — {formatDate(data.end_date)}
-                </p>
-              </div>
-              <div className="range-switch" aria-label="新高新低历史范围">
-                {[30, 90, 180, 300].map((n) => (
-                  <button
-                    key={n}
-                    className={days === n ? 'active' : ''}
-                    aria-pressed={days === n}
-                    onClick={() => setDays(n)}
-                  >
-                    近 {n} 日
-                  </button>
-                ))}
-              </div>
-            </div>
+            <TrendPanelHeading
+              statusDot={false}
+              title={`${period} 日新高新低趋势`}
+              description={`${formatDate(data.start_date)} — ${formatDate(data.end_date)}`}
+              actions={
+                <HistoryRangeSwitch
+                  label="新高新低历史范围"
+                  options={[30, 90, 180, 300].map((value) => ({ value, label: `近 ${value} 日` }))}
+                  value={days}
+                  onChange={setDays}
+                />
+              }
+            />
             <div className="microcap-view-switch" aria-label="新高新低指标">
               {(
                 [

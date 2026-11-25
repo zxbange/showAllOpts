@@ -1,6 +1,8 @@
+import { ScrollableTableRegion } from '../components/ScrollableTableRegion'
+import { DisplayRefreshButton } from '../components/PageActionButton'
 import { useSearchParams } from 'react-router-dom'
 import { useCallback, useState } from 'react'
-import { Coins, Layers3, RefreshCw, Search, SlidersHorizontal } from 'lucide-react'
+import { Coins, Layers3, Search, SlidersHorizontal } from 'lucide-react'
 import { PageHeader } from '../components/PageHeader'
 import { getDividendOverview } from '../api/client'
 import { useResource } from '../hooks/useResource'
@@ -40,14 +42,7 @@ export function DividendPage() {
           <p>静态股息率 &gt; 3% · 0 &lt; PE &lt; 12 · 非银行前 50 只，银行前 20 只</p>
         </div>
         <div className="heading-actions">
-          <button
-            className="button button-quiet icon-button"
-            aria-label="刷新高股息选股"
-            disabled={loading}
-            onClick={reload}
-          >
-            <RefreshCw size={16} className={loading ? 'spin' : ''} />
-          </button>
+          <DisplayRefreshButton ariaLabel="刷新高股息选股" onClick={reload} loading={loading} />
         </div>
       </PageHeader>
       {loading ? (
@@ -119,11 +114,9 @@ export function DividendPage() {
             ) : !items.length ? (
               <EmptyState search title="没有匹配的股票" description="试试其他代码、名称或行业。" />
             ) : (
-              <div
+              <ScrollableTableRegion
                 className="dividend-table-wrap"
-                tabIndex={0}
-                role="region"
-                aria-label="高股息股票明细，可左右滚动"
+                label="高股息股票明细，可左右滚动"
               >
                 <table className="dividend-table">
                   <thead>
@@ -178,7 +171,7 @@ export function DividendPage() {
                     ))}
                   </tbody>
                 </table>
-              </div>
+              </ScrollableTableRegion>
             )}
             <div className="panel-bottom">
               <span>

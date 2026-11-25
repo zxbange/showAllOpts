@@ -1,3 +1,5 @@
+import { ScrollableTableRegion } from '../components/ScrollableTableRegion'
+import { PageActionButton } from '../components/PageActionButton'
 import { useCallback, useEffect, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import {
@@ -166,16 +168,15 @@ function CashCowPeriodPage({
             </select>
           </label>
           <PageHeaderActions>
-            <button
-              className="button button-primary"
+            <PageActionButton
+              icon={running ? Square : RefreshCw}
               disabled={
                 busy || loading || !status || !admin || cancelling || uncertain || !!statusError
               }
               onClick={() => void act(running ? 'cancel' : 'refresh')}
             >
-              {running ? <Square size={16} /> : <RefreshCw size={16} />}
               {busy ? '正在提交…' : cancelling ? '正在停止…' : running ? '取消采集' : '更新数据'}
-            </button>
+            </PageActionButton>
           </PageHeaderActions>
         </div>
       </PageHeader>
@@ -333,12 +334,7 @@ function CashCowPeriodPage({
                 </span>
                 <span className="cash-cow-expand">年度明细</span>
               </summary>
-              <div
-                className="cash-cow-table"
-                tabIndex={0}
-                role="region"
-                aria-label={`${item.name}年度明细`}
-              >
+              <ScrollableTableRegion className="cash-cow-table" label={`${item.name}年度明细`}>
                 <table>
                   <caption>金额单位：亿元；每股分红与收盘价：元</caption>
                   <thead>
@@ -380,7 +376,7 @@ function CashCowPeriodPage({
                     ))}
                   </tbody>
                 </table>
-              </div>
+              </ScrollableTableRegion>
             </details>
           ))
         )}
