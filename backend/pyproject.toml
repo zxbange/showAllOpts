@@ -24,4 +24,4 @@ strict = true
 follow_imports = "silent"
 show_error_codes = true
 # Start at stable shared interfaces; expand as modules are migrated.
-files = ["app/services/holdings_calendar.py", "app/services/collection_calendar.py", "app/services/collection_lifecycle.py", "app/repositories/dividend_schema.py", "app/repositories/cash_cow_snapshot.py", "app/repositories/etf_state_schema.py", "app/repositories/market_state_schema.py", "app/repositories/valuation_state_schema.py"]
+files = ["app/services/holdings_calendar.py", "app/services/collection_calendar.py", "app/services/collection_lifecycle.py", "app/repositories/dividend_schema.py", "app/repositories/cash_cow_snapshot.py", "app/repositories/etf_state_schema.py", "app/repositories/market_state_schema.py", "app/repositories/valuation_state_schema.py", "app/repositories/dividend_snapshot.py", "app/repositories/cash_cow_validation.py"]
