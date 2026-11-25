@@ -2,31 +2,46 @@
 
 ETF collection and display reads can share a page-configured database account.
 """
-from app.services.collection_calendar import automatic_collection_allowed, latest_due_slot, manual_failure_isolated
-from app.services.system_runtime import source_client
-from app.services.system_configuration import pin_configuration
-from app.services import collection_notifications
-from datetime import date, datetime, timedelta
-from contextlib import contextmanager
-from zoneinfo import ZoneInfo
-import sqlite3
 import errno
-import threading
-import logging
 import json
+import logging
+import sqlite3
+import threading
 import time
 import uuid
-
-from app.core.diagnostics import diagnostic_details
-from app.services.collection_errors import safe_error, sanitize_error
-
-from app.services.etf_configuration import ETFConfiguration, ConfigurationFailure, DEFAULT_COLLECTION_TIME, target_key, reconcile_system_ledger
-from app.services.etf_diagnostics import database_diagnostic, database_write_run, log_database_failure, log_database_retry
-from app.services.etf_notifications import ETFRunSummary
+from contextlib import contextmanager
+from datetime import date, datetime, timedelta
+from zoneinfo import ZoneInfo
 
 import httpx
 import portalocker
 from sqlalchemy import create_engine
+
+from app.core.diagnostics import diagnostic_details
+from app.services import collection_notifications
+from app.services.collection_calendar import (
+    automatic_collection_allowed,
+    latest_due_slot,
+    manual_failure_isolated,
+)
+from app.services.collection_errors import safe_error, sanitize_error
+from app.services.collection_lifecycle import hold_lease, start_worker
+from app.services.etf_configuration import (
+    DEFAULT_COLLECTION_TIME,
+    ConfigurationFailure,
+    ETFConfiguration,
+    reconcile_system_ledger,
+    target_key,
+)
+from app.services.etf_diagnostics import (
+    database_diagnostic,
+    database_write_run,
+    log_database_failure,
+    log_database_retry,
+)
+from app.services.etf_notifications import ETFRunSummary
+from app.services.system_configuration import pin_configuration
+from app.services.system_runtime import source_client
 
 LOG = logging.getLogger(__name__)
 CHINA = ZoneInfo('Asia/Shanghai')
@@ -331,7 +346,7 @@ class ETFCollection:
         if issue != 'writer_target_mismatch' or not (self.root / 'state.sqlite').exists():
             return
         try:
-            with portalocker.Lock(str(self.root / 'collection.lock'), timeout=0):
+            with hold_lease(portalocker.Lock(str(self.root / 'collection.lock'), timeout=0)):
                 with self.connect() as db:
                     self._recover_manual_runs(db, reason='configuration_changed')
                     stamp = self.clock().isoformat()
@@ -404,7 +419,7 @@ class ETFCollection:
         self._reconcile_target_change(self.configuration_issue)
         self.root.mkdir(parents=True, exist_ok=True, mode=0o700)
         try:
-            with portalocker.Lock(str(self.root / 'collection.lock'), timeout=0):
+            with hold_lease(portalocker.Lock(str(self.root / 'collection.lock'), timeout=0)):
                 with self.connect() as db:
                     if db.execute("SELECT 1 FROM manual_runs WHERE status='queued'").fetchone():
                         raise ConfigurationFailure('采集任务已排队，请等待完成后修改配置')
@@ -419,7 +434,7 @@ class ETFCollection:
     def test_configuration(self, body):
         self.root.mkdir(parents=True, exist_ok=True, mode=0o700)
         try:
-            with portalocker.Lock(str(self.root / 'collection.lock'), timeout=0):
+            with hold_lease(portalocker.Lock(str(self.root / 'collection.lock'), timeout=0)):
                 return self.configuration.test(body)
         except portalocker.exceptions.LockException:
             raise ConfigurationFailure('采集正在运行，请稍后测试连接') from None
@@ -433,7 +448,7 @@ class ETFCollection:
             if row:
                 return dict(row)
         try:
-            with portalocker.Lock(str(self.root / 'collection.lock'), timeout=0):
+            with hold_lease(portalocker.Lock(str(self.root / 'collection.lock'), timeout=0)):
                 with self.connect() as db:
                     row = db.execute('SELECT * FROM manual_runs WHERE id=?', (request_id,)).fetchone()
                     if row:
@@ -544,7 +559,7 @@ class ETFCollection:
             if row is None:
                 raise ConfigurationFailure('未找到该手动采集任务，请刷新采集状态')
         try:
-            with portalocker.Lock(str(self.root / 'collection.lock'), timeout=0):
+            with hold_lease(portalocker.Lock(str(self.root / 'collection.lock'), timeout=0)):
                 with self.connect() as db:
                     # Recover an already-dead worker immediately, without starting
                     # another collection or mistaking a completed run for cancelled.
@@ -594,7 +609,7 @@ class ETFCollection:
             # Recover interrupted jobs without network I/O or stealing another worker's run.
             self.root.mkdir(parents=True, exist_ok=True, mode=0o700)
             try:
-                with portalocker.Lock(str(self.root / 'collection.lock'), timeout=0):
+                with hold_lease(portalocker.Lock(str(self.root / 'collection.lock'), timeout=0)):
                     with self.connect() as db:
                         self._recover_manual_runs(db)
                         db.execute("DELETE FROM metadata WHERE key='progress'")
@@ -602,8 +617,8 @@ class ETFCollection:
                 pass
             self.stop_event.clear()
             self.floor = self.clock()
-            self.worker = threading.Thread(target=self._loop, name='etf-collection', daemon=True)
-            self.worker.start()
+            start_worker(self._loop, name='etf-collection',
+                         assign=lambda worker: setattr(self, 'worker', worker), factory=threading.Thread)
 
     def stop(self):
         self.stop_event.set()
@@ -632,7 +647,7 @@ class ETFCollection:
             return False
         self.root.mkdir(parents=True, exist_ok=True, mode=0o700)
         try:
-            with portalocker.Lock(str(self.root / 'collection.lock'), timeout=0):
+            with hold_lease(portalocker.Lock(str(self.root / 'collection.lock'), timeout=0)):
                 config = self.configuration.load()
                 with self.connect() as db:
                     config = reconcile_system_ledger(self.configuration, db,

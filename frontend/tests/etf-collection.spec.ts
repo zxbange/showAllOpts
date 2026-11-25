@@ -315,3 +315,32 @@ test('automatic retry success remains separate from the original failed attempt'
   await expect(rows.nth(0)).toContainText('自动采集（第2次尝试） · 本次日常采集完成')
   await expect(rows.nth(1)).toContainText('失败 · 旧记录，显示请求时间')
 })
+
+test('an acknowledged ETF run cannot be replaced by a stale idle response', async ({ page }) => {
+  await page.clock.install()
+  const commands: string[] = []
+  let id = ''
+  await page.route('**/api/v1/etf-shares/collection-status', (route) =>
+    route.fulfill({ json: ready }),
+  )
+  await page.route('**/api/v1/etf-shares/collection-run', (route) => {
+    id = route.request().postDataJSON().request_id
+    commands.push(id)
+    return route.fulfill({ status: 202, json: { id, status: 'queued' } })
+  })
+  await page.route('**/api/v1/etf-shares/collection-cancel', (route) => {
+    commands.push(route.request().postDataJSON().request_id)
+    return route.fulfill({ json: { id, status: 'cancelled' } })
+  })
+  await page.goto('/etf-shares')
+  const update = page.getByRole('button', { name: '更新数据', exact: true })
+  await update.click()
+  const cancel = page.getByRole('button', { name: '取消采集', exact: true })
+  await expect(cancel).toBeEnabled()
+  await page.clock.fastForward(6000)
+  await expect(cancel).toBeEnabled()
+  await expect(update).toHaveCount(0)
+  await cancel.click()
+  await expect(update).toBeEnabled()
+  expect(commands).toEqual([id, id])
+})

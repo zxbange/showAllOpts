@@ -1,17 +1,18 @@
 import { dataUpdateInstant, formatDataUpdatedAt } from '../lib/dataUpdatedAt'
 import { CollectionHistoryFrame, CollectionHistoryError } from './CollectionHistory'
 import { PageHeaderActions } from './PageHeaderActions'
-import { useEffect, useRef, useState } from 'react'
 import { useAuth } from './AccountAccess'
-import { getETFCollectionStatus } from '../api/client'
-import { cancelCollection, runCollection } from '../api/etfCollection'
-import type { ETFCollectionStatus, ETFCollectionRun } from '../types/etf'
-import { collectionErrorMessage, withManualRun } from '../lib/etf'
+import { useQueuedCollectionTask } from '../hooks/useQueuedCollectionTask'
+import {
+  cancelETFQueuedTask,
+  startETFQueuedTask,
+  etfQueuedActive,
+  etfQueuedDisplay,
+  etfQueuedTask,
+} from '../lib/etfQueuedTask'
+import type { ETFCollectionRun } from '../types/etf'
+import { collectionErrorMessage } from '../lib/etf'
 
-const active = (s?: ETFCollectionStatus | null) =>
-  ['queued', 'running', 'cancelling'].includes(s?.manual?.status ?? '') ||
-  s?.status === 'running' ||
-  !!s?.progress
 const phases: Record<string, string> = {
   calendar: '读取交易日历',
   fetching: '获取交易所数据',
@@ -29,140 +30,16 @@ const labels: Record<string, string> = {
   abandoned: '已停止补采',
 }
 export function ETFCollectionPanel({ onCollected }: { onCollected: () => void }) {
-  const admin = useAuth().session?.user?.role === 'admin'
-  const [status, setStatus] = useState<ETFCollectionStatus | null>(null)
-  const [error, setError] = useState('')
-  const [historyUnavailable, setHistoryUnavailable] = useState(false)
-  const [busy, setBusy] = useState('')
-  const [uncertain, setUncertain] = useState(false)
-  const [retryExhausted, setRetryExhausted] = useState(false)
-  const retryChoice = useRef(false)
-  const [refresh, setRefresh] = useState(0)
-  const lock = useRef(false)
-  const requestId = useRef<string | null>(null)
-  const mutationVersion = useRef(0)
-  const mounted = useRef(false)
-  const reload = useRef(onCollected)
-  reload.current = onCollected
-  const previous = useRef<ETFCollectionStatus | null>(null)
-  useEffect(() => {
-    mounted.current = true
-    return () => {
-      mounted.current = false
-    }
-  }, [])
-  useEffect(() => {
-    let live = true
-    let timer: ReturnType<typeof setTimeout>
-    const controller = new AbortController()
-    async function poll() {
-      let delay = 15000
-      try {
-        const version = mutationVersion.current
-        const next = await getETFCollectionStatus(controller.signal)
-        if (!live) return
-        if (version !== mutationVersion.current || lock.current) {
-          timer = setTimeout(poll, 2000)
-          return
-        }
-        if (requestId.current && next.manual?.id === requestId.current) {
-          requestId.current = null
-          setUncertain(false)
-          setRetryExhausted(false)
-          setError('')
-        }
-        const old = previous.current
-        if (
-          old &&
-          !next.cache_pending &&
-          (old.cache_pending ||
-            (active(old) && !active(next)) ||
-            (!!next.manual &&
-              (old.manual?.id !== next.manual.id || old.manual?.status !== next.manual.status) &&
-              !active(next)) ||
-            (!!next.runs?.[0] &&
-              (old.runs?.[0]?.slot !== next.runs[0].slot ||
-                old.runs?.[0]?.status !== next.runs[0].status) &&
-              !active(next)))
-        )
-          reload.current()
-        previous.current = next
-        setStatus(next)
-        setHistoryUnavailable(false)
-        if (active(next) || next.cache_pending) delay = 2000
-      } catch {
-        if (live) setHistoryUnavailable(true)
-        // Keep saved charts visible while the next poll retries status retrieval.
-      }
-      if (live) timer = setTimeout(poll, delay)
-    }
-    void poll()
-    return () => {
-      live = false
-      controller.abort()
-      clearTimeout(timer)
-    }
-  }, [refresh])
-  const running = active(status)
+  const { session } = useAuth()
+  const admin = session?.user?.role === 'admin'
+  const { task, state } = useQueuedCollectionTask(etfQueuedTask, session, onCollected)
+  const { error, historyUnavailable, busy, uncertain, retryExhausted } = state
+  const status = etfQueuedDisplay(state)
+  const running = etfQueuedActive(status)
   const manualActive = ['queued', 'running', 'cancelling'].includes(status?.manual?.status ?? '')
   const cancelling = status?.manual?.status === 'cancelling'
-  async function run() {
-    if (!admin || lock.current || running || !status?.configured) return
-    lock.current = true
-    mutationVersion.current++
-    setBusy('run')
-    setError('')
-    if (!requestId.current) retryChoice.current = retryExhausted && !!status.retry_exhausted_count
-    requestId.current ??= Array.from(crypto.getRandomValues(new Uint8Array(16)), (byte) =>
-      byte.toString(16).padStart(2, '0'),
-    ).join('')
-    try {
-      const result = await runCollection(requestId.current, retryChoice.current)
-      if (!mounted.current) return
-      requestId.current = null
-      setUncertain(false)
-      setRetryExhausted(false)
-      previous.current = withManualRun(previous.current ?? { status: 'configured' }, result)
-      setStatus(previous.current)
-      setRefresh((n) => n + 1)
-    } catch (e) {
-      if (mounted.current) {
-        setUncertain(true)
-        setError(
-          `${e instanceof Error ? collectionErrorMessage(e.message) : '请求失败'} 可重试同一请求，避免重复采集。`,
-        )
-        setRefresh((n) => n + 1)
-      }
-    } finally {
-      lock.current = false
-      if (mounted.current) setBusy('')
-    }
-  }
-  async function cancel() {
-    const manual = status?.manual
-    if (!admin || lock.current || !manual || !manualActive || cancelling) return
-    lock.current = true
-    mutationVersion.current++
-    setBusy('cancel')
-    setError('')
-    try {
-      const result = await cancelCollection(manual.id)
-      if (!mounted.current) return
-      previous.current = withManualRun(previous.current ?? { status: 'configured' }, result)
-      setStatus(previous.current)
-    } catch (e) {
-      if (mounted.current)
-        setError(
-          `${e instanceof Error ? collectionErrorMessage(e.message) : '取消请求失败'} 取消结果待确认，将继续查询状态；可重试取消同一任务。`,
-        )
-    } finally {
-      lock.current = false
-      if (mounted.current) {
-        setBusy('')
-        setRefresh((n) => n + 1)
-      }
-    }
-  }
+  const run = () => startETFQueuedTask(task, admin)
+  const cancel = () => cancelETFQueuedTask(task, admin)
   const progress = status?.progress
   const recent: ETFCollectionRun[] =
     status?.recent_runs ??
@@ -198,7 +75,7 @@ export function ETFCollectionPanel({ onCollected }: { onCollected: () => void })
                   type="checkbox"
                   checked={retryExhausted}
                   disabled={!!busy || running || uncertain}
-                  onChange={(e) => setRetryExhausted(e.target.checked)}
+                  onChange={(e) => task.patch({ retryExhausted: e.target.checked })}
                 />
                 重新尝试当前目标日已耗尽重试的数据（{status.retry_exhausted_count}项）
               </label>
@@ -208,7 +85,9 @@ export function ETFCollectionPanel({ onCollected }: { onCollected: () => void })
             <PageHeaderActions>
               <button
                 className="button button-primary"
-                disabled={!!busy || (!manualActive && (running || !status?.configured))}
+                disabled={
+                  !!busy || !state.status || (!manualActive && (running || !status?.configured))
+                }
                 onClick={() => void (manualActive ? cancel() : run())}
               >
                 {manualActive

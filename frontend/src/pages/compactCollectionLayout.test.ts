@@ -22,10 +22,7 @@ describe('compact collection controls replace obsolete footer cards', () => {
       expect(text).toContain('取消采集')
       expect(text).toContain('busy')
     }
-    expect(source('components/MarketCollectionPanel')).toContain('lock.current')
-    expect(source('components/MarketCollectionPanel')).toContain(
-      'requestId.current ??= crypto.randomUUID()',
-    )
+    expect(source('components/MarketCollectionPanel')).toContain('useQueuedCollectionTask(')
   })
   it('removes the redundant growth comparison description', () => {
     expect(source('pages/GrowthDividendPage')).not.toContain(

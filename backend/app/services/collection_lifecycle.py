@@ -7,7 +7,8 @@ releasing it. In particular, do not move release outside a decorated collector.
 """
 
 import re
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -41,6 +42,21 @@ class RunLease:
             if not self._released:
                 self._lock.release()
                 self._released = True
+
+
+@contextmanager
+def hold_lease(lock: TryLock) -> Iterator[RunLease]:
+    """Context-managed lease preserving the caller's original busy exception.
+
+    Use for short or long existing with-lock paths that distinguish contention
+    exceptions themselves. Do not turn a busy acquisition into a body result.
+    """
+    lock.acquire()
+    lease = RunLease(lock)
+    try:
+        yield lease
+    finally:
+        lease.release()
 
 
 def try_lease(
