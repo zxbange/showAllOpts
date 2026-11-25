@@ -27,6 +27,10 @@ from app.services.collection_calendar import (
 )
 from app.services.collection_errors import safe_error, sanitize_error
 from app.services.collection_lifecycle import hold_lease, start_worker
+from app.services.collection_writer import WriterFailure, writer_error_code
+from app.services.etf_collection_plan import ScopedSourceGuard as _ScopedSourceGuard
+from app.services.etf_collection_plan import observation_source as _observation_source
+from app.services.etf_collection_plan import plan_manual_observations
 from app.services.etf_configuration import (
     DEFAULT_COLLECTION_TIME,
     ConfigurationFailure,
@@ -72,34 +76,6 @@ class CancellableHTTPClient:
         return result
 
 
-class _ScopedSourceGuard:
-    """One scoped source's release window and rate limit, confined to this run."""
-    def __init__(self):
-        self.rate_limited = False
-        self.available_from = None
-
-    def skip_reason(self, day):
-        if self.rate_limited:
-            return 'rate_limit'
-        if self.available_from is not None and day < self.available_from:
-            return 'archive'
-        return None
-
-    def observe(self, error_details, available_from):
-        if error_details.get('http_status') == 429:
-            self.rate_limited = True
-        if available_from is not None and (self.available_from is None or available_from > self.available_from):
-            self.available_from = available_from
-
-
-def _observation_source(kind, code, day, today, guards):
-    if kind == 'shares' and code.endswith('.XSHG'):
-        return 'sse_scoped_shares', {'scoped_sse': True}, guards['sse_scoped_shares']
-    if kind == 'prices' and code.endswith('.XSHE') and day < today:
-        return 'szse_dated_close', {'dated_szse_prices': True}, guards['szse_dated_close']
-    return 'exchanges', {}, None
-
-
 def _observation_error(exc, day, guard):
     from app.services.etf_exchange import SZSEPriceArchiveRequired
     available_from = exc.available_from if isinstance(exc, SZSEPriceArchiveRequired) else None
@@ -108,30 +84,6 @@ def _observation_error(exc, day, guard):
     if guard is not None:
         guard.observe(details, available_from)
     return details
-
-
-class WriterFailure(RuntimeError):
-    """Safe public classification only; original driver message is never retained."""
-    def __init__(self, code):
-        self.code = code
-        super().__init__(code)
-
-
-def writer_error_code(exc):
-    original = getattr(exc, 'orig', exc)
-    args = getattr(original, 'args', ())
-    number = getattr(original, 'database_error_number', None)
-    if number is None:
-        number = args[0] if args and isinstance(args[0], int) else None
-    if number in {1044, 1045, 1142, 1143, 1227, 1370}:
-        return 'writer_permission_denied'
-    if number == 1146:
-        return 'writer_table_missing'
-    if number == 1049:
-        return 'writer_database_missing'
-    if number in {2002, 2003, 2005, 2006, 2013, 2055}:
-        return 'writer_connection_failed'
-    return 'writer_write_failed'
 
 
 # A writer retry is only safe at checkout, before any schema check,
@@ -884,48 +836,11 @@ class ETFCollection:
 
     @staticmethod
     def _manual_days(db, calendar, end, funds):
-        expected = {(kind, code) for kind in ('shares', 'prices') for code in funds}
-        observed = {}
-        for row in db.execute("SELECT kind,code,day,status FROM observations WHERE day<=?",
-                              (end.isoformat(),)):
-            key = row['kind'], row['code']
-            if key in expected:
-                try:
-                    day = date.fromisoformat(row['day'])
-                except (TypeError, ValueError):
-                    continue
-                observed.setdefault(day, {})[key] = row['status']
-        completed = sorted(day for day, rows in observed.items()
-                           if all(rows.get(key) == 'complete' for key in expected))
+        rows = db.execute("SELECT kind,code,day,status FROM observations WHERE day<=?",
+                          (end.isoformat(),))
         has_floor = db.execute(f"SELECT value FROM metadata WHERE {_MANUAL_GAP_KEYS} AND value<=? "
                                "ORDER BY value LIMIT 1", (end.isoformat(),)).fetchone()
-        candidates = [completed[-1] if completed else end]
-        if completed:
-            # A later fully covered scheduled date does not erase a known
-            # earlier gap, but old blocked history alone does not open a range.
-            candidates.extend(day for day, rows in observed.items() if completed[0] < day
-                              and any(value in ('pending', 'manual_only', 'retry_exhausted')
-                                      for value in rows.values()))
-        if has_floor:
-            candidates.append(date.fromisoformat(has_floor[0]))
-        available = getattr(calendar, 'days', ())
-        if not completed and not has_floor:
-            # Bootstrap checks only the latest three verified sessions,
-            # including sessions that never ran. The first known date has no
-            # proven predecessor and cannot be written as a repair target.
-            recent = [day for day in available[1:] if day <= end][-3:]
-            if recent:
-                candidates.append(recent[0])
-        start = min(candidates)
-        if available:
-            start = max(start, available[0])
-        scope = (end,) if start >= end else tuple(dict.fromkeys(calendar.range(start, end)))
-        # A new target without reliable coverage never walks unbounded prior history.
-        required = {(kind, code, day) for day in scope if day < end
-                    and (day != scope[0] or day not in completed) for kind, code in expected}
-        unchecked = {(kind, code, day) for kind, code, day in required
-                     if observed.get(day, {}).get((kind, code)) != 'complete'}
-        return scope, required, unchecked
+        return plan_manual_observations(rows, has_floor[0] if has_floor else None, calendar, end, funds)
 
     def _repair_history(self, db, c, client, config, writer, calendar, end, funds, progress, check_cancelled, today, guards):
         scope, required, unchecked = self._manual_days(db, calendar, end, funds)
