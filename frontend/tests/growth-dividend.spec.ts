@@ -561,3 +561,24 @@ test('database sync uses the global cancellation entry, not public collection', 
   await expect(page.getByText('数据库同步中，请到顶部“数据同步”查看或取消。')).toBeVisible()
   expect(mutations).toBe(0)
 })
+
+test('a fast terminal attempt without a run ID releases the start button', async ({ page }) => {
+  let current = { ...status }
+  let starts = 0
+  await page.route('**/api/v1/growth-dividend/**', (route) => {
+    if (route.request().url().endsWith('/refresh')) {
+      starts++
+      current = { ...status, last_attempt_at: '2026-11-10T18:01:00+08:00' }
+      return route.fulfill({ json: { started: true } })
+    }
+    return route.fulfill({
+      json: route.request().url().endsWith('/status') ? current : { ...history, status: current },
+    })
+  })
+  await page.goto('/growth-dividend')
+  const update = page.getByRole('button', { name: '更新数据', exact: true })
+  await update.click()
+  await expect(update).toBeEnabled()
+  await expect(page.getByRole('button', { name: '取消采集', exact: true })).toHaveCount(0)
+  expect(starts).toBe(1)
+})

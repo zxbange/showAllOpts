@@ -1,31 +1,51 @@
-from app.services.collection_outcomes import record_task
-from app.services.collection_errors import safe_error
-from app.services.collection_calendar import automatic_collection_allowed, manual_failure_isolated
-from app.core.history_sync import mark_sync_owner, clear_sync_owner, database_syncing, SYNC_MESSAGE
-from app.services.system_configuration import task_config, latest_task_slot
 """Append-only valuation history, durable recovery and an independent 18:30 schedule."""
-from app.services.system_runtime import source_client
-from app.services.collection_notifications import notify_collection
-from contextlib import contextmanager
-from datetime import date, datetime, time, timedelta, timezone
-from decimal import Decimal, localcontext
+
 import hashlib
 import json
 import logging
 import sqlite3
 import threading
-from time import monotonic
 import uuid
+from contextlib import contextmanager
+from datetime import date, datetime, time, timedelta, timezone
+from decimal import Decimal, localcontext
+from functools import partial
+from time import monotonic
 from zoneinfo import ZoneInfo
 
 import httpx
 import portalocker
 
 from app.core.diagnostics import diagnostic_details
-from app.services.valuation_ruler_model import (START, INDEX, METHOD, PUBLIC_SOURCE, JQ_SOURCE,
-    ValuationError, ValuationConflict, validate_day, valid_code)
-from app.services.valuation_ruler_source import SourceError, CALENDAR_SOURCE
+from app.core.history_sync import SYNC_MESSAGE, clear_sync_owner, database_syncing, mark_sync_owner
+from app.services.collection_calendar import automatic_collection_allowed, manual_failure_isolated
+from app.services.collection_errors import safe_error
+from app.services.collection_lifecycle import (
+    RunContext,
+    RunRequest,
+    cancellation_marker,
+    is_running,
+    request_cancel,
+    start_worker,
+    try_lease,
+)
+from app.services.collection_notifications import notify_collection
+from app.services.collection_outcomes import record_task
 from app.services.index_valuation_source import EastmoneySource
+from app.services.system_configuration import latest_task_slot, task_config
+from app.services.system_runtime import source_client
+from app.services.valuation_ruler_model import (
+    INDEX,
+    JQ_SOURCE,
+    METHOD,
+    PUBLIC_SOURCE,
+    START,
+    ValuationConflict,
+    ValuationError,
+    valid_code,
+    validate_day,
+)
+from app.services.valuation_ruler_source import CALENDAR_SOURCE, SourceError
 
 LOG=logging.getLogger(__name__)
 CHINA=ZoneInfo('Asia/Shanghai')
@@ -142,28 +162,18 @@ class ValuationRuler:
     def acquire(self, *, for_history=False):
         lock=portalocker.Lock(str(self.root/'collection.lock'),timeout=0,
             flags=portalocker.LOCK_EX|portalocker.LOCK_NB)
-        try:lock.acquire()
-        except portalocker.exceptions.LockException:return None
-        try:(mark_sync_owner if for_history else clear_sync_owner)(self)
-        except BaseException:
-            lock.release()
-            raise
-        return lock
+        return try_lease(lock, portalocker.exceptions.LockException,
+                         on_acquired=lambda: (mark_sync_owner if for_history else clear_sync_owner)(self))
 
     def running(self):
-        lock=self.acquire()
-        if lock is None:return True
-        lock.release();return False
+        return is_running(self.acquire)
 
     def cancel(self):
         busy=self.running()
         if not busy or database_syncing(self,busy):return False
         state=self.read_state()
         if not state.get('active'):return False
-        identifier=state.get('run_id','')
-        if len(identifier)!=32 or any(c not in '0123456789abcdef' for c in identifier):return False
-        (self.root/('cancel-'+identifier)).touch()
-        return True
+        return request_cancel(self.root, state.get('run_id'))
 
     def save_calendar(self,db,days,source):
         days=list(days)
@@ -324,6 +334,7 @@ class ValuationRuler:
             lock.release()
             return False
         state=None
+        initialized=False
         try:
             with self.db() as db:
                 db.execute('BEGIN IMMEDIATE')
@@ -337,31 +348,47 @@ class ValuationRuler:
                     comparison_error=None,comparison_attempted_date=None,target_date=None,updated_at=moment.isoformat())
                 db.execute('UPDATE state SET payload=? WHERE id=1',(json.dumps(state),))
                 if slot:db.execute('INSERT INTO slots VALUES (?,?) ON CONFLICT(slot) DO UPDATE SET outcome=excluded.outcome',(slot,'running'))
+            initialized=True
             if background:
-                self.worker=threading.Thread(target=self._execute,args=(runner,lock,state,moment,slot),daemon=True,name='valuation-ruler-'+kind)
-                self.worker.start()
-            else:self._execute(runner,lock,state,moment,slot)
+                start_worker(partial(self._execute, runner, lock, state, moment, slot),
+                             name='valuation-ruler-'+kind,
+                             assign=lambda worker: setattr(self, 'worker', worker),
+                             factory=threading.Thread)
         except BaseException as exc:
             LOG.error('Valuation launch failed %s',diagnostic_details(exc))
             try:
-                if state is not None:
+                if initialized:
                     state.update(active=False,phase='failed',error='无法启动估值标尺任务，请重试。')
                     with self.db() as db:
                         self.write_state(state,db)
                         if slot:db.execute('UPDATE slots SET outcome=? WHERE slot=?',('failed',slot))
             finally:lock.release()
             raise
+        if not background:
+            # The collector owns the admitted transaction and terminal state.
+            # Do not rerun launch cleanup after it has released the lease.
+            try:
+                self._execute(runner,lock,state,moment,slot)
+            finally:
+                lock.release()
         return state['run_id'] if return_run_id else True
 
     @notify_collection('valuation_ruler')
     def _execute(self,runner,lock,state,moment,slot):
-        marker=self.root/('cancel-'+state['run_id']);started=monotonic()
+        marker = cancellation_marker(self.root, state['run_id'])
+        assert marker is not None
+        context = RunContext(
+            RunRequest(moment, slot, 'scheduled' if slot is not None else 'manual'), marker,
+            self.stop_event, automatic_collection_allowed, manual_failure_isolated,
+            CollectionCancelled, monotonic,
+        )
         isolate = slot is None and manual_failure_isolated(moment)
         old_failures = None
         state.pop('_outcome_error', None)
         def check_cancel():
-            if (slot is not None and not automatic_collection_allowed(moment + timedelta(seconds=monotonic()-started))) or self.stop_event.is_set() or marker.exists():raise CollectionCancelled()
-            if monotonic()-started>MAX_RUN_SECONDS:raise SourceError('budget_exceeded',common=True)
+            context.check_cancel()
+            if context.elapsed > MAX_RUN_SECONDS:
+                raise SourceError('budget_exceeded', common=True)
         try:
             with self.db() as db:
                 old_failures = {row[0] for row in db.execute('SELECT trade_date FROM failures')}
@@ -379,7 +406,7 @@ class ValuationRuler:
                            state.get('phase'), '估值标尺更新失败，已保存数据保留。')
             state.update(phase='failed',error=str(exc) if isinstance(exc,ValuationError) else message)
         finally:
-            isolate = isolate or (slot is None and manual_failure_isolated(moment + timedelta(seconds=monotonic()-started)))
+            isolate = isolate or context.isolate_manual_failure(include_requested=False)
             try:
                 state['active']=False
                 if isolate and old_failures is not None:
@@ -387,7 +414,7 @@ class ValuationRuler:
                         for day in {row[0] for row in db.execute('SELECT trade_date FROM failures')} - old_failures:
                             db.execute('DELETE FROM failures WHERE trade_date=?', (day,))
                     state['manual_failure_isolated'] = state['phase'] == 'failed'
-                state['retry_after']=(moment+timedelta(minutes=15, seconds=monotonic()-started)).isoformat() if state['phase']=='failed' and not isolate else None
+                state['retry_after']=(context.effective_moment + timedelta(minutes=15)).isoformat() if state['phase']=='failed' and not isolate else None
                 with self.db() as db:
                     self.write_state(state,db)
                     if slot:db.execute('UPDATE slots SET outcome=? WHERE slot=?',(state['phase'],slot))
@@ -397,8 +424,10 @@ class ValuationRuler:
                 state['_outcome_error'] = safe_error(exc, stage='cache_publish')
                 raise
             finally:
-                record_task(self.settings, 'valuation_ruler', outcome=state['phase'], scheduled=slot is not None, run_key=state['run_id'], error_details=(state.get('_outcome_error') or safe_error(stage='validate', code='invalid_data')) if state['phase'] == 'failed' else None)
-                lock.release()
+                try:
+                    record_task(self.settings, 'valuation_ruler', outcome=state['phase'], scheduled=slot is not None, run_key=state['run_id'], error_details=(state.get('_outcome_error') or safe_error(stage='validate', code='invalid_data')) if state['phase'] == 'failed' else None)
+                finally:
+                    lock.release()
 
     def refresh(self,background=True,*,moment=None,slot=None,cutoff=None,return_run_id=False):
         from app.services.collection_calendar import latest_due_slot, trading_day

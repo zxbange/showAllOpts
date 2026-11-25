@@ -2,7 +2,9 @@ import { PageHeaderActions } from '../components/PageHeaderActions'
 import { useAuth } from '../components/AccountAccess'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { RefreshCw, Download, Square, TrendingUp, TrendingDown, Gauge, Layers3 } from 'lucide-react'
-import { getMarginHistory, getMarginStatus, updateMargin } from '../api/client'
+import { getMarginHistory } from '../api/client'
+import { useCollectionTask } from '../hooks/useCollectionTask'
+import { marginCollectionTask, marginCollectionErrorText } from '../lib/marginCollectionTask'
 import { PageHeader } from '../components/PageHeader'
 import { StatCard } from '../components/StatCard'
 import { MarginChart } from '../components/MarginChart'
@@ -13,33 +15,37 @@ import '../styles/margin.css'
 const percent = (value: number | null | undefined) => (value == null ? '—' : value.toFixed(2) + '%')
 const pp = (value: number | null | undefined) =>
   value == null ? '—' : (value > 0 ? '+' : '') + value.toFixed(2) + ' 个百分点'
-const message = (error: unknown) =>
-  error instanceof Error && error.message !== 'Failed to fetch'
-    ? error.message
-    : '暂时无法连接数据服务，请稍后重试。'
-
 export function MarginPage() {
-  const admin = useAuth().session?.user?.role === 'admin'
+  const { session } = useAuth()
+  const admin = session?.user?.role === 'admin'
+  const {
+    status,
+    statusError: pollError,
+    actionError,
+    pending,
+    accepted,
+    uncertain,
+    stopping,
+    historyRevision,
+    act: startCollection,
+    cancel,
+    reconcile,
+  } = useCollectionTask(marginCollectionTask, session, admin)
   const [data, setData] = useState<MarginHistory | null>(null)
-  const [status, setStatus] = useState<MarginStatus | null>(null)
-  const currentStatus = useRef<MarginStatus | null>(null)
   const historyProgress = useRef(0)
   const historyRefreshAt = useRef(0)
   const historyLoading = useRef(false)
+  const historyStatus = useRef<MarginStatus | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
-  const [pollError, setPollError] = useState<string | null>(null)
-  const [busy, setBusy] = useState(false)
-  const [stopping, setStopping] = useState(false)
   const [revision, setRevision] = useState(0)
   const [chartDays, setChartDays] = useState(0)
   const [chartReset, setChartReset] = useState(0)
   const reload = useCallback(() => setRevision((value) => value + 1), [])
-  const saveStatus = useCallback((next: MarginStatus) => {
-    currentStatus.current = next
-    setStatus(next)
-    if (!next.running) setStopping(false)
-  }, [])
+  const reloadDisplay = () => {
+    reload()
+    void reconcile()
+  }
 
   useEffect(() => {
     const controller = new AbortController()
@@ -51,11 +57,11 @@ export function MarginPage() {
       .then((next) => {
         if (controller.signal.aborted) return
         historyProgress.current = next.status.processed
+        historyStatus.current = next.status
         setData(next)
-        saveStatus(next.status)
       })
       .catch((reason: unknown) => {
-        if (!controller.signal.aborted) setError(message(reason))
+        if (!controller.signal.aborted) setError(marginCollectionErrorText(reason))
       })
       .finally(() => {
         if (!controller.signal.aborted) {
@@ -67,64 +73,47 @@ export function MarginPage() {
       controller.abort()
       historyLoading.current = false
     }
-  }, [revision, saveStatus])
+  }, [revision, historyRevision])
 
+  // History and task status are separate requests; history may never overwrite
+  // the latest command/status observation. Preserve the existing progress throttle.
   useEffect(() => {
-    const controller = new AbortController()
-    let timer: number
-    async function poll() {
-      try {
-        const next = await getMarginStatus(controller.signal)
-        if (controller.signal.aborted) return
-        setPollError(null)
-        const previous = currentStatus.current
-        saveStatus(next)
-        const completed =
-          previous &&
-          ((previous.running && !next.running) || previous.last_success_at !== next.last_success_at)
-        const progressed =
-          next.running &&
-          next.processed > historyProgress.current &&
-          (historyProgress.current === 0 || Date.now() - historyRefreshAt.current >= 15000)
-        if (!historyLoading.current && (completed || progressed)) {
-          reload()
-        }
-      } catch (reason) {
-        if (!controller.signal.aborted) setPollError(message(reason))
-      } finally {
-        if (!controller.signal.aborted)
-          timer = window.setTimeout(poll, currentStatus.current?.running ? 2000 : 30000)
-      }
-    }
-    timer = window.setTimeout(poll, 2000)
-    return () => {
-      controller.abort()
-      window.clearTimeout(timer)
-    }
-  }, [revision, reload, saveStatus])
+    if (!status || historyLoading.current) return
+    const shown = historyStatus.current
+    const elapsed = Date.now() - historyRefreshAt.current
+    const progressed =
+      status.running &&
+      status.processed > historyProgress.current &&
+      (historyProgress.current === 0 || elapsed >= 15000)
+    // A status response can arrive before initial history. Recheck on the
+    // next poll if that history captured an older terminal/publication state.
+    const completedSinceHistory =
+      shown &&
+      elapsed >= 15000 &&
+      !status.running &&
+      (shown.running ||
+        status.last_success_at !== shown.last_success_at ||
+        status.last_attempt_at !== shown.last_attempt_at)
+    if (progressed || completedSinceHistory) reload()
+  }, [status, reload])
 
-  async function act(action: 'refresh' | 'cancel') {
-    setBusy(true)
-    setError(null)
-    setPollError(null)
-    try {
-      const result = await updateMargin(action)
-      if (action === 'cancel' && result.cancelled) setStopping(true)
-      saveStatus(await getMarginStatus())
-      reload()
-    } catch (reason) {
-      setError(message(reason))
-    } finally {
-      setBusy(false)
-    }
+  function act(action: 'refresh' | 'cancel') {
+    return action === 'refresh' ? startCollection() : cancel()
   }
 
   const latest = data?.latest
   const summary = data?.summary
   const running = status?.running ?? false
   const cancelling = stopping || status?.cancelling
+  const busy = pending || (!running && (accepted || stopping))
   const progress = status?.percent == null ? null : Math.max(0, Math.min(100, status.percent))
-  const shownError = error || pollError || (!running ? status?.error : null)
+  const shownError =
+    (actionError && uncertain
+      ? actionError + ' 操作结果待确认，请重新加载后再操作。'
+      : actionError) ||
+    error ||
+    pollError ||
+    (!running ? status?.error : null)
   return (
     <div className="page-enter margin-page">
       <PageHeader dataUpdatedAt={latest?.updated_at}>
@@ -138,7 +127,7 @@ export function MarginPage() {
           <button
             className="button button-quiet icon-button"
             aria-label="刷新两融展示数据"
-            onClick={reload}
+            onClick={reloadDisplay}
             disabled={loading}
           >
             <RefreshCw size={16} className={loading ? 'spin' : ''} />
@@ -273,7 +262,7 @@ export function MarginPage() {
             <button
               className="button button-quiet"
               onClick={() => void act('cancel')}
-              disabled={busy || cancelling || !admin}
+              disabled={busy || cancelling || !admin || uncertain || !!pollError}
             >
               <Square size={15} />
               {cancelling ? '正在停止…' : '取消采集'}
@@ -282,7 +271,7 @@ export function MarginPage() {
             <button
               className="button button-primary"
               onClick={() => void act('refresh')}
-              disabled={busy || loading || !admin}
+              disabled={busy || loading || !admin || uncertain || !status || !!pollError}
             >
               <Download size={16} />
               {busy ? '正在启动…' : '更新数据'}
