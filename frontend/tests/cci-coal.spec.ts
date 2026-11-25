@@ -321,3 +321,38 @@ test('commodity toolbar switches its command with the active tab without stale b
   expect(commands[2]).toContain('/a00/')
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
 })
+
+test('an in-flight A00 command stays locked across a commodity tab switch', async ({ page }) => {
+  const commands: string[] = []
+  let finishA00!: () => void
+  const pendingA00 = new Promise<void>((resolve) => {
+    finishA00 = resolve
+  })
+  await page.route('**/api/v1/commodities/**', async (route) => {
+    const path = new URL(route.request().url()).pathname
+    if (route.request().method() === 'POST') {
+      commands.push(path)
+      if (path.includes('/a00/')) await pendingA00
+      return route.fulfill({ json: { started: true } })
+    }
+    return route.fulfill({ json: { rows: [], status: { running: false, automatic: true } } })
+  })
+  await page.goto('/commodities')
+  const actions = page.locator('.page-header-actions')
+  const update = actions.getByRole('button', { name: '更新数据', exact: true })
+  await update.click()
+  await expect.poll(() => commands.length).toBe(1)
+  try {
+    await page.getByRole('link', { name: 'CCI动力煤', exact: true }).click()
+    await expect(update).toBeEnabled()
+    await update.click()
+    await expect(update).toBeEnabled()
+    await page.goBack()
+    await expect(actions.getByRole('button', { name: '采集中', exact: true })).toBeDisabled()
+    expect(commands).toEqual(['/api/v1/commodities/a00/refresh', '/api/v1/commodities/cci/refresh'])
+  } finally {
+    finishA00()
+  }
+  await expect(update).toBeEnabled()
+  expect(commands).toHaveLength(2)
+})

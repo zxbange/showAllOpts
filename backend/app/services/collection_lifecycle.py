@@ -104,7 +104,7 @@ class RunContext:
     stop_signal: StopSignal
     automatic_allowed: Callable[[datetime], bool]
     manual_isolated: Callable[[datetime], bool]
-    cancelled_error: type[Exception]
+    cancelled_error: Callable[[], Exception]
     clock: Callable[[], float] = field(default=monotonic, repr=False)
     started: float = field(init=False)
 
@@ -137,17 +137,22 @@ class RunContext:
 
 
 def start_worker(
-    callback: Callable[[], None],
+    callback: Callable[..., None],
     *,
     name: str,
     assign: Callable[[Thread], None],
     factory: Callable[..., Thread] = Thread,
+    args: tuple[object, ...] | None = None,
 ) -> None:
     """Assign before start, preserving access to the thread even on failure.
 
     The admitting caller still owns cleanup if construction or start raises.
     After a successful start, the collector owns cleanup.
     """
-    worker = factory(target=callback, name=name, daemon=True)
+    worker = (
+        factory(target=callback, name=name, daemon=True)
+        if args is None
+        else factory(target=callback, args=args, name=name, daemon=True)
+    )
     assign(worker)
     worker.start()

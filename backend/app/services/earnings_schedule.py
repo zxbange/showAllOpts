@@ -1,18 +1,21 @@
-from app.services.collection_calendar import next_automatic_collection, automatic_collection_allowed
 """Durable daily earnings queue: one shared bank/non-bank run, then cash cows.
 
 Manual and scheduled collections use the same execution lease. The coordinator
 never holds that lease and never kills a live worker during a possible commit.
 """
-from contextlib import contextmanager
-from datetime import datetime, timedelta, timezone
+
 import json
 import logging
 import sqlite3
 import threading
+from contextlib import contextmanager
+from datetime import datetime, timedelta, timezone
 
 import portalocker
+
 from app.core.diagnostics import diagnostic_details
+from app.services.collection_calendar import automatic_collection_allowed, next_automatic_collection
+from app.services.collection_lifecycle import RunLease, try_lease
 from app.services.system_configuration import task_config
 
 CHINA = timezone(timedelta(hours=8))
@@ -64,16 +67,15 @@ def acquire_execution(settings, acquire_task):
     root.mkdir(parents=True, exist_ok=True)
     group = portalocker.Lock(str(root / 'earnings-execution.lock'), timeout=0,
                              flags=portalocker.LOCK_EX | portalocker.LOCK_NB)
-    try:
-        group.acquire()
-    except portalocker.exceptions.LockException:
+    group = try_lease(group, portalocker.exceptions.LockException)
+    if group is None:
         return None
     try:
         task = acquire_task()
         if task is None:
             group.release()
             return None
-        return ExecutionLease(group, task)
+        return RunLease(ExecutionLease(group, task))
     except BaseException:
         group.release()
         raise

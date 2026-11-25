@@ -10,7 +10,8 @@ import {
   AriaComponent,
 } from 'echarts/components'
 import { CanvasRenderer } from 'echarts/renderers'
-import { apiFetch } from '../api/http'
+import { createCommodityCollectionTask } from '../lib/commodityCollectionTask'
+import { useCollectionTask } from '../hooks/useCollectionTask'
 import { useAuth } from '../components/AccountAccess'
 registerChartComponents([
   LineChart,
@@ -132,58 +133,27 @@ function CoalChart({ rows }: { rows: Quote[] }) {
     <div className="commodity-chart" ref={root} role="img" aria-label="CCI动力煤三档价格走势" />
   )
 }
+const cciCollectionTask = createCommodityCollectionTask<Data>(
+  'cci',
+  'CCI报价暂时无法读取',
+  'CCI更新未启动，请稍后重试',
+)
+
 export function CCICoalPage() {
-  const admin = useAuth().session?.user?.role === 'admin'
-  const [data, setData] = useState<Data | null>(null)
-  const [error, setError] = useState('')
-  const [busy, setBusy] = useState(false)
-  const [revision, setRevision] = useState(0)
+  const { session } = useAuth()
+  const admin = session?.user?.role === 'admin'
+  const {
+    status: data,
+    statusError,
+    actionError,
+    pending,
+    accepted,
+    uncertain,
+    act: refresh,
+  } = useCollectionTask(cciCollectionTask, session, admin)
+  const busy = pending || accepted || uncertain
+  const error = actionError || statusError
   const [grade, setGrade] = useState('all')
-  const guard = useRef(false)
-  const mounted = useRef(true)
-  useEffect(() => {
-    mounted.current = true
-    const controller = new AbortController()
-    let timer: ReturnType<typeof setTimeout>
-    async function poll() {
-      try {
-        const r = await apiFetch('/api/v1/commodities/cci', {
-          signal: controller.signal,
-          cache: 'no-store',
-        })
-        if (!r.ok) throw Error('CCI报价暂时无法读取')
-        const next = await r.json()
-        if (!controller.signal.aborted) {
-          setData(next)
-          setError('')
-          if (next.status.running) timer = setTimeout(poll, 2000)
-        }
-      } catch (e) {
-        if (!controller.signal.aborted) setError((e as Error).message)
-      }
-    }
-    void poll()
-    return () => {
-      mounted.current = false
-      controller.abort()
-      clearTimeout(timer)
-    }
-  }, [revision])
-  async function refresh() {
-    if (guard.current) return
-    guard.current = true
-    setBusy(true)
-    try {
-      const r = await apiFetch('/api/v1/commodities/cci/refresh', { method: 'POST' })
-      if (!r.ok) throw Error('CCI更新未启动，请稍后重试')
-      if (mounted.current) setRevision((v) => v + 1)
-    } catch (e) {
-      if (mounted.current) setError((e as Error).message)
-    } finally {
-      guard.current = false
-      if (mounted.current) setBusy(false)
-    }
-  }
   return (
     <div className="commodity-page">
       <section className="commodity-summary">
@@ -210,7 +180,7 @@ export function CCICoalPage() {
             <PageHeaderActions>
               <button
                 className="button button-primary"
-                disabled={busy || data?.status.running}
+                disabled={busy || data?.status.running || !data || !!statusError}
                 onClick={() => void refresh()}
               >
                 {busy || data?.status.running ? '采集中' : '更新数据'}

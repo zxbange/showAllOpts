@@ -1,20 +1,28 @@
-from app.services.collection_errors import safe_error as public_error
-from app.services.collection_outcomes import record_task
-from app.services.collection_calendar import automatic_collection_allowed, latest_due_slot, manual_failure_isolated
-from app.services.system_configuration import task_config
-from app.services.holdings_calendar import trading_day
 """CCI has its own model, history and daily 21:00 scheduling ledger."""
-from app.services.system_runtime import source_client
-from app.services.collection_notifications import notify_collection
-from datetime import date, datetime, timedelta
-from pathlib import Path
+
 import json
 import logging
 import threading
+from datetime import date, datetime, timedelta
+from pathlib import Path
 from time import monotonic
+
 import httpx
-from app.services.commodities import Commodities, CHINA, now
-from app.services.cci_source import START, GRADES, SOURCE_URL, validate_rows, fetch_rows, safe_error
+
+from app.services.cci_source import GRADES, SOURCE_URL, START, fetch_rows, safe_error, validate_rows
+from app.services.collection_calendar import (
+    automatic_collection_allowed,
+    latest_due_slot,
+    manual_failure_isolated,
+)
+from app.services.collection_errors import safe_error as public_error
+from app.services.collection_lifecycle import start_worker
+from app.services.collection_notifications import notify_collection
+from app.services.collection_outcomes import record_task
+from app.services.commodities import CHINA, Commodities, now
+from app.services.holdings_calendar import trading_day
+from app.services.system_configuration import task_config
+from app.services.system_runtime import source_client
 
 LOG = logging.getLogger(__name__)
 SEED = Path(__file__).resolve().parents[1] / 'data/cci_coal.json'
@@ -140,8 +148,8 @@ class CCICoal(Commodities):
             self.state(stage='正在更新数据并补齐缺失报价', outcome='running', error=None, trigger='scheduled',
                        targetDate=slot.date().isoformat(), slot=slot.isoformat())
             LOG.info('CCI collection start trigger=scheduled slot=%s', slot.isoformat())
-            self.thread = threading.Thread(target=self.collect, args=(lock, slot), daemon=True, name='cci-coal')
-            self.thread.start()
+            start_worker(self.collect, args=(lock, slot), name='cci-coal',
+                         assign=lambda worker: setattr(self, 'thread', worker), factory=threading.Thread)
             launched = True
             return True
         finally:

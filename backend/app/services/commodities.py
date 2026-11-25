@@ -1,28 +1,52 @@
-from app.services.collection_errors import safe_error as public_error
-from app.services.collection_outcomes import record_task
-from app.services.collection_calendar import automatic_collection_allowed, latest_due_slot, manual_failure_isolated
-from app.services.holdings_calendar import trading_day
-from app.services.system_configuration import task_config, latest_task_slot, pin_configuration
-from contextvars import copy_context
 """Independent persisted quotes. Daily Shanghai scheduling and manual collection share a cross-process lock."""
-from app.services.system_runtime import source_client
-from app.services.collection_notifications import notify_collection
-from contextlib import contextmanager
-from pathlib import Path
-from datetime import date, datetime, timezone, timedelta
-from time import monotonic
-from zoneinfo import ZoneInfo
-import logging
-from app.core.diagnostics import diagnostic_details
+
 import json
+import logging
 import sqlite3
 import threading
+from contextlib import contextmanager
+from contextvars import copy_context
+from datetime import date, datetime, timedelta, timezone
+from pathlib import Path
+from time import monotonic
+from zoneinfo import ZoneInfo
+
 import httpx
 import portalocker
-from app.services.commodity_source import (HOME, CATALOG, START, fetch, home_date_reference,
-    public_report_date, parse_home, QuoteError, QuoteIncomplete, explicit_home_date,
-    recovery_links, parse_recovery, diagnostic_reason, ArticleNotApplicable,
-    ALU_HOME, CNMN_CATALOG, cnmn_daily_links, parse_cnmn_daily)
+
+from app.core.diagnostics import diagnostic_details
+from app.services.collection_calendar import (
+    automatic_collection_allowed,
+    latest_due_slot,
+    manual_failure_isolated,
+)
+from app.services.collection_errors import safe_error as public_error
+from app.services.collection_lifecycle import is_running, start_worker, try_lease
+from app.services.collection_notifications import notify_collection
+from app.services.collection_outcomes import record_task
+from app.services.commodity_source import (
+    ALU_HOME,
+    CATALOG,
+    CNMN_CATALOG,
+    HOME,
+    START,
+    ArticleNotApplicable,
+    QuoteError,
+    QuoteIncomplete,
+    cnmn_daily_links,
+    diagnostic_reason,
+    explicit_home_date,
+    fetch,
+    home_date_reference,
+    parse_cnmn_daily,
+    parse_home,
+    parse_recovery,
+    public_report_date,
+    recovery_links,
+)
+from app.services.holdings_calendar import trading_day
+from app.services.system_configuration import latest_task_slot, pin_configuration, task_config
+from app.services.system_runtime import source_client
 
 LOG = logging.getLogger(__name__)
 CHINA = ZoneInfo('Asia/Shanghai')
@@ -90,8 +114,7 @@ class Commodities:
         finally:c.close()
     def lock(self):
         lock=portalocker.Lock(str(self.root/'collection.lock'),timeout=0,flags=portalocker.LOCK_EX|portalocker.LOCK_NB)
-        try:lock.acquire();return lock
-        except portalocker.exceptions.LockException:return None
+        return try_lease(lock, portalocker.exceptions.LockException)
     def status(self):
         with self.db() as db:
             state=json.loads(db.execute('SELECT payload FROM state WHERE id=1').fetchone()[0])
@@ -99,8 +122,7 @@ class Commodities:
                 pending=[dict(day=row[0],reason=row[1]) for row in db.execute('SELECT day,reason FROM failed_targets ORDER BY day LIMIT 20')]
                 count=db.execute('SELECT count(*) FROM failed_targets').fetchone()[0]
                 state.update(pendingTargets=pending, pendingCount=count)
-        lock=self.lock();running=lock is None
-        if lock:lock.release()
+        running = is_running(self.lock)
         return dict(state,running=running,automatic=task_config(self.settings, self.task_key)['enabled'],schedule='、'.join(task_config(self.settings, self.task_key)['times']))
     def state(self,**values):
         with self.db() as db:db.execute('UPDATE state SET payload=? WHERE id=1',(json.dumps(values,ensure_ascii=False),))
@@ -161,8 +183,8 @@ class Commodities:
                 if requested_at is not None:
                     return context.run(self.collect, lock, slot, requested_at=requested_at)
                 return context.run(self.collect, lock, slot)
-            self.thread=threading.Thread(target=pinned_collect,args=(lock,slot,requested_at),daemon=True,name='commodities')
-            self.thread.start()
+            start_worker(pinned_collect, args=(lock, slot, requested_at), name='commodities',
+                         assign=lambda worker: setattr(self, 'thread', worker), factory=threading.Thread)
         except BaseException:lock.release();raise
         return True
     def recovery_plan(self, today, *, persist=True):
