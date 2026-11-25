@@ -6,6 +6,7 @@
 
 - [架构与扩展约定](development/architecture.md)
 - [工程与页面规范](development/engineering.md)
+- [采集策略与执行边界](development/collection-policy-boundaries.md)
 
 ## 运行与维护
 

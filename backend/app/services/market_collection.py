@@ -14,7 +14,7 @@ import time as monotonic_time
 import uuid
 from contextlib import contextmanager
 from datetime import date, datetime, time, timedelta, timezone
-from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
+from decimal import Decimal
 from zoneinfo import ZoneInfo
 
 import httpx
@@ -23,6 +23,7 @@ from sqlalchemy import create_engine
 
 from app.core.diagnostics import diagnostic_details
 from app.repositories.market_state_schema import initialize_market_state
+from app.services import market_observation_rules as observation_rules
 from app.services.collection_calendar import (
     automatic_collection_allowed,
     latest_due_slot,
@@ -38,7 +39,14 @@ from app.services.growth_dividend_source import fetch_calendar
 from app.services.holdings_calendar import trading_day
 from app.services.market_configuration import MarketConfiguration
 from app.services.market_diagnostics import copy_source_failure, source_failure_details
+from app.services.market_gap_plan import (
+    METRIC_DONE,
+    PUBLISHED,
+    plan_market_gaps,
+    transition_market_day,
+)
 from app.services.market_methodology import JOINQUANT_HEAT_METHOD, LEGACY_SINA_HEAT_METHOD
+from app.services.market_observation_rules import SAFE_ERRORS, SourceFailure
 from app.services.market_public import MarketDependencyError, PublicMarketProvider
 from app.services.market_sina import (
     SinaDataError,
@@ -55,32 +63,10 @@ CHINA = ZoneInfo('Asia/Shanghai')
 SCHEDULE = ['23:58']
 DATED_PRICE_METHOD = 'sina_dated_raw_snapshot_v1'
 RESOLVED = ('current', 'insufficient_history', 'paused')
-PUBLISHED = ('written', 'existing_preserved')
-METRIC_DONE = (*PUBLISHED, 'outside_window')
 # A scheduled batch is the latest configured Shanghai slot. Polling/restarts keep
 # its durable budget; only a new slot or explicit manual request starts over.
 MAX_PASSES_PER_RUN = 4
 RETRY_DELAYS = (timedelta(minutes=5), timedelta(minutes=30), timedelta(hours=6))
-SAFE_ERRORS = {
-    'source_unavailable', 'source_not_ready', 'source_rate_limited', 'source_forbidden',
-    'calendar_unavailable', 'calendar_incomplete', 'calendar_regressed',
-    'snapshot_invalid', 'historical_snapshot_missing', 'quote_unavailable',
-    'quote_mismatch', 'unknown_missing_ma', 'quote_stale', 'source_partial',
-    'service_interrupted', 'cancelled', 'missing_writer_configuration',
-    'writer_permission_denied', 'writer_table_missing', 'writer_database_missing',
-    'writer_connection_failed', 'writer_write_failed', 'writer_journal_incomplete',
-    'writer_value_mismatch', 'writer_result_invalid', 'before_collection_time',
-    'worker_disabled', 'universe_coverage_unverified', 'universe_incomplete',
-    'adjustment_unavailable', 'adjustment_precision_unverified', 'paused_unknown', 'invalid_tdx_archive',
-    'historical_count_unavailable', 'historical_count_mismatch', 'historical_identity_conflict', 'historical_category_unknown',
-    'unsupported_historical_schema',
-    'heat_methodology_unverified', 'heat_methodology_mismatch',
-    'historical_snapshot_unverified', 'writer_methodology_mismatch',
-    'snapshot_quote_mismatch',
-    'dated_report_invalid', 'dated_report_cache_invalid',
-    'dated_membership_window_unverified', 'dated_membership_gap',
-}
-
 
 def _json(value):
     return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(',', ':'))
@@ -93,13 +79,7 @@ def _stamp(moment):
 
 
 def _number(value):
-    try:
-        result = Decimal(str(value))
-    except (InvalidOperation, ValueError, TypeError):
-        raise ValueError('invalid numeric observation') from None
-    if not result.is_finite():
-        raise ValueError('invalid numeric observation')
-    return result
+    return observation_rules.number(value)
 
 
 class CollectionInterrupted(Exception):
@@ -125,12 +105,6 @@ class CollectionBusy(ConfigurationFailure):
 
     def detail(self):
         return {'code': 'collection_busy', 'message': str(self), 'active_run': self.active_run}
-
-
-class SourceFailure(Exception):
-    def __init__(self, code):
-        self.code = code if code in SAFE_ERRORS else 'source_unavailable'
-        super().__init__(self.code)
 
 
 class PacedHTTPClient:
@@ -315,25 +289,21 @@ class MarketCollection:
 
     @staticmethod
     def _heat_contract(heat):
-        return (isinstance(heat, dict) and heat.get('methodology') == JOINQUANT_HEAT_METHOD
-                and heat.get('price_basis') == 'qfq' and heat.get('denominator') == 'eligible')
+        return observation_rules.heat_contract(heat)
 
     @staticmethod
     def _quote_method(quote):
-        return quote.get('methodology', LEGACY_SINA_HEAT_METHOD) if isinstance(quote, dict) else LEGACY_SINA_HEAT_METHOD
+        return observation_rules.quote_method(quote)
 
     @classmethod
     def _verified_heat_quote(cls, quote):
-        return (isinstance(quote, dict) and cls._quote_method(quote) == JOINQUANT_HEAT_METHOD
-                and quote.get('verified') is True)
+        return observation_rules.verified_heat_quote(quote, method=cls._quote_method)
 
     @staticmethod
     def _capability(provider):
         check = getattr(provider, 'heat_capability', None)
         result = check() if callable(check) else {}
-        verified = isinstance(result, dict) and result.get('methodology') == JOINQUANT_HEAT_METHOD and result.get('verified') is True
-        return {'methodology': JOINQUANT_HEAT_METHOD, 'verified': verified,
-                'error': None if verified else 'heat_methodology_unverified'}
+        return observation_rules.heat_capability(result)
 
     @staticmethod
     def _archive(db, kind, day, payload, stamp, *, symbol='', methodology=LEGACY_SINA_HEAT_METHOD):
@@ -735,7 +705,6 @@ class MarketCollection:
         durable before collection starts, so a later success cannot strand an
         earlier failure when the authoritative MAX advances.
         """
-        today = moment.date()
         cutoff = cutoff or self._data_cutoff(moment, manual)
         source = self.source_dates_loader(self)
         existing = {kind: {str(day) for day in source[kind]} for kind in ('heat', 'crowding')}
@@ -744,18 +713,14 @@ class MarketCollection:
             manual_only = {row[0].removeprefix('manual-only:') for row in db.execute(
                 "SELECT key FROM metadata WHERE key LIKE 'manual-only:%'")}
             calendar = [row[0] for row in db.execute('SELECT day FROM calendar WHERE day<=? ORDER BY day', (str(cutoff),))]
-            latest = {kind: max(values, default=None) for kind, values in existing.items()}
-            target = calendar[-1] if calendar else None
-            needed = {kind: {day for day in calendar if day > latest[kind]} if latest[kind]
-                      else ({target} if target else set()) for kind in existing}
-            for kind in needed:
-                needed[kind].update(row[0].removeprefix('gap:' + kind + ':') for row in db.execute(
-                    "SELECT key FROM metadata WHERE key LIKE ?", ('gap:' + kind + ':%',))
-                    if manual or row[0].removeprefix('gap:' + kind + ':') not in manual_only)
-            if calendar and any(value and value < calendar[0] for value in latest.values()):
-                raise SourceFailure('calendar_incomplete')
-            planned = {day for day in set().union(*needed.values()) if day <= str(cutoff)}
-            planned |= {value for value in latest.values() if value and value <= str(cutoff)}
+            saved_gaps = {
+                kind: {row[0].removeprefix('gap:' + kind + ':') for row in db.execute(
+                    "SELECT key FROM metadata WHERE key LIKE ?", ('gap:' + kind + ':%',))}
+                for kind in existing
+            }
+            plan = plan_market_gaps(calendar, existing, saved_gaps, manual_only,
+                                    cutoff=str(cutoff), manual=manual)
+            target, latest, needed, planned = plan.target, plan.latest, plan.needed, plan.planned
             tracked = {row[0] for row in db.execute('SELECT trade_date FROM days WHERE trade_date<=?', (str(cutoff),))}
             original_tracked = tracked.copy()
             if not manual:
@@ -775,36 +740,20 @@ class MarketCollection:
                 db.execute("""INSERT OR IGNORE INTO days
                            (trade_date,status,created_at,updated_at) VALUES (?,'pending',?,?)""", (day, stamp, stamp))
                 row = dict(db.execute('SELECT * FROM days WHERE trade_date=?', (day,)).fetchone())
-                states = {}
-                for kind, values in existing.items():
-                    old = row[kind + '_status']
+                transition = transition_market_day(day, row, existing, needed, stamp)
+                for kind, action in transition.gap_operations.items():
                     key = 'gap:' + kind + ':' + day
-                    if day in values:
-                        value = old if old in PUBLISHED else 'existing_preserved'
-                        db.execute('DELETE FROM metadata WHERE key=?', (key,))
-                    elif day in needed[kind]:
-                        value = old if old in ('pending', 'blocked') else 'pending'
-                        db.execute('INSERT OR IGNORE INTO metadata VALUES (?,?)', (key, stamp))
-                    elif old in PUBLISHED:
-                        # MAX-only source reads do not enumerate prior successes.
-                        value = old
+                    if action == 'clear':
                         db.execute('DELETE FROM metadata WHERE key=?', (key,))
                     else:
-                        value = 'outside_window'
-                    states[kind + '_status'] = value
-                complete = all(value in METRIC_DONE for value in states.values())
-                excluded = all(value == 'outside_window' for value in states.values())
-                reset = row['status'] in ('complete', 'superseded') and not complete
+                        db.execute('INSERT OR IGNORE INTO metadata VALUES (?,?)', (key, stamp))
                 db.execute("""UPDATE days SET heat_status=?,crowding_status=?,status=?,error=?,
                            next_attempt_at=?,updated_at=? WHERE trade_date=?""",
-                           (states['heat_status'], states['crowding_status'],
-                            'superseded' if excluded else 'complete' if complete else 'pending' if reset else row['status'],
-                            None if complete or reset else row['error'],
-                            None if complete or reset else row['next_attempt_at'],
-                            stamp if complete or reset else row['updated_at'], day))
+                           (transition.heat_status, transition.crowding_status, transition.status,
+                            transition.error, transition.next_attempt_at, transition.updated_at, day))
         # Source MAX per metric is evidence only for that exact planned target,
         # never for older sessions or for a target earlier than MAX.
-        return target, {kind for kind, values in existing.items() if target in values}
+        return target, plan.verified
 
     def _notify_result(self, run_key, *, scheduled, outcome, changed, stamp,
                        target=None, cutoff=None, error_details=None):
@@ -1371,18 +1320,7 @@ class MarketCollection:
 
     @staticmethod
     def _validate_snapshot(snapshot, day):
-        try:
-            rows = snapshot['rows']
-            symbols = [row['symbol'] for row in rows]
-            if snapshot['date'] != day or not rows or snapshot['expected_count'] != len(rows) or len(set(symbols)) != len(rows):
-                raise ValueError()
-            for row in rows:
-                if _number(row['amount']) < 0 or _number(row['volume']) < 0 or _number(row['close']) < 0:
-                    raise ValueError()
-            if sum((_number(row['amount']) for row in rows), Decimal(0)) <= 0:
-                raise ValueError()
-        except (KeyError, TypeError, ValueError):
-            raise SourceFailure('snapshot_invalid') from None
+        return observation_rules.validate_snapshot(snapshot, day)
 
     def _store_snapshot(self, day, snapshot):
         payload = _json(snapshot)
@@ -1408,31 +1346,12 @@ class MarketCollection:
 
     @classmethod
     def _dated_snapshot(cls, snapshot, day):
-        try:
-            cls._validate_snapshot(snapshot, day)
-            return (snapshot.get('source_has_trading_date') is True
-                    and snapshot.get('dated_snapshot_verified') is True
-                    and snapshot.get('date_verified_by') == 'sina_hq'
-                    and all(row.get('date') == day for row in snapshot['rows']))
-        except (SourceFailure, AttributeError, TypeError):
-            return False
+        return observation_rules.dated_snapshot(snapshot, day, validate=cls._validate_snapshot)
 
     def _checkpoint_hq(self, day, digest, node_rows, rows, run_id):
         """Commit one verified HQ batch before permitting the next HTTP request."""
         stamp = _stamp(self.clock())
-        symbols = set()
-        try:
-            for row in rows:
-                symbol = row['symbol']
-                node = node_rows[symbol]
-                if (symbol in symbols or row['date'] != day
-                        or _number(row['close']) != _number(node['close'])
-                        or _number(row['volume']) != _number(node['volume'])
-                        or _number(row['amount']).quantize(Decimal('1'), rounding=ROUND_HALF_UP) != _number(node['amount'])):
-                    raise ValueError()
-                symbols.add(symbol)
-        except (KeyError, TypeError, ValueError):
-            raise SourceFailure('snapshot_invalid') from None
+        observation_rules.validate_hq_batch(day, node_rows, rows)
         with self.connect() as db:
             db.executemany('INSERT OR REPLACE INTO hq_checkpoints VALUES(?,?,?,?,?)',
                            [(day, digest, row['symbol'], _json(row), stamp) for row in rows])
@@ -1577,33 +1496,12 @@ class MarketCollection:
 
     @staticmethod
     def _fresh_quote(quote, snapshot_row, day):
-        try:
-            return (quote.get('status') in ('current', 'insufficient_history', 'unknown_missing_ma')
-                    and quote['symbol'] == snapshot_row['symbol']
-                    and quote['day'] == quote['date'] == day
-                    and _number(quote['close']) == _number(snapshot_row['close']) > 0
-                    and _number(quote['volume']) == _number(snapshot_row['volume']) > 0)
-        except (AttributeError, KeyError, ValueError, TypeError):
-            return False
+        return observation_rules.fresh_quote(quote, snapshot_row, day)
 
     @classmethod
     def _price_verified(cls, quote, snapshot_row, day):
-        if cls._fresh_quote(quote, snapshot_row, day):
-            return True
-        try:
-            if (cls._verified_heat_quote(quote) and quote.get('status') == 'paused'
-                    and quote.get('paused') == 1 and quote['symbol'] == snapshot_row['symbol']
-                    and quote['day'] == quote['date'] == day
-                    and _number(quote['close']) == _number(snapshot_row['close']) > 0
-                    and _number(quote['volume']) == _number(snapshot_row['volume']) == _number(snapshot_row['amount']) == 0):
-                return True
-            return (quote.get('status') == 'no_trade'
-                    and quote['symbol'] == snapshot_row['symbol'] and quote['day'] == day
-                    and date.fromisoformat(quote['date']) < date.fromisoformat(day)
-                    and _number(quote['close']) > 0
-                    and _number(snapshot_row['volume']) == _number(snapshot_row['amount']) == 0)
-        except (AttributeError, KeyError, ValueError, TypeError):
-            return False
+        return observation_rules.price_verified(quote, snapshot_row, day,
+                                                fresh=cls._fresh_quote, verified_heat=cls._verified_heat_quote)
 
     def _verify_snapshot(self, provider, day, snapshot, run_id, manual, attempted):
         """The undated quote list needs dated, matching samples in all markets."""
@@ -1615,13 +1513,9 @@ class MarketCollection:
                     return True
             except (ValueError, KeyError, TypeError):
                 pass
-        samples = []
-        for market in ('sh', 'sz', 'bj'):
-            rows = [row for row in snapshot['rows'] if row['symbol'].startswith(market)
-                    and _number(row['amount']) > 0 and _number(row['volume']) > 0 and _number(row['close']) > 0]
-            if not rows:
-                return False
-            samples.append(max(rows, key=lambda row: (_number(row['amount']), row['symbol'])))
+        samples = observation_rules.verification_samples(snapshot['rows'])
+        if samples is None:
+            return False
         verified = True
         for sample in samples:
             self._check(run_id)
