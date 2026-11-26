@@ -140,7 +140,8 @@ def create_app(settings: Settings | None = None, engine: Engine | None = None) -
             application.state.personal_holdings = holdings
             etf_collection = ETFCollection(settings, refresh=cache.refresh_etf_collection,
                                            remote_worker=remote_worker,
-                                           cache_publisher=cache.publish_etf_collection)
+                                           cache_publisher=cache.publish_etf_collection,
+                                           cache_verifier=cache.verify_etf_publication)
             queue_services.append(etf_collection)
             cleanup.push_async_callback(stop_worker, 'etf_collection', etf_collection)
             application.state.etf_collection = etf_collection

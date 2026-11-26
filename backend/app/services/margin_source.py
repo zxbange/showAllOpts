@@ -64,6 +64,7 @@ _SAFE_REASONS = {
     '东方财富统计日期无效或超出请求范围。': 'report_date_range',
     '东方财富担保比例不是有效百分比。': 'invalid_ratio',
     '东方财富尚未披露该日担保比例，将继续补采。': 'not_disclosed',
+    '东方财富未返回目标统计日有效担保比例。': 'target_not_ready',
     '中证链接不在允许的 HTTPS 来源范围内。': 'unsafe_url',
     '中证链接路径无效。': 'unsafe_url',
     '中证链接不是预期的日报文件或目录。': 'unsafe_url',

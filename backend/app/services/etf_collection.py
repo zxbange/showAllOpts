@@ -23,6 +23,15 @@ from app.core.etf_publication import (
     public_cache_status,
     safe_publication_error,
 )
+from app.repositories.etf_publication_outcomes import (
+    bind_legacy_latest,
+    bind_requirement,
+    mark_recovered,
+    mark_synced,
+    pending_publications,
+    project_recovery,
+    unsynced_recoveries,
+)
 from app.repositories.etf_publication_state import (
     KEY_PREFIX,
     clear_publication_requirements,
@@ -203,9 +212,10 @@ def collector_module():
 class ETFCollection:
     def __init__(self, settings, refresh=None, *, collector=None, engine_factory=create_engine,
                  client_factory=None, clock=None, remote_worker=None, tick_gate=None,
-                 cache_publisher=None):
+                 cache_publisher=None, cache_verifier=None):
         self.settings, self.refresh = settings, refresh
         self.cache_publisher = cache_publisher
+        self.cache_verifier = cache_verifier
         self.collector, self.engine_factory = collector, engine_factory
         self.client_factory = client_factory or (lambda: source_client(self.settings, factory=httpx.Client, timeout=30, trust_env=False))
         self.clock = clock or (lambda: datetime.now(CHINA))
@@ -319,7 +329,7 @@ class ETFCollection:
             state['recent_runs'] = [dict(r) for r in db.execute("SELECT * FROM run_history WHERE status NOT IN ('running','publishing') ORDER BY (finished_at IS NOT NULL) DESC,julianday(COALESCE(finished_at,requested_at)) DESC,rowid DESC LIMIT 20")]
             for item in state['recent_runs']:
                 detail = db.execute('SELECT details FROM run_history_errors WHERE id=?', (item['id'],)).fetchone()
-                item['error_details'] = json.loads(detail[0]) if detail else None
+                project_recovery(item, detail[0] if detail else None)
             state['latest_result'] = next(iter(state['recent_runs']), None)
             state['metadata'] = dict(db.execute('SELECT key,value FROM metadata').fetchall())
             latest = state['metadata'].get('coverage_end')
@@ -609,6 +619,7 @@ class ETFCollection:
                     preserve_legacy_pending(db)
                     db.commit()
                     self._recover_manual_runs(db)
+                    self._reconcile_publication_outcomes(db, config)
                     db.execute("DELETE FROM metadata WHERE key='progress'")
                     manual = db.execute("SELECT * FROM manual_runs WHERE status='queued' ORDER BY rowid LIMIT 1").fetchone()
                     if manual:
@@ -766,12 +777,27 @@ class ETFCollection:
             self._refresh(db)
         pending = db.execute("SELECT value FROM metadata WHERE key='cache_pending'").fetchone()
         history_status = 'partial' if state == 'complete' and pending and pending[0] == '1' else state
-        if (history_status == 'partial' and pending and pending[0] == '1'
-                and (state == 'complete' or self._run_error_details is None)):
-            self._run_error_details = safe_error(code='publication_pending', stage='cache_publish')
+        history_detail = self._run_error_details
+        if history_status == 'partial' and pending and pending[0] == '1':
+            if state == 'complete':
+                target = self._notification_report.target
+                self._run_error_details = safe_error(code='publication_pending', stage='cache_publish', trade_date=target)
+                history_detail = self._run_error_details
+                if target is not None:
+                    try:
+                        requirement = bind_requirement(db, target_key(config), target,
+                            (self.collector or collector_module()).catalog())
+                        if requirement is not None:
+                            history_detail = history_detail | {'publication_requirement': requirement}
+                    except Exception as exc:
+                        LOG.warning('ETF run publication evidence unavailable error_type=%s', type(exc).__name__)
+            elif self._run_error_details is None:
+                # Acquisition was incomplete; lack of an error detail must not
+                # turn it into a cache-only problem eligible for recovery.
+                self._run_error_details = history_detail = safe_error(stage='collection')
         if self._run_error_details:
             self._write_history(db, 'INSERT OR REPLACE INTO run_history_errors VALUES (?,?)',
-                                (history_id, json.dumps(self._run_error_details)))
+                                (history_id, json.dumps(history_detail)))
         finished_at = self.clock().isoformat()
         history_recorded = self._write_history(db,
             "INSERT INTO run_history VALUES (?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET "
@@ -812,12 +838,49 @@ class ETFCollection:
             try:
                 with hold_lease(portalocker.Lock(str(self.root / 'collection.lock'), timeout=0)):
                     with self.connect() as db:
-                        reconcile_system_ledger(self.configuration, db,
+                        config = reconcile_system_ledger(self.configuration, db,
                             ('observations', 'slots', 'metadata'), self.clock().isoformat())
                         db.commit()
+                        self._reconcile_publication_outcomes(db, config)
                         return self._refresh(db, force=True, full=full)
             except portalocker.exceptions.LockException:
                 return ETFPublicationResult('waiting_lock')
+
+    def _sync_publication_outcomes(self, db):
+        from app.services.collection_outcomes import record_outcome, recover_publication_outcome
+        for row, detail, recovered_at in unsynced_recoveries(db):
+            identity = dict(run_key=row['id'], trigger=row['trigger'], finished_at=row['finished_at'])
+            # A crash can separate the two local SQLite ledgers. The original
+            # partial is replayed idempotently, then only that run is resolved.
+            record_outcome(self.settings, 'etf-shares', outcome='partial',
+                           error_details=detail, **identity)
+            if recover_publication_outcome(self.settings, 'etf-shares', recovered_at=recovered_at, **identity):
+                if not detail.get('publication_synced'):
+                    mark_synced(db, row, detail)
+                    LOG.info('ETF publication outcome recovered run=%s date=%s', row['id'],
+                             detail.get('publication_requirement', {}).get('trade_date', '-'))
+        db.commit()
+
+    def _reconcile_publication_outcomes(self, db, config):
+        if self.cache_publisher is None and self.cache_verifier is None:
+            return
+        try:
+            identity = target_key(config)
+            bind_legacy_latest(db, identity, (self.collector or collector_module()).catalog())
+            db.commit()
+            pending = db.execute("SELECT value FROM metadata WHERE key='cache_pending'").fetchone()
+            if self.cache_verifier is not None and (not pending or pending[0] != '1'):
+                for candidate in list(pending_publications(db, identity)):
+                    receipt = self.cache_verifier(expected_keys=candidate.keys)
+                    if isinstance(receipt, ETFPublicationResult) and receipt.status == 'published':
+                        # Upgrade of old ledgers: only a real snapshot
+                        # published after this exact run can certify recovery.
+                        mark_recovered(db, candidate, receipt.published_at)
+                db.commit()
+            self._sync_publication_outcomes(db)
+        except Exception as exc:
+            db.rollback()
+            LOG.warning('ETF publication outcome reconciliation unavailable error_type=%s', type(exc).__name__)
 
     def _refresh(self, db, *, force=False, full=False):
         row = db.execute("SELECT value FROM metadata WHERE key='cache_pending'").fetchone()
@@ -873,8 +936,20 @@ class ETFCollection:
                     raise TypeError('Invalid ETF cache publication receipt')
                 store(result, required)
                 if result.successful:
+                    if result.status == 'published':
+                        identity = target_key(self.configuration.load())
+                        for candidate in list(pending_publications(db, identity)):
+                            if candidate.keys <= expected:
+                                mark_recovered(db, candidate, self.clock().isoformat())
                     clear_publication_requirements(db)
                 db.commit()
+                # Result projection is separate from remote DB publication.
+                # A temporarily locked outcome ledger never rolls back data.
+                try:
+                    self._sync_publication_outcomes(db)
+                except Exception as exc:
+                    db.rollback()
+                    LOG.warning('ETF publication outcome synchronization unavailable error_type=%s', type(exc).__name__)
                 return result
             repair = db.execute("SELECT value FROM metadata WHERE key='cache_repair_start'").fetchone()
             published = self.refresh(repair_start=date.fromisoformat(repair[0])) if repair else self.refresh()

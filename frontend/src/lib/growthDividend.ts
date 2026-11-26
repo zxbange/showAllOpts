@@ -26,42 +26,39 @@ export interface GrowthDividendBenchmark {
   name: string
   color: string
   sampleCount: number
-  levels: Array<{ percentile: 'P20' | 'P80' | 'P20/P80'; value: number }>
+  levels: Array<{ percentile: number; value: number; date: string }>
 }
 
-/** Full-history percentiles are independent of the chart's visible date window. */
+/** Round the displayed percentile without changing the underlying rank. */
+export function formatGrowthDividendPercentile(percentile: number) {
+  return `${Math.round(percentile * 100)}%`
+}
+
+/** Invert the linear (n−1) quantile at each ratio's latest observation; ties use their midpoint. */
 export function growthDividendBenchmarks(points: GrowthDividendPoint[]): GrowthDividendBenchmark[] {
   return growthDividendLines.flatMap((line) => {
     if (!line.ratio) return []
-    const samples = points
+    const observations = points
       .filter((point) => line.key !== 'chinext_dividend_ratio' || point.date >= '2018-01-01')
-      .map((point) => point[line.key])
-      .filter(
-        (value): value is number =>
-          typeof value === 'number' && Number.isFinite(value) && value > 0,
-      )
-      .sort((a, b) => a - b)
-    if (!samples.length) return []
-    const quantile = (fraction: number) => {
-      const position = (samples.length - 1) * fraction
-      const lower = Math.floor(position)
-      return samples[lower] + (samples[Math.ceil(position)] - samples[lower]) * (position - lower)
-    }
-    const p20 = quantile(0.2)
-    const p80 = quantile(0.8)
+      .flatMap((point) => {
+        const value = point[line.key]
+        return typeof value === 'number' && Number.isFinite(value) && value > 0
+          ? [{ date: point.date, value }]
+          : []
+      })
+    if (!observations.length) return []
+    const latest = observations.reduce((last, point) => (point.date >= last.date ? point : last))
+    const samples = observations.map((point) => point.value).sort((a, b) => a - b)
+    const first = samples.indexOf(latest.value)
+    const last = samples.lastIndexOf(latest.value)
+    const percentile = samples.length === 1 ? 0.5 : (first + last) / (2 * (samples.length - 1))
     return [
       {
         key: line.key,
         name: line.name,
         color: line.color,
         sampleCount: samples.length,
-        levels:
-          p20 === p80
-            ? [{ percentile: 'P20/P80' as const, value: p20 }]
-            : [
-                { percentile: 'P20' as const, value: p20 },
-                { percentile: 'P80' as const, value: p80 },
-              ],
+        levels: [{ percentile, value: latest.value, date: latest.date }],
       },
     ]
   })
@@ -144,7 +141,7 @@ export function growthDividendSeries(
           lineStyle: { color: line.color, type: 'dashed' as const, width: 1, opacity: 0.5 },
           data: (benchmarks.find((benchmark) => benchmark.key === line.key)?.levels ?? []).map(
             (level) => ({
-              name: `${line.name} ${level.percentile}`,
+              name: `${line.name} ${formatGrowthDividendPercentile(level.percentile)}`,
               yAxis: level.value,
             }),
           ),

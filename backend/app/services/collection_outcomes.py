@@ -27,6 +27,24 @@ SYNC_MODULES = frozenset(('industry-momentum', 'microcap-temperature', 'microcap
 ALIASES = {'complete': 'success', 'completed': 'success', 'error': 'failed',
            'publication_pending': 'partial'}
 TERMINAL = frozenset(('success', 'failed', 'partial', 'cancelled', 'interrupted', 'unknown'))
+PUBLICATION_MODULES = frozenset(('etf-shares', 'market-sentiment', 'market-crowding'))
+
+
+def publication_recovery_stamp(payload, finished_at=None):
+    """Only project a dated recovery of an explicitly pending publication."""
+    if not isinstance(payload, dict) or payload.get('code') != 'publication_pending' or payload.get('stage') != 'cache_publish':
+        return None
+    try:
+        stamp = datetime.fromisoformat(payload['publication_recovered_at'])
+        if stamp.utcoffset() is None:
+            return None
+        if finished_at:
+            finished = datetime.fromisoformat(finished_at)
+            if finished.utcoffset() is None or stamp < finished:
+                return None
+        return stamp.astimezone(timezone.utc).isoformat(timespec='microseconds')
+    except (KeyError, TypeError, ValueError):
+        return None
 
 
 @contextmanager
@@ -87,6 +105,52 @@ def record_outcome(settings, module_key, *, run_key, outcome, trigger, finished_
         return False
 
 
+def recover_publication_outcome(settings, module_key, *, run_key, trigger, finished_at, recovered_at):
+    """Resolve the same run, retaining its original finish/order and pending audit.
+
+    The collector must separately prove the publication. Never create a new
+    success, upgrade a real failure, or resurrect retained/deleted history here.
+    """
+    if module_key not in PUBLICATION_MODULES or trigger not in ('manual', 'scheduled'):
+        return False
+    try:
+        finish = datetime.fromisoformat(finished_at)
+        if finish.utcoffset() is None:
+            return False
+        stamp = finish.astimezone(timezone.utc).isoformat(timespec='microseconds')
+        with database(settings) as db:
+            db.execute('BEGIN IMMEDIATE')
+            for table in ('result_tombstones', 'results_archive'):
+                if db.execute('SELECT 1 FROM sqlite_master WHERE type=\'table\' AND name=?', (table,)).fetchone():
+                    if db.execute('SELECT 1 FROM ' + table + ' WHERE module=? AND run_key=?',
+                                  (module_key, str(run_key))).fetchone():
+                        return False
+            row = db.execute('SELECT outcome,finished_at,trigger FROM results WHERE module=? AND run_key=?',
+                             (module_key, str(run_key))).fetchone()
+            detail = db.execute('SELECT payload FROM result_details WHERE module=? AND run_key=?',
+                                (module_key, str(run_key))).fetchone()
+            if not row or not detail or row['finished_at'] != stamp or row['trigger'] != trigger:
+                return False
+            original = json.loads(detail[0])
+            existing = publication_recovery_stamp(original, finished_at)
+            if row['outcome'] == 'success':
+                return existing is not None
+            if row['outcome'] != 'partial' or original.get('code') != 'publication_pending' or original.get('stage') != 'cache_publish':
+                return False
+            payload = sanitize_error(original) | {'publication_recovered_at': recovered_at}
+            verified = publication_recovery_stamp(payload, finished_at)
+            if verified is None:
+                return False
+            payload['publication_recovered_at'] = verified
+            db.execute('UPDATE results SET outcome=? WHERE module=? AND run_key=?', ('success', module_key, str(run_key)))
+            db.execute('UPDATE result_details SET payload=? WHERE module=? AND run_key=?',
+                       (json.dumps(payload, ensure_ascii=False), module_key, str(run_key)))
+        return True
+    except Exception as exc:
+        LOG.warning('Collection publication recovery unavailable module=%s error_type=%s', module_key, type(exc).__name__)
+        return False
+
+
 def outcome_history(settings, module_key, limit=5):
     """Bounded, read-only real completion history, never synthesized from latest state."""
     if module_key not in MODULES or type(limit) is not int or not 1 <= limit <= 5:
@@ -102,20 +166,27 @@ def outcome_history(settings, module_key, limit=5):
                 'SELECT run_key,outcome,finished_at,trigger FROM results WHERE module=? '
                 'ORDER BY finished_at DESC,rowid DESC LIMIT ?', (module_key, limit)).fetchall()
             has_details = connection.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='result_details'").fetchone()
-            details = {}
+            details, recoveries = {}, {}
             if has_details:
                 for row in rows:
                     saved = connection.execute('SELECT payload FROM result_details WHERE module=? AND run_key=?',
                                                (module_key, row['run_key'])).fetchone()
                     if saved:
                         try:
-                            details[row['run_key']] = sanitize_error(json.loads(saved[0]))
+                            payload = json.loads(saved[0])
+                            recovered = publication_recovery_stamp(payload, row['finished_at']) if row['outcome'] == 'success' else None
+                            if recovered:
+                                recoveries[row['run_key']] = recovered
+                            else:
+                                details[row['run_key']] = sanitize_error(payload)
                         except (ValueError, TypeError):
                             pass
         finally:
             connection.close()
         kind = 'database_sync' if module_key in SYNC_MODULES else 'collection'
-        return {'items': [dict(row) | {'kind': kind, 'error_details': details.get(row['run_key'])} for row in rows]}
+        return {'items': [dict(row) | {'kind': kind, 'error_details': details.get(row['run_key'])} |
+                         ({'publication_recovered_at': recoveries[row['run_key']]} if row['run_key'] in recoveries else {})
+                         for row in rows]}
     except (sqlite3.Error, OSError, ValueError) as exc:
         LOG.warning('Collection history reading unavailable module=%s error_type=%s',
                     module_key, type(exc).__name__)
@@ -135,8 +206,9 @@ def latest_outcomes(settings):
         return {'items': items}
     try:
         with database(settings) as db:
-            rows = [db.execute('SELECT module,run_key,outcome,finished_at,trigger FROM results WHERE module=? '
-                               'ORDER BY finished_at DESC,rowid DESC LIMIT 1', (key,)).fetchone() for key in MODULES]
+            rows = [db.execute('SELECT r.module,r.run_key,r.outcome,r.finished_at,r.trigger,d.payload '
+                               'FROM results r LEFT JOIN result_details d ON d.module=r.module AND d.run_key=r.run_key '
+                               'WHERE r.module=? ORDER BY r.finished_at DESC,r.rowid DESC LIMIT 1', (key,)).fetchone() for key in MODULES]
         for row in rows:
             if row is not None and row['module'] in items:
                 if row['module'] in unresolved and (not unresolved[row['module']] or row['run_key'] != unresolved[row['module']]):
@@ -145,6 +217,13 @@ def latest_outcomes(settings):
                 if current_stamp and datetime.fromisoformat(current_stamp) > datetime.fromisoformat(row['finished_at']):
                     continue
                 items[row['module']].update({key: row[key] for key in ('outcome', 'finished_at', 'trigger')})
+                if row['outcome'] == 'success' and row['module'] in PUBLICATION_MODULES and row['payload']:
+                    try:
+                        recovered = publication_recovery_stamp(json.loads(row['payload']), row['finished_at'])
+                    except (TypeError, ValueError):
+                        recovered = None
+                    if recovered:
+                        items[row['module']]['publication_recovered_at'] = recovered
     except Exception as exc:
         LOG.warning('Collection outcome reading unavailable error_type=%s', type(exc).__name__)
         raise OutcomeUnavailable('采集结果暂不可用') from None

@@ -40,7 +40,8 @@ def main(argv=None):
             return 0
         if options.module == 'etf-shares':
             from app.services.etf_collection import ETFCollection
-            collector = ETFCollection(settings, cache_publisher=cache.publish_etf_collection)
+            collector = ETFCollection(settings, cache_publisher=cache.publish_etf_collection,
+                                      cache_verifier=cache.verify_etf_publication)
             result = collector.retry_cache_publication(full=options.full)
             print(json.dumps(result.public(), ensure_ascii=False, indent=2))
             if result.status == 'waiting_lock':

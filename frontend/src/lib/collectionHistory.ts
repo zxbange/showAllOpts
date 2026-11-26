@@ -49,5 +49,9 @@ export function collectionHistoryText(record: CollectionHistoryEntry) {
     dataUpdateInstant(record.finished_at) != null
       ? formatDataUpdatedAt(record.finished_at)
       : '完成时间未记录'
-  return `${record.source_name ? `${record.source_name} · ` : ''}${time} · ${trigger}${action} · ${labels[record.outcome] || '状态待确认'}`
+  const publication =
+    record.outcome === 'success' && dataUpdateInstant(record.publication_recovered_at) != null
+      ? ` · 缓存随后发布成功（${formatDataUpdatedAt(record.publication_recovered_at)}）`
+      : ''
+  return `${record.source_name ? `${record.source_name} · ` : ''}${time} · ${trigger}${action} · ${labels[record.outcome] || '状态待确认'}${publication}`
 }

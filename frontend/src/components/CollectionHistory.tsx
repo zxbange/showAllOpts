@@ -95,7 +95,7 @@ function CollectionHistoryContent({ moduleKey, title }: { moduleKey: string; tit
   const latest =
     moduleKey === 'social-feed'
       ? `${data.items['social-weibo']?.finished_at}/${data.items['social-xueqiu']?.finished_at}`
-      : data.items[moduleKey]?.finished_at
+      : `${data.items[moduleKey]?.finished_at}/${data.items[moduleKey]?.outcome}/${data.items[moduleKey]?.publication_recovered_at}`
   useEffect(
     () =>
       pollCollectionHistory(

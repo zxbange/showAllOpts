@@ -207,6 +207,60 @@ test('initial ETF history cannot stay stale when publication completes before th
   await expect(page.getByText(/2026-11-24.+2026-11-24/)).toHaveCount(0)
 })
 
+test('ETF lamp changes from waiting red to verified green for the same run', async ({ page }) => {
+  let recovered = false
+  const finished = '2026-11-26T08:00:24+08:00'
+  const published = '2026-11-26T08:05:35+08:00'
+  await page.clock.install()
+  await page.route('**/api/v1/collection-outcomes', (r) =>
+    r.fulfill({
+      json: {
+        items: {
+          'etf-shares': {
+            outcome: recovered ? 'success' : 'partial',
+            trigger: 'scheduled',
+            finished_at: finished,
+            ...(recovered ? { publication_recovered_at: published } : {}),
+          },
+        },
+      },
+    }),
+  )
+  await page.route('**/api/v1/etf-shares/collection-status', (r) =>
+    r.fulfill({
+      json: {
+        ...ready,
+        cache_pending: false,
+        recent_runs: [{
+          id: 'original-run',
+          trigger: 'scheduled',
+          status: recovered ? 'complete' : 'partial',
+          requested_at: '2026-11-26T08:00:00+08:00',
+          finished_at: finished,
+          time_basis: 'completed_at',
+          ...(recovered ? { publication_recovered_at: published } : {
+            error_details: { code: 'publication_pending', stage: 'cache_publish', message: '等待缓存发布' },
+          }),
+        }],
+      },
+    }),
+  )
+  await page.goto('/etf-shares')
+  const lamp = page.locator('[data-collection-key="etf-shares"]').first()
+  await expect(lamp).toHaveClass(/collection-outcome--failed/)
+  await page.getByText('最近采集记录', { exact: true }).click()
+  await expect(page.locator('.etf-collection-panel details li')).toHaveCount(1)
+  recovered = true
+  await page.clock.fastForward(5200)
+  await expect(lamp).toHaveClass(/collection-outcome--success/)
+  await expect(lamp).toHaveAttribute('title', /图表缓存随后于.+发布成功/)
+  await page.clock.fastForward(15100)
+  const rows = page.locator('.etf-collection-panel details li')
+  await expect(rows).toHaveCount(1)
+  await expect(rows.first()).toContainText('缓存随后发布成功（2026-11-26 08:05:35）')
+  await expect(rows.first()).toContainText('2026-11-26 08:00:24')
+})
+
 test('late status from a departed page cannot replace new page status', async ({ page }) => {
   let holdOldPage = true
   let heldResponses = 0

@@ -156,6 +156,9 @@ export function ETFCollectionPanel({ onCollected }: { onCollected: () => void })
               {labels[run.status] ?? '状态待确认'}
               {run.time_basis === 'legacy_request_time' ? ' · 旧记录，显示请求时间' : ''}
               {run.time_basis === 'recovered_at' ? ' · 显示中断确认时间' : ''}
+              {run.status === 'complete' && dataUpdateInstant(run.publication_recovered_at) != null
+                ? ` · 缓存随后发布成功（${formatDataUpdatedAt(run.publication_recovered_at)}）`
+                : ''}
               {run.error ? ` · ${collectionErrorMessage(run.error)}` : ''}
             </div>
             <CollectionHistoryError

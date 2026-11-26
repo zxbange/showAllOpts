@@ -68,7 +68,7 @@ def latest_slot(moment):
     return slot if moment >= slot else slot - timedelta(days=1)
 
 
-def _manual_statistics_limit(settings, moment):
+def _statistics_limit(settings, moment):
     times = task_config(settings, 'margin')['times']
     slot = latest_due_slot(moment, times, is_open=trading_day)
     if slot is None:
@@ -229,8 +229,7 @@ class MarginGuarantee:
             if slot and state.get('scheduled_slot') == slot:
                 lock.release()
                 return False
-            data_end = (moment.astimezone(CHINA).date() if slot is not None
-                        else _manual_statistics_limit(self.settings, moment))
+            data_end = _statistics_limit(self.settings, moment)
             state.update(run_id=uuid.uuid4().hex, active=True, error=None, stage='读取东方财富两融数据',
                          target_date=data_end.isoformat() if data_end is not None else None,
                          processed=0, total=None, percent=None, last_attempt_at=moment.isoformat(),
@@ -317,7 +316,12 @@ class MarginGuarantee:
                                          'ON p.trade_date=r.trade_date WHERE p.trade_date IS NULL AND r.trade_date<=? '
                                          + self.unresolved_sql() +
                                          'ORDER BY r.trade_date DESC', (target.isoformat(),)).fetchall()
-                LOG.info('Margin catalog complete reports=%s pending=%s', len(reports), len(pending))
+                target_report = next((report for report in reports if report.trade_date == target), None)
+                LOG.info('Margin catalog complete reports=%s pending=%s start=%s target=%s latest=%s target_report=%s',
+                         len(reports), len(pending), start, target,
+                         max((report.trade_date for report in reports), default='-'),
+                         'missing' if target_report is None else
+                         'ratio_null' if isinstance(target_report, RatioReport) and target_report.ratio is None else 'present')
                 scope = 'collection'
                 # If a correctly titled report also exists, verify it first so
                 # an inconsistent correction remains pending and visibly fails.
@@ -367,17 +371,22 @@ class MarginGuarantee:
                                 raise MarginSourceError('中证更正日报对应统计日的正式日报尚未校验。')
                             if corrected and existing is not None and existing['ratio'] != ratio:
                                 raise MarginSourceError('中证更正日报与已保存统计日的比例冲突，未覆盖现有数据。')
-                            db.execute('INSERT OR IGNORE INTO points VALUES (?,?,?,?)',
-                                       (point['date'], ratio, report.url, now().isoformat()))
+                            inserted = db.execute('INSERT OR IGNORE INTO points VALUES (?,?,?,?)',
+                                                  (point['date'], ratio, report.url, now().isoformat())).rowcount
                             if corrected:
                                 db.execute('INSERT OR REPLACE INTO report_resolutions VALUES (?,?,?,?,?,?,?)',
                                            (row['trade_date'], report.url, correction['content_sha256'],
                                             point['date'], ratio, correction['reason'], now().isoformat()))
+                        # The transaction has exited successfully: log only committed dates/counts.
+                        LOG.info('Margin observation saved report_date=%s statistics_date=%s inserted=%s',
+                                 row['trade_date'], observation_date, inserted)
                         consecutive_failures = 0
                     except CollectionCancelled:
                         raise
                     except Exception as exc:
                         run_error = safe_error(exc, stage=report_stage, trade_date=row['trade_date'])
+                        if (report_stage == 'fetch' and safe_error_details(exc)['code'] == 'not_disclosed'):
+                            run_error = safe_error(stage='fetch', code='margin_target_not_ready', trade_date=row['trade_date'])
                         failures += 1
                         consecutive_failures += 1
                         failure = dict(scope='report', date=row['trade_date'],
@@ -395,13 +404,27 @@ class MarginGuarantee:
                     if self.delay and not isinstance(report, RatioReport):
                         self.stop_event.wait(self.delay)
                 check_cancel()
+            # An empty, valid listing is not proof the expected trading day's
+            # observation was published. Keep stored points and report the gap.
+            with self.db() as db:
+                target_saved = db.execute('SELECT 1 FROM points WHERE trade_date=?',
+                                          (target.isoformat(),)).fetchone() is not None
+            LOG.info('Margin target coverage target=%s saved=%s', target, target_saved)
+            target_reason = f'目标统计日 {target} 尚未取得有效担保比例，保留已有数据，请在后续正常采集时点或手动重新检查。'
             if failures:
                 state.update(stage='部分完成，失败日期下次补采', error=f'{failures} 份日报未成功读取，已保存其余数据。最后失败：'
-                                   + failure_summary(state['last_failure']))
+                                   + failure_summary(state['last_failure'])
+                                   + ('' if target_saved else ' ' + target_reason))
+            elif not target_saved:
+                failure = dict(scope='report', date=target.isoformat(),
+                               **safe_error_details(MarginSourceError('东方财富未返回目标统计日有效担保比例。')))
+                state.update(stage='目标统计日数据未取得', error=target_reason,
+                             last_failure=failure, recent_failures=[failure], percent=100)
+                run_error = safe_error(stage='fetch', code='margin_target_not_ready', trade_date=target)
             else:
                 state.update(stage='更新完成' if pending else '没有新增披露', error=None,
                              last_success_at=now().isoformat(), percent=100)
-            outcome = 'partial' if failures else 'success'
+            outcome = 'partial' if failures or not target_saved else 'success'
         except CollectionCancelled:
             state.update(stage='已停止，已保存数据可继续补采', error=None)
             outcome = 'cancelled'
