@@ -7,7 +7,14 @@ type LoginState = {
   state: string
   message: string
   image?: boolean
-  session?: { state: string; checked_at?: string | number | null }
+  session?: {
+    state: string
+    checked_at?: string | number | null
+    retry_at?: number
+    retry_reason?: string
+    pause_reason?: string
+    verification_pending?: boolean
+  }
 }
 const platforms = ['weibo', 'xueqiu'] as const
 const label = (platform: Platform) => (platform === 'weibo' ? '微博' : '雪球')
@@ -17,8 +24,12 @@ const normal = (state?: LoginState) => state?.session?.state === 'normal'
 const sessionMessage = (state?: LoginState) => {
   if (!state) return '正在读取登录状态…'
   if (active(state)) return state.message
+  if (normal(state) && state.session?.retry_at)
+    return `上次登录验证正常 · 采集退避中（${state.session.retry_reason ?? '等待重试'}；最早重试：${new Date(state.session.retry_at * 1000).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai', hour12: false })}）`
+  if (normal(state) && state.session?.verification_pending) return '登录验证正常，等待采集验证'
   if (normal(state)) return '登录正常'
   if (state.session?.state === 'expired') return '登录已失效，请重新扫码'
+  if (state.session?.pause_reason) return state.session.pause_reason
   if (state.session?.state === 'restricted') return '平台访问受限，请检查账号或扫码处理'
   if (['error', 'blocked', 'expired'].includes(state.state)) return state.message
   if (state.session?.state === 'unknown') return '已有登录凭据，等待下一次监控验证'

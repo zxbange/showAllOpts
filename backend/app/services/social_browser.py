@@ -179,8 +179,6 @@ class BrowserLogin:
             raise ValueError('请先取消正在进行的扫码登录') from None
         try:
             self.monitor.update_config({platform + '_cookie': ''})
-            self.monitor.platform_state(platform, paused=True, reason='已退出平台登录', reason_code='logged_out',
-                                        retry_at=0, failures=0, incident_id=None, alert_sent_at='manual')
             profile = self.profiles / platform
             # Remove only this platform's local browser credentials, never a resolved external path.
             if profile.is_symlink() or profile.resolve().parent != self.profiles.resolve():
