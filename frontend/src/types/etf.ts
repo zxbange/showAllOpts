@@ -50,6 +50,7 @@ export interface ETFCollectionCoverage {
 
 export interface ETFCollectionRun {
   error_details?: CollectionErrorDetails | null
+  publication_recovered_at?: string | null
   id: string
   trigger: 'manual' | 'scheduled'
   status: string

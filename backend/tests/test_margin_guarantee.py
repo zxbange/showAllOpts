@@ -410,7 +410,8 @@ def test_cached_title_anomaly_preserves_actual_day_and_persists_receipt(monitor,
     if before:
         assert history['points'] == before
     assert status['pending_reports'] == 0
-    assert status['error'] is None
+    assert status['last_failure']['code'] == 'target_not_ready'
+    assert '2026-10-27' in status['error']
     assert status['source_corrections'][0]['report_date'] == '2023-10-06'
     assert status['source_corrections'][0]['content_sha256'] == m.TITLE_DATE_CORRECTION['content_sha256']
     restarted = m.MarginGuarantee(monitor.settings, client_factory=lambda: nullcontext(object()), delay=0)
@@ -477,7 +478,8 @@ def test_formal_actual_day_is_verified_before_correction(monitor, monkeypatch, n
                 assert status['source_corrections'] == []
             else:
                 assert status['pending_reports'] == 0
-                assert status['error'] is None
+                assert status['last_failure']['code'] == 'target_not_ready'
+                assert '2026-10-27' in status['error']
 
 
 def test_resolution_write_failure_rolls_back_new_observation(monitor, monkeypatch):
@@ -563,9 +565,39 @@ def test_manual_unknown_calendar_does_not_connect_or_change_existing_data(monito
     assert '无法核验' in monitor.status(later)['error']
 
 
-def test_automatic_query_date_mapping_is_not_changed(monitor, monkeypatch):
-    today = MOMENT.date()
-    calls = provider(monkeypatch, [today])
-    assert monitor.refresh(background=False, moment=MOMENT, slot=MOMENT.isoformat())
-    assert calls['lists'][-1][1] == today
-    assert calls['points'] == [today]
+@pytest.mark.parametrize('moment,expected', [
+    (datetime(2026, 11, 26, 8, tzinfo=m.CHINA), date(2026, 11, 25)),
+    (datetime(2026, 11, 30, 8, tzinfo=m.CHINA), date(2026, 11, 27)),
+    (datetime(2026, 10, 8, 8, tzinfo=m.CHINA), date(2026, 9, 30)),
+])
+def test_automatic_and_manual_share_previous_verified_statistics_day(monitor, monkeypatch, moment, expected):
+    today = moment.date()
+    calls = provider(monkeypatch, [expected, today])
+    assert monitor.refresh(background=False, moment=moment, slot=moment.isoformat())
+    assert calls['lists'][-1][1] == expected
+    assert calls['points'] == [expected]
+    assert monitor.status(moment)['target_date'] == str(expected)
+    assert monitor.refresh(background=False, moment=moment)
+    assert calls['lists'][-1][1] == expected
+    assert calls['points'] == [expected]
+    assert monitor.status(moment)['error'] is None
+
+
+def test_schedule_adjustment_keeps_slot_identity_and_rechecks_same_target(monitor, monkeypatch):
+    # Running 08:00 then moving the configured slot to 08:10 can trigger
+    # another normal slot; it must never consume the same-session statistics.
+    calls = provider(monkeypatch, [MOMENT.date() - timedelta(days=1), MOMENT.date()])
+    config = {'enabled': True, 'times': ['08:00']}
+    monkeypatch.setattr(m, 'task_config', lambda *_: config)
+    # latest_task_slot uses the configuration module's task_config directly.
+    monkeypatch.setattr('app.services.system_configuration.task_config', lambda *_: config)
+    monitor.schedule_floor = (MOMENT - timedelta(days=1)).isoformat()
+    monitor.tick(MOMENT)
+    config['times'] = ['08:10']
+    monitor.tick(MOMENT.replace(minute=51))
+    assert len(calls['lists']) == 2
+    assert all(end == MOMENT.date() - timedelta(days=1) for _, end in calls['lists'])
+    assert calls['points'] == [MOMENT.date() - timedelta(days=1)]
+    assert monitor.read_state()['scheduled_slot'] == MOMENT.replace(minute=10).isoformat()
+    monitor.tick(MOMENT.replace(minute=52))
+    assert len(calls['lists']) == 2

@@ -114,7 +114,7 @@ describe('full-history percentile benchmarks', () => {
     star50_dividend_ratio: star50,
   })
 
-  it('interpolates independent historical samples and excludes pre-2018 ChiNext values', () => {
+  it('ranks independent latest valid values and excludes pre-2018 ChiNext values', () => {
     const history = [
       sample('2017-12-29', 9999),
       sample('2018-01-02', 0.5),
@@ -126,12 +126,9 @@ describe('full-history percentile benchmarks', () => {
     const original = structuredClone(history)
     const [chinext, star50] = growthDividendBenchmarks(history)
     expect(chinext.sampleCount).toBe(5)
-    expect(chinext.levels.map((level) => level.percentile)).toEqual(['P20', 'P80'])
-    expect(chinext.levels[0].value).toBeCloseTo(0.18, 12)
-    expect(chinext.levels[1].value).toBeCloseTo(0.42, 12)
+    expect(chinext.levels).toEqual([{ percentile: 0.5, value: 0.3, date: '2026-11-10' }])
     expect(star50.sampleCount).toBe(3)
-    expect(star50.levels[0].value).toBeCloseTo(0.36, 12)
-    expect(star50.levels[1].value).toBeCloseTo(0.84, 12)
+    expect(star50.levels).toEqual([{ percentile: 0.5, value: 0.6, date: '2026-11-10' }])
     expect(history).toEqual(original)
   })
 
@@ -145,13 +142,13 @@ describe('full-history percentile benchmarks', () => {
     expect(single).toMatchObject({
       key: 'chinext_dividend_ratio',
       sampleCount: 1,
-      levels: [{ percentile: 'P20/P80', value: 0.3 }],
+      levels: [{ percentile: 0.5, value: 0.3, date: '2026-11-10' }],
     })
     expect(growthDividendSeries(invalid).filter((line) => line.markLine?.data.length)).toEqual([])
     const constant = growthDividendSeries([sample('2020-01-02', 0.3), sample('2026-11-10', 0.3)])
     expect(constant[3].markLine?.data).toMatchObject([
       {
-        name: '创红比 P20/P80',
+        name: '创红比 50%',
         yAxis: 0.3,
       },
     ])
@@ -161,8 +158,7 @@ describe('full-history percentile benchmarks', () => {
   it('updates when observations are corrected or added, but ignores newly missing dates', () => {
     const history = [sample('2018-01-02', 0.2), sample('2026-11-10', 0.8)]
     const before = growthDividendBenchmarks(history)
-    expect(before[0].levels[0].value).toBeCloseTo(0.32, 12)
-    expect(before[0].levels[1].value).toBeCloseTo(0.68, 12)
+    expect(before[0].levels).toEqual([{ percentile: 1, value: 0.8, date: '2026-11-10' }])
     expect(growthDividendBenchmarks([...history, sample('2026-11-11', null)])).toEqual(before)
     const after = growthDividendBenchmarks([
       history[0],
@@ -170,16 +166,28 @@ describe('full-history percentile benchmarks', () => {
       sample('2026-11-11', 0.6),
     ])
     expect(after[0].sampleCount).toBe(3)
-    expect(after[0].levels[0].value).toBeCloseTo(0.28, 12)
-    expect(after[0].levels[1].value).toBeCloseTo(0.52, 12)
+    expect(after[0].levels).toEqual([{ percentile: 1, value: 0.6, date: '2026-11-11' }])
     const series = growthDividendSeries(history, before)
     expect(series.slice(0, 3).every((line) => line.markLine === undefined)).toBe(true)
     expect(series[3].markLine?.lineStyle).toMatchObject({ type: 'dashed', width: 1, opacity: 0.5 })
     expect(series[3].markLine?.label).toEqual({ show: false })
-    expect(series[3].markLine?.data.map((line) => line.name)).toEqual(['创红比 P20', '创红比 P80'])
+    expect(series[3].markLine?.data.map((line) => line.name)).toEqual(['创红比 100%'])
     expect(series[3].markLine?.data.map((line) => line.yAxis)).toEqual(
       before[0].levels.map((level) => level.value),
     )
+  })
+
+  it('uses the latest valid date per ratio, including ties and out-of-order input', () => {
+    const history = [
+      sample('2026-11-10', 0.5, null),
+      sample('2026-11-08', 0.5, 0.8),
+      sample('2026-11-07', 0.1, 0.2),
+      sample('2026-11-09', 0.9, 0.2),
+      sample('2026-11-11', null, null),
+    ]
+    const [chinext, star50] = growthDividendBenchmarks(history)
+    expect(chinext.levels).toEqual([{ percentile: 0.5, value: 0.5, date: '2026-11-10' }])
+    expect(star50.levels).toEqual([{ percentile: 0.25, value: 0.2, date: '2026-11-09' }])
   })
 })
 
@@ -229,6 +237,12 @@ describe('axis-side percentile labels', () => {
           star50_dividend_ratio: scenario.starRatios[index],
         }))
         const benchmarks = growthDividendBenchmarks(history)
+        const expectedLabels = benchmarks
+          .map(
+            (benchmark) =>
+              `${benchmark.key === 'chinext_dividend_ratio' ? '创' : '科'} ${Math.round(benchmark.levels[0].percentile * 100)}%`,
+          )
+          .sort()
         const referenceValues = benchmarks.flatMap((benchmark) =>
           benchmark.levels.map((level) => level.value),
         )
@@ -295,12 +309,7 @@ describe('axis-side percentile labels', () => {
               (element): element is InstanceType<typeof graphic.Text> =>
                 element instanceof graphic.Text,
             )
-          expect(labels.map((label) => label.style.text).sort()).toEqual([
-            '创 0.2',
-            '创 0.8',
-            '科 0.2',
-            '科 0.8',
-          ])
+          expect(labels.map((label) => label.style.text).sort()).toEqual(expectedLabels)
           expect(labels.every((label) => label.style.opacity === 0.65)).toBe(true)
           const bounds = labels.map((label) => {
             const rect = label.getBoundingRect().clone()
@@ -327,18 +336,12 @@ describe('axis-side percentile labels', () => {
               (element): element is InstanceType<typeof graphic.Polyline> =>
                 element instanceof graphic.Polyline,
             )
-          expect(leaders).toHaveLength(4)
+          expect(leaders).toHaveLength(2)
           for (const [index, benchmark] of benchmarks.entries()) {
-            const values =
-              benchmark.levels.length === 1
-                ? [benchmark.levels[0].value, benchmark.levels[0].value]
-                : benchmark.levels.map((level) => level.value).reverse()
-            for (const [offset, value] of values.entries()) {
-              expect(leaders[index * 2 + offset].shape.points[0][1]).toBeCloseTo(
-                chart.convertToPixel({ yAxisIndex: 1 }, value) as number,
-                8,
-              )
-            }
+            expect(leaders[index].shape.points[0][1]).toBeCloseTo(
+              chart.convertToPixel({ yAxisIndex: 1 }, benchmark.levels[0].value) as number,
+              8,
+            )
           }
           const redraw = (shown = benchmarks) => {
             chart.getZr().remove(currentOverlay)
@@ -373,25 +376,27 @@ describe('axis-side percentile labels', () => {
             growthDividendSeries(history, benchmarks).map((series) => series.markLine?.data),
           )
           chart.resize({ width: width === 960 ? 280 : 960, height: 390 })
-          expect(redraw()).toEqual(['创 0.2', '创 0.8', '科 0.2', '科 0.8'])
+          expect(redraw()).toEqual(expectedLabels)
           chart.dispatchAction({ type: 'dataZoom', start: 40, end: 80 })
-          expect(redraw()).toEqual(['创 0.2', '创 0.8', '科 0.2', '科 0.8'])
+          expect(redraw()).toEqual(expectedLabels)
           chart.dispatchAction({ type: 'legendUnSelect', name: '创红比' })
-          expect(redraw(benchmarks.slice(1))).toEqual(['科 0.2', '科 0.8'])
+          expect(redraw(benchmarks.slice(1))).toEqual(
+            expectedLabels.filter((label) => label.startsWith('科')),
+          )
           chart.dispatchAction({ type: 'legendUnSelect', name: '科创红利比' })
           expect(redraw([])).toEqual([])
           chart.dispatchAction({ type: 'legendSelect', name: '创红比' })
           chart.dispatchAction({ type: 'legendSelect', name: '科创红利比' })
-          expect(redraw()).toEqual(['创 0.2', '创 0.8', '科 0.2', '科 0.8'])
+          expect(redraw()).toEqual(expectedLabels)
           expect(
             JSON.stringify(growthDividendSeries(history).map((series) => series.markLine?.data)),
           ).toBe(initialReferences)
-          // A collapsed chart cannot fit two labels. Skip the overlay rather than
+          // A collapsed chart cannot fit labels. Skip the overlay rather than
           // drawing coincident text, then restore it as soon as it has room.
           chart.resize({ width, height: 130 })
           expect(redraw()).toEqual([])
           chart.resize({ width, height: 390 })
-          expect(redraw()).toEqual(['创 0.2', '创 0.8', '科 0.2', '科 0.8'])
+          expect(redraw()).toEqual(expectedLabels)
           // Optional synthetic previews for local visual QA; never production data.
           const output = process.env.GROWTH_DIVIDEND_PREVIEW_DIR
           if (output) {

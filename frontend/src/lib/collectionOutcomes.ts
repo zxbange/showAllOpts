@@ -49,7 +49,17 @@ export function collectionOutcomePresentation(item?: CollectionOutcome, unavaila
     hour12: false,
   })
   const trigger = item.trigger === 'manual' ? '手动' : item.trigger === 'scheduled' ? '自动' : ''
-  const label = `${item.running ? `正在${action}；` : ''}最近一次已结束${trigger}${action}：${state}；${when}（北京时间）`
+  const recovered =
+    item.outcome === 'success' && item.publication_recovered_at
+      ? Date.parse(item.publication_recovered_at)
+      : NaN
+  const publication = Number.isFinite(recovered)
+    ? `；图表缓存随后于 ${new Date(recovered).toLocaleString('zh-CN', {
+        timeZone: 'Asia/Shanghai',
+        hour12: false,
+      })} 发布成功`
+    : ''
+  const label = `${item.running ? `正在${action}；` : ''}最近一次已结束${trigger}${action}：${state}；${when}（北京时间）${publication}`
   if (item.running) return { tone: 'running', symbol: '…', label }
   if (item.outcome === 'success') return { tone: 'success', symbol: '✓', label }
   if (item.outcome === 'failed' || item.outcome === 'partial')

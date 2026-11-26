@@ -98,7 +98,7 @@ async function inspectChart(page: Page) {
     }
     return {
       benchmarkLabels: texts
-        .filter((text) => /^[创科] 0\.[28]$/.test(text.style.text))
+        .filter((text) => /^[创科] \d+%$/.test(text.style.text))
         .map((text) => ({
           text: text.style.text,
           opacity: text.style.opacity,
@@ -228,18 +228,19 @@ test('five-year default, all history, date entry and manual zoom survive refresh
   const references = chart.series.map((line) => line.references)
   expect(references.slice(0, 3)).toEqual([[], [], []])
   expect(chart.series.slice(3).map((line) => line.referenceStyle)).toEqual(['dashed', 'dashed'])
-  // These are calculated from all ten historical dates, including observations
-  // outside the five-year view; the early STAR nulls are not zero samples.
-  expect(references[3][0].yAxis).toBeCloseTo(0.5105071448585038, 12)
-  expect(references[3][1].yAxis).toBeCloseTo(0.5354150799695354, 12)
-  expect(references[4][0].yAxis).toBeCloseTo(0.2236100533130236, 12)
-  expect(references[4][1].yAxis).toBeCloseTo(0.2368775872264932, 12)
+  // One line per ratio at its own latest valid value, ranked against all history.
+  expect(references[3]).toEqual([
+    { name: '创红比 100%', yAxis: points.at(-1)!.chinext_dividend_ratio },
+  ])
+  expect(references[4]).toEqual([
+    { name: '科创红利比 0%', yAxis: points.at(-1)!.star50_dividend_ratio },
+  ])
   expect(chart.series.slice(3).every((line) => line.referenceWidth === 1)).toBe(true)
   expect(chart.series.slice(3).every((line) => line.referenceOpacity === 0.5)).toBe(true)
   expect(chart.series.slice(3).every((line) => !line.referenceLabelsVisible)).toBe(true)
   const labelTexts = async () =>
     (await inspectChart(page)).benchmarkLabels.map((label) => label.text).sort()
-  await expect.poll(labelTexts).toEqual(['创 0.2', '创 0.8', '科 0.2', '科 0.8'])
+  await expect.poll(labelTexts).toEqual(['创 100%', '科 0%'])
   assertLabelLayout(chart)
   await expect(page.locator('.growth-dividend-benchmarks')).toHaveCount(0)
   await expect(page.locator('.growth-dividend-benchmark-note')).toContainText('两组细虚线均读右轴')
@@ -261,13 +262,13 @@ test('five-year default, all history, date entry and manual zoom survive refresh
     .toMatchObject({ start: '2020-01-02', end: '2021-11-10' })
   const custom = await inspectChart(page)
   expect(custom.series.map((line) => line.references)).toEqual(references)
-  // Local ratios do not reach the full-history P20/P80, but the right axis
-  // still contains all four visible benchmarks. The left axis stays local.
+  // Local ratios do not reach the latest full-history reference, but the right axis
+  // still contains both visible references. The left axis stays local.
   expect(custom.rightExtent[0]).toBeLessThan(references[4][0].yAxis)
-  expect(custom.rightExtent[1]).toBeGreaterThan(references[3][1].yAxis)
+  expect(custom.rightExtent[1]).toBeGreaterThan(references[3][0].yAxis)
   expect(custom.leftExtent[1]).toBeLessThan(points.at(-1)!.dividend!)
   await page.getByRole('button', { name: '隐藏创红比', exact: true }).click()
-  await expect.poll(labelTexts).toEqual(['科 0.2', '科 0.8'])
+  await expect.poll(labelTexts).toEqual(['科 0%'])
   await expect.poll(async () => (await inspectChart(page)).series[3].visible).toBe(false)
   expect((await inspectChart(page)).rightExtent[1]).toBeLessThan(references[3][0].yAxis)
   await page.getByRole('button', { name: '隐藏科创红利比', exact: true }).click()
@@ -275,7 +276,7 @@ test('five-year default, all history, date entry and manual zoom survive refresh
   await expect.poll(async () => (await inspectChart(page)).series[4].visible).toBe(false)
   await page.getByRole('button', { name: '显示创红比', exact: true }).click()
   await page.getByRole('button', { name: '显示科创红利比', exact: true }).click()
-  await expect.poll(labelTexts).toEqual(['创 0.2', '创 0.8', '科 0.2', '科 0.8'])
+  await expect.poll(labelTexts).toEqual(['创 100%', '科 0%'])
   await page.evaluate(async () => {
     const url = '/tests/chart-runtime.ts'
     const { getInstanceByDom } = await import(url)
@@ -320,9 +321,12 @@ test('five-year default, all history, date entry and manual zoom survive refresh
   await expect(draftStart).toHaveValue('2020-01-01')
   const updated = await inspectChart(page)
   assertLabelLayout(updated)
-  expect(updated.series[3].references[0].yAxis).toBeCloseTo(2200 / 4300, 12)
-  expect(updated.series[3].references[1].yAxis).toBeCloseTo(2800 / 5200, 12)
-  expect(updated.series[4].references[0].yAxis).toBeCloseTo(0.22156721782890007, 12)
+  expect(updated.series[3].references).toEqual([
+    { name: '创红比 95%', yAxis: points.at(-1)!.chinext_dividend_ratio },
+  ])
+  expect(updated.series[4].references).toEqual([
+    { name: '科创红利比 7%', yAxis: points.at(-1)!.star50_dividend_ratio },
+  ])
   expect(updated.series.map((line) => line.references)).not.toEqual(references)
   expect(reads).toBe(initialReads + 1)
   await page.getByRole('button', { name: '近5年', exact: true }).click()
@@ -529,11 +533,10 @@ for (const delta of [0, 0.00000001]) {
       }, width)
       await expect.poll(async () => (await inspectChart(page)).width).toBe(width)
       const resized = await inspectChart(page)
+      const percentile = delta ? '78%' : '50%'
       expect(resized.benchmarkLabels.map((label) => label.text).sort()).toEqual([
-        '创 0.2',
-        '创 0.8',
-        '科 0.2',
-        '科 0.8',
+        `创 ${percentile}`,
+        `科 ${percentile}`,
       ])
       expect(resized.series.map((line) => line.references)).toEqual(original)
       assertLabelLayout(resized)
@@ -581,4 +584,30 @@ test('a fast terminal attempt without a run ID releases the start button', async
   await expect(update).toBeEnabled()
   await expect(page.getByRole('button', { name: '取消采集', exact: true })).toHaveCount(0)
   expect(starts).toBe(1)
+})
+
+test('current percentile follows each ratio latest valid observation without filling missing samples', async ({
+  page,
+}) => {
+  const sample = [
+    { ...points[0], date: '2026-11-07', chinext_dividend_ratio: 0.2, star50_dividend_ratio: 0.4 },
+    { ...points[1], date: '2026-11-09', chinext_dividend_ratio: 0.4, star50_dividend_ratio: 0.2 },
+    { ...points[2], date: '2026-11-10', chinext_dividend_ratio: 0.3, star50_dividend_ratio: null },
+    { ...points[3], date: '2026-11-11', chinext_dividend_ratio: null, star50_dividend_ratio: null },
+  ]
+  await page.route('**/api/v1/growth-dividend/**', (route) =>
+    route.fulfill({
+      json: route.request().url().endsWith('/status')
+        ? status
+        : { ...history, points: sample, latest: sample.at(-1) },
+    }),
+  )
+  await page.goto('/growth-dividend')
+  await expect(page.locator('.growth-dividend-chart canvas')).toBeVisible()
+  const chart = await inspectChart(page)
+  expect(chart.series[3].references).toEqual([{ name: '创红比 50%', yAxis: 0.3 }])
+  expect(chart.series[4].references).toEqual([{ name: '科创红利比 0%', yAxis: 0.2 }])
+  expect(chart.series[3].data.at(-1)).toBeNull()
+  expect(chart.series[4].data.slice(-2)).toEqual([null, null])
+  assertLabelLayout(chart)
 })

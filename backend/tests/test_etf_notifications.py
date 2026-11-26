@@ -169,6 +169,31 @@ def test_cache_pending_has_same_partial_terminal_and_no_duplicate_when_published
     assert '目标数据日期：2026-11-23' in result['message']
 
 
+def test_verified_cache_outcome_recovers_same_run_without_second_notification(tmp_path, monkeypatch):
+    from app.services.collection_outcomes import latest_outcomes
+
+    _enable_outbox(monkeypatch)
+    case = SourceFixture(tmp_path, monkeypatch)
+    case.worker.cache_publisher = case.cache.publish_etf_collection
+    case.worker.cache_verifier = case.cache.verify_etf_publication
+    held = case.cache.acquire()
+    assert held is not None
+    try:
+        assert case.worker.tick(case.now)
+        original = case.worker.status()['latest_result']
+        assert original['status'] == 'partial'
+    finally:
+        held.release()
+    case.now += timedelta(minutes=6)
+    assert not case.worker.tick(case.now)
+    result = case.worker.status()['latest_result']
+    assert result['status'] == 'complete' and result['id'] == original['id']
+    assert latest_outcomes(case.worker.settings)['items']['etf-shares']['outcome'] == 'success'
+    with notifications._database(case.worker.settings) as outbox:
+        messages = outbox.execute('SELECT message FROM outbox').fetchall()
+    assert len(messages) == 1 and '采集结果：部分完成' in messages[0]['message']
+
+
 def test_ambiguous_commit_never_reports_totals_or_a_false_zero(tmp_path, monkeypatch):
     _enable_outbox(monkeypatch)
     case = SourceFixture(tmp_path, monkeypatch)

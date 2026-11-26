@@ -1,5 +1,38 @@
 from types import SimpleNamespace
-from app.services.collection_outcomes import record_outcome, latest_outcomes, database, record_task
+
+from app.services.collection_outcomes import database, latest_outcomes, record_outcome, record_task
+
+
+def test_publication_resolution_preserves_original_order_and_partial_audit(tmp_path):
+    import json
+
+    from app.services.collection_outcomes import outcome_history, recover_publication_outcome
+
+    settings = SimpleNamespace(log_path=tmp_path)
+    module = 'etf-shares'
+    first = '2026-11-26T08:00:24+08:00'
+    later = '2026-11-26T08:03:00+08:00'
+    recovered = '2026-11-26T08:05:35+08:00'
+    identity = dict(run_key='cache-only', trigger='scheduled', finished_at=first)
+    assert record_outcome(settings, module, outcome='partial',
+                          error_details={'code': 'publication_pending', 'stage': 'cache_publish'}, **identity)
+    assert record_outcome(settings, module, run_key='newer-failure', outcome='failed', trigger='manual', finished_at=later)
+    assert not recover_publication_outcome(settings, module, recovered_at=first.replace('08:00:24','07:59:00'), **identity)
+    assert not recover_publication_outcome(settings, module, **(identity | {'trigger':'manual'}), recovered_at=recovered)
+    assert recover_publication_outcome(settings, module, recovered_at=recovered, **identity)
+    assert recover_publication_outcome(settings, module, recovered_at=recovered, **identity)
+    assert latest_outcomes(settings)['items'][module]['outcome'] == 'failed'
+    rows = outcome_history(settings, module)['items']
+    assert [r['outcome'] for r in rows] == ['failed','success']
+    assert rows[1]['run_key'] == 'cache-only' and rows[1]['error_details'] is None
+    assert rows[1]['publication_recovered_at'].startswith('2026-11-26T00:05:35')
+    with database(settings) as db:
+        detail = json.loads(db.execute('SELECT payload FROM result_details WHERE module=? AND run_key=?',
+                                       (module,'cache-only')).fetchone()[0])
+        assert detail['code'] == 'publication_pending'
+        assert db.execute('SELECT COUNT(*) FROM results').fetchone()[0] == 2
+    assert not recover_publication_outcome(settings, module, run_key='newer-failure', trigger='manual',
+                                           finished_at=later, recovered_at=recovered)
 
 
 def test_completion_order_not_success_preference_and_idempotent(tmp_path):
@@ -43,7 +76,8 @@ def test_task_aliases_and_all_cash_cow_periods(tmp_path):
 
 
 def test_native_newer_failure_cannot_be_hidden_by_older_ledger_success(tmp_path):
-    import sqlite3, json
+    import json
+    import sqlite3
     settings = SimpleNamespace(log_path=tmp_path)
     root = tmp_path / 'market-data' / 'commodities'
     root.mkdir(parents=True)
@@ -55,7 +89,8 @@ def test_native_newer_failure_cannot_be_hidden_by_older_ledger_success(tmp_path)
 
 
 def test_old_last_success_is_not_a_finished_latest_failure(tmp_path):
-    import sqlite3, json
+    import json
+    import sqlite3
     settings = SimpleNamespace(log_path=tmp_path)
     root = tmp_path / 'market-data' / 'dividend-collection'
     root.mkdir(parents=True)
@@ -66,7 +101,11 @@ def test_old_last_success_is_not_a_finished_latest_failure(tmp_path):
 
 
 def test_corrupt_ledger_cannot_fall_back_to_stale_native_success(tmp_path):
-    import pytest, sqlite3, json
+    import json
+    import sqlite3
+
+    import pytest
+
     from app.services.collection_outcomes import OutcomeUnavailable
     settings = SimpleNamespace(log_path=tmp_path)
     root = tmp_path / 'market-data' / 'commodities'
@@ -95,7 +134,8 @@ def test_api_authenticated_no_store_and_unavailable_is_not_stale_green(client):
 
 
 def test_new_native_failure_without_finish_clock_masks_stale_ledger_success(tmp_path):
-    import sqlite3, json
+    import json
+    import sqlite3
     settings = SimpleNamespace(log_path=tmp_path)
     root = tmp_path / 'market-data' / 'dividend-collection'
     root.mkdir(parents=True)

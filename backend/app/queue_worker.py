@@ -97,6 +97,7 @@ def serve(settings: Settings, stop_requested: threading.Event) -> int:
             refresh=cache.refresh_etf_collection,
             tick_gate=gate,
             cache_publisher=cache.publish_etf_collection,
+            cache_verifier=cache.verify_etf_publication,
         )
         market = MarketCollection(
             settings, refresh=cache.refresh_market_collection, cache=cache, tick_gate=gate

@@ -19,7 +19,8 @@ from app.core import database
 from app.core.cache import SnapshotCache
 from app.core.config import Settings
 from app.models.etf import ETFPrice, ETFShare, ETFTradingDay
-from app.repositories.etf_publication_state import mark_committed
+from app.repositories.etf_publication_state import clear_publication_requirements, mark_committed
+from app.services import collection_outcomes
 from app.services.etf_collection import ETFCollection
 
 
@@ -47,6 +48,7 @@ def test_actual_worker_cache_lock_source_mismatch_and_verified_api_recovery(tmp_
     case = SourceFixture(tmp_path, monkeypatch, manual=True)
     save(case.worker, {'enabled': False, 'schedule': ['08:00']})
     case.worker.cache_publisher = case.cache.publish_etf_collection
+    case.worker.cache_verifier = case.cache.verify_etf_publication
     case.seed_ledger(TARGET)
     code = '510300.XSHG'
     case.seed_share(code, HISTORY, 12_345)
@@ -63,6 +65,13 @@ def test_actual_worker_cache_lock_source_mismatch_and_verified_api_recovery(tmp_
         assert state['cache_pending'] and state['cache_publication']['status'] == 'waiting_lock'
         assert state['cache_publication']['required_through'] == str(TARGET)
         assert state['latest_result']['status'] == 'partial'
+        original = state['latest_result']
+        assert (
+            collection_outcomes.latest_outcomes(case.worker.settings)['items']['etf-shares'][
+                'outcome'
+            ]
+            == 'partial'
+        )
         assert _history(client)['end_date'] == str(HISTORY)
     finally:
         held.release()
@@ -82,6 +91,10 @@ def test_actual_worker_cache_lock_source_mismatch_and_verified_api_recovery(tmp_
     assert case.cache.read_state()['modules']['etf-shares']['file'] == prior_file
     assert _history(client)['end_date'] == str(HISTORY)
     assert not any(key.startswith('cache_expected_day:') for key in state['metadata'])
+    assert (
+        collection_outcomes.latest_outcomes(case.worker.settings)['items']['etf-shares']['outcome']
+        == 'partial'
+    )
 
     with case.engine.begin() as source:
         source.execute(table.insert(), committed)
@@ -95,11 +108,250 @@ def test_actual_worker_cache_lock_source_mismatch_and_verified_api_recovery(tmp_
     assert history['end_date'] == str(TARGET)
     assert history['funds'][0]['shares'] == str(committed['shares'])
     assert len(state['recent_runs']) == 1  # A publication-only retry is not another collection.
+    recovered = state['latest_result']
+    assert recovered['id'] == original['id'] and recovered['finished_at'] == original['finished_at']
+    assert recovered['status'] == 'complete' and recovered['error_details'] is None
+    assert recovered['publication_recovered_at']
+    unified = collection_outcomes.latest_outcomes(case.worker.settings)['items']['etf-shares']
+    assert (
+        unified['outcome'] == 'success'
+        and unified['publication_recovered_at'] == recovered['publication_recovered_at']
+    )
     with case.worker.connect() as db:
         assert not db.execute(
             "SELECT 1 FROM metadata WHERE key LIKE 'cache_expected_day:%'"
         ).fetchone()
+        assert (
+            db.execute('SELECT status FROM run_history WHERE id=?', (original['id'],)).fetchone()[0]
+            == 'partial'
+        )
+        raw = json.loads(
+            db.execute(
+                'SELECT details FROM run_history_errors WHERE id=?', (original['id'],)
+            ).fetchone()[0]
+        )
+        assert raw['code'] == 'publication_pending' and raw['publication_synced']
     client.close()
+
+
+def _restarted_worker(case):
+    worker = ETFCollection(
+        case.worker.settings,
+        cache_publisher=case.cache.publish_etf_collection,
+        cache_verifier=case.cache.verify_etf_publication,
+        collector=case.worker.collector,
+        clock=lambda: case.now,
+        client_factory=lambda: pytest.fail('publication-only recovery must not fetch an exchange'),
+    )
+    worker.start = lambda: None
+    return worker
+
+
+@pytest.mark.parametrize('missing_key', [False, True])
+@pytest.mark.parametrize('manual', [False, True])
+def test_existing_old_red_ledger_requires_actual_same_date_snapshot(
+    tmp_path, monkeypatch, missing_key, manual
+):
+    from app.core import cache as cache_module
+
+    case = SourceFixture(tmp_path, monkeypatch, manual=manual)
+    monkeypatch.setattr(cache_module, 'now', lambda: case.now)
+    case.worker.refresh = lambda **_: False  # Old collector could not acquire refresh.lock.
+    if manual:
+        save(case.worker, {'enabled': False, 'schedule': ['08:00']})
+        case.seed_ledger(TARGET)
+        case.worker.request_run('old-cache-pending-manual')
+    assert case.worker.tick(case.now)
+    old = case.worker.status()['latest_result']
+    assert old['status'] == 'partial' and old['error_details']['code'] == 'publication_pending'
+    # Reproduce the old deployed ledger: no per-run requirement or recovery
+    # receipt, and cache_pending was cleared after the old boolean refresh.
+    with case.worker.connect() as db:
+        db.execute(
+            'UPDATE run_history_errors SET details=? WHERE id=?',
+            (json.dumps({'code': 'publication_pending', 'stage': 'cache_publish'}), old['id']),
+        )
+    case.now += timedelta(minutes=6)
+    table = ETFPrice.__table__
+    condition = (table.c.fund_code == '510050.XSHG') & (table.c.trade_date == TARGET)
+    if missing_key:
+        with case.engine.begin() as source:
+            missing = dict(source.execute(select(table).where(condition)).mappings().one())
+            source.execute(table.delete().where(condition))
+    assert case.cache.refresh_etf_collection()
+    with case.worker.connect() as db:
+        clear_publication_requirements(db)
+    restarted = _restarted_worker(case)
+    assert not restarted.tick(case.now)
+    if missing_key:
+        # Other funds already give the cache MAX(date)=TARGET; that is not
+        # sufficient proof of all committed observations.
+        assert restarted.status()['latest_result']['status'] == 'partial'
+        assert (
+            collection_outcomes.latest_outcomes(restarted.settings)['items']['etf-shares'][
+                'outcome'
+            ]
+            == 'partial'
+        )
+        with case.engine.begin() as source:
+            source.execute(table.insert(), missing)
+        case.now += timedelta(minutes=1)
+        assert case.cache.refresh_etf_collection()
+        assert not restarted.tick(case.now)
+    result = restarted.status()['latest_result']
+    assert result['id'] == old['id'] and result['finished_at'] == old['finished_at']
+    assert result['status'] == 'complete' and result['publication_recovered_at']
+    assert (
+        collection_outcomes.latest_outcomes(restarted.settings)['items']['etf-shares']['outcome']
+        == 'success'
+    )
+    assert len(restarted.status()['recent_runs']) == 1
+
+
+def test_legacy_recovery_cannot_use_a_different_database_target(tmp_path, monkeypatch):
+    from app.core import cache as cache_module
+
+    case = SourceFixture(tmp_path, monkeypatch)
+    monkeypatch.setattr(cache_module, 'now', lambda: case.now)
+    case.worker.refresh = lambda **_: False
+    assert case.worker.tick(case.now)
+    old = case.worker.status()['latest_result']
+    with case.worker.connect() as db:
+        db.execute(
+            'UPDATE run_history_errors SET details=? WHERE id=?',
+            (json.dumps({'code': 'publication_pending', 'stage': 'cache_publish'}), old['id']),
+        )
+    case.now += timedelta(minutes=6)
+    assert case.cache.refresh_etf_collection()
+    with case.worker.connect() as db:
+        clear_publication_requirements(db)
+    # The original snapshot has the correct dates, but it no longer belongs
+    # to the database selected for the collection ledger/API.
+    save(case.worker, {'enabled': False, 'database': 'different_market_target'})
+    restarted = _restarted_worker(case)
+    assert not restarted.tick(case.now)
+    result = restarted.status()['latest_result']
+    assert result['id'] == old['id'] and result['status'] == 'partial'
+    assert (
+        collection_outcomes.latest_outcomes(restarted.settings)['items']['etf-shares']['outcome']
+        == 'partial'
+    )
+
+
+def test_later_real_failure_is_not_hidden_by_older_publication_recovery(tmp_path, monkeypatch):
+    case = SourceFixture(tmp_path, monkeypatch, manual=True)
+    save(case.worker, {'enabled': False, 'schedule': ['08:00']})
+    case.seed_ledger(TARGET)
+    case.worker.cache_publisher = case.cache.publish_etf_collection
+    case.worker.cache_verifier = case.cache.verify_etf_publication
+    held = case.cache.acquire()
+    assert held is not None
+    try:
+        case.worker.request_run('earlier-publication-pending')
+        assert case.worker.tick(case.now)
+        old = case.worker.status()['latest_result']
+        assert old['status'] == 'partial'
+        case.now += timedelta(minutes=1)
+
+        def unavailable():
+            raise RuntimeError('fixture unavailable')
+
+        case.worker.client_factory = unavailable
+        case.worker.request_run('later-source-failure')
+        assert not case.worker.tick(case.now)
+        assert case.worker.status()['latest_result']['status'] == 'failed'
+    finally:
+        held.release()
+    restarted = _restarted_worker(case)
+    case.now += timedelta(minutes=6)
+    assert not restarted.tick(case.now)
+    state = restarted.status()
+    assert not state['cache_pending']
+    assert state['latest_result']['status'] == 'failed'
+    older = next(row for row in state['recent_runs'] if row['id'] == old['id'])
+    assert older['status'] == 'complete' and older['publication_recovered_at']
+    unified = collection_outcomes.outcome_history(restarted.settings, 'etf-shares')['items']
+    assert [row['outcome'] for row in unified] == ['failed', 'success']
+    assert unified[1]['run_key'] == old['id']
+
+
+def test_real_source_gap_stays_partial_after_cache_only_success(tmp_path, monkeypatch):
+    import httpx
+
+    case = SourceFixture(tmp_path, monkeypatch)
+    case.worker.cache_publisher = case.cache.publish_etf_collection
+    case.worker.cache_verifier = case.cache.verify_etf_publication
+    case.overrides[('510300', TARGET)] = lambda request: httpx.Response(200, json={'result': []})
+    held = case.cache.acquire()
+    assert held is not None
+    try:
+        assert not case.worker.tick(case.now)
+        old = case.worker.status()['latest_result']
+        assert old['status'] == 'partial'
+        assert old['error_details']['code'] != 'publication_pending'
+    finally:
+        held.release()
+    restarted = _restarted_worker(case)
+    case.now += timedelta(minutes=6)
+    assert not restarted.tick(case.now)
+    state = restarted.status()
+    assert not state['cache_pending']
+    assert state['latest_result']['status'] == 'partial'
+    assert 'publication_recovered_at' not in state['latest_result']
+    assert (
+        collection_outcomes.latest_outcomes(restarted.settings)['items']['etf-shares']['outcome']
+        == 'partial'
+    )
+
+
+def test_recovery_receipt_survives_failed_shared_projection_without_duplicate_run(
+    tmp_path, monkeypatch
+):
+    case = SourceFixture(tmp_path, monkeypatch)
+    case.worker.cache_publisher = case.cache.publish_etf_collection
+    case.worker.cache_verifier = case.cache.verify_etf_publication
+    held = case.cache.acquire()
+    assert held is not None
+    try:
+        assert case.worker.tick(case.now)
+    finally:
+        held.release()
+    real = collection_outcomes.recover_publication_outcome
+    monkeypatch.setattr(
+        collection_outcomes, 'recover_publication_outcome', lambda *args, **kwargs: False
+    )
+    restarted = _restarted_worker(case)
+    case.now += timedelta(minutes=6)
+    assert not restarted.tick(case.now)
+    state = restarted.status()
+    assert state['latest_result']['status'] == 'complete' and not state['cache_pending']
+    assert (
+        collection_outcomes.latest_outcomes(restarted.settings)['items']['etf-shares']['outcome']
+        == 'partial'
+    )
+    monkeypatch.setattr(collection_outcomes, 'recover_publication_outcome', real)
+    again = _restarted_worker(case)
+    case.now += timedelta(minutes=1)
+    assert not again.tick(case.now)
+    assert (
+        collection_outcomes.latest_outcomes(again.settings)['items']['etf-shares']['outcome']
+        == 'success'
+    )
+    assert len(collection_outcomes.outcome_history(again.settings, 'etf-shares')['items']) == 1
+    # A separately restored shared ledger may predate its successful repair.
+    # The local immutable recovery receipt must still win for this same run.
+    with collection_outcomes.database(again.settings) as outcomes:
+        outcomes.execute("UPDATE results SET outcome='partial' WHERE module='etf-shares'")
+        outcomes.execute(
+            "UPDATE result_details SET payload=? WHERE module='etf-shares'",
+            (json.dumps({'code': 'publication_pending', 'stage': 'cache_publish'}),),
+        )
+    case.now += timedelta(minutes=1)
+    assert not again.tick(case.now)
+    assert (
+        collection_outcomes.latest_outcomes(again.settings)['items']['etf-shares']['outcome']
+        == 'success'
+    )
 
 
 def test_expected_older_day_forces_dirty_window_and_actual_snapshot_check(tmp_path):

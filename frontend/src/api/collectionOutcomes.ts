@@ -6,6 +6,7 @@ export interface CollectionOutcome {
   trigger: 'manual' | 'scheduled' | null
   kind?: 'collection' | 'database_sync'
   running?: boolean
+  publication_recovered_at?: string | null
 }
 export interface CollectionOutcomes {
   items: Record<string, CollectionOutcome>

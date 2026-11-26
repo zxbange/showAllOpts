@@ -688,15 +688,8 @@ class SnapshotCache:
 
     def publish_etf_collection(self, *, repair_start=None, expected_keys=(), full=False):
         """Prove the selected immutable snapshot really contains the committed ETF keys."""
-        from sqlalchemy import func, select
-
-        from app.core.etf_publication import (
-            ETFPublicationResult,
-            safe_publication_error,
-            validate_local_coverage,
-        )
+        from app.core.etf_publication import ETFPublicationResult
         from app.core.etf_sync import publication_expected_keys, repair_window_start
-        from app.models.etf import ETFPrice
 
         if not self.settings.cache_enabled:
             return ETFPublicationResult('direct_read')
@@ -719,35 +712,55 @@ class SnapshotCache:
             finally:
                 publication_expected_keys.reset(expected_token)
                 repair_window_start.reset(token)
-            entry = self.read_state().get('modules', {}).get('etf-shares', {})
-            if entry.get('error') or entry.get('progress', {}).get('status') != 'complete':
-                code = safe_publication_error(entry.get('error_code')) or 'UNKNOWN'
-                logger.warning('ETF cache publication incomplete code=%s', code)
-                return ETFPublicationResult('failed', error_code=code)
-            try:
-                path = self.snapshot_path('etf-shares', entry)
-                if path is None:
-                    return ETFPublicationResult('failed', error_code='ETF_SNAPSHOT_UNAVAILABLE')
-                engine = create_engine('sqlite:///file:' + path.as_posix() + '?mode=ro&uri=true', poolclass=NullPool)
-                try:
-                    with engine.connect() as local:
-                        validate_local_coverage(local, expected)
-                        shares = local.scalar(select(func.max(ETFShare.trade_date)))
-                        prices = local.scalar(select(func.max(ETFPrice.trade_date)))
-                finally:
-                    engine.dispose()
-            except Exception as exc:
-                code, _, _ = failure_details(exc)
-                logger.warning('ETF cache publication receipt unavailable code=%s %s', code, diagnostic_details(exc))
-                return ETFPublicationResult('failed', error_code=safe_publication_error(code) or 'UNKNOWN')
-            result = ETFPublicationResult('published', latest_share_date=shares.isoformat() if shares else None,
-                                          latest_price_date=prices.isoformat() if prices else None,
-                                          published_at=entry.get('updated_at'))
-            logger.info('ETF cache publication verified shares_through=%s prices_through=%s required_keys=%s',
-                        result.latest_share_date or '-', result.latest_price_date or '-', len(expected))
+            result = self.verify_etf_publication(expected_keys=expected)
+            if result.status == 'published':
+                logger.info('ETF cache publication verified shares_through=%s prices_through=%s required_keys=%s',
+                            result.latest_share_date or '-', result.latest_price_date or '-', len(expected))
             return result
         finally:
             lock.release()
+
+    def verify_etf_publication(self, *, expected_keys):
+        """Read-only proof from the same immutable snapshot served by the API."""
+        from sqlalchemy import func, select
+
+        from app.core.etf_publication import (
+            ETFPublicationResult,
+            safe_publication_error,
+            validate_local_coverage,
+        )
+        from app.models.etf import ETFPrice
+
+        if not self.settings.cache_enabled:
+            return ETFPublicationResult('direct_read')
+        entry = self.read_state().get('modules', {}).get('etf-shares', {})
+        if entry.get('error') or entry.get('progress', {}).get('status') != 'complete':
+            code = safe_publication_error(entry.get('error_code')) or 'UNKNOWN'
+            return ETFPublicationResult('failed', error_code=code)
+        try:
+            path = self.snapshot_path('etf-shares', entry)
+            if path is None:
+                return ETFPublicationResult('failed', error_code='ETF_SNAPSHOT_UNAVAILABLE')
+            engine = create_engine('sqlite:///file:' + path.as_posix() + '?mode=ro&uri=true', poolclass=NullPool)
+            try:
+                with engine.connect() as local:
+                    validate_local_coverage(local, expected_keys)
+                    shares = local.scalar(select(func.max(ETFShare.trade_date)))
+                    prices = local.scalar(select(func.max(ETFPrice.trade_date)))
+            finally:
+                engine.dispose()
+            # During a cache-only reconciliation another process may change
+            # the pointer. Its new snapshot must be checked separately.
+            current = self.read_state().get('modules', {}).get('etf-shares', {})
+            if current.get('file') != entry.get('file') or self.snapshot_path('etf-shares', current) != path:
+                return ETFPublicationResult('failed', error_code='ETF_SNAPSHOT_UNAVAILABLE')
+        except Exception as exc:
+            code, _, _ = failure_details(exc)
+            logger.warning('ETF cache publication receipt unavailable code=%s %s', code, diagnostic_details(exc))
+            return ETFPublicationResult('failed', error_code=safe_publication_error(code) or 'UNKNOWN')
+        return ETFPublicationResult('published', latest_share_date=shares.isoformat() if shares else None,
+                                    latest_price_date=prices.isoformat() if prices else None,
+                                    published_at=entry.get('updated_at'))
 
     def refresh_market_collection(self):
         """Publish daily aggregates, including repaired earlier dates, in isolation."""
