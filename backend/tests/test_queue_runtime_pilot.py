@@ -348,13 +348,18 @@ def test_dedicated_supervisor_starts_only_the_two_queues_and_forwards_remote_wak
 
     database = SimpleNamespace(dispose=lambda: calls.append('disposed'))
     cache = SimpleNamespace(
-        refresh_etf_collection=lambda: None, refresh_market_collection=lambda: None
+        refresh_etf_collection=lambda: None,
+        publish_etf_collection=lambda **_: None,
+        refresh_market_collection=lambda: None,
     )
+
+    def make_etf(*_args, tick_gate, cache_publisher, **_kwargs):
+        assert cache_publisher is cache.publish_etf_collection
+        return FakeCollector('etf', tick_gate)
+
     monkeypatch.setattr(queue_worker, 'VersionedDatabase', lambda *_a, **_kw: database)
     monkeypatch.setattr(queue_worker, 'SnapshotCache', lambda *_a, **_kw: cache)
-    monkeypatch.setattr(
-        queue_worker, 'ETFCollection', lambda *_a, tick_gate, **_kw: FakeCollector('etf', tick_gate)
-    )
+    monkeypatch.setattr(queue_worker, 'ETFCollection', make_etf)
     monkeypatch.setattr(
         queue_worker,
         'MarketCollection',

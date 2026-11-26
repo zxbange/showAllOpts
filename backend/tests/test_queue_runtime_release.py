@@ -42,7 +42,8 @@ class MockCollector:
 
 queue_worker.VersionedDatabase = lambda *a, **kw: SimpleNamespace(dispose=lambda: None)
 queue_worker.SnapshotCache = lambda *a, **kw: SimpleNamespace(
-    refresh_etf_collection=lambda: None, refresh_market_collection=lambda: None
+    refresh_etf_collection=lambda: None, publish_etf_collection=lambda **_: None,
+    refresh_market_collection=lambda: None
 )
 queue_worker.ETFCollection = MockCollector
 queue_worker.MarketCollection = MockCollector

@@ -309,7 +309,7 @@ class SnapshotCache:
         self.schedule.save(daily_time, now)
         return self.schedule_status()
 
-    def status(self):
+    def status(self, *, modules=None):
         schedule = self.schedule_status()
         if not self.settings.cache_enabled:
             return {'enabled': False, 'refreshing': False, 'manual_enabled': False,
@@ -318,7 +318,8 @@ class SnapshotCache:
         state = self.read_state()
         running = self.refreshing()
         items = []
-        for module, (name, _) in DATABASE_SYNC_MODULES.items():
+        selected = DATABASE_SYNC_MODULES if modules is None else {module: MODULES[module] for module in modules}
+        for module, (name, _) in selected.items():
             entry = state['modules'].get(module, {})
             items.append({'id': module, 'name': name, 'ready': self.snapshot_path(module, entry) is not None,
                           'updated_at': entry.get('updated_at'), 'last_attempt_at': entry.get('last_attempt_at'),
@@ -494,7 +495,8 @@ class SnapshotCache:
         except (OSError, sqlite3.Error, ValueError):
             return False
 
-    def _refresh_locked(self, lock, modules, reason, slot=None, full=False, preserve_pending=False):
+    def _refresh_locked(self, lock, modules, reason, slot=None, full=False, preserve_pending=False,
+                        release_lock=True):
         run_id = uuid.uuid4().hex
         marker = self.root / ('cancel-' + run_id)
         deferred, deferred_full = [], False
@@ -533,6 +535,8 @@ class SnapshotCache:
             state['pending_manual_isolated'] = isolated_manual or bool(deferred and state.get('pending_manual_isolated'))
             for module in modules:
                 state['modules'].setdefault(module, {})['error'] = None
+                if module == 'etf-shares':
+                    state['modules'][module].pop('error_code', None)
                 state['modules'][module]['progress'] = {'status': 'waiting', 'stage': '等待同步', 'processed': 0, 'percent': 0}
             if slot:
                 state['scheduled_slot'] = max(state.get('scheduled_slot', ''), slot)
@@ -606,6 +610,8 @@ class SnapshotCache:
                     if not module_marker.exists():
                         entry['progress'].update(status='failed', stage='同步失败，保留旧快照')
                         code, hint, frames = failure_details(exc)
+                        if module == 'etf-shares':
+                            entry['error_code'] = code
                         entry['error'] = '同步失败，保留上次成功数据。[{}] {}'.format(code, hint)
                         logger.error('Cache refresh failed module=%s error_type=%s code=%s hint=%s frames=%s',
                                      module, type(exc).__name__, code, hint, frames)
@@ -642,7 +648,8 @@ class SnapshotCache:
                 for module in modules:
                     (self.root / ('cancel-' + run_id + '-' + module)).unlink(missing_ok=True)
             finally:
-                lock.release()
+                if release_lock:
+                    lock.release()
 
     def refresh(self, module=None, background=True, reason='manual', full=False):
         if reason == 'scheduled' and not automatic_collection_allowed(now()):
@@ -677,21 +684,70 @@ class SnapshotCache:
 
     def refresh_etf_collection(self, *, repair_start=None):
         """Publish only ETF changes; leave interrupted non-ETF work for its own run."""
+        return self.publish_etf_collection(repair_start=repair_start).successful
+
+    def publish_etf_collection(self, *, repair_start=None, expected_keys=(), full=False):
+        """Prove the selected immutable snapshot really contains the committed ETF keys."""
+        from sqlalchemy import func, select
+
+        from app.core.etf_publication import (
+            ETFPublicationResult,
+            safe_publication_error,
+            validate_local_coverage,
+        )
+        from app.core.etf_sync import publication_expected_keys, repair_window_start
+        from app.models.etf import ETFPrice
+
         if not self.settings.cache_enabled:
-            return True  # Direct reads already see committed collector data.
+            return ETFPublicationResult('direct_read')
+        expected = frozenset(expected_keys)
+        if expected:
+            oldest = min(day for _, _, day in expected)
+            repair_start = min(oldest, repair_start) if repair_start is not None else oldest
         lock = self.acquire()
         if lock is None:
-            return False
-        state = self.read_state()
-        full = bool('etf-shares' in state.get('pending', []) and state.get('pending_full'))
-        from app.core.etf_sync import repair_window_start
-        token = repair_window_start.set(repair_start)
+            logger.info('ETF cache publication waiting reason=refresh_lock')
+            return ETFPublicationResult('waiting_lock')
         try:
-            self._refresh_locked(lock, ['etf-shares'], 'etf-collection', full=full, preserve_pending=True)
+            state = self.read_state()
+            full = full or bool('etf-shares' in (state.get('pending') or []) and state.get('pending_full'))
+            token = repair_window_start.set(repair_start)
+            expected_token = publication_expected_keys.set(expected)
+            try:
+                self._refresh_locked(lock, ['etf-shares'], 'etf-collection', full=full,
+                                     preserve_pending=True, release_lock=False)
+            finally:
+                publication_expected_keys.reset(expected_token)
+                repair_window_start.reset(token)
+            entry = self.read_state().get('modules', {}).get('etf-shares', {})
+            if entry.get('error') or entry.get('progress', {}).get('status') != 'complete':
+                code = safe_publication_error(entry.get('error_code')) or 'UNKNOWN'
+                logger.warning('ETF cache publication incomplete code=%s', code)
+                return ETFPublicationResult('failed', error_code=code)
+            try:
+                path = self.snapshot_path('etf-shares', entry)
+                if path is None:
+                    return ETFPublicationResult('failed', error_code='ETF_SNAPSHOT_UNAVAILABLE')
+                engine = create_engine('sqlite:///file:' + path.as_posix() + '?mode=ro&uri=true', poolclass=NullPool)
+                try:
+                    with engine.connect() as local:
+                        validate_local_coverage(local, expected)
+                        shares = local.scalar(select(func.max(ETFShare.trade_date)))
+                        prices = local.scalar(select(func.max(ETFPrice.trade_date)))
+                finally:
+                    engine.dispose()
+            except Exception as exc:
+                code, _, _ = failure_details(exc)
+                logger.warning('ETF cache publication receipt unavailable code=%s %s', code, diagnostic_details(exc))
+                return ETFPublicationResult('failed', error_code=safe_publication_error(code) or 'UNKNOWN')
+            result = ETFPublicationResult('published', latest_share_date=shares.isoformat() if shares else None,
+                                          latest_price_date=prices.isoformat() if prices else None,
+                                          published_at=entry.get('updated_at'))
+            logger.info('ETF cache publication verified shares_through=%s prices_through=%s required_keys=%s',
+                        result.latest_share_date or '-', result.latest_price_date or '-', len(expected))
+            return result
         finally:
-            repair_window_start.reset(token)
-        entry = self.read_state().get('modules', {}).get('etf-shares', {})
-        return not entry.get('error') and entry.get('progress', {}).get('status') == 'complete'
+            lock.release()
 
     def refresh_market_collection(self):
         """Publish daily aggregates, including repaired earlier dates, in isolation."""

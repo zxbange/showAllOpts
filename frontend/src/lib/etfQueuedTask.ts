@@ -71,18 +71,28 @@ export const etfQueuedTask = createQueuedCollectionTask<ETFCollectionStatus, ETF
     }
     if (state.receipt && receiptConfirmed(state.receipt, next)) value.receipt = null
     const old = state.status
+    const publication = next.cache_publication
+    // On the initial page load, the history request can have opened the old
+    // immutable snapshot just before the first status poll sees publication.
+    // One reload for that receipt closes the race; stable polls never repeat it.
+    const verifiedPublication =
+      (publication?.status === 'published' || publication?.status === 'direct_read') &&
+      (!old ||
+        old.cache_publication?.published_at !== publication.published_at ||
+        old.cache_publication?.status !== publication.status)
     if (
-      old &&
       !next.cache_pending &&
-      (old.cache_pending ||
-        (etfQueuedActive(old) && !etfQueuedActive(next)) ||
-        (!!next.manual &&
-          (old.manual?.id !== next.manual.id || old.manual?.status !== next.manual.status) &&
-          !etfQueuedActive(next)) ||
-        (!!next.runs?.[0] &&
-          (old.runs?.[0]?.slot !== next.runs[0].slot ||
-            old.runs?.[0]?.status !== next.runs[0].status) &&
-          !etfQueuedActive(next)))
+      (verifiedPublication ||
+        (old &&
+          (old.cache_pending ||
+            (etfQueuedActive(old) && !etfQueuedActive(next)) ||
+            (!!next.manual &&
+              (old.manual?.id !== next.manual.id || old.manual?.status !== next.manual.status) &&
+              !etfQueuedActive(next)) ||
+            (!!next.runs?.[0] &&
+              (old.runs?.[0]?.slot !== next.runs[0].slot ||
+                old.runs?.[0]?.status !== next.runs[0].status) &&
+              !etfQueuedActive(next)))))
     )
       value.historyRevision++
     return value
