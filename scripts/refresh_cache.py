@@ -11,7 +11,6 @@ sys.path.insert(0, str(ROOT / 'backend'))
 
 from app.core.cache import MODULES, SnapshotCache
 from app.core.config import Settings
-from app.core.database import build_engine
 from app.core.logging import configure_logging
 
 
@@ -30,20 +29,36 @@ def main(argv=None):
     try:
         settings = Settings()
         configure_logging(settings)
-        source = build_engine(settings, for_cache=True)
+        # Match the API/worker's durable cache namespace and target identity;
+        # status remains lazy and does not open a source database connection.
+        from app.core.database import VersionedDatabase
+        source = VersionedDatabase(settings, for_cache=True)
         cache = SnapshotCache(settings, source)
+        selected_modules = (options.module,) if options.module else None
         if options.status:
-            print(json.dumps(cache.status(), ensure_ascii=False, indent=2))
+            print(json.dumps(cache.status(modules=selected_modules), ensure_ascii=False, indent=2))
             return 0
+        if options.module == 'etf-shares':
+            from app.services.etf_collection import ETFCollection
+            collector = ETFCollection(settings, cache_publisher=cache.publish_etf_collection)
+            result = collector.retry_cache_publication(full=options.full)
+            print(json.dumps(result.public(), ensure_ascii=False, indent=2))
+            if result.status == 'waiting_lock':
+                return 2
+            if result.status == 'direct_read':
+                print('本地缓存未启用，网页使用数据库直读。', file=sys.stderr)
+                return 0
+            return 0 if result.successful else 1
         if not cache.refresh(options.module, background=False, reason='cli', full=options.full):
             print('已有同步任务正在执行；本次未重复启动。')
             return 2
-        result = cache.status()
+        result = cache.status(modules=selected_modules)
         selected = [m for m in result['modules'] if options.module is None or m['id'] == options.module]
         for entry in selected:
             print('{}: {}，记录数={}，上次成功同步={}'.format(
                 entry['name'], entry['error'] or '同步成功', entry['rows'], entry['updated_at']))
-        return 1 if any(m['error'] or not m['ready'] for m in selected) else 0
+        return 1 if not selected or any(m['error'] or not m['ready'] or m['progress']['status'] != 'complete'
+                                        for m in selected) else 0
     except Exception as exc:
         logging.getLogger(__name__).error('Cache command failed: %s; check configuration, database and cache directory permissions.', type(exc).__name__)
         return 1

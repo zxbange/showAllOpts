@@ -10,11 +10,13 @@ from sqlalchemy import create_engine, func, inspect, select, union
 from sqlalchemy.pool import NullPool
 
 from app.core.cache_sync import chunks, key_filter, read_batches
+from app.core.etf_publication import validate_local_coverage, validate_source_coverage
 from app.core.sync_progress import report
 from app.models.etf import ETFPrice, ETFShare, ETFTradingDay
 
 
 repair_window_start = ContextVar("etf_cache_repair_start", default=None)
+publication_expected_keys = ContextVar("etf_cache_expected_keys", default=frozenset())
 
 def manifest(connection, table, since=None):
     # Compare values too: timestamps may have only second precision.
@@ -77,6 +79,10 @@ def copy_etf(cache, path, previous, full=False, *, source=None, identity=None):
             cache.sync_notes['etf-shares'] = None if price_exists else '源库尚无 ETF 收盘价表，保留份额展示，市值暂不估算。'
             remote = {table.name: manifest(source, table, bounds.get(table.name)) if table.name in source_tables else {}
                       for table in tables}
+            # Collector-triggered publication must include every confirmed key
+            # still waiting for publication, not just a recent table maximum.
+            expected = publication_expected_keys.get()
+            validate_source_coverage(remote, expected)
             absent = {table.name for table in tables if table.name not in source_tables}
             # A missing optional table means an empty series for every date, not
             # just the incremental window. Counts must also remove the old history.
@@ -122,6 +128,7 @@ def copy_etf(cache, path, previous, full=False, *, source=None, identity=None):
                 with destination.connect() as connection:
                     if connection.exec_driver_sql('PRAGMA quick_check').scalar() != 'ok':
                         raise RuntimeError('ETF snapshot validation failed')
+                    validate_local_coverage(connection, expected)
                 return path.name, count
             finally:
                 destination.dispose()

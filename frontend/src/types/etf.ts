@@ -65,6 +65,15 @@ export interface ETFCollectionStatus extends ETFCollectionCoverage {
   enabled?: boolean
   configured?: boolean
   cache_pending?: boolean
+  cache_publication?: {
+    status: 'pending' | 'publishing' | 'waiting_lock' | 'failed' | 'published' | 'direct_read'
+    error_code?: string | null
+    latest_share_date?: string | null
+    latest_price_date?: string | null
+    published_at?: string | null
+    last_attempt_at?: string | null
+    required_through?: string | null
+  } | null
   manual?: ETFManualRun | null
   progress?: { phase: string; completed: number; total: number } | null
   lookback_days?: number

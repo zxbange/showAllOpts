@@ -42,6 +42,7 @@ export function ETFCollectionPanel({ onCollected }: { onCollected: () => void })
   const run = () => startETFQueuedTask(task, admin)
   const cancel = () => cancelETFQueuedTask(task, admin)
   const progress = status?.progress
+  const publication = status?.cache_publication
   const recent: ETFCollectionRun[] =
     status?.recent_runs ??
     status?.runs?.map((run, i) => ({
@@ -59,7 +60,34 @@ export function ETFCollectionPanel({ onCollected }: { onCollected: () => void })
     <section className="panel etf-collection-panel" aria-label="ETF采集管理">
       <div className="etf-collection-overview">
         <div role="status">
-          {status?.cache_pending && <p>采集已入库，等待图表缓存更新…</p>}
+          {status?.cache_pending && (
+            <>
+              <p>等待图表缓存更新…</p>
+              {publication?.status === 'waiting_lock' && <p>其他同步占用缓存，稍后重试。</p>}
+              {publication?.status === 'publishing' && <p>正在核验并发布缓存。</p>}
+              {publication?.status === 'failed' && (
+                <p>
+                  缓存更新失败，保留旧图表，等待重试
+                  {publication.error_code ? `（${publication.error_code}）` : ''}。
+                </p>
+              )}
+              {(publication?.required_through ||
+                publication?.latest_share_date ||
+                publication?.last_attempt_at) && (
+                <p>
+                  {[
+                    publication.required_through && `待核验发布至 ${publication.required_through}`,
+                    publication.latest_share_date &&
+                      `上次核验缓存份额至 ${publication.latest_share_date}`,
+                    publication.last_attempt_at &&
+                      `最近尝试 ${formatDataUpdatedAt(publication.last_attempt_at)}`,
+                  ]
+                    .filter(Boolean)
+                    .join(' · ')}
+                </p>
+              )}
+            </>
+          )}
           {progress && (
             <p>
               {phases[progress.phase] ?? '处理中'} · 本轮目标日已处理 {progress.completed} /{' '}

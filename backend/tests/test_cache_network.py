@@ -194,13 +194,12 @@ def test_app_and_cli_select_the_background_timeout(cached, engine, monkeypatch, 
     spec=importlib.util.spec_from_file_location('refresh_cache_timeout_test',path)
     module=importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
-    monkeypatch.setattr(module,'build_engine',build)
     monkeypatch.setattr(module,'Settings',lambda:settings)
     monkeypatch.setattr(module,'configure_logging',lambda config:None)
     # The CLI selects APP_ENV_FILE for its process; do not leak it into later tests.
     with patch.dict(os.environ):
         assert module.main(['--status'])==0
-    assert selected==[True,False,True]
+    assert selected==[True,False]  # Cache status is namespace-aware and never builds a DB engine.
 
 
 @pytest.mark.parametrize('values',[

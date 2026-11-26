@@ -100,6 +100,14 @@ test('polls active progress, refreshes chart after cache completion and stops on
         ...ready,
         manual: { id: 'job-1', status: phase === 'running' ? 'running' : 'complete' },
         cache_pending: phase === 'cache_pending',
+        cache_publication:
+          phase === 'cache_pending'
+            ? {
+                status: 'waiting_lock',
+                required_through: '2026-11-25',
+                latest_share_date: '2026-11-24',
+              }
+            : null,
       },
     })
   })
@@ -110,12 +118,14 @@ test('polls active progress, refreshes chart after cache completion and stops on
   const initialPolls = polls
   phase = 'cache_pending'
   await page.clock.fastForward(2100)
-  await expect(page.getByText('采集已入库，等待图表缓存更新…')).toBeVisible()
+  await expect(page.getByText('等待图表缓存更新…')).toBeVisible()
+  await expect(page.getByText('其他同步占用缓存，稍后重试。')).toBeVisible()
+  await expect(page.getByText(/待核验发布至 2026-11-25/)).toBeVisible()
   expect(polls).toBeGreaterThan(initialPolls)
   expect(histories).toBe(initialHistories)
   phase = 'complete'
   await page.clock.fastForward(2100)
-  await expect(page.getByText('采集已入库，等待图表缓存更新…')).toHaveCount(0)
+  await expect(page.getByText('等待图表缓存更新…')).toHaveCount(0)
   await expect.poll(() => histories).toBe(initialHistories + 1)
   await page.getByRole('link', { name: '总览', exact: true }).click()
   await expect(page).toHaveURL(/\/$/)
@@ -123,6 +133,78 @@ test('polls active progress, refreshes chart after cache completion and stops on
   const count = polls
   await page.clock.fastForward(30000)
   expect(polls).toBe(count)
+})
+
+test('initial ETF history cannot stay stale when publication completes before the first status response', async ({
+  page,
+}) => {
+  let published = false
+  let newReads = 0
+  let oldStarted!: () => void
+  let finishOld!: () => void
+  const sawOld = new Promise<void>((resolve) => {
+    oldStarted = resolve
+  })
+  const heldOld = new Promise<void>((resolve) => {
+    finishOld = resolve
+  })
+  const history = (day: string) => ({
+    group: 'hs300',
+    group_name: '沪深300',
+    start_date: day,
+    end_date: day,
+    baseline_date: day,
+    observed_days: 1,
+    available_funds: 1,
+    market_values: [],
+    funds: [
+      {
+        code: '510300.XSHG',
+        name: '沪深300ETF华泰柏瑞',
+        date: day,
+        shares: '1000000',
+        previous_date: null,
+        shares_change: null,
+        daily_change_pct: null,
+        updated_at: null,
+        lagging: false,
+        points: [{ date: day, shares: '1000000', change_pct: 0 }],
+      },
+    ],
+  })
+  await page.route('**/api/v1/etf-shares/history?*', async (r) => {
+    if (!published) {
+      oldStarted()
+      await heldOld
+      await r.fulfill({ json: history('2026-11-24') }).catch(() => {})
+    } else {
+      newReads++
+      await r.fulfill({ json: history('2026-11-25') })
+    }
+  })
+  await page.route('**/api/v1/etf-shares/collection-status', async (r) => {
+    await sawOld
+    published = true
+    await r.fulfill({
+      json: {
+        ...ready,
+        cache_pending: false,
+        cache_publication: {
+          status: 'published',
+          published_at: '2026-11-26T08:00:01+08:00',
+          latest_share_date: '2026-11-25',
+        },
+      },
+    })
+  })
+  await page.goto('/etf-shares')
+  try {
+    await expect.poll(() => newReads).toBeGreaterThan(0)
+  } finally {
+    finishOld()
+  }
+  await expect(page.getByText(/2026-11-25.+2026-11-25/)).toBeVisible()
+  await expect(page.getByText(/2026-11-24.+2026-11-24/)).toHaveCount(0)
 })
 
 test('late status from a departed page cannot replace new page status', async ({ page }) => {

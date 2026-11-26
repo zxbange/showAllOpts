@@ -92,7 +92,12 @@ def serve(settings: Settings, stop_requested: threading.Event) -> int:
         runtime.publish('starting', set())
         database = VersionedDatabase(settings, for_cache=settings.cache_enabled)
         cache = SnapshotCache(settings, database)
-        etf = ETFCollection(settings, refresh=cache.refresh_etf_collection, tick_gate=gate)
+        etf = ETFCollection(
+            settings,
+            refresh=cache.refresh_etf_collection,
+            tick_gate=gate,
+            cache_publisher=cache.publish_etf_collection,
+        )
         market = MarketCollection(
             settings, refresh=cache.refresh_market_collection, cache=cache, tick_gate=gate
         )

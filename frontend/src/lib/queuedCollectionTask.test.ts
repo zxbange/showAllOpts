@@ -224,6 +224,35 @@ describe('shared queued command transport', () => {
     expect(task.getSnapshot().historyRevision).toBe(1)
     detach()
   })
+
+  it('reloads once for the first verified ETF publication receipt and later distinct publications', async () => {
+    const result: ETFCollectionStatus = {
+      ...etfReady,
+      cache_pending: false,
+      cache_publication: {
+        status: 'published',
+        published_at: '2026-11-26T08:00:01+08:00',
+        latest_share_date: '2026-11-25',
+      },
+    }
+    const read = vi.mocked(getETFCollectionStatus).mockResolvedValue(result)
+    const task = etfQueuedTask({})
+    const detach = task.subscribe(() => {})
+    await flush()
+    expect(task.getSnapshot().historyRevision).toBe(1)
+    await vi.advanceTimersByTimeAsync(15000)
+    expect(task.getSnapshot().historyRevision).toBe(1)
+    read.mockResolvedValue({
+      ...result,
+      cache_publication: {
+        ...result.cache_publication!,
+        published_at: '2026-11-26T08:06:01+08:00',
+      },
+    })
+    await vi.advanceTimersByTimeAsync(15000)
+    expect(task.getSnapshot().historyRevision).toBe(2)
+    detach()
+  })
   it('a mismatched ETF acknowledgement cannot discard the request identity', async () => {
     vi.mocked(getETFCollectionStatus).mockResolvedValue(etfReady)
     const run = vi

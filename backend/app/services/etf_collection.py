@@ -18,6 +18,18 @@ import portalocker
 from sqlalchemy import create_engine
 
 from app.core.diagnostics import diagnostic_details
+from app.core.etf_publication import (
+    ETFPublicationResult,
+    public_cache_status,
+    safe_publication_error,
+)
+from app.repositories.etf_publication_state import (
+    KEY_PREFIX,
+    clear_publication_requirements,
+    mark_committed,
+    preserve_legacy_pending,
+    publication_requirements,
+)
 from app.repositories.etf_state_schema import initialize_etf_state, migrate_etf_run_history
 from app.services import collection_notifications
 from app.services.collection_calendar import (
@@ -190,8 +202,10 @@ def collector_module():
 
 class ETFCollection:
     def __init__(self, settings, refresh=None, *, collector=None, engine_factory=create_engine,
-                 client_factory=None, clock=None, remote_worker=None, tick_gate=None):
+                 client_factory=None, clock=None, remote_worker=None, tick_gate=None,
+                 cache_publisher=None):
         self.settings, self.refresh = settings, refresh
+        self.cache_publisher = cache_publisher
         self.collector, self.engine_factory = collector, engine_factory
         self.client_factory = client_factory or (lambda: source_client(self.settings, factory=httpx.Client, timeout=30, trust_env=False))
         self.clock = clock or (lambda: datetime.now(CHINA))
@@ -328,6 +342,12 @@ class ETFCollection:
         if writer_issue:
             state.update(status=writer_issue, ready=False, disabled_reason=writer_issue)
         state['cache_pending'] = state['metadata'].get('cache_pending') == '1'
+        state['cache_publication'] = public_cache_status(
+            state['metadata'].pop('cache_publication', None), state['cache_pending'],
+            state['metadata'].get('cache_attempt'))
+        for key in tuple(state['metadata']):
+            if key.startswith(KEY_PREFIX):
+                del state['metadata'][key]
         raw_progress = state['metadata'].pop('progress', None)
         if raw_progress:
             state['progress'] = json.loads(raw_progress)
@@ -586,6 +606,7 @@ class ETFCollection:
                 with self.connect() as db:
                     config = reconcile_system_ledger(self.configuration, db,
                         ('observations', 'slots', 'metadata'), moment.isoformat())
+                    preserve_legacy_pending(db)
                     db.commit()
                     self._recover_manual_runs(db)
                     db.execute("DELETE FROM metadata WHERE key='progress'")
@@ -782,25 +803,94 @@ class ETFCollection:
             data_date=report.target, error_details=self._run_error_details)
         return complete
 
-    def _refresh(self, db):
+    def retry_cache_publication(self, *, full=False):
+        """Explicit operator repair only. No exchange requests or collection outcome."""
+        with pin_configuration(self.settings):
+            if not self.configured:
+                return ETFPublicationResult('failed', error_code='ETF_SNAPSHOT_UNAVAILABLE')
+            self.root.mkdir(parents=True, exist_ok=True, mode=0o700)
+            try:
+                with hold_lease(portalocker.Lock(str(self.root / 'collection.lock'), timeout=0)):
+                    with self.connect() as db:
+                        reconcile_system_ledger(self.configuration, db,
+                            ('observations', 'slots', 'metadata'), self.clock().isoformat())
+                        db.commit()
+                        return self._refresh(db, force=True, full=full)
+            except portalocker.exceptions.LockException:
+                return ETFPublicationResult('waiting_lock')
+
+    def _refresh(self, db, *, force=False, full=False):
         row = db.execute("SELECT value FROM metadata WHERE key='cache_pending'").fetchone()
-        if not row or row[0] != '1' or not self.refresh:
+        if (not force and (not row or row[0] != '1')) or (not self.refresh and self.cache_publisher is None):
             return
         last = db.execute("SELECT value FROM metadata WHERE key='cache_attempt'").fetchone()
         now = self.clock()
-        if last and now - datetime.fromisoformat(last[0]) < timedelta(minutes=5):
-            return
-        db.execute("INSERT OR REPLACE INTO metadata VALUES ('cache_attempt',?)", (now.isoformat(),))
-        db.commit()
         try:
+            elapsed = now - datetime.fromisoformat(last[0]) if last else None
+        except (ValueError, TypeError):
+            elapsed = None
+        if not force and elapsed is not None and timedelta(0) <= elapsed < timedelta(minutes=5):
+            return
+        if force:
+            db.execute("INSERT OR REPLACE INTO metadata VALUES ('cache_pending','1')")
+            if full:
+                db.execute("INSERT OR REPLACE INTO metadata VALUES ('cache_full_rebuild','1')")
+        old = db.execute("SELECT value FROM metadata WHERE key='cache_publication'").fetchone()
+        previous = public_cache_status(old[0] if old else None, True, last[0] if last else None) or {}
+        def store(result, required=None):
+            payload = result.public()
+            if result.status not in ('published', 'direct_read'):
+                for field in ('published_at', 'latest_share_date', 'latest_price_date'):
+                    payload[field] = previous.get(field)
+            payload['required_through'] = (required.isoformat() if required else
+                                           None if result.successful else previous.get('required_through'))
+            db.execute("INSERT OR REPLACE INTO metadata VALUES ('cache_publication',?)", (json.dumps(payload),))
+        db.execute("INSERT OR REPLACE INTO metadata VALUES ('cache_attempt',?)", (now.isoformat(),))
+        if self.cache_publisher is not None:
+            db.execute("INSERT OR REPLACE INTO metadata VALUES ('cache_publication',?)",
+                       (json.dumps(previous | {'status': 'publishing', 'error_code': None}),))
+        db.commit()
+        required = None
+        try:
+            if self.cache_publisher is not None:
+                try:
+                    repair, expected = publication_requirements(db)
+                except (ValueError, TypeError, KeyError):
+                    result = ETFPublicationResult('failed', error_code='ETF_REQUIREMENTS_INVALID')
+                    store(result)
+                    db.commit()
+                    LOG.warning('ETF cache publication requirements invalid')
+                    return result
+                required = max((day for _, _, day in expected), default=None)
+                db.execute("INSERT OR REPLACE INTO metadata VALUES ('cache_publication',?)",
+                           (json.dumps(previous | {'status': 'publishing', 'error_code': None,
+                                'required_through': required.isoformat() if required else None}),))
+                db.commit()
+                full_marker = db.execute("SELECT value FROM metadata WHERE key='cache_full_rebuild'").fetchone()
+                result = self.cache_publisher(repair_start=repair, expected_keys=expected,
+                                              full=full or bool(full_marker and full_marker[0] == '1'))
+                if not isinstance(result, ETFPublicationResult):
+                    raise TypeError('Invalid ETF cache publication receipt')
+                store(result, required)
+                if result.successful:
+                    clear_publication_requirements(db)
+                db.commit()
+                return result
             repair = db.execute("SELECT value FROM metadata WHERE key='cache_repair_start'").fetchone()
             published = self.refresh(repair_start=date.fromisoformat(repair[0])) if repair else self.refresh()
             if published is not False:
-                db.execute("DELETE FROM metadata WHERE key='cache_repair_start'")
-                db.execute("INSERT OR REPLACE INTO metadata VALUES ('cache_pending','0')")
+                clear_publication_requirements(db)
                 db.commit()
+            return published
         except Exception as exc:
             LOG.warning('ETF cache publish failed %s', diagnostic_details(exc))
+            if self.cache_publisher is not None:
+                from app.core.cache_errors import failure_details
+                code, _, _ = failure_details(exc)
+                result = ETFPublicationResult('failed', error_code=safe_publication_error(code) or 'UNKNOWN')
+                store(result, required)
+                db.commit()
+                return result
 
     def _write_day(self, c, config, writer, calendar, end, shares, prices, *, historical=False):
         report = getattr(self, '_notification_report', None)
@@ -934,9 +1024,9 @@ class ETFCollection:
             # Preserve the earliest dirty date *before* attempting COMMIT.
             # A stop, ambiguous COMMIT or cache lock cannot lose this intent.
             if shares or prices or verified:
-                earliest = calendar.previous(day).isoformat()
+                earliest = calendar.previous(day)
                 db.execute("INSERT INTO metadata VALUES ('cache_repair_start',?) "
-                           "ON CONFLICT(key) DO UPDATE SET value=min(value,excluded.value)", (earliest,))
+                           "ON CONFLICT(key) DO UPDATE SET value=min(value,excluded.value)", (earliest.isoformat(),))
                 db.execute("INSERT OR REPLACE INTO metadata VALUES ('cache_pending','1')")
                 db.commit()
                 progress('writing', completed, total + 2 * len(funds))
@@ -944,6 +1034,8 @@ class ETFCollection:
             done = set(verified)
             done.update((kind, row['fund_code'], row['trade_date']) for kind, records in
                         (('shares', shares), ('prices', prices)) for row in records)
+            if shares or prices or verified:
+                mark_committed(db, day, earliest, done)
             db.executemany("UPDATE observations SET status='complete' WHERE kind=? AND code=? AND day=?",
                            ((kind, code, target.isoformat()) for kind, code, target in done))
             unresolved -= done
@@ -1082,7 +1174,14 @@ class ETFCollection:
                         'etf_missing_shares' if 'shares' in kinds else 'etf_missing_prices')
                 self._run_error_details = history_errors.get(old) or safe_error(code=code, stage='fetch', trade_date=old)
             progress('writing', completed, total)
+            earliest = calendar.previous(end) if hasattr(calendar, 'previous') else end
             self._write_day(c, config, writer, calendar, end, shares, prices)
+            # Remember the exact committed date window even if collection
+            # finishes much later or another process temporarily owns refresh.lock.
+            mark_committed(db, end, earliest, (
+                (kind, row['fund_code'], row['trade_date'])
+                for kind, records in (('shares', shares), ('prices', prices)) for row in records))
+            db.commit()
             db.execute("INSERT OR REPLACE INTO metadata VALUES ('writer_error','')")
             # Charge only committed attempts. Preserve old values on an incomplete
             # source response, but do not mistake them for fresh verification.
