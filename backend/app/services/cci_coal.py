@@ -365,6 +365,8 @@ class CCICoal(Commodities):
             incomplete = bool(errors or recovery['deferredCount'] or should_stop())
             outcome = ('completed' if target_hits == len(GRADES) and not incomplete else
                        'partial' if count else 'failed' if incomplete else 'empty')
+            if not incomplete and target_hits < len(GRADES):
+                run_error = public_error(code='cci_target_not_ready', stage='fetch', trade_date=day)
             stage = {'completed': '更新完成，缺失日期已核查', 'partial': '部分数据已更新，仍有待获取报价',
                      'failed': '报价读取失败，历史保留', 'empty': '来源无可用报价，历史保留'}[outcome]
             limited = bool(recovery['deferredCount'] or should_stop())
@@ -406,7 +408,7 @@ class CCICoal(Commodities):
                 for detail in details:
                     LOG.info('CCI grade result %s', json.dumps(detail, ensure_ascii=False))
                 record_task(self.settings, 'cci', outcome='partial' if outcome == 'no_quote' else outcome, scheduled=slot is not None,
-                            error_details=(run_error or public_error(stage='fetch')) if outcome in ('failed', 'partial', 'no_quote') else None)
+                            error_details=(run_error or public_error(stage='fetch')) if outcome in ('failed', 'partial', 'no_quote', 'empty') else None)
                 LOG.info('CCI collection finish target=%s trigger=%s outcome=%s observed=%s inserted=%s changed=%s recovery=%s elapsedMs=%s slot=%s',
                          day, trigger, outcome, count, inserted, changed, json.dumps(recovery, ensure_ascii=False),
                          round((monotonic()-began)*1000), slot.isoformat() if slot else '-')

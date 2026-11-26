@@ -25,7 +25,7 @@ MODULES = ('etf-shares', 'market-sentiment', 'market-crowding', 'growth-dividend
 SYNC_MODULES = frozenset(('industry-momentum', 'microcap-temperature', 'microcap-breadth',
                          'etf-momentum', 'institution-ownership', 'personal-holdings'))
 ALIASES = {'complete': 'success', 'completed': 'success', 'error': 'failed',
-           'publication_pending': 'partial'}
+           'publication_pending': 'partial', 'empty': 'partial'}
 TERMINAL = frozenset(('success', 'failed', 'partial', 'cancelled', 'interrupted', 'unknown'))
 PUBLICATION_MODULES = frozenset(('etf-shares', 'market-sentiment', 'market-crowding'))
 
