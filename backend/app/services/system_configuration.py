@@ -38,6 +38,7 @@ def default_schedules(settings, *, legacy=True, warnings=None):
     }
     for key in ('etf', 'margin', 'commodities', 'growth_dividend', 'market', 'valuation_ruler', 'cci', 'earnings_selection'):
         result[key]['telegram_notify'] = False
+        result[key]['feishu_notify'] = False
     path = getattr(settings, 'cache_path', settings.log_path / 'cache') / 'schedule.json'
     if legacy and path.exists():
         try:
@@ -186,7 +187,13 @@ class SystemConfiguration:
                 old = result['schedules'].pop('cash_cow', {})
                 result['schedules']['earnings_selection'] = {
                     'enabled': old.get('enabled', True), 'times': ['23:00'],
-                    'telegram_notify': old.get('telegram_notify', False)}
+                    'telegram_notify': old.get('telegram_notify', False),
+                    'feishu_notify': old.get('feishu_notify', False)}
+            # Older saved schedules lack the new opt-in. Never enable a
+            # previously unsupported channel during migration.
+            for schedule in result['schedules'].values():
+                if 'telegram_notify' in schedule:
+                    schedule.setdefault('feishu_notify', False)
             # Migrate only the previous default once; explicitly customized times survive.
             if not result.get('valuation_schedule_v2'):
                 if result['schedules']['valuation_ruler']['times'] == ['20:00']:
@@ -300,10 +307,14 @@ class SystemConfiguration:
         if not isinstance(schedules, dict) or set(schedules) != set(defaults):
             raise SystemConfigurationError('请提交完整任务配置')
         for name, value in schedules.items():
+            # Accept old clients without clearing an already-saved Feishu flag.
+            if isinstance(value, dict) and 'feishu_notify' in defaults[name]:
+                value.setdefault('feishu_notify', previous['schedules'][name].get('feishu_notify', False))
             if not isinstance(value, dict) or set(value) != set(defaults[name]) or type(value.get('enabled')) is not bool:
                 raise SystemConfigurationError('任务配置格式无效')
-            if 'telegram_notify' in value and type(value['telegram_notify']) is not bool:
-                raise SystemConfigurationError('通知开关格式无效')
+            for channel in ('telegram_notify', 'feishu_notify'):
+                if channel in value and type(value[channel]) is not bool:
+                    raise SystemConfigurationError('通知开关格式无效')
             if 'times' in value:
                 times = value['times']
                 count = 2 if name == 'commodities' else 1

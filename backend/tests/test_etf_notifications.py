@@ -111,7 +111,7 @@ def test_run_report_keeps_current_evidence_separate_from_history_and_commit_cert
 
 
 def _enable_outbox(monkeypatch):
-    monkeypatch.setattr(notifications, 'enabled', lambda *_: True)
+    monkeypatch.setattr(notifications, 'configured_channels', lambda *_: ('telegram',))
     monkeypatch.setattr(notifications, 'start_notifications', lambda *_: None)
 
 

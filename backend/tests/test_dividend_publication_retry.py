@@ -24,7 +24,7 @@ def transport_timeout():
 @pytest.fixture
 def publication(tmp_path, monkeypatch):
     monkeypatch.setattr(database_retry, 'sleep', lambda _: None)
-    monkeypatch.setattr(notifications, 'enabled', lambda *_: True)
+    monkeypatch.setattr(notifications, 'configured_channels', lambda *_: ('telegram',))
     monkeypatch.setattr(notifications, 'start_notifications', lambda *_: None)
     service, remote, local, cache, calls = publication_service(tmp_path, monkeypatch)
     cache.fail = False

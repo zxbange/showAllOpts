@@ -26,11 +26,13 @@ describe('system task controls', () => {
     )
   it('separates frequency, time, automatic execution and notifications', () => {
     const html = render()
-    for (const title of ['任务', '自动运行', '频率', '运行时间', 'Telegram 通知']) {
+    for (const title of ['任务', '自动运行', '频率', '运行时间', '通知渠道']) {
       expect(html).toContain(`role="columnheader">${title}`)
     }
     expect(html).toContain('role="switch"')
-    expect(html).toContain('通知开关只控制推送')
+    expect(html).toContain('Telegram 和飞书通知开关独立控制自动及手动采集结果推送')
+    expect(html.match(/aria-label="飞书通知"/g)).toHaveLength(2)
+    expect(html.match(/aria-label="Telegram 通知"/g)).toHaveLength(2)
     expect(html).toContain('修改后保存生效')
     expect(html).toContain('业绩选股（高股息 / 奶牛股）')
     expect(html).not.toContain('每月最后一天')

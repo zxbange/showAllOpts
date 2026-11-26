@@ -1,4 +1,4 @@
-"""Opt-in collection-result Telegram outbox; never a dependency of collection success."""
+"""Opt-in collection-result Telegram and Feishu outboxes; never a dependency of collection success."""
 from contextvars import ContextVar
 from datetime import date, datetime
 from decimal import Decimal, InvalidOperation
@@ -38,21 +38,38 @@ def capture_task_outcome(task, outcome, error_details=None):
         active[1].update(outcome=outcome, error_details=error_details)
 
 
-def enabled(settings, task_id):
+_OUTBOXES = {'telegram': 'outbox', 'feishu': 'outbox_feishu'}
+
+
+def configured_channels(settings, task_id):
     from app.services.system_configuration import task_config
-    return task_id in LABELS and task_config(settings, task_id).get('telegram_notify') is True
+    if task_id not in LABELS:
+        return ()
+    plan = task_config(settings, task_id)
+    return tuple(channel for channel in _OUTBOXES if plan.get(channel + '_notify') is True)
+
+
+def enabled(settings, task_id):
+    return bool(configured_channels(settings, task_id))
 
 
 def _database(settings):
     root = settings.log_path / 'collection-notifications'
     root.mkdir(parents=True, exist_ok=True)
     db = sqlite3.connect(root / 'outbox.sqlite3', timeout=15)
-    db.row_factory = sqlite3.Row
-    db.execute('CREATE TABLE IF NOT EXISTS outbox (task TEXT, run TEXT, message TEXT, '
-               'status TEXT, attempts INTEGER NOT NULL DEFAULT 0, next_try REAL NOT NULL DEFAULT 0, '
-               'PRIMARY KEY(task,run))')
-    (root / 'outbox.sqlite3').chmod(0o600)
-    return db
+    try:
+        db.row_factory = sqlite3.Row
+        # Keep the legacy Telegram table byte-for-byte compatible. Creating an
+        # independent Feishu table migrates without copying or replaying old rows.
+        for table in _OUTBOXES.values():
+            db.execute(f'CREATE TABLE IF NOT EXISTS {table} (task TEXT, run TEXT, message TEXT, '
+                       'status TEXT, attempts INTEGER NOT NULL DEFAULT 0, next_try REAL NOT NULL DEFAULT 0, '
+                       'PRIMARY KEY(task,run))')
+        (root / 'outbox.sqlite3').chmod(0o600)
+        return db
+    except BaseException:
+        db.close()
+        raise
 
 
 MAX_TELEGRAM_UNITS = 3900
@@ -83,14 +100,17 @@ def _format_slice(lines, units=MAX_TELEGRAM_UNITS):
     rendered = []
     marker = '其余项目请在页面查看。'
     remaining = units - len(marker) - 1
+    remaining_bytes = 19000 - len(marker.encode('utf-8')) - 2
     for line in lines:
         for raw in str(line).splitlines() or ['']:
             clean = ''.join(c for c in raw[:550] if not 0xD800 <= ord(c) <= 0xDFFF)
             length = sum(2 if ord(c) > 0xFFFF else 1 for c in clean) + 1
-            if length > remaining:
+            encoded_length = len(json.dumps(clean, ensure_ascii=False).encode('utf-8')) - 2 + 2
+            if length > remaining or encoded_length > remaining_bytes:
                 return '\n'.join([*rendered, marker])
             rendered.append(clean)
             remaining -= length
+            remaining_bytes -= encoded_length
     return '\n'.join(rendered)
 
 
@@ -142,7 +162,8 @@ def emit_collection_result(settings, task_id, *, scheduled, run_key, outcome,
             return False
         if not scheduled and manual_result is False and not changed_count:  # Legacy explicit import.
             return False
-        if not enabled(settings, task_id):
+        channels = configured_channels(settings, task_id)
+        if not channels:
             LOG.info('Collection notification skipped task=%s reason=disabled', task_id)
             return False
         message = format_result(task_id, outcome, changed_count, summary, collected_at,
@@ -151,22 +172,102 @@ def emit_collection_result(settings, task_id, *, scheduled, run_key, outcome,
         db = _database(settings)
         try:
             with db:
-                inserted = db.execute('INSERT OR IGNORE INTO outbox(task,run,message,status) VALUES(?,?,?,?)',
-                                      (task_id, str(run_key), message, 'pending')).rowcount
+                db.execute('BEGIN IMMEDIATE')
+                key = (task_id, str(run_key))
+                # One event freezes its recipient channels at first enqueue.
+                # A later retry of the same event cannot attach a newly enabled
+                # channel, including after migration from Telegram-only.
+                exists = any(db.execute(f'SELECT 1 FROM {table} WHERE task=? AND run=?', key).fetchone()
+                             for table in _OUTBOXES.values())
+                if not exists:
+                    for channel in channels:
+                        table = _OUTBOXES[channel]
+                        db.execute(f'INSERT INTO {table}(task,run,message,status) VALUES(?,?,?,?)',
+                                   (*key, message, 'pending'))
         finally:
             db.close()
-        LOG.info('Collection notification %s task=%s changed_count=%s trigger=%s',
-                 'enqueued' if inserted else 'duplicate', task_id, changed_count,
-                 'automatic' if scheduled else 'manual')
+        LOG.info('Collection notification %s task=%s changed_count=%s trigger=%s channels=%s',
+                 'duplicate' if exists else 'enqueued', task_id, changed_count,
+                 'automatic' if scheduled else 'manual', ','.join(channels))
         start_notifications(settings)
-        return bool(inserted)
+        return not exists
     except Exception as exc:
         LOG.warning('Collection notification enqueue failed task=%s error_type=%s', task_id, type(exc).__name__)
         return False
 
 
+def _deliver_one(settings, db, monitor, channel, table, row):
+    from app.services.social_notifications import NotificationDeferred, NotificationError
+    key = (row['task'], row['run'])
+
+    def opted_in():
+        return channel in configured_channels(settings, row['task'])
+
+    def skip():
+        with db:
+            db.execute(f"UPDATE {table} SET status='skipped' WHERE task=? AND run=?", key)
+        LOG.info('Collection notification skipped task=%s channel=%s reason=disabled_before_delivery',
+                 row['task'], channel)
+
+    def defer(seconds):
+        with db:
+            db.execute(f'UPDATE {table} SET next_try=? WHERE task=? AND run=?', (time.time()+seconds, *key))
+
+    if not opted_in():
+        skip()
+        return
+    try:
+        # Credentials are shared; category-specific switches are not. Feishu
+        # reuses the social sender's lock, signature and provider backoff.
+        if channel == 'feishu':
+            with monitor.db() as social_db:
+                config = monitor.config(social_db)
+            if not config.get('feishu_webhook') or not config.get('feishu_secret'):
+                LOG.warning('Collection notification destination missing task=%s channel=%s', row['task'], channel)
+                defer(300)
+                return
+            wait = config.get('notification_retry_at', {}).get('feishu', 0) - time.time()
+            if wait > 0:
+                defer(wait)
+                return
+            monitor.send_channel('feishu', row['message'], require_enabled=False,
+                                 require_channel_enabled=False, lock_timeout=1, guard=lambda _db, _config: opted_in())
+        else:
+            with portalocker.Lock(str(monitor.root / 'notification-send.lock'), timeout=1):
+                if not opted_in():
+                    skip()
+                    return
+                with monitor.db() as social_db:
+                    config = monitor.config(social_db)
+                if not config.get('token') or not config.get('chat_id'):
+                    LOG.warning('Collection notification destination missing task=%s channel=%s', row['task'], channel)
+                    defer(300)
+                    return
+                monitor.send_part(monitor.decode(config['token']), monitor.decode(config['chat_id']), row['message'])
+    except (NotificationDeferred, portalocker.exceptions.LockException):
+        # Disable/pause or lock contention before actual send is not a failed
+        # network attempt; re-evaluate independently on the next pass.
+        if not opted_in():
+            skip()
+        else:
+            defer(30)
+    except Exception as exc:
+        attempts = row['attempts'] + 1
+        retry_after = exc.retry_after if isinstance(exc, NotificationError) else 0
+        with db:
+            db.execute(f'UPDATE {table} SET attempts=?,next_try=?,status=? WHERE task=? AND run=?',
+                       (attempts, time.time()+max(60*min(attempts, 5), retry_after),
+                        'failed' if attempts >= 3 else 'pending', *key))
+        LOG.warning('Collection notification failed task=%s channel=%s attempt=%s error_type=%s',
+                    row['task'], channel, attempts, type(exc).__name__)
+    else:
+        with db:
+            db.execute(f"UPDATE {table} SET status='sent' WHERE task=? AND run=?", key)
+        LOG.info('Collection notification sent task=%s channel=%s', row['task'], channel)
+
+
 def deliver_pending(settings):
-    """One bounded delivery pass, serialized across API workers and social sends."""
+    """Bound each channel independently; a backlog cannot exclude the other."""
     from app.services.social import SocialMonitor
     root = settings.log_path / 'collection-notifications'
     root.mkdir(parents=True, exist_ok=True)
@@ -174,40 +275,18 @@ def deliver_pending(settings):
         with portalocker.Lock(str(root / 'delivery.lock'), timeout=0):
             db = _database(settings)
             try:
-                rows = db.execute("SELECT * FROM outbox WHERE status='pending' AND next_try<=? LIMIT 8",
-                                  (time.time(),)).fetchall()
-                for row in rows:
-                    if not enabled(settings, row['task']):
-                        LOG.info('Collection notification skipped task=%s reason=disabled_before_delivery', row['task'])
-                        with db:
-                            db.execute("UPDATE outbox SET status='skipped' WHERE task=? AND run=?", (row['task'], row['run']))
-                        continue
-                    monitor = SocialMonitor(settings)
-                    with portalocker.Lock(str(monitor.root / 'notification-send.lock'), timeout=1):
-                        if not enabled(settings, row['task']):
-                            continue
-                        with monitor.db() as social_db:
-                            config = monitor.config(social_db)
-                        if not config.get('token') or not config.get('chat_id'):
-                            LOG.warning('Collection notification destination missing task=%s', row['task'])
-                            with db:
-                                db.execute('UPDATE outbox SET next_try=? WHERE task=? AND run=?',
-                                           (time.time() + 300, row['task'], row['run']))
-                            continue
-                        try:
-                            monitor.send_part(monitor.decode(config['token']), monitor.decode(config['chat_id']), row['message'])
-                        except Exception as exc:
-                            attempts = row['attempts'] + 1
-                            with db:
-                                db.execute('UPDATE outbox SET attempts=?,next_try=?,status=? WHERE task=? AND run=?',
-                                           (attempts, time.time() + 60 * min(attempts, 5),
-                                            'failed' if attempts >= 3 else 'pending', row['task'], row['run']))
-                            LOG.warning('Collection notification failed task=%s attempt=%s error_type=%s',
-                                        row['task'], attempts, type(exc).__name__)
-                        else:
-                            with db:
-                                db.execute("UPDATE outbox SET status='sent' WHERE task=? AND run=?", (row['task'], row['run']))
-                            LOG.info('Collection notification sent task=%s', row['task'])
+                batches = [(channel, table, db.execute(
+                    f"SELECT * FROM {table} WHERE status='pending' AND next_try<=? ORDER BY rowid LIMIT 8",
+                    (time.time(),)).fetchall()) for channel, table in _OUTBOXES.items()]
+                if not any(rows for _, _, rows in batches):
+                    return
+                monitor = SocialMonitor(settings)
+                # Interleave channels; one slow destination must not defer an
+                # entire other channel batch behind its own per-message timeouts.
+                for index in range(8):
+                    for channel, table, rows in batches:
+                        if index < len(rows):
+                            _deliver_one(settings, db, monitor, channel, table, rows[index])
             finally:
                 db.close()
     except portalocker.exceptions.LockException:

@@ -1656,7 +1656,7 @@ def test_heat_progress_logs_count_and_elapsed_without_stock_payload(tmp_path, ca
 @pytest.mark.parametrize('notify_enabled', [True, False])
 def test_manual_collection_notifications_obey_switch_and_no_change(tmp_path, monkeypatch, notify_enabled):
     from app.services import collection_notifications as notifications
-    monkeypatch.setattr(notifications, 'enabled', lambda *_: notify_enabled)
+    monkeypatch.setattr(notifications, 'configured_channels', lambda *_: ('telegram',) if notify_enabled else ())
     monkeypatch.setattr(notifications, 'start_notifications', lambda *_: None)
     collection, provider, writer, clock = worker(tmp_path)
     original_writer = collection.writer
@@ -1687,7 +1687,7 @@ def test_manual_collection_notifications_obey_switch_and_no_change(tmp_path, mon
 
 def test_market_recovery_and_cooldown_report_distinct_terminal_manual_runs(tmp_path, monkeypatch):
     from app.services import collection_notifications as notifications
-    monkeypatch.setattr(notifications, 'enabled', lambda *_: True)
+    monkeypatch.setattr(notifications, 'configured_channels', lambda *_: ('telegram',))
     monkeypatch.setattr(notifications, 'start_notifications', lambda *_: None)
     collection, _, _, clock = worker(tmp_path)
     collection.request_run('manual-lost')

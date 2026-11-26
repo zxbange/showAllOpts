@@ -6,6 +6,7 @@ import { apiFetch } from './http'
 export type TaskConfiguration = {
   enabled: boolean
   telegram_notify?: boolean
+  feishu_notify?: boolean
   times?: string[]
   frequency?: string
   start?: string
