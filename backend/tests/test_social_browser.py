@@ -763,3 +763,67 @@ def test_run_success_is_preserved_when_cleanup_fails(browser_client, failure):
     assert service.status('weibo')['state'] == 'success'
     assert service.monitor.platform_login('weibo')['state'] == 'normal'
     context.close.assert_called_once()
+
+
+def test_stale_fetch_error_does_not_replace_verified_session(browser_client):
+    _, browser = browser_client
+    monitor = browser.monitor
+    monitor.add_author('weibo', '123', '测试')
+    monitor.update_config({'weibo_cookie': 'SUB=old', 'telegram_enabled': False, 'enabled': True},
+                          verified_platform='weibo')
+    author = monitor.overview()['authors'][0]
+
+    def stale_error(*args):
+        monitor.update_config({'weibo_cookie': 'SUB=new'}, verified_platform='weibo')
+        raise RuntimeError('old request failed')
+
+    with patch.object(monitor, 'night_time', return_value=False), \
+            patch.object(monitor, 'scheduled_author', side_effect=[(author, 'queue'), None]), \
+            patch.object(monitor, 'check_author', side_effect=stale_error), \
+            patch.object(monitor, 'deliver_notifications'), patch.object(monitor, 'send_alerts'):
+        monitor.cycle()
+    assert monitor.platform_login('weibo')['state'] == 'normal'
+    assert not monitor.overview()['platforms']['weibo'].get('retry_at')
+
+
+def test_third_fetch_failure_pauses_and_prepares_alert(browser_client):
+    _, browser = browser_client
+    monitor = browser.monitor
+    monitor.add_author('weibo', '123', '测试')
+    monitor.update_config({'weibo_cookie': 'SUB=test', 'telegram_enabled': False, 'enabled': True},
+                          verified_platform='weibo')
+    author = monitor.overview()['authors'][0]
+    monitor.platform_state('weibo', failures=2, reason_code='fetch_failed', retry_at=0)
+    with patch.object(monitor, 'night_time', return_value=False), \
+            patch.object(monitor, 'scheduled_author', side_effect=[(author, 'queue'), None]), \
+            patch.object(monitor, 'check_author', side_effect=RuntimeError('fetch failed')), \
+            patch.object(monitor, 'deliver_notifications'), patch.object(monitor, 'send_alerts') as alerts:
+        monitor.cycle()
+    state = monitor.overview()['platforms']['weibo']
+    assert state['paused'] and state['failures'] == 3
+    assert state['reason_code'] == 'fetch_failed_limit' and state['incident_id']
+    assert '连续三次' in monitor.platform_login('weibo')['pause_reason']
+    alerts.assert_called_once()
+
+
+def test_verified_relogin_preserves_wait_and_stops_on_next_failure(browser_client):
+    _, browser = browser_client
+    monitor = browser.monitor
+    monitor.add_author('weibo', '123', '测试')
+    monitor.update_config({'weibo_cookie': 'SUB=old', 'telegram_enabled': False, 'enabled': True},
+                          verified_platform='weibo')
+    monitor.platform_state('weibo', failures=1, reason_code='fetch_failed', retry_at=9999999999)
+    browser.logout('weibo')
+    monitor.update_config({'weibo_cookie': 'SUB=new'}, verified_platform='weibo')
+    state = monitor.overview()['platforms']['weibo']
+    assert state['retry_at'] == 9999999999 and state['verification_pending']
+    assert monitor.scheduled_author('weibo') is None
+    monitor.platform_state('weibo', retry_at=0)
+    author = monitor.overview()['authors'][0]
+    with patch.object(monitor, 'night_time', return_value=False), \
+            patch.object(monitor, 'scheduled_author', side_effect=[(author, 'queue'), None]), \
+            patch.object(monitor, 'check_author', side_effect=RuntimeError('fetch failed')), \
+            patch.object(monitor, 'deliver_notifications'), patch.object(monitor, 'send_alerts'):
+        monitor.cycle()
+    assert monitor.overview()['platforms']['weibo']['paused']
+    assert '重新登录后的采集验证失败' in monitor.platform_login('weibo')['pause_reason']

@@ -232,10 +232,20 @@ class SocialMonitor(NotificationMixin, CubeMonitorMixin):
                     if key in ('weibo_cookie', 'xueqiu_cookie'):
                         platform = key.removesuffix('_cookie')
                         state = config.setdefault('platforms', {}).setdefault(platform, {})
+                        if verified_platform == platform and value and state.get('login'):
+                            state['verification_pending'] = True
                         state['login'] = dict(state='normal' if value and verified_platform == platform else
                                               'unknown' if value else 'logged_out',
                                               checked_at=now() if verified_platform == platform else None,
                                               source='scan' if verified_platform == platform else 'config')
+                        if not value:
+                            # Keep outstanding platform waits and restrictions across logout.
+                            state.setdefault('logout_paused', not state.get('paused'))
+                            state['paused'] = True
+                            if not state.get('reason_code') and not state.get('retry_at'):
+                                state.update(reason='已退出平台登录', reason_code='logged_out')
+                        elif verified_platform == platform and state.pop('logout_paused', False):
+                            state['paused'] = False
                         if verified_platform == platform and state.get('reason_code') in ('login_expired', 'login_redirect', 'logged_out'):
                             state.update(paused=False, reason=None, reason_code=None, retry_at=0, failures=0,
                                          http_status=None, incident_id=None, alert_sent_at=None)
@@ -272,7 +282,8 @@ class SocialMonitor(NotificationMixin, CubeMonitorMixin):
             if expected_cookie:
                 target['login'] = dict(state=state, checked_at=now(), source='monitor')
             if state == 'normal' and not target.get('paused'):
-                target.update(failures=0, retry_at=0, reason=None, reason_code=None, http_status=None)
+                target.update(failures=0, retry_at=0, reason=None, reason_code=None, http_status=None,
+                              verification_pending=False)
             self.write_config(db, config)
             return True
 
@@ -287,6 +298,12 @@ class SocialMonitor(NotificationMixin, CubeMonitorMixin):
             login['state'] = 'expired'
         elif state.get('paused') and state.get('reason_code') != 'logged_out':
             login['state'] = 'restricted'
+        if state.get('verification_pending'):
+            login['verification_pending'] = True
+        if state.get('paused') and state.get('reason_code') == 'fetch_failed_limit':
+            login.update(pause_reason=state.get('reason'))
+        if state.get('retry_at', 0) > time.time():
+            login.update(retry_at=state['retry_at'], retry_reason=state.get('reason'))
         return login
 
     def overview(self):
@@ -568,7 +585,8 @@ class SocialMonitor(NotificationMixin, CubeMonitorMixin):
         if not config['enabled']:
             return
         for platform, state in config.get('platforms', {}).items():
-            if not state.get('paused') or state.get('alert_sent_at') or time.time() < state.get('alert_next_try', 0):
+            if (state.get('login', {}).get('state') == 'logged_out' or not state.get('paused') or state.get('alert_sent_at')
+                    or time.time() < state.get('alert_next_try', 0)):
                 continue
             routes = state.get('alert_delivery', {})
             label = '微博' if platform == 'weibo' else '雪球'
@@ -868,9 +886,22 @@ class SocialMonitor(NotificationMixin, CubeMonitorMixin):
                 outcome = 'failed'
                 LOG.warning('Social monitoring deferred platform=%s reason=rate_limited retry_seconds=%s',
                             author['platform'], error.retry_after)
-                self.platform_state(author['platform'], retry_at=time.time() + error.retry_after, reason=str(error), reason_code='rate_limited', http_status=None)
                 with self.db() as db:
                     db.execute('BEGIN IMMEDIATE')
+                    latest = self.config(db)
+                    target = latest.setdefault('platforms', {}).setdefault(platform, {})
+                    target['retry_at'] = max(target.get('retry_at', 0), time.time() + error.retry_after)
+                    if not target.get('paused'):
+                        target.update(reason=str(error), reason_code='rate_limited', http_status=None)
+                        if (latest[platform + '_cookie'] == current[platform + '_cookie']
+                                and target.get('verification_pending')):
+                            target.update(paused=True, verification_pending=False, paused_at=now(),
+                                          incident_id=uuid.uuid4().hex, alert_sent_at=None, alert_next_try=0,
+                                          alert_delivery=initial_delivery(latest))
+                    self.write_config(db, latest)
+                    if latest[platform + '_cookie'] != current[platform + '_cookie']:
+                        outcome = 'cancelled'
+                        continue
                     if self.active_task(db, author):
                         table = 'cubes' if author.get('_kind') == 'cube' else 'authors'
                         db.execute(f'UPDATE {table} SET last_check=?,last_error=? WHERE id=?', (now(), str(error), author['id']))
@@ -890,14 +921,30 @@ class SocialMonitor(NotificationMixin, CubeMonitorMixin):
                     message = '平台网络传输异常，已暂缓抓取，系统会自动退避重试'
                 with self.db() as db:
                     db.execute('BEGIN IMMEDIATE')
+                    latest = self.config(db)
+                    if latest[platform + '_cookie'] != current[platform + '_cookie']:
+                        outcome = 'cancelled'
+                        continue
                     if self.active_task(db, author):
                         table = 'cubes' if author.get('_kind') == 'cube' else 'authors'
                         db.execute(f'UPDATE {table} SET last_check=?,last_error=? WHERE id=?', (now(), message, author['id']))
+                    target = latest.setdefault('platforms', {}).setdefault(platform, {})
+                    failures = target.get('failures', 0) + 1
+                    if not target.get('paused') and not (target.get('reason_code') == 'rate_limited'
+                                                        and target.get('retry_at', 0) > time.time()):
+                        verifying = target.get('verification_pending', False)
+                        if failures >= 3 or verifying:
+                            prefix = ('重新登录后的采集验证失败，请检查平台登录或网络：' if verifying
+                                      else '连续三次采集失败，请检查平台登录或网络：')
+                            target.update(failures=failures, verification_pending=False, paused=True, reason=prefix + message,
+                                          reason_code='fetch_failed_limit', http_status=None, paused_at=now(),
+                                          incident_id=uuid.uuid4().hex, alert_sent_at=None, alert_next_try=0,
+                                          alert_delivery=initial_delivery(latest))
+                        else:
+                            target.update(failures=failures, reason=message, reason_code='fetch_failed', http_status=None,
+                                          retry_at=max(target.get('retry_at', 0), time.time() + min(21600, random.uniform(POLL_INTERVAL_MIN, POLL_INTERVAL_MAX) * 2 ** min(failures - 1, 6))))
+                        self.write_config(db, latest)
                 error_message = '部分用户抓取失败，请查看用户列表'
-                failures = state.get('failures', 0) + 1
-                self.platform_state(author['platform'], failures=failures,
-                                    reason=message, reason_code='fetch_failed', http_status=None,
-                                    retry_at=time.time() + min(21600, random.uniform(POLL_INTERVAL_MIN, POLL_INTERVAL_MAX) * 2 ** min(failures - 1, 6)))
                 LOG.warning('Social fetch failed platform=%s kind=%s %s', author['platform'],
                             'cube' if author.get('_kind') == 'cube' else 'author', diagnostic_details(error))
             finally:
