@@ -15,7 +15,7 @@ from test_market_collection import EVENING, worker
 
 
 def test_market_alert_reads_bounded_page_publications_not_working_candidates(tmp_path, monkeypatch):
-    monkeypatch.setattr(notifications, 'enabled', lambda *_: True)
+    monkeypatch.setattr(notifications, 'configured_channels', lambda *_: ('telegram',))
     monkeypatch.setattr(notifications, 'start_notifications', lambda *_: None)
     monitor, _, _, clock = worker(tmp_path, refresh=lambda: True)
     engine = create_engine('sqlite://')
@@ -47,7 +47,7 @@ def test_market_alert_reads_bounded_page_publications_not_working_candidates(tmp
 
 def test_scheduled_dividend_no_change_and_later_failure_keep_verified_details(tmp_path, monkeypatch):
     from app.services import dividend_collection as module
-    monkeypatch.setattr(notifications, 'enabled', lambda *_: True)
+    monkeypatch.setattr(notifications, 'configured_channels', lambda *_: ('telegram',))
     monkeypatch.setattr(notifications, 'start_notifications', lambda *_: None)
     config = {'revision': 1, 'host': 'localhost', 'port': 3306, 'database': 'test'}
     monkeypatch.setattr(module, 'database_config', lambda _: config)

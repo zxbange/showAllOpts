@@ -70,7 +70,7 @@ def test_dynamic_schedule_changes_scope_and_next_run(tmp_path, monkeypatch):
 @pytest.mark.parametrize('notify_enabled,changed_count', [(True, 1), (False, 1), (True, 0)])
 def test_manual_run_notifies_when_enabled_with_or_without_changes(tmp_path, monkeypatch, notify_enabled, changed_count):
     from app.services import collection_notifications as notifications
-    monkeypatch.setattr(notifications, 'enabled', lambda settings, task: task == 'market' and notify_enabled)
+    monkeypatch.setattr(notifications, 'configured_channels', lambda settings, task: ('telegram',) if task == 'market' and notify_enabled else ())
     monkeypatch.setattr(notifications, 'start_notifications', lambda *_: None)
     owner, _, _, _ = worker(tmp_path)
     original = owner.writer

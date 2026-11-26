@@ -93,12 +93,13 @@ export function SystemTaskConfiguration({
         <span className="system-timezone">北京时间 · 24h</span>
       </div>
       <p className="system-settings-muted system-task-help">
-        自动运行控制定时执行，通知开关只控制推送；修改后保存生效。除微博 /
+        自动运行控制定时执行，Telegram
+        和飞书通知开关独立控制自动及手动采集结果推送；修改后保存生效。除微博 /
         雪球动态外，自动任务在周末和节假日暂停；未核验年份也暂停自动运行，手动仍可运行。
       </p>
       <div className="system-task-table" role="table" aria-label="自动任务配置">
         <div className="system-task-columns" role="row">
-          {['任务', '自动运行', '频率', '运行时间', 'Telegram 通知'].map((title) => (
+          {['任务', '自动运行', '频率', '运行时间', '通知渠道'].map((title) => (
             <span role="columnheader" key={title}>
               {title}
             </span>
@@ -209,13 +210,26 @@ export function SystemTaskConfiguration({
                 />
               )}
             </div>
-            <div className="system-task-notify" role="cell" data-label="Telegram 通知">
+            <div className="system-task-notify" role="cell" data-label="通知渠道">
               {t.telegram_notify !== undefined ? (
-                <SettingsSwitch
-                  label="Telegram 通知"
-                  checked={t.telegram_notify}
-                  onChange={(telegram_notify) => onChange(key, { telegram_notify })}
-                />
+                <div className="system-task-notify-channels">
+                  <div>
+                    <span>Telegram</span>
+                    <SettingsSwitch
+                      label="Telegram 通知"
+                      checked={t.telegram_notify}
+                      onChange={(telegram_notify) => onChange(key, { telegram_notify })}
+                    />
+                  </div>
+                  <div>
+                    <span>飞书</span>
+                    <SettingsSwitch
+                      label="飞书通知"
+                      checked={t.feishu_notify ?? false}
+                      onChange={(feishu_notify) => onChange(key, { feishu_notify })}
+                    />
+                  </div>
+                </div>
               ) : key === 'social' || key === 'social_cubes' ? (
                 <a className="system-not-applicable" href="#settings-notifications">
                   单独配置

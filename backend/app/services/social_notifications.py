@@ -146,10 +146,10 @@ class NotificationMixin:
                 if channel not in enabled and delivery['status'] == 'pending':
                     delivery.update(status='skipped', last_error=None)
 
-    def send_channel(self, channel, text, require_enabled=True, guard=None, upload_guard=None):
+    def send_channel(self, channel, text, require_enabled=True, guard=None, upload_guard=None, *, require_channel_enabled=True, lock_timeout=35):
         """Serialize sends across workers and re-read switches just before network I/O."""
         try:
-            with portalocker.Lock(str(self.root / 'notification-send.lock'), timeout=35):
+            with portalocker.Lock(str(self.root / 'notification-send.lock'), timeout=lock_timeout):
                 if channel == 'feishu':
                     with self.db() as db:
                         config = self.config(db)
@@ -159,7 +159,7 @@ class NotificationMixin:
                 with self.db() as db:
                     db.execute('BEGIN IMMEDIATE')
                     current = self.config(db)
-                    if channel not in enabled_channels(current):
+                    if require_channel_enabled and channel not in enabled_channels(current):
                         raise NotificationSkipped()
                     if require_enabled and not current['enabled']:
                         raise NotificationDeferred()
@@ -205,6 +205,9 @@ class NotificationMixin:
                     LOG.warning('Notification send failed channel=%s %s', channel, diagnostic_details(error))
                     raise NotificationError(CHANNEL_LABELS[channel] + '通知配置或发送异常，请检查渠道设置。') from None
         except portalocker.exceptions.LockException:
+            if not require_channel_enabled:
+                # The independent collection outbox owns its retry budget.
+                raise NotificationDeferred() from None
             raise NotificationError('通知发送繁忙，请稍后重试。') from None
 
     @staticmethod

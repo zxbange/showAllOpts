@@ -133,13 +133,14 @@ export function SystemNotificationConfiguration({
       <h2>社交监控通知</h2>
       <ConfigurationErrorDialog message={error} onDismiss={() => setError('')} />
       <p className="system-settings-muted">
-        此区域独立保存，开关即时生效；Telegram 凭证与采集任务共用。
+        此区域独立保存，开关即时生效；Telegram 和飞书凭证与采集任务共用。
       </p>
       {error && <p role="alert">{error}</p>}
       {notice && <p role="status">{notice}</p>}
       <h3>通知渠道</h3>
       <p className="social-muted">
-        此处开关仅控制社交监控通知；采集任务使用各自的 Telegram 开关。测试消息需开启对应社交通知。
+        此处开关仅控制社交监控通知；采集任务使用各自的
+        Telegram、飞书开关。测试消息需开启对应社交通知。
       </p>
       {!notificationEnabled('telegram') && !notificationEnabled('feishu') && (
         <p className="social-notice">通知渠道均已关闭，监控运行时只采集、不推送。</p>

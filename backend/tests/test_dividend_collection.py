@@ -301,7 +301,7 @@ def test_verified_source_enabled_by_default_without_starting_network(tmp_path):
 def test_manual_dividend_notifies_changed_noop_and_failed_publication(tmp_path, monkeypatch):
     from app.services import collection_notifications as notifications
     import app.services.dividend_collection as module
-    monkeypatch.setattr(notifications, 'enabled', lambda *_: True)
+    monkeypatch.setattr(notifications, 'configured_channels', lambda *_: ('telegram',))
     monkeypatch.setattr(notifications, 'start_notifications', lambda *_: None)
     monkeypatch.setattr(module, 'database_config', lambda _: {'revision': 1, 'host': 'localhost', 'port': 3306, 'database': 'test'})
     engine = create_engine('sqlite:///' + str(tmp_path / 'results.sqlite'))

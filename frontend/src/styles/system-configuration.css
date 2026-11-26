@@ -577,3 +577,25 @@
   justify-content: flex-end;
   margin-top: 20px;
 }
+
+.system-task-notify-channels {
+  display: grid;
+  gap: 6px;
+}
+.system-task-notify-channels > div {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  justify-content: space-between;
+}
+.system-task-notify-channels > div > span {
+  color: var(--muted);
+  font-size: 10px;
+}
+@media (min-width: 851px) {
+  .system-task-notify-channels > div {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 2px;
+  }
+}

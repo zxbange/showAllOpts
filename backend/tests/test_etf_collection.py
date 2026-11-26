@@ -632,7 +632,7 @@ def test_collection_logs_unexpected_calendar_failure(tmp_path, caplog):
 
 def test_manual_etf_notification_dedup_and_cancel_use_stable_run_ids(tmp_path, monkeypatch):
     from app.services import collection_notifications as notifications
-    monkeypatch.setattr(notifications, 'enabled', lambda *_: True)
+    monkeypatch.setattr(notifications, 'configured_channels', lambda *_: ('telegram',))
     monkeypatch.setattr(notifications, 'start_notifications', lambda *_: None)
     w, collector, _ = worker(tmp_path)
     from test_etf_page_configuration import save
@@ -660,7 +660,7 @@ def test_manual_etf_notification_dedup_and_cancel_use_stable_run_ids(tmp_path, m
 def test_manual_etf_reports_cache_partial_without_second_alert_on_publish_retry(tmp_path, monkeypatch):
     from app.services import collection_notifications as notifications
     from test_etf_page_configuration import save
-    monkeypatch.setattr(notifications, 'enabled', lambda *_: True)
+    monkeypatch.setattr(notifications, 'configured_channels', lambda *_: ('telegram',))
     monkeypatch.setattr(notifications, 'start_notifications', lambda *_: None)
     w, _, _ = worker(tmp_path, refresh=lambda **_: False)
     w.start = lambda: None
@@ -679,7 +679,7 @@ def test_manual_etf_reports_cache_partial_without_second_alert_on_publish_retry(
 
 def test_recovered_interruptions_notify_only_transitions_not_old_etf_history(tmp_path, monkeypatch):
     from app.services import collection_notifications as notifications
-    monkeypatch.setattr(notifications, 'enabled', lambda *_: True)
+    monkeypatch.setattr(notifications, 'configured_channels', lambda *_: ('telegram',))
     monkeypatch.setattr(notifications, 'start_notifications', lambda *_: None)
     w, _, _ = worker(tmp_path)
     w.start = lambda: None

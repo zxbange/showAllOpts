@@ -35,7 +35,7 @@ const initial = () => ({
   },
   schedules: {
     cache: { enabled: true, times: ['07:00'] },
-    market: { enabled: true, times: ['00:01'], telegram_notify: false },
+    market: { enabled: true, times: ['00:01'], telegram_notify: false, feishu_notify: false },
     etf: { enabled: true, times: ['09:00'] },
     commodities: { enabled: true, times: ['11:00', '18:00'] },
     holdings: {
@@ -52,7 +52,12 @@ const initial = () => ({
       min_interval_minutes: 10,
       max_interval_minutes: 16,
     },
-    earnings_selection: { enabled: true, times: ['23:00'], telegram_notify: false },
+    earnings_selection: {
+      enabled: true,
+      times: ['23:00'],
+      telegram_notify: false,
+      feishu_notify: false,
+    },
   },
 })
 test('admin saves shared database, integrations and times without secret echo', async ({
@@ -247,7 +252,11 @@ test('schedule columns, explicit switches and 24-hour fields remain independent'
   const market = page.getByRole('row', { name: '市场热度 / 抱团拥挤度', exact: true })
   const auto = market.getByRole('switch', { name: '自动运行', exact: true })
   const notify = market.getByRole('switch', { name: 'Telegram 通知', exact: true })
+  const feishu = market.getByRole('switch', { name: '飞书通知', exact: true })
   await expect(auto).toBeChecked()
+  await expect(notify).not.toBeChecked()
+  await expect(feishu).not.toBeChecked()
+  await feishu.check()
   await expect(notify).not.toBeChecked()
   await auto.uncheck()
   await notify.check()
@@ -264,6 +273,7 @@ test('schedule columns, explicit switches and 24-hour fields remain independent'
   await expect.poll(() => saves).toBe(1)
   expect(config.schedules.market.times).toEqual(['23:59'])
   expect(config.schedules.market.telegram_notify).toBe(true)
+  expect(config.schedules.market.feishu_notify).toBe(true)
   await time.fill('24:01')
   await page.getByRole('button', { name: '保存系统配置' }).click()
   expect(saves).toBe(1)

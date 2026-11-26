@@ -1,15 +1,18 @@
 """Both collection triggers share terminal reporting and an idempotent outbox."""
-from contextlib import contextmanager
 import json
 import sqlite3
+from contextlib import contextmanager
 from types import SimpleNamespace
+
 import pytest
+
 from app.services import collection_notifications as n
+
 
 @pytest.fixture
 def settings(tmp_path,monkeypatch):
     monkeypatch.setattr(n,'start_notifications',lambda settings:None)
-    monkeypatch.setattr(n,'enabled',lambda settings,task:True)
+    monkeypatch.setattr(n, 'configured_channels', lambda settings, task: ('telegram',))
     return SimpleNamespace(log_path=tmp_path)
 
 def rows(settings):
@@ -26,7 +29,7 @@ def test_automatic_failure_no_change_enqueues_but_inactive_and_disabled_are_sile
     assert emit(settings,changed_count=0,outcome='failed')
     assert not emit(settings,run_key='skipped',outcome='skipped')
     assert not emit(settings,run_key='running',outcome='running')
-    monkeypatch.setattr(n,'enabled',lambda *_:False)
+    monkeypatch.setattr(n, 'configured_channels', lambda *_: ())
     assert not emit(settings,run_key='disabled')
     assert len(rows(settings)) == 1
     assert '采集结果：失败' in rows(settings)[0]['message']
@@ -60,7 +63,7 @@ def test_delivery_independent_of_social_switch_and_disable_cancels_queue(setting
     emit(settings);n.deliver_pending(settings);n.deliver_pending(settings)
     assert len(sent)==1 and rows(settings)[0]['status']=='sent'
     emit(settings,run_key='run-2')
-    monkeypatch.setattr(n,'enabled',lambda *_:False)
+    monkeypatch.setattr(n, 'configured_channels', lambda *_: ())
     n.deliver_pending(settings)
     assert rows(settings)[1]['status']=='skipped' and len(sent)==1
 
@@ -206,9 +209,9 @@ def test_skip_and_queue_reasons_are_observable_without_payload(settings, monkeyp
     caplog.set_level(logging.INFO, logger=n.__name__)
     emit(settings, scheduled=False, summary=['DO_NOT_LOG_PAYLOAD'])
     emit(settings, changed_count=0)
-    monkeypatch.setattr(n, 'enabled', lambda *_: False)
+    monkeypatch.setattr(n, 'configured_channels', lambda *_: ())
     emit(settings)
-    monkeypatch.setattr(n, 'enabled', lambda *_: True)
+    monkeypatch.setattr(n, 'configured_channels', lambda *_: ('telegram',))
     emit(settings, summary=['DO_NOT_LOG_PAYLOAD'])
     emit(settings)
     assert 'reason=disabled' in caplog.text
@@ -259,9 +262,9 @@ def test_valuation_current_hook_emits_after_current_store_publish(settings):
 @pytest.mark.parametrize('scheduled', [True, False])
 def test_every_collection_trigger_obeys_switch_change_and_dedup(settings, monkeypatch, task, scheduled):
     args = dict(scheduled=scheduled, run_key='one-run', outcome='completed', changed_count=1, summary=['changed'])
-    monkeypatch.setattr(n, 'enabled', lambda *_: False)
+    monkeypatch.setattr(n, 'configured_channels', lambda *_: ())
     assert not n.emit_collection_result(settings, task, **args)
-    monkeypatch.setattr(n, 'enabled', lambda *_: True)
+    monkeypatch.setattr(n, 'configured_channels', lambda *_: ('telegram',))
     assert n.emit_collection_result(settings, task, **dict(args, run_key='no-change', changed_count=0, outcome='failed'))
     assert n.emit_collection_result(settings, task, **args)
     assert not n.emit_collection_result(settings, task, **args)
@@ -405,3 +408,178 @@ def test_scheduled_delivery_zero_change_and_dedup(settings, monkeypatch):
     n.deliver_pending(settings)
     assert len(sent) == 1
     assert '触发方式：自动采集' in sent[0] and '成功（无新增或变更）' in sent[0]
+
+
+def feishu_rows(settings):
+    db = n._database(settings)
+    try:
+        return [dict(row) for row in db.execute('SELECT * FROM outbox_feishu')]
+    finally:
+        db.close()
+
+
+def test_existing_telegram_outbox_is_preserved_and_new_feishu_never_replays(settings, monkeypatch):
+    root = settings.log_path / 'collection-notifications'
+    root.mkdir()
+    with sqlite3.connect(root / 'outbox.sqlite3') as db:
+        db.execute('CREATE TABLE outbox(task TEXT, run TEXT, message TEXT, status TEXT, '
+                   'attempts INTEGER NOT NULL DEFAULT 0, next_try REAL NOT NULL DEFAULT 0, PRIMARY KEY(task,run))')
+        db.execute("INSERT INTO outbox VALUES('cci','run-1','old payload','pending',2,123)")
+        db.execute("INSERT INTO outbox VALUES('cci','already-sent','old sent','sent',1,456)")
+    old = rows(settings)
+    monkeypatch.setattr(n, 'configured_channels', lambda *_: ('telegram', 'feishu'))
+    assert not emit(settings)
+    assert not emit(settings, run_key='already-sent')
+    assert rows(settings) == old
+    assert feishu_rows(settings) == []
+    assert emit(settings, run_key='new')
+    assert rows(settings)[2]['message'] == feishu_rows(settings)[0]['message']
+
+
+def test_both_channels_freeze_recipient_set_and_concurrent_emits_dedupe(settings, monkeypatch):
+    from concurrent.futures import ThreadPoolExecutor
+    monkeypatch.setattr(n, 'configured_channels', lambda *_: ('telegram', 'feishu'))
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        results = list(pool.map(lambda _: emit(settings, scheduled=False), range(4)))
+    assert sum(results) == 1
+    assert len(rows(settings)) == len(feishu_rows(settings)) == 1
+    assert rows(settings)[0]['message'] == feishu_rows(settings)[0]['message']
+    monkeypatch.setattr(n, 'configured_channels', lambda *_: ('feishu',))
+    assert emit(settings, run_key='feishu-only')
+    monkeypatch.setattr(n, 'configured_channels', lambda *_: ('telegram', 'feishu'))
+    assert not emit(settings, run_key='feishu-only')
+    assert len(rows(settings)) == 1 and len(feishu_rows(settings)) == 2
+
+
+@pytest.mark.parametrize('channels', [('feishu',), ('telegram', 'feishu')])
+def test_real_collection_outbox_feishu_delivery_ignores_social_switch_and_uses_signed_text(tmp_path, monkeypatch, channels):
+    import httpx
+
+    import app.services.social_notifications as sn
+    from app.core.config import Settings
+    from app.services.social import SocialMonitor
+    from app.services.system_configuration import SystemConfiguration
+
+    settings = Settings(_env_file=None, log_dir=tmp_path, social_worker_enabled=False,
+                        telegram_bot_token='fake-token', telegram_chat_id='123')
+    monkeypatch.setattr(n, 'start_notifications', lambda *_: None)
+    social = SocialMonitor(settings)
+    social.update_config({'telegram_enabled': False, 'feishu_enabled': False,
+                          'feishu_webhook': 'https://open.feishu.cn/open-apis/bot/v2/hook/synthetic-test-hook',
+                          'feishu_secret': 'synthetic-secret'})
+    config = SystemConfiguration(settings)
+    form = config.load()
+    for channel in channels:
+        form['schedules']['cci'][channel+'_notify'] = True
+    config.save(form)
+    assert n.configured_channels(settings, 'cci') == channels
+    assert not social.overview()['enabled'] and not social.overview()['feishu_enabled']
+    received, telegram = [], []
+    def handler(request):
+        payload = json.loads(request.content)
+        received.append(payload)
+        assert payload == sn.feishu_body(payload['content']['text'], 'synthetic-secret', timestamp=payload['timestamp'])
+        return httpx.Response(200, json={'code': 0})
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    monkeypatch.setattr(sn.httpx, 'Client', lambda **_: client)
+    monkeypatch.setattr(SocialMonitor, 'send_part', lambda _self, _token, _chat, message: telegram.append(message))
+    assert emit(settings, scheduled=False)
+    n.deliver_pending(settings)
+    n.deliver_pending(settings)
+    assert len(received) == 1 and feishu_rows(settings)[0]['status'] == 'sent'
+    assert received[0]['content']['text'] == feishu_rows(settings)[0]['message']
+    if 'telegram' in channels:
+        assert telegram == [received[0]['content']['text']]
+    else:
+        assert not telegram and not rows(settings)
+
+
+def test_feishu_failure_retries_independently_of_telegram(settings, monkeypatch, caplog):
+    from app.services import social_notifications as sn
+    calls = []
+    sent = fake_social(monkeypatch, settings)
+    from app.services.social import SocialMonitor
+    def config(self, _):
+        return {'token': 'token', 'chat_id': 'chat', 'enabled': False, 'telegram_enabled': False,
+                'feishu_webhook': 'fake-webhook', 'feishu_secret': 'fake-secret'}
+    def send_feishu(self, channel, text, **kwargs):
+        calls.append((channel, text))
+        assert not kwargs['require_enabled'] and not kwargs['require_channel_enabled']
+        if len(calls) == 1:
+            raise sn.NotificationError('DO_NOT_LOG_SECRET', 300)
+    monkeypatch.setattr(SocialMonitor, 'config', config)
+    monkeypatch.setattr(SocialMonitor, 'send_channel', send_feishu, raising=False)
+    monkeypatch.setattr(n, 'configured_channels', lambda *_: ('telegram', 'feishu'))
+    emit(settings)
+    n.deliver_pending(settings)
+    assert rows(settings)[0]['status'] == 'sent'
+    assert feishu_rows(settings)[0]['attempts'] == 1
+    assert feishu_rows(settings)[0]['next_try'] >= n.time.time()+290
+    n.deliver_pending(settings)
+    assert len(calls) == len(sent) == 1
+    with n._database(settings) as db:
+        db.execute('UPDATE outbox_feishu SET next_try=0')
+    n.deliver_pending(settings)
+    assert len(calls)==2 and len(sent)==1 and feishu_rows(settings)[0]['status']=='sent'
+    assert calls[0][1] == sent[0] == calls[1][1]
+    assert 'DO_NOT_LOG_SECRET' not in caplog.text
+
+
+def test_channel_disabled_before_delivery_skips_only_that_channel(settings, monkeypatch):
+    sent = fake_social(monkeypatch, settings)
+    monkeypatch.setattr(n, 'configured_channels', lambda *_: ('telegram', 'feishu'))
+    emit(settings)
+    monkeypatch.setattr(n, 'configured_channels', lambda *_: ('telegram',))
+    n.deliver_pending(settings)
+    assert len(sent) == 1 and feishu_rows(settings)[0]['status'] == 'skipped'
+    monkeypatch.setattr(n, 'configured_channels', lambda *_: ('telegram', 'feishu'))
+    n.deliver_pending(settings)
+    assert feishu_rows(settings)[0]['status'] == 'skipped'
+
+
+def test_common_text_respects_feishu_json_escaping_limit():
+    from app.services.social_notifications import feishu_body
+    text = n.format_result('cci', 'completed', 1, ['\x00' * 550] * 10)
+    assert len(text.encode('utf-16-le')) // 2 <= n.MAX_TELEGRAM_UNITS
+    assert len(json.dumps(feishu_body(text, 'synthetic-secret'), ensure_ascii=False).encode('utf-8')) <= 20 * 1024
+
+
+def test_telegram_failure_and_missing_feishu_destination_are_independent(settings, monkeypatch):
+    fake_social(monkeypatch, settings, fail=True)
+    from app.services.social import SocialMonitor
+    config = dict(token='token', chat_id='chat', feishu_webhook='', feishu_secret='')
+    monkeypatch.setattr(SocialMonitor, 'config', lambda *_: config)
+    messages = []
+    monkeypatch.setattr(SocialMonitor, 'send_channel',
+                        lambda self, channel, message, **kwargs: messages.append(message), raising=False)
+    monkeypatch.setattr(n, 'configured_channels', lambda *_: ('telegram', 'feishu'))
+    emit(settings)
+    n.deliver_pending(settings)
+    assert rows(settings)[0]['attempts'] == 1
+    assert not messages and feishu_rows(settings)[0]['attempts'] == 0
+    config.update(feishu_webhook='webhook', feishu_secret='secret')
+    with n._database(settings) as db:
+        db.execute('UPDATE outbox_feishu SET next_try=0')
+    n.deliver_pending(settings)
+    assert len(messages) == 1 and feishu_rows(settings)[0]['status'] == 'sent'
+    assert rows(settings)[0]['attempts'] == 1 and rows(settings)[0]['status'] == 'pending'
+
+
+def test_feishu_three_failures_are_terminal_and_do_not_replay(settings, monkeypatch):
+    fake_social(monkeypatch, settings)
+    from app.services.social import SocialMonitor
+    monkeypatch.setattr(SocialMonitor, 'config', lambda *_: {'feishu_webhook': 'webhook', 'feishu_secret': 'secret'})
+    calls = []
+    def fail(self, channel, message, **kwargs):
+        calls.append(message)
+        raise RuntimeError('synthetic failure')
+    monkeypatch.setattr(SocialMonitor, 'send_channel', fail, raising=False)
+    monkeypatch.setattr(n, 'configured_channels', lambda *_: ('feishu',))
+    emit(settings)
+    for _ in range(4):
+        with n._database(settings) as db:
+            db.execute('UPDATE outbox_feishu SET next_try=0')
+        n.deliver_pending(settings)
+    assert len(calls) == 3 and feishu_rows(settings)[0]['status'] == 'failed'
+    assert feishu_rows(settings)[0]['attempts'] == 3
+    assert not emit(settings)

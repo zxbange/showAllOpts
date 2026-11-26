@@ -351,7 +351,7 @@ def test_authenticated_api_reads_offline_and_uses_existing_csrf_protection(clien
 
 def test_automatic_startup_notifies_once_across_workers_and_later_daily_slot(monitor, monkeypatch):
     from app.services import collection_notifications as notifications
-    monkeypatch.setattr(notifications, 'enabled', lambda *_: True)
+    monkeypatch.setattr(notifications, 'configured_channels', lambda *_: ('telegram',))
     monkeypatch.setattr(notifications, 'start_notifications', lambda *_: None)
     monitor.settings.growth_dividend_worker_enabled = True
     provider(monkeypatch)
@@ -384,14 +384,14 @@ def test_automatic_startup_notifies_once_across_workers_and_later_daily_slot(mon
 @pytest.mark.parametrize('notify_enabled,preload', [(False, False), (True, True)])
 def test_startup_respects_switch_even_if_no_business_changes(monitor, monkeypatch, notify_enabled, preload):
     from app.services import collection_notifications as notifications
-    monkeypatch.setattr(notifications, 'enabled', lambda *_: notify_enabled)
+    monkeypatch.setattr(notifications, 'configured_channels', lambda *_: ('telegram',) if notify_enabled else ())
     monkeypatch.setattr(notifications, 'start_notifications', lambda *_: None)
     monitor.settings.growth_dividend_worker_enabled = True
     provider(monkeypatch)
     if preload:
-        monkeypatch.setattr(notifications, 'enabled', lambda *_: False)
+        monkeypatch.setattr(notifications, 'configured_channels', lambda *_: ())
         monitor.refresh(background=False, moment=MOMENT)
-        monkeypatch.setattr(notifications, 'enabled', lambda *_: notify_enabled)
+        monkeypatch.setattr(notifications, 'configured_channels', lambda *_: ('telegram',) if notify_enabled else ())
         state = monitor.read_state()
         state['initialized'] = False
         monitor.write_state(state)
