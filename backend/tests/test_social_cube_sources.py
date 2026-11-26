@@ -243,7 +243,8 @@ def test_notification_is_plain_text_detailed_and_split_by_utf16_units():
     parts = cube_message_parts({'symbol': 'ZH679918', 'name': '测试组合'}, event)
     text = ''.join(parts)
     assert '【雪球组合调仓】测试组合 ZH679918' in text
-    assert '状态：调仓成功' in text and '北京时间' in text
+    assert '状态：调仓成功' in text and '北京时间' not in text
+    assert '调仓时间：2026-10-25 10:03:04' in text
     assert '买入 山外山 SH688410：0% → 11.38%' in text
     assert '组合记录价：9.78' in text and '调仓说明：调仓备注' in text
     assert '原文：https://www.xueqiu.com/P/ZH679918' in text and 'untrusted.example' not in text

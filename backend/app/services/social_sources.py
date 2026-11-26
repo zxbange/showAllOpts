@@ -1,14 +1,17 @@
 import html
-import re
-import random
-import math
 import logging
+import math
+import random
+import re
+from contextlib import closing
+from datetime import datetime, timedelta, timezone
+from email.utils import parsedate_to_datetime
 from html.parser import HTMLParser
 from urllib.parse import urlparse
-from datetime import datetime, timezone, timedelta
-from contextlib import closing
-from email.utils import parsedate_to_datetime
+
 import httpx
+
+from app.services.notification_time import notification_time
 from app.services.social_images import extract_images
 
 XUEQIU_TIMELINE_URL = 'https://www.xueqiu.com/statuses/original/timeline.json'
@@ -386,7 +389,7 @@ def fetch_posts(author, pages):
 
 def message_parts(platform, post):
     label = "微博" if platform == "weibo" else "雪球"
-    text = f"【{label}】{post['name']}\n时间：{post['time']}\n\n{post['text']}\n\n原文：{post['url']}"
+    text = f"【{label}】{post['name']}\n时间：{notification_time(post.get('time'))}\n\n{post['text']}\n\n原文：{post['url']}"
     # Telegram limits UTF-16 code units; leave room for astral characters.
     parts, current, units = [], [], 0
     for char in text:

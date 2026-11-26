@@ -1,18 +1,25 @@
 """Read-only Xueqiu portfolio events and plain-text Telegram messages."""
-from datetime import datetime, timedelta, timezone
-from contextlib import closing
 import math
 import random
 import re
+from contextlib import closing
+from datetime import datetime, timedelta, timezone
 from urllib.parse import urlsplit
 
 import httpx
 
+from app.services.notification_time import notification_time
 from app.services.social_sources import (
-    MonitoringDeferred, PlatformIntervention, PostBatch, RateLimited,
-    check_payload, check_response, fetch_json, fetch_xueqiu_author_name, plain_text,
+    MonitoringDeferred,
+    PlatformIntervention,
+    PostBatch,
+    RateLimited,
+    check_payload,
+    check_response,
+    fetch_json,
+    fetch_xueqiu_author_name,
+    plain_text,
 )
-
 
 CHINA = timezone(timedelta(hours=8))
 HISTORY_URL = 'https://www.xueqiu.com/cubes/rebalancing/history.json'
@@ -243,7 +250,7 @@ def cube_message_parts(cube, event):
     alias = plain_text(cube.get('name'))
     if alias and alias not in (name, symbol):
         lines.append(f'备注：{alias}')
-    lines.extend([f"调仓时间：{event.get('time') or '未知'}（北京时间）",
+    lines.extend([f"调仓时间：{notification_time(event.get('time'))}",
                   f"状态：{labels.get(event.get('status'), '待确认')}", ''])
     for change in event.get('changes', ()):
         before = '未知' if change.get('before') is None else f"{change['before']:g}%"
