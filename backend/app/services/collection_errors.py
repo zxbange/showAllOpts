@@ -19,6 +19,7 @@ MESSAGES = {
     'interrupted': '采集被中断，尚未确认完整完成。',
     'market_history_unverified': '未能核验该交易日的历史行情快照。',
     'market_heat_unverified': '尚未核验市场热度所需的复权及 MA20 口径。',
+    'cci_target_not_ready': '数据源尚未返回目标日动力煤报价，请等待后续更新。',
     'margin_target_not_ready': '东方财富尚未返回该统计日有效担保比例，请等待披露后继续补采。',
     'market_source_not_ready': '数据源尚未提供该交易日可核验的行情。',
     'market_gap_pending': '市场指标仍有交易日未取得或未入库，不计为采集成功。',

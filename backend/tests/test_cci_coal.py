@@ -172,9 +172,23 @@ def test_today_results_history_and_diagnostics(tmp_path, monkeypatch, caplog, mo
         return httpx.Response(200,json=response(day='2026-11-02' if mode=='stale' else '2026-11-03',grade=p['index_name']))
     monkeypatch.setattr(module.httpx,'Client',lambda **kwargs:real_client(transport=httpx.MockTransport(handle),**kwargs))
     store=CCICoal(Settings(_env_file=None,log_dir=tmp_path));old=store.history()['rows']
+    from app.services import collection_notifications as notifications
+    monkeypatch.setattr(notifications, 'configured_channels', lambda *_: ('telegram',))
+    monkeypatch.setattr(notifications, 'start_notifications', lambda *_: None)
     with caplog.at_level('INFO'):
         store.collect(store.lock())
     state=store.status()
+    if mode == 'empty':
+        assert latest_outcomes(store.settings)['items']['commodities-cci']['outcome'] == 'partial'
+        db = notifications._database(store.settings)
+        try:
+            message = db.execute('SELECT message FROM outbox').fetchone()[0]
+        finally:
+            db.close()
+        assert '采集结果：未完成（来源尚无目标日报价）' in message
+        assert '数据源尚未返回目标日动力煤报价' in message
+        assert '目标数据日期：2026-11-03' in message
+        assert '更新记录：0' in message
     assert state['outcome']==expected and state['observed']==hits
     assert state['inserted']==hits and state['changed']==0
     assert len(calls)==3 and len(state['grades'])==3

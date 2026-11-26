@@ -30,6 +30,7 @@ _RESULT_LABELS = {
     'failed': '失败', 'error': '失败', 'cancelled': '已取消', 'interrupted': '已中断',
     'skipped': '未采集', 'blocked': '未采集', 'paused': '已暂停',
     'no_quote': '部分完成（来源尚无目标日报价）',
+    'empty': '未完成（来源尚无目标日报价）',
 }
 
 
