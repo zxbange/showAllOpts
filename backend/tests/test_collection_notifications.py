@@ -391,7 +391,7 @@ def test_automatic_and_manual_content_match_except_trigger_and_bound_utf16():
     manual = n.format_result(**args, manual=True).splitlines()
     assert auto[1] == '触发方式：自动采集' and manual[1] == '触发方式：手动采集'
     assert auto[:1] + auto[2:] == manual[:1] + manual[2:]
-    assert '采集时间：2026-11-24T09:00:00+08:00' in auto
+    assert '采集时间：2026-11-24 09:00:00' in auto
     assert '目标数据日期：2026-11-23' in auto
     assert any('操作超时' in item and 'MySQL 2013' in item for item in auto)
     assert any('沪深300' in item for item in auto)

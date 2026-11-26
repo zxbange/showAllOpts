@@ -275,7 +275,7 @@ def test_earnings_share_daily_schedule_and_migrate_month_end(tmp_path):
     config._persist(value, config.cipher())
     migrated = config.public()
     assert 'cash_cow' not in migrated['schedules']
-    assert migrated['schedules']['earnings_selection'] == {'enabled': False, 'times': ['23:00'], 'telegram_notify': True, 'feishu_notify': False}
+    assert migrated['schedules']['earnings_selection'] == {'enabled': False, 'times': ['23:00'], 'telegram_notify': True, 'feishu_notify': True}
     body = form(config)
     body['schedules']['earnings_selection'].update(enabled=True, times=['22:30'])
     config.save(body)
@@ -299,7 +299,7 @@ def test_market_time_migration_persists_once_and_respects_later_edits(tmp_path):
     assert service(tmp_path).load()['schedules']['market']['times'] == ['22:15']
 
 
-def test_feishu_schedule_flags_migrate_off_and_round_trip_independently(tmp_path):
+def test_feishu_schedule_flags_inherit_telegram_and_round_trip_independently(tmp_path):
     config = service(tmp_path)
     old = config.default()
     for schedule in old['schedules'].values():
@@ -308,7 +308,8 @@ def test_feishu_schedule_flags_migrate_off_and_round_trip_independently(tmp_path
     config._persist(old, config.cipher())
     value = config.load()
     assert value['schedules']['market']['telegram_notify'] is True
-    assert value['schedules']['market']['feishu_notify'] is False
+    assert value['schedules']['market']['feishu_notify'] is True
+    assert value['schedules']['margin']['feishu_notify'] is False
     body = form(config)
     body['schedules']['market']['telegram_notify'] = False
     body['schedules']['market']['feishu_notify'] = True

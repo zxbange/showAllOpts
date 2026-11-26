@@ -94,7 +94,7 @@ export function SystemTaskConfiguration({
       </div>
       <p className="system-settings-muted system-task-help">
         自动运行控制定时执行，Telegram
-        和飞书通知开关独立控制自动及手动采集结果推送；修改后保存生效。除微博 /
+        和飞书通知开关独立控制自动及手动采集结果推送；开关即时保存，时间等输入修改后需保存。除微博 /
         雪球动态外，自动任务在周末和节假日暂停；未核验年份也暂停自动运行，手动仍可运行。
       </p>
       <div className="system-task-table" role="table" aria-label="自动任务配置">
@@ -225,7 +225,7 @@ export function SystemTaskConfiguration({
                     <span>飞书</span>
                     <SettingsSwitch
                       label="飞书通知"
-                      checked={t.feishu_notify ?? false}
+                      checked={t.feishu_notify ?? t.telegram_notify}
                       onChange={(feishu_notify) => onChange(key, { feishu_notify })}
                     />
                   </div>

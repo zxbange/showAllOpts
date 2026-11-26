@@ -1,8 +1,4 @@
 """Opt-in collection-result Telegram and Feishu outboxes; never a dependency of collection success."""
-from contextvars import ContextVar
-from datetime import date, datetime
-from decimal import Decimal, InvalidOperation
-from functools import wraps
 import inspect
 import json
 import logging
@@ -10,10 +6,16 @@ import sqlite3
 import threading
 import time
 import uuid
+from contextvars import ContextVar
+from datetime import date, datetime
+from decimal import Decimal, InvalidOperation
+from functools import wraps
 from zoneinfo import ZoneInfo
+
 import portalocker
 
 from app.services.collection_errors import safe_error, sanitize_error
+from app.services.notification_time import notification_time
 
 LOG = logging.getLogger(__name__)
 LABELS = {'etf': '国家队动态', 'margin': '两融担保比例', 'commodities': 'A00 铝',
@@ -116,13 +118,7 @@ def _format_slice(lines, units=MAX_TELEGRAM_UNITS):
 
 def format_result(task_id, outcome, changed_count, summary, collected_at=None, *, manual=False,
                   error_details=None, data_date=None, retrying=False):
-    try:
-        moment = datetime.fromisoformat(collected_at) if isinstance(collected_at, str) else collected_at
-        if moment is None or moment.utcoffset() is None:
-            raise ValueError
-        stamp = moment.astimezone(_CHINA).isoformat(timespec='seconds')
-    except (ValueError, TypeError, AttributeError):
-        stamp = datetime.now(_CHINA).isoformat(timespec='seconds')
+    stamp = notification_time(collected_at, fallback=notification_time(datetime.now(_CHINA)))
     status = _RESULT_LABELS.get(outcome, '结果未核实')
     if status == '成功' and changed_count == 0:
         status += '（无新增或变更）'

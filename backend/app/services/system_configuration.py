@@ -38,7 +38,7 @@ def default_schedules(settings, *, legacy=True, warnings=None):
     }
     for key in ('etf', 'margin', 'commodities', 'growth_dividend', 'market', 'valuation_ruler', 'cci', 'earnings_selection'):
         result[key]['telegram_notify'] = False
-        result[key]['feishu_notify'] = False
+        result[key]['feishu_notify'] = result[key]['telegram_notify']
     path = getattr(settings, 'cache_path', settings.log_path / 'cache') / 'schedule.json'
     if legacy and path.exists():
         try:
@@ -188,12 +188,12 @@ class SystemConfiguration:
                 result['schedules']['earnings_selection'] = {
                     'enabled': old.get('enabled', True), 'times': ['23:00'],
                     'telegram_notify': old.get('telegram_notify', False),
-                    'feishu_notify': old.get('feishu_notify', False)}
-            # Older saved schedules lack the new opt-in. Never enable a
-            # previously unsupported channel during migration.
+                    'feishu_notify': old.get('feishu_notify', old.get('telegram_notify', False))}
+            # Missing Feishu flags inherit the existing Telegram preference;
+            # explicitly saved channel choices stay independent.
             for schedule in result['schedules'].values():
                 if 'telegram_notify' in schedule:
-                    schedule.setdefault('feishu_notify', False)
+                    schedule.setdefault('feishu_notify', schedule['telegram_notify'])
             # Migrate only the previous default once; explicitly customized times survive.
             if not result.get('valuation_schedule_v2'):
                 if result['schedules']['valuation_ruler']['times'] == ['20:00']:

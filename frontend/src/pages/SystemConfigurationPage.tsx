@@ -1,7 +1,7 @@
 import { PageHeader } from '../components/PageHeader'
 import { SystemTaskConfiguration } from '../components/SystemTaskConfiguration'
 import { SystemRuntimeConfiguration } from '../components/SystemRuntimeConfiguration'
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { ConfigurationErrorDialog } from '../components/ConfigurationErrorDialog'
 import { useAuth } from '../components/AccountAccess'
 import { SystemNotificationConfiguration } from '../components/SystemNotificationConfiguration'
@@ -27,16 +27,29 @@ function Editor() {
     [error, setError] = useState(''),
     [notice, setNotice] = useState(''),
     [reload, setReload] = useState(0)
+  const saved = useRef<SystemConfiguration | null>(null)
+  const switchBusy = useRef(false)
   useEffect(() => {
     const c = new AbortController()
     systemConfigurationRequest<SystemConfiguration>('GET', undefined, false, c.signal)
-      .then(setConfig)
+      .then((value) => {
+        saved.current = value
+        setConfig(value)
+      })
       .catch((e) => {
         if (!c.signal.aborted) setError(e.message)
       })
     return () => c.abort()
   }, [reload])
   function updateTask(key: string, patch: Partial<TaskConfiguration>) {
+    if (
+      Object.keys(patch).every((field) =>
+        ['enabled', 'telegram_notify', 'feishu_notify'].includes(field),
+      )
+    ) {
+      void saveSwitch(key, patch)
+      return
+    }
     setConfig((value) =>
       value
         ? {
@@ -45,6 +58,43 @@ function Editor() {
           }
         : value,
     )
+  }
+  async function saveSwitch(key: string, patch: Partial<TaskConfiguration>) {
+    const baseline = saved.current
+    if (!baseline || busy || switchBusy.current) return
+    switchBusy.current = true
+    setBusy('switch')
+    setError('')
+    setNotice('')
+    // Persist only the selected switch against the last server revision. Never
+    // include unsaved time, database, runtime or credential edits.
+    const { password_set: _passwordSet, ...database } = baseline.database
+    const schedules = { ...baseline.schedules, [key]: { ...baseline.schedules[key], ...patch } }
+    try {
+      const value = await systemConfigurationRequest<SystemConfiguration>('PUT', {
+        revision: baseline.revision,
+        database: { ...database, password: null },
+        schedules,
+        ...(baseline.runtime ? { runtime: baseline.runtime } : {}),
+      })
+      saved.current = value
+      setConfig((draft) =>
+        draft
+          ? {
+              ...draft,
+              revision: value.revision,
+              database_revision: value.database_revision,
+              schedules: { ...draft.schedules, [key]: { ...draft.schedules[key], ...patch } },
+            }
+          : value,
+      )
+      setNotice('开关已保存并生效')
+    } catch (e) {
+      setError(e instanceof Error ? e.message : '开关保存失败')
+    } finally {
+      switchBusy.current = false
+      setBusy('')
+    }
   }
   async function submit(test = false) {
     if (!config || busy) return
@@ -71,7 +121,9 @@ function Editor() {
         const value = await systemConfigurationRequest<{ message: string }>('POST', body, true)
         setNotice(value.message)
       } else {
-        setConfig(await systemConfigurationRequest<SystemConfiguration>('PUT', body))
+        const value = await systemConfigurationRequest<SystemConfiguration>('PUT', body)
+        saved.current = value
+        setConfig(value)
         setPassword('')
         setPasswordEdited(false)
         setIntegrationDraft({})
