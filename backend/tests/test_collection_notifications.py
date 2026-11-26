@@ -1,10 +1,13 @@
 """Both collection triggers share terminal reporting and an idempotent outbox."""
-from contextlib import contextmanager
 import json
 import sqlite3
+from contextlib import contextmanager
 from types import SimpleNamespace
+
 import pytest
+
 from app.services import collection_notifications as n
+
 
 @pytest.fixture
 def settings(tmp_path,monkeypatch):
@@ -450,11 +453,12 @@ def test_both_channels_freeze_recipient_set_and_concurrent_emits_dedupe(settings
 
 @pytest.mark.parametrize('channels', [('feishu',), ('telegram', 'feishu')])
 def test_real_collection_outbox_feishu_delivery_ignores_social_switch_and_uses_signed_text(tmp_path, monkeypatch, channels):
+    import httpx
+
+    import app.services.social_notifications as sn
     from app.core.config import Settings
     from app.services.social import SocialMonitor
     from app.services.system_configuration import SystemConfiguration
-    import app.services.social_notifications as sn
-    import httpx
 
     settings = Settings(_env_file=None, log_dir=tmp_path, social_worker_enabled=False,
                         telegram_bot_token='fake-token', telegram_chat_id='123')
