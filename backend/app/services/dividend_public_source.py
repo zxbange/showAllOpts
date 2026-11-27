@@ -8,6 +8,7 @@ from decimal import Decimal, InvalidOperation
 import logging
 import re
 import time
+import unicodedata
 
 from app.services.dividend_limits import DIVIDEND_GROUP_LIMITS
 from app.services.cash_cow_source import EastmoneyCashCowSource, CashCowSourceError, DATACENTER
@@ -20,6 +21,16 @@ CHINA = timezone(timedelta(hours=8))
 
 class DividendSourceError(ValueError):
     pass
+
+
+def name_risk(name):
+    """Compare eligibility flags, not provider-specific display names."""
+    if not isinstance(name, str) or not name.strip():
+        raise DividendSourceError('证券名称缺失。')
+    normalized = re.sub(r'\s+', '', unicodedata.normalize('NFKC', name)).upper()
+    if not normalized:
+        raise DividendSourceError('证券名称缺失。')
+    return any(tag in normalized for tag in ('ST', '*', '退'))
 
 
 def decimal(value, *, positive=False):
@@ -361,11 +372,16 @@ class DividendPublicSource(EastmoneyCashCowSource):
                 raise DividendSourceError('上市日期跨来源不一致：' + symbol)
             if not mature(listed, self.day) or symbol.startswith(('4', '8')):
                 continue
-            if not isinstance(row.get('name'), str) or not row['name']:
-                raise DividendSourceError('证券名称缺失。')
-            if census[symbol].get('name') != row['name']:
-                raise DividendSourceError('证券名称跨来源不一致，无法核验当前ST状态：' + symbol)
-            if any(tag in row['name'] for tag in ('ST', '*', '退')):
+            reference_name, selector_name = row.get('name'), census[symbol].get('name')
+            reference_risk = name_risk(reference_name)
+            selector_risk = name_risk(selector_name)
+            if reference_risk != selector_risk:
+                LOG.warning('Dividend name risk mismatch symbol=%s reference_risk=%s selector_risk=%s',
+                            symbol, reference_risk, selector_risk)
+                raise DividendSourceError('当前ST/退市标识跨来源不一致：' + symbol)
+            if reference_name != selector_name:
+                LOG.info('Dividend ordinary name difference symbol=%s risk=%s', symbol, reference_risk)
+            if reference_risk:
                 continue
             eligible.append(row)
         self.on_progress('quotes')
@@ -379,7 +395,7 @@ class DividendPublicSource(EastmoneyCashCowSource):
                 if not isinstance(quote_name, str) or not quote_name:
                     raise DividendSourceError('行情证券名称缺失：' + row['symbol'])
                 # XD/XR/DR or ordinary short-name variations are not ST changes.
-                if any(tag in quote_name for tag in ('ST', '*', '退')):
+                if name_risk(quote_name):
                     raise DividendSourceError('当前ST/退市标识跨接口不一致：' + row['symbol'])
                 active.append(row)
         self.on_progress('valuations')
