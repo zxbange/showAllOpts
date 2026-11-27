@@ -120,9 +120,22 @@ def test_collect_complete_current_day_and_missing_nonpaused_valuation(monkeypatc
         assert symbols==['600036.SH']
         return {'600036.SH':dict(fiscal_year=2025,annual_dps={2025:Decimal('.5'),2024:Decimal('.4'),2023:Decimal('.3')})}
     source.fiscal_cash=dividends
+    independent[0]['name'] = 'Bank新简称'
     meta,records=source.collect()
     assert meta['eligible_count']==1 and meta['value_count']==1
     assert records[0]['method']=='bank' and records[0]['dividend_cash_1y'] is None
+    independent[0]['name'] = 'ＳＴ Bank'
+    with pytest.raises(DividendSourceError, match='ST/退市标识'):
+        source.collect()
+    independent[0]['name'] = 'Bank新简称'
+    quotes[0]['name'] = '＊ＳＴ Bank'
+    with pytest.raises(DividendSourceError, match='ST/退市标识'):
+        source.collect()
+    quotes[0]['name'] = 'Bank'
+    independent[0]['name'] = ' '
+    with pytest.raises(DividendSourceError, match='证券名称缺失'):
+        source.collect()
+    independent[0]['name'] = 'Bank'
     industry_rows=responses['reference/industries']
     responses['reference/industries']=[industry_rows[-1]]
     with pytest.raises(DividendSourceError,match='申万'):
