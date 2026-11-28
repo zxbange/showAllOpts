@@ -618,11 +618,11 @@ class MarketCollection:
             raise CollectionInterrupted()
         if run_id:
             with self.connect() as db:
-                row = db.execute('SELECT cancel_requested,trigger FROM manual_runs WHERE id=?', (run_id,)).fetchone()
+                row = db.execute('SELECT cancel_requested FROM manual_runs WHERE id=?', (run_id,)).fetchone()
             if row and row[0]:
                 raise CollectionCancelled()
-            if row and row[1] == 'scheduled' and not automatic_collection_allowed(self.clock()):
-                raise CollectionInterrupted()
+            # The trading calendar gates admission in _tick, not an admitted run.
+            # A Friday evening run may finish after midnight on Saturday.
 
     def _phase(self, run_id, phase, day=None):
         self._check(run_id)
@@ -1212,8 +1212,8 @@ class MarketCollection:
                     self._finish_run(run_id, 'blocked', 'before_collection_time')
                 else:
                     self._finish_run(run_id, 'partial' if unfinished else 'complete')
-            if manual or automatic_collection_allowed(self.clock()):
-                self._refresh_pending()
+            # Publish the admitted run even when it finished after midnight.
+            self._refresh_pending()
             return completed
         except SinaRateLimitError as error:
             code = 'source_forbidden' if getattr(error, 'status_code', None) == 403 else 'source_rate_limited'
