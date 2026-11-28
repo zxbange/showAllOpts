@@ -145,6 +145,9 @@ def test_interrupted_forced_baseline_keeps_published_snapshot(journal, monkeypat
 
 
 def test_network_retry_resumes_committed_page_without_user_restart(journal, monkeypatch):
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+    monkeypatch.setattr('app.core.cache.now', lambda: datetime(2026, 11, 27, 12, tzinfo=ZoneInfo('Asia/Shanghai')))
     from app.core import ownership_baseline as baseline
     from test_cache_network import lost_connection
     _, _, cache = journal
