@@ -59,7 +59,6 @@ def test_reads_use_bounded_buffered_pages_across_composite_key_boundaries(cached
 
 
 def test_interrupted_second_data_page_retries_cleanly_without_publishing_partial_copy(cached, session, engine, monkeypatch, caplog):
-    from datetime import datetime
     from zoneinfo import ZoneInfo
     monkeypatch.setattr('app.core.cache.now', lambda: datetime(2026, 11, 27, 12, tzinfo=ZoneInfo('Asia/Shanghai')))
     _, cache = cached
@@ -98,7 +97,6 @@ def test_interrupted_second_data_page_retries_cleanly_without_publishing_partial
 
 
 def test_retry_exhaustion_keeps_old_cache_and_other_modules_continue(cached, monkeypatch):
-    from datetime import datetime
     from zoneinfo import ZoneInfo
     monkeypatch.setattr('app.core.cache.now', lambda: datetime(2026, 11, 27, 12, tzinfo=ZoneInfo('Asia/Shanghai')))
     _, cache = cached
@@ -138,7 +136,6 @@ def test_permanent_errors_are_not_retried(cached, monkeypatch, error):
 
 
 def test_shutdown_interrupts_backoff_and_resumes_full_rebuild(cached, session, engine, monkeypatch):
-    from datetime import datetime
     from zoneinfo import ZoneInfo
     monkeypatch.setattr('app.core.cache.now', lambda: datetime(2026, 11, 27, 12, tzinfo=ZoneInfo('Asia/Shanghai')))
     settings, cache=cached
