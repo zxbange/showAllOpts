@@ -116,7 +116,7 @@ def test_market_cross_midnight_preserves_existing_auto_retry_bookkeeping(tmp_pat
 
 
 @pytest.mark.parametrize('kind', ['etf', 'market'])
-def test_auto_stops_between_requests_when_crossing_into_weekend(tmp_path, kind):
+def test_auto_crossing_weekend_respects_module_run_policy(tmp_path, kind):
     start = datetime(2026, 11, 13, 23, 59, tzinfo=CHINA)
     if kind == 'etf':
         from test_etf_collection import worker
@@ -138,6 +138,9 @@ def test_auto_stops_between_requests_when_crossing_into_weekend(tmp_path, kind):
         def cross(symbol):
             clock.value = datetime(2026, 11, 14, 0, 1, tzinfo=CHINA)
         source.on_quote = cross
+        assert w.tick()
+        assert len(source.quote_calls) > 1
+        assert writer.calls
+        calls = len(source.quote_calls)
         assert not w.tick()
-        assert len(source.quote_calls) <= 1
-        assert not writer.calls
+        assert len(source.quote_calls) == calls

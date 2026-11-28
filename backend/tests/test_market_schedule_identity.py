@@ -250,6 +250,25 @@ def test_running_evening_batch_keeps_identity_across_open_midnight(tmp_path):
 
 
 
+def test_running_friday_batch_finishes_and_publishes_after_closed_midnight(tmp_path):
+    published = []
+    w, provider, writer, clock = worker(tmp_path, moment=stamp('2026-11-13', '23:58'),
+                                         refresh=lambda: published.append(True))
+    w._auto_time = lambda: time(23, 58)
+    historical_provider(provider)
+    writer.dates = {kind: {'2026-11-12'} for kind in ('heat', 'crowding')}
+    provider.on_quote = lambda symbol: setattr(clock, 'value', stamp('2026-11-14', '00:01'))
+    assert w.tick()
+    assert writer.dates['heat'] == writer.dates['crowding'] == {'2026-11-12', '2026-11-13'}
+    assert published
+    with w.connect() as db:
+        assert db.execute("SELECT status FROM manual_runs WHERE trigger='scheduled'").fetchone()[0] == 'complete'
+        assert not db.execute("SELECT 1 FROM days WHERE cache_pending=1").fetchone()
+    calls = len(provider.quote_calls)
+    assert not w.tick()
+    assert len(provider.quote_calls) == calls
+
+
 def test_scheduler_notes_bound_memory_under_concurrent_calls(tmp_path):
     from concurrent.futures import ThreadPoolExecutor
     w, _, _, clock = worker(tmp_path)
